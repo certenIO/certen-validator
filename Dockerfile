@@ -1,10 +1,18 @@
 # Dockerfile for Certen Protocol Independent Validator
 # Production-Grade Multi-Stage Build
 
-FROM golang:1.25-alpine AS builder
+# REPRODUCIBLE BUILD. Every input is pinned, so the same commit and the same key files give byte-identical binaries,
+# and the release publishes their SHA-256 (docs/l4/REPRODUCIBLE_BUILD.md):
+#   - both base images by digest (a tag such as golang:1.25-alpine or alpine:latest moves under the same name);
+#   - the Alpine packages by exact version: apk fails by name when a pinned version leaves the repository, instead of
+#     building against a different compiler or libc without saying so;
+#   - every go build with -trimpath (no host paths), -buildvcs=false (.git is not in the context, .dockerignore) and
+#     -ldflags=-buildid= (no per-build id).
+# To move a pin: change it here, rebuild twice from the same commit, compare, publish the new digests.
+FROM golang:1.25.14-alpine3.24@sha256:1ae0735f00daffa3aaf1363a5184c0d2dc55c78e3db4ec70241cdac97bf84b59 AS builder
 
-# Install build dependencies
-RUN apk add --no-cache git gcc musl-dev
+# Install build dependencies (versions pinned; see above)
+RUN apk add --no-cache git=2.54.0-r0 gcc=15.2.0-r5 musl-dev=1.2.6-r2
 
 # Set working directory
 WORKDIR /build
@@ -19,7 +27,7 @@ RUN go mod download
 COPY . ./
 
 # Build the validator service with CGO (required for gnark/blst)
-RUN CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -o validator .
+RUN CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -trimpath -buildvcs=false -ldflags=-buildid= -o validator .
 
 # VERIFY the BLS ZK keys. NEVER generate them.
 #
@@ -77,11 +85,11 @@ RUN set -eu; \
 # Build the governance proof CLI (G0/G1/G2)
 # Per CERTEN spec v3-governance-kpsw-exec-4.0
 WORKDIR /build/accumulate-lite-client-2/liteclient/proof/consolidated_governance-proof
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o /build/govproof .
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -trimpath -buildvcs=false -ldflags=-buildid= -o /build/govproof .
 
 # Build the txhash tool for G2 payload verification
 WORKDIR /build/accumulate-lite-client-2/liteclient/proof/consolidated_governance-proof/cmd/txhash
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o /build/txhash .
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -trimpath -buildvcs=false -ldflags=-buildid= -o /build/txhash .
 WORKDIR /build
 
 # Build the schema migrator.
@@ -95,15 +103,15 @@ WORKDIR /build
 #
 # With this binary in the image, compose can run it as a one-shot service the validators depend on, and
 # the failure mode disappears rather than being documented.
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o /build/schemamigrate ./cmd/schemamigrate
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -trimpath -buildvcs=false -ldflags=-buildid= -o /build/schemamigrate ./cmd/schemamigrate
 
 # ═══════════════════════════════════════════════════════════════
 # Production Stage
 # ═══════════════════════════════════════════════════════════════
-FROM alpine:latest
+FROM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
 
-# Install runtime dependencies
-RUN apk add --no-cache ca-certificates tzdata
+# Install runtime dependencies (versions pinned; see the builder stage)
+RUN apk add --no-cache ca-certificates=20260909-r0 tzdata=2026d-r0
 
 # Create unprivileged user for security
 RUN adduser -D -s /bin/sh validator
