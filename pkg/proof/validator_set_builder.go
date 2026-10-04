@@ -164,9 +164,15 @@ func fetchAccountStateProof(ctx context.Context, q AccumulateQuerier, url string
 // ledger). Its chains component is then the merkle hash of the empty list - 32 zero bytes - which verifyChainBinding
 // recomputes and checks against the receipt like any other.
 func fetchAccountStateProofOpt(ctx context.Context, q AccumulateQuerier, url string, allowNoChains bool) (*AccountStateProof, error) {
+	return fetchAccountStateProofWith(ctx, q, url, allowNoChains, true)
+}
+
+// fetchAccountStateProofWith is fetchAccountStateProofOpt with the receipt options given: true for the current state,
+// or {"forHeight": block} for the state as of a block.
+func fetchAccountStateProofWith(ctx context.Context, q AccumulateQuerier, url string, allowNoChains bool, includeReceipt any) (*AccountStateProof, error) {
 	raw, err := q.Query(ctx, map[string]any{
 		"scope": url,
-		"query": map[string]any{"queryType": "default", "includeReceipt": true},
+		"query": map[string]any{"queryType": "default", "includeReceipt": includeReceipt},
 	})
 	if err != nil {
 		return nil, err
