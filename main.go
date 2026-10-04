@@ -1670,6 +1670,9 @@ func startValidator(
 		return nil, nil, fmt.Errorf("batch path: %w (the files are left in place; resolve them before restarting)", otErr)
 	}
 	stack.OutcomeTrees = outcomeTrees
+	// The cadence lane and co-signing peers read a member's missing commit time from its commit block, as the on-demand
+	// submitter does (RB5-F57).
+	stack.CommitTime = liteClientAdapter.MinorBlockTime
 	prover.SetOutcomeTreeRetainer(stack)
 	log.Printf("🌳 [OUTCOME] batch trees kept at %s", outcomeTrees.Dir())
 	// The attester compares an incoming request's period width against this and

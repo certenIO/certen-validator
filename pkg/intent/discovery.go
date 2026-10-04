@@ -1251,6 +1251,8 @@ func (id *IntentDiscovery) convertCertenTransactionToIntent(certenTx *accumulate
 	}
 	// The BVN it was written on, for its L1-L3 proof (RB4-F46).
 	intent.ProofPartition = certenTx.ProofPartition
+	// Its block there: the member's commit block, whose time is BlockTime (RB5-F57).
+	intent.ProofBlockIndex = certenTx.ProofBlockIndex
 	// The minor block's own time, read with the block that carried the transaction: consensus data.
 	intent.BlockTime = certenTx.Timestamp
 

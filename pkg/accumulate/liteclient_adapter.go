@@ -387,6 +387,69 @@ func BVNNameOf(partitionURL string) string {
 	return id
 }
 
+// BVNPartitionURL is BVNNameOf's inverse: the partition URL of a BVN name, "bvn1" -> acc://bvn-bvn1.acme ("" for no
+// name). Accumulate URLs are case-insensitive, and MinorBlockTime checks the answering partition with EqualFold.
+func BVNPartitionURL(name string) string {
+	id := strings.ToLower(strings.TrimSpace(name))
+	if id == "" || strings.ContainsAny(id, "/.@:") {
+		return ""
+	}
+	return "acc://bvn-" + id + ".acme"
+}
+
+// TransactionBlock is the BVN partition whose minor block `index` holds transaction txHash - as a chain entry's receipt
+// names the block (its localBlock) but not the partition. Every BVN the network-status lists is asked for that block;
+// exactly one must answer as itself and hold the transaction, or it is refused by name: a partition is never guessed.
+func (l *LiteClientAdapter) TransactionBlock(ctx context.Context, txHash string, index int64) (string, error) {
+	tx := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(txHash), "0x"))
+	if tx == "" || index <= 0 {
+		return "", fmt.Errorf("a transaction block needs a transaction and a block index (got %q, %d)", txHash, index)
+	}
+	status, err := l.queryV3API(ctx, "network-status", map[string]interface{}{})
+	if err != nil {
+		return "", fmt.Errorf("network-status for the partition list: %w", err)
+	}
+	network, _ := status["network"].(map[string]interface{})
+	parts, _ := network["partitions"].([]interface{})
+	var found []string
+	for _, p := range parts {
+		m, _ := p.(map[string]interface{})
+		id, _ := m["id"].(string)
+		if typ, _ := m["type"].(string); typ != "blockValidator" || id == "" {
+			continue
+		}
+		partition := BVNPartitionURL(id)
+		first, records, _, err := l.readBlockEntries(ctx, l.convertToLedgerScope(partition), index, 0)
+		if err != nil {
+			var apiErr *V3APIError
+			if errors.As(err, &apiErr) && apiErr.Code == v3NotFound {
+				continue // this BVN has no block at that index
+			}
+			return "", fmt.Errorf("block %d on %s: %w", index, partition, err)
+		}
+		block, err := l.parseMinorBlockRecord(first, partition, index)
+		if err != nil {
+			return "", err
+		}
+		if !strings.EqualFold(block.Source, partition) || block.Index != index {
+			continue // answered by another partition (the request was routed): not this BVN's block
+		}
+		for _, e := range l.getBlockEntries(map[string]interface{}{"entries": map[string]interface{}{"records": records}}, index, partition) {
+			if h, _ := e.Data["entry"].(string); strings.EqualFold(h, tx) {
+				found = append(found, partition)
+				break
+			}
+		}
+	}
+	if len(parts) == 0 {
+		return "", fmt.Errorf("network-status lists no partitions")
+	}
+	if len(found) != 1 {
+		return "", fmt.Errorf("transaction %s is in block %d of %d BVN(s) (%v); exactly one must hold it", tx, index, len(found), found)
+	}
+	return found[0], nil
+}
+
 // isCertenTransaction checks if a block entry is a CERTEN intent transaction
 func (l *LiteClientAdapter) isCertenTransaction(entry BlockEntry) bool {
 	if entry.Data == nil {

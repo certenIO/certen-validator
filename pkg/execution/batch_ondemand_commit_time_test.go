@@ -11,6 +11,9 @@ import (
 
 const odPartition = "acc://bvn-bvn1.acme/ledger"
 
+// odCommitBlockPartition is the BVN a test member's commit block is on (RB5-F57).
+const odCommitBlockPartition = "acc://bvn-bvn1.acme"
+
 // leaderAt returns which roster member leads the member at elapsed.
 func leaderAt(t *testing.T, member *PendingBatchIntent, elapsed time.Duration) string {
 	t.Helper()
@@ -100,13 +103,16 @@ func TestOnDemandFailover_ReadsAMissingBlockTimeOnceAndKeepsIt(t *testing.T) {
 	s := odSubmitter(t, "validator-1")
 	s.cfg.CommitTime = func(_ context.Context, partition string, height uint64) (time.Time, error) {
 		calls++
-		if partition != odPartition || height != 105 {
+		// The member's commit block - the BVN block its intent was written in - never the Directory block that
+		// anchored it (RB5-F57).
+		if partition != odCommitBlockPartition || height != 13430413 {
 			t.Fatalf("asked for %s@%d", partition, height)
 		}
 		return blockTime, nil
 	}
 	m := odMember(1, odChain, 105)
-	m.CommitPartition = odPartition
+	m.CommitPartition = "acc://dn.acme"
+	m.ExecPartition, m.ExecBlock = odCommitBlockPartition, 13430413
 	if err := s.cfg.Stack.Mempool.AddOnDemand(m); err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +138,8 @@ func TestOnDemandFailover_UnreadableBlockTimeFallsBackToFirstSightingAndRetriesL
 		return time.Time{}, errors.New("api down")
 	}
 	m := odMember(1, odChain, 105)
-	m.CommitPartition = odPartition
+	m.CommitPartition = "acc://dn.acme"
+	m.ExecPartition, m.ExecBlock = odCommitBlockPartition, 13430413
 	m.FirstSeen = time.Now().Add(-6 * time.Minute) // persisted: survives a restart
 	m.EnqueuedAt = time.Now()                      // local: reset by one
 

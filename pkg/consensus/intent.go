@@ -90,6 +90,19 @@ type CertenIntent struct {
 	// comment already claimed it was not - RB4-F74.) Zero when discovery could not read it. It is
 	// never serialized: nothing hashed or signed over an intent changes by carrying it.
 	BlockTime time.Time `json:"-"`
+	// ProofBlockIndex is the index of the ProofPartition (BVN) minor block the intent was written in - the block whose
+	// time BlockTime is. With ProofPartition it names the batch member's commit block, whose consensus time is the
+	// member's commit time on every validator (RB5-F57). Never serialized, like BlockTime.
+	ProofBlockIndex int64 `json:"-"`
+}
+
+// ExecutionBlock is the BVN minor block the intent was written in: its partition ("bvn1") and index. Empty when
+// discovery did not read the intent from a BVN block.
+func (c *CertenIntent) ExecutionBlock() (partition string, index int64) {
+	if c == nil {
+		return "", 0
+	}
+	return c.ProofPartition, c.ProofBlockIndex
 }
 
 // IntentData represents the parsed intent data blob

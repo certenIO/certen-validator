@@ -216,6 +216,25 @@ type BatchStack struct {
 	// and certify what the tree's members did (RB5 D4, outcome_retention.go). Required: a tree is kept before it is
 	// signed, and without the store nothing is signed.
 	OutcomeTrees *OutcomeTreeStore
+
+	// CommitTime reads the consensus time of a member's commit block (LiteClientAdapter.MinorBlockTime) for a member
+	// queued without it, through ResolveCommitTime: in the cadence lane before a period's trees are formed, and in a
+	// co-signing peer before it rebuilds one, as the on-demand submitter does for its lane (RB5-F57). Nil reads nothing;
+	// a v4 member without a commit time then waits, by name.
+	CommitTime CommitTimeResolver
+}
+
+// commitTimeReadTimeout bounds one ensureCommitTimes pass.
+const commitTimeReadTimeout = 30 * time.Second
+
+// ensureMemberCommitTimes is ensureCommitTimes over this stack's mempool and reader.
+func (s *BatchStack) ensureMemberCommitTimes(members []*PendingBatchIntent, logf func(string, ...interface{})) {
+	if s.CommitTime == nil || len(members) == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), commitTimeReadTimeout)
+	defer cancel()
+	ensureCommitTimes(ctx, s.CommitTime, s.Mempool, members, logf)
 }
 
 // MemberOutcomeReader reads the recorded outcome of an intent's member on a chain (nil: none recorded).
@@ -628,6 +647,10 @@ func (s *BatchStack) flushOneChain(
 		return
 	}
 
+	// The cadence lane's commit-time resolver (RB5-F57): a member queued without its commit time has it read from its
+	// commit block before the period's trees are formed, so a v4 member is not held for one that can be read.
+	s.ensureMemberCommitTimes(s.Mempool.PeriodMembers(chainID, cutoffHeight, periodBlocks), logf)
+
 	res, err := orch.FlushChain(ctx, chainID, cutoffHeight, periodBlocks)
 	if err != nil {
 		// FlushChain requeues on any pre-anchor failure, so nothing is lost there. Past the
@@ -1033,7 +1056,13 @@ func (s *BatchStack) admit(
 		intentMessage = m
 	}
 
+	// The member's commit block: the BVN block its intent was written in, whose consensus time commitTime is - read by
+	// discovery from exactly that block. Any later reader of a missing commit time reads that block (RB5-F57).
+	execPartition, execBlock := commitBlockOf(attestation)
+
 	return &PendingBatchIntent{
+		ExecPartition:        execPartition,
+		ExecBlock:            execBlock,
 		IntentID:             intentID,
 		GovernanceCommitment: governanceCommitment,
 		AccumulateSetRoot:    accSetRoot,

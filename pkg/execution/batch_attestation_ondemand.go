@@ -120,6 +120,8 @@ func (s *BatchStack) HandleOnDemandAttestationRequest(
 	if err := s.Mempool.RequireCertified(member); err != nil {
 		return refuseWith(CodeNotReady, "member %s: %v", member.IntentID, err)
 	}
+	// Its commit time, if queued here without it, from its commit block (RB5-F57) - the value the proposer used.
+	s.ensureMemberCommitTimes([]*PendingBatchIntent{member}, nil)
 
 	// A successor in a sequential intent is co-signed only once THIS validator reads its predecessor's
 	// outcome on chain (batch_sequence.go) - so no quorum anchors it out of order.
