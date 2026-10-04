@@ -93,7 +93,7 @@ type pendingMember struct {
 func (p *ProofRecovery) RunOnce(ctx context.Context) (int, error) {
 	var count int
 	var oldest sql.NullFloat64
-	if err := p.DB.QueryRowContext(ctx, `SELECT count(*), EXTRACT(EPOCH FROM now() - min(recorded_at)) FROM intent_member_outcomes
+	if err := p.DB.QueryRowContext(ctx, `SELECT count(*), EXTRACT(EPOCH FROM now() - min(proof_owed_since)) FROM intent_member_outcomes
 		WHERE proof_cycle = 'proof_pending' AND reported_by = $1`, p.ValidatorID).Scan(&count, &oldest); err != nil {
 		return 0, fmt.Errorf("read proof_pending members: %w", err)
 	}

@@ -13,6 +13,7 @@
 --   reported_by        the validator that reported the outcome: the one that recovers a proof_pending member
 --   refusal            the named cause of a refusal before any chain transaction; set, the intent's class is `refused`
 --   proof_attempts, next_proof_attempt_at   the automatic recovery of a proof_pending member (attempts, backoff)
+--   proof_owed_since   when the member's executed action first became owed its proof bundle (kept while owed)
 --
 -- intent_lifecycle.status (no CHECK by design) gains executed_proof_pending, executed_proof_unavailable and
 -- refused_pending_attestation; only its column comment changes here.
@@ -39,6 +40,7 @@ ALTER TABLE public.intent_member_outcomes ADD COLUMN reported_by character varyi
 ALTER TABLE public.intent_member_outcomes ADD COLUMN refusal text;
 ALTER TABLE public.intent_member_outcomes ADD COLUMN proof_attempts integer DEFAULT 0 NOT NULL;
 ALTER TABLE public.intent_member_outcomes ADD COLUMN next_proof_attempt_at timestamp with time zone;
+ALTER TABLE public.intent_member_outcomes ADD COLUMN proof_owed_since timestamp with time zone;
 
 ALTER TABLE public.intent_member_outcomes ADD CONSTRAINT intent_member_outcome_proof_attempts_nonnegative CHECK (proof_attempts >= 0);
 
@@ -51,5 +53,6 @@ COMMENT ON COLUMN public.intent_member_outcomes.reported_by IS 'The validator th
 COMMENT ON COLUMN public.intent_member_outcomes.refusal IS 'The named cause of a refusal before any chain transaction; set, the intent fails with failure_class refused.';
 COMMENT ON COLUMN public.intent_member_outcomes.proof_attempts IS 'Automatic recovery attempts of a proof_pending member.';
 COMMENT ON COLUMN public.intent_member_outcomes.next_proof_attempt_at IS 'When the automatic recovery next re-drives a proof_pending member.';
+COMMENT ON COLUMN public.intent_member_outcomes.proof_owed_since IS 'When the executed action first became owed its proof bundle; kept while proof_pending or proof_unavailable, cleared when written.';
 
 COMMENT ON COLUMN public.intent_lifecycle.status IS 'submitted | pending_signatures | authorized | in_process | settling | refused_pending_attestation | executed_proof_pending | complete | executed_proof_unavailable | failed. settling = consensus committed and the target-chain write is IN FLIGHT. refused_pending_attestation = refused by name before any chain transaction; its non-settlement attestation is pending. executed_proof_pending = every member resolved, at least one EXECUTED with its proof bundle not produced yet: NOT a failure, NOT terminal. executed_proof_unavailable = executed, its proof can never be produced (terminal; not a failure of the action). Deliberately no CHECK constraint.';

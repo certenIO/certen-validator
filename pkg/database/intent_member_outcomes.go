@@ -255,9 +255,9 @@ func (r *IntentLifecycleRepository) RecordMemberOutcome(ctx context.Context, o M
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO intent_member_outcomes
 			(intent_id, chain_id, settlement, proof_cycle, legs, settlement_tx, write_back_tx, cycle_id, reason, effects_proven,
-			 reported_by, refusal, next_proof_attempt_at, recorded_at)
+			 reported_by, refusal, next_proof_attempt_at, proof_owed_since, recorded_at)
 		VALUES ($1, $2, $3, $4, $5, NULLIF($6, ''), NULLIF($7, ''), NULLIF($8, ''), NULLIF($9, ''), $10, $11, NULLIF($12, ''),
-			CASE WHEN $13 THEN now() END, now())
+			CASE WHEN $13 THEN now() END, CASE WHEN $14 THEN now() END, now())
 		ON CONFLICT (intent_id, chain_id) DO UPDATE SET
 			settlement = EXCLUDED.settlement, proof_cycle = EXCLUDED.proof_cycle, legs = EXCLUDED.legs,
 			settlement_tx = EXCLUDED.settlement_tx, write_back_tx = EXCLUDED.write_back_tx,
@@ -265,10 +265,12 @@ func (r *IntentLifecycleRepository) RecordMemberOutcome(ctx context.Context, o M
 			reported_by = EXCLUDED.reported_by, refusal = COALESCE(EXCLUDED.refusal, intent_member_outcomes.refusal),
 			next_proof_attempt_at = CASE WHEN EXCLUDED.proof_cycle = 'proof_pending'
 				THEN COALESCE(intent_member_outcomes.next_proof_attempt_at, now()) END,
+			proof_owed_since = CASE WHEN EXCLUDED.proof_cycle IN ('proof_pending', 'proof_unavailable')
+				THEN COALESCE(intent_member_outcomes.proof_owed_since, now()) END,
 			recorded_at = now()`,
 		o.IntentID, o.ChainID, string(o.Settlement), string(o.ProofCycle), o.Legs,
 		o.SettlementTx, o.WriteBackTx, o.CycleID, o.Reason, o.EffectsProven, o.ReportedBy, o.Refusal,
-		o.ProofCycle == MemberProofCyclePending); err != nil {
+		o.ProofCycle == MemberProofCyclePending, o.ProofCycle == MemberProofCyclePending || o.ProofCycle == MemberProofCycleUnavailable); err != nil {
 		return derived, fmt.Errorf("record member outcome %s/%d: %w", o.IntentID, o.ChainID, err)
 	}
 
