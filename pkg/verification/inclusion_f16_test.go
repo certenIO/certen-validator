@@ -10,6 +10,7 @@ import (
 
 	"github.com/certen/independant-validator/pkg/ethproof"
 	"github.com/certen/independant-validator/pkg/ethproof/ethprooftest"
+	"github.com/certen/independant-validator/pkg/ethrpc"
 )
 
 // RB5-F16: the Level 4 verifier checked "inclusion proofs" as a hash list (leaf, sibling hashes, left/right directions),
@@ -19,7 +20,13 @@ import (
 // fixtureResult is a Level 4 result for Base Sepolia's real settlement, its proofs built from the captured block.
 func fixtureResult(t *testing.T) (*ExternalChainResultData, *UnifiedVerifier) {
 	t.Helper()
-	f := ethprooftest.Load(t, ethprooftest.BaseSepolia)
+	return fixtureResultOf(t, ethprooftest.BaseSepolia)
+}
+
+// fixtureResultOf is a Level 4 result for the named captured block's settlement.
+func fixtureResultOf(t *testing.T, name string) (*ExternalChainResultData, *UnifiedVerifier) {
+	t.Helper()
+	f := ethprooftest.Load(t, name)
 	header := f.Header(t)
 	var txs, rcs [][]byte
 	for _, tx := range f.Transactions() {
@@ -55,7 +62,7 @@ func fixtureResult(t *testing.T) (*ExternalChainResultData, *UnifiedVerifier) {
 		}
 		return &d
 	}
-	r := &ExternalChainResultData{Chain: "base-sepolia", ChainID: f.ChainID, TxHash: f.SettlementTx, BlockNumber: header.Number.Uint64(),
+	r := &ExternalChainResultData{Chain: ethrpc.ChainKeyForID(f.ChainID), ChainID: f.ChainID, TxHash: f.SettlementTx, BlockNumber: header.Number.Uint64(),
 		BlockHash: f.BlockHash(), TransactionsRoot: header.TxHash, ReceiptsRoot: header.ReceiptHash, StateRoot: header.Root, Status: 1,
 		TxInclusionProof: convert(txProof), ReceiptInclusionProof: convert(rcProof)}
 	v := NewUnifiedVerifier(&UnifiedVerifierConfig{})
@@ -68,6 +75,18 @@ func TestLevel4VerifiesTheEmittedInclusionProofs(t *testing.T) {
 	res := &VerificationResult{Details: map[string]interface{}{}}
 	if err := v.verifyExecutionProof(&ExecutionProofBundle{Result: r}, res); err != nil {
 		t.Fatalf("THE regression: a real inclusion proof of the settlement is refused: %v", err)
+	}
+}
+
+// Level 4 verifies the settlement of every captured signed-settlement block, including an Arbitrum block holding a Nitro
+// retry (0x68) beside signed transactions.
+func TestLevel4VerifiesEverySignedSettlementBlock(t *testing.T) {
+	for _, name := range ethprooftest.Settlements {
+		r, v := fixtureResultOf(t, name)
+		res := &VerificationResult{Details: map[string]interface{}{}}
+		if err := v.verifyExecutionProof(&ExecutionProofBundle{Result: r}, res); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
 	}
 }
 

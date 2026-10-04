@@ -58,7 +58,7 @@ func strategyObserver(t *testing.T, urls []string, chainID int64) *chain.EVMObse
 
 // The gate's own provider cannot serve the block's bodies; the other two agree on them. The proofs are the agreed ones.
 func TestTheGateProvesTheSettlementFromAgreedReads(t *testing.T) {
-	for _, name := range []string{ethprooftest.Sepolia, ethprooftest.BaseSepolia, ethprooftest.ArbitrumSepolia} {
+	for _, name := range ethprooftest.Settlements {
 		t.Run(name, func(t *testing.T) {
 			f := ethprooftest.Load(t, name)
 			noBodies := func(method string, params []json.RawMessage, res json.RawMessage) json.RawMessage {
@@ -92,7 +92,7 @@ func TestTheGateProvesTheSettlementFromAgreedReads(t *testing.T) {
 
 // The gate and the strategy observer prove a settlement identically, byte for byte.
 func TestTheGateAndTheStrategyObserverProveIdentically(t *testing.T) {
-	for _, name := range []string{ethprooftest.Sepolia, ethprooftest.BaseSepolia, ethprooftest.ArbitrumSepolia} {
+	for _, name := range ethprooftest.Settlements {
 		t.Run(name, func(t *testing.T) {
 			f := ethprooftest.Load(t, name)
 			urls := ethprooftest.URLs(t, &ethprooftest.Provider{F: f}, &ethprooftest.Provider{F: f})

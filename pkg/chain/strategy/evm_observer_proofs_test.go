@@ -56,7 +56,7 @@ func observeFixture(t *testing.T, name string) (*ethprooftest.Fixture, *Observat
 
 // The observation carries a transaction and a receipt inclusion proof that verify offline against the block they name.
 func TestTheStrategyObserverCarriesRealInclusionProofs(t *testing.T) {
-	for _, name := range []string{ethprooftest.Sepolia, ethprooftest.BaseSepolia, ethprooftest.ArbitrumSepolia} {
+	for _, name := range ethprooftest.Settlements {
 		t.Run(name, func(t *testing.T) {
 			f, obs := observeFixture(t, name)
 			var txProof, rcProof ethproof.InclusionProof
