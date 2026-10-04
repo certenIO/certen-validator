@@ -193,6 +193,9 @@ type IntentDiscovery struct {
 	proofGenerator *proof.LiteClientProofGenerator
 	validatorID    string
 
+	// v2Shadow builds proof v2 beside v1 (RB6 Phase A); nil when not configured. It can never fail or delay an intent.
+	v2Shadow ProofV2Shadow
+
 	// PHASE 5: Batch system integration for PostgreSQL persistence and proof assembly
 
 	// Intent lifecycle tracking (PostgreSQL)
@@ -343,6 +346,15 @@ func (id *IntentDiscovery) SetBFTConsensus(consensus BFTConsensusProtocol) {
 }
 
 // SetRepositories configures database repositories for intent lifecycle tracking
+// ProofV2Shadow captures an intent's governing pages at discovery and builds its v2 proof after the v1 proof.
+type ProofV2Shadow interface {
+	Capture(intentID, account, tx string)
+	Build(intentID, account, tx, bvn string)
+}
+
+// SetProofV2Shadow installs the proof v2 shadow.
+func (id *IntentDiscovery) SetProofV2Shadow(s ProofV2Shadow) { id.v2Shadow = s }
+
 func (id *IntentDiscovery) SetRepositories(repos *database.Repositories) {
 	id.repos = repos
 	if repos != nil {
@@ -1640,10 +1652,16 @@ func (id *IntentDiscovery) processIntent(intent *CertenIntent, blockHeight uint6
 			id.logger.Printf("🔗 [REAL-PROOF] Generating L1-L4 chained proof for %s (txHash=%s, partition=%s, attempts=%d)",
 				intent.IntentID, intent.TransactionHash[:16]+"...", intent.ProofPartition, inlineAttempts)
 
+			if id.v2Shadow != nil {
+				id.v2Shadow.Capture(intent.IntentID, accountURL, intent.TransactionHash)
+			}
 			cp, perr := id.buildChainedCertenProof(ctx, accountURL, intent.TransactionHash, intent.ProofPartition, intent.IntentID, inlineAttempts)
 			if perr != nil {
 				id.logger.Printf("⚠️ [REAL-PROOF] L1-L4 chained proof unavailable for %s: %v", intent.IntentID, perr)
 			} else {
+				if id.v2Shadow != nil {
+					id.v2Shadow.Build(intent.IntentID, accountURL, intent.TransactionHash, intent.ProofPartition)
+				}
 				certenProof = cp
 				id.logger.Printf("✅ [REAL-PROOF] CertenProof created with L1-L4 chained proof for %s", intent.IntentID)
 			}
@@ -1799,10 +1817,16 @@ func (id *IntentDiscovery) processMultiLegIntent(intent *CertenIntent, blockHeig
 			}
 			id.logger.Printf("🔗 [MULTI-LEG] Generating L1-L3 chained proof for %s (attempts=%d)", intent.IntentID, inlineAttempts)
 
+			if id.v2Shadow != nil {
+				id.v2Shadow.Capture(intent.IntentID, accountURL, intent.TransactionHash)
+			}
 			cp, perr := id.buildChainedCertenProof(ctx, accountURL, intent.TransactionHash, intent.ProofPartition, intent.IntentID, inlineAttempts)
 			if perr != nil {
 				id.logger.Printf("⚠️ [MULTI-LEG] L1-L3 chained proof unavailable for %s: %v", intent.IntentID, perr)
 			} else {
+				if id.v2Shadow != nil {
+					id.v2Shadow.Build(intent.IntentID, accountURL, intent.TransactionHash, intent.ProofPartition)
+				}
 				certenProof = cp
 				id.logger.Printf("✅ [MULTI-LEG] CertenProof created for all legs of %s", intent.IntentID)
 			}
