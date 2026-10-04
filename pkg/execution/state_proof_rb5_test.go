@@ -54,12 +54,12 @@ func buildStateWithSlot(t *testing.T, account common.Address, slot common.Hash, 
 	stateRoot := stateTrie.Hash()
 
 	// Account proof.
-	accCollector := NewMerkleProofCollector()
+	accCollector := &proofNodes{}
 	if err := stateTrie.Prove(accKey, accCollector); err != nil {
 		t.Fatalf("prove account: %v", err)
 	}
 	// Storage proof.
-	stoCollector := NewMerkleProofCollector()
+	stoCollector := &proofNodes{}
 	if err := storageTrie.Prove(stoKey, stoCollector); err != nil {
 		t.Fatalf("prove storage: %v", err)
 	}
@@ -68,12 +68,21 @@ func buildStateWithSlot(t *testing.T, account common.Address, slot common.Hash, 
 		Account:      account,
 		Slot:         slot,
 		Value:        common.BigToHash(value),
-		AccountProof: accCollector.GetNodes(),
+		AccountProof: accCollector.nodes,
 		StorageHash:  storageHash,
-		StorageProof: stoCollector.GetNodes(),
+		StorageProof: stoCollector.nodes,
 	}
 	return sp, stateRoot
 }
+
+// proofNodes collects the nodes trie.Prove emits, in order.
+type proofNodes struct{ nodes [][]byte }
+
+func (p *proofNodes) Put(_ []byte, v []byte) error {
+	p.nodes = append(p.nodes, append([]byte(nil), v...))
+	return nil
+}
+func (p *proofNodes) Delete([]byte) error { return nil }
 
 var (
 	rb5Account = common.HexToAddress("0x5FbDB2315678afecb367f032d93F642f64180aa3")

@@ -3,7 +3,8 @@
 // Live check of the create-transaction locator and the signed-transaction reader against production
 // anchors (RB3-F33/F127), read-only. Behind the live build tag rather than a skip (00_STANDARD §2):
 //
-//	CERTEN_TEST_RPC_84532, CERTEN_TEST_RPC_421614, CERTEN_TEST_RPC_11155111 - an RPC URL per chain
+//	CERTEN_TEST_RPC_84532, CERTEN_TEST_RPC_421614, CERTEN_TEST_RPC_11155111 - comma-separated RPC URLs per chain, at
+//	least two independent providers each: the repair reads through agreeing providers (RB5-F53).
 
 package execution
 
@@ -13,8 +14,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
-	"log"
 	"os"
 	"strconv"
 	"strings"
@@ -63,11 +62,11 @@ func TestLiveLocateAnchorCreateOnProductionAnchors(t *testing.T) {
 		if url == "" {
 			t.Fatalf("the live build requires CERTEN_TEST_RPC_%d", id)
 		}
-		pool, err := ethrpc.NewPool(ethrpc.ParseEndpoints(url), 5*time.Second, log.New(io.Discard, "", 0))
+		a, err := ethrpc.NewAgreeingReader(context.Background(), id, ethrpc.ParseEndpoints(url), 30*time.Second)
 		if err != nil {
 			t.Fatal(err)
 		}
-		r.pools[id] = pool
+		r.readers[id] = a
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
@@ -137,17 +136,17 @@ func TestLiveRepairConfirmsEveryExportedAnchor(t *testing.T) {
 	r := NewEthAnchorTxReader()
 	defer r.Close()
 	for _, id := range []int64{84532, 421614, 11155111} {
-		// Comma-separated: several providers, as production configures, so one's rate limit or retention
-		// hands the read to the next.
+		// Comma-separated: several independent providers, as production configures; facts hold only where
+		// they agree.
 		urls := ethrpc.ParseEndpoints(os.Getenv(fmt.Sprintf("CERTEN_TEST_RPC_%d", id)))
 		if len(urls) == 0 {
 			t.Fatalf("the live build requires CERTEN_TEST_RPC_%d", id)
 		}
-		pool, err := ethrpc.NewPool(urls, 5*time.Second, log.New(io.Discard, "", 0))
+		a, err := ethrpc.NewAgreeingReader(context.Background(), id, urls, 30*time.Second)
 		if err != nil {
 			t.Fatal(err)
 		}
-		r.pools[id] = pool
+		r.readers[id] = a
 	}
 	cfg := AnchorRepairConfig{Reader: r, Now: time.Now}
 	var completedDiffers, misnamed []string
@@ -215,7 +214,7 @@ func TestLiveRepairConfirmsEveryExportedAnchor(t *testing.T) {
 			vblockDiffers++
 		}
 		// consensus_completed_at is the time the quorum was confirmed on-chain: the verify block's time.
-		vt, err := poolCreateChain{r.pools[row.Chain]}.BlockTime(ctx, uint64(verify.BlockNumber))
+		vt, err := agreedCreateChain{r.readers[row.Chain]}.BlockTime(ctx, uint64(verify.BlockNumber))
 		if err != nil {
 			fail("verify block %d time: %v", verify.BlockNumber, err)
 			continue
@@ -268,11 +267,11 @@ func TestLiveProjectionClassification(t *testing.T) {
 		if len(urls) == 0 {
 			t.Fatalf("the live build requires CERTEN_TEST_RPC_%d", id)
 		}
-		pool, err := ethrpc.NewPool(urls, 5*time.Second, log.New(io.Discard, "", 0))
+		a, err := ethrpc.NewAgreeingReader(context.Background(), id, urls, 30*time.Second)
 		if err != nil {
 			t.Fatal(err)
 		}
-		r.pools[id] = pool
+		r.readers[id] = a
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
 	defer cancel()

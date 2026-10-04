@@ -23,6 +23,7 @@ import (
 
 	"github.com/certen/independant-validator/pkg/crypto/bls"
 	"github.com/certen/independant-validator/pkg/crypto/bls_zkp"
+	"github.com/certen/independant-validator/pkg/ethproof"
 	"github.com/certen/independant-validator/pkg/execution/contracts"
 )
 
@@ -383,12 +384,12 @@ func synthSettlement(t *testing.T, chainID int64, number, time uint64, parent co
 		t.Fatal(err)
 	}
 	h := &types.Header{ParentHash: parent, Number: new(big.Int).SetUint64(number), Time: time, Difficulty: big.NewInt(0),
-		TxHash: trieRoot([][]byte{txBytes}), ReceiptHash: trieRoot([][]byte{rBytes}), Root: common.Hash{0x5}}
-	txp, err := proveIndex([][]byte{txBytes}, 0, h.TxHash)
+		TxHash: ethproof.TrieRoot([][]byte{txBytes}), ReceiptHash: ethproof.TrieRoot([][]byte{rBytes}), Root: common.Hash{0x5}}
+	txp, err := ethproof.Prove([][]byte{txBytes}, 0, h.TxHash)
 	if err != nil {
 		t.Fatal(err)
 	}
-	rp, err := proveIndex([][]byte{rBytes}, 0, h.ReceiptHash)
+	rp, err := ethproof.Prove([][]byte{rBytes}, 0, h.ReceiptHash)
 	if err != nil {
 		t.Fatal(err)
 	}

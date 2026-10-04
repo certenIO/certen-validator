@@ -20,6 +20,7 @@ import (
 
 	"github.com/certen/independant-validator/pkg/crypto/bls"
 	"github.com/certen/independant-validator/pkg/crypto/bls_zkp"
+	"github.com/certen/independant-validator/pkg/ethproof"
 	"github.com/certen/independant-validator/pkg/execution/contracts"
 )
 
@@ -481,10 +482,13 @@ func inclusionVerifies(value []byte, nodes []hexutil.Bytes, index uint64, root c
 	}
 	p := &MerkleInclusionProof{LeafHash: [32]byte(crypto.Keccak256Hash(value)), LeafIndex: index, ExpectedRoot: [32]byte(root),
 		LeafValue: value}
+	// The evidence carries the nodes only; each node's hash is derived from its own bytes, never stated.
 	for _, n := range nodes {
 		p.ProofNodes = append(p.ProofNodes, []byte(n))
+		p.ProofHashes = append(p.ProofHashes, [32]byte(crypto.Keccak256Hash(n)))
 	}
-	return p.Verify()
+	_, err := ethproof.VerifyInclusion(p, root, index)
+	return err == nil
 }
 
 // decodeEvidenceHeader decodes a header's RLP, requiring the canonical encoding: the bytes hashed are the bytes read.

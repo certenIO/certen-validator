@@ -182,11 +182,8 @@ func (o *ExternalChainObserver) observeMemberExecution(
 	if result.Status != 1 {
 		return nil, leaf, fmt.Errorf("settlement %s did not execute (status=%d)", txHash.Hex(), result.Status)
 	}
-	if result.TxInclusionProof == nil || !result.TxInclusionProof.Verify() {
-		return nil, leaf, fmt.Errorf("RB-2: tx inclusion proof failed to verify for %s", txHash.Hex())
-	}
-	if result.ReceiptInclusionProof == nil || !result.ReceiptInclusionProof.Verify() {
-		return nil, leaf, fmt.Errorf("RB-2: receipt inclusion proof failed to verify for %s", txHash.Hex())
+	if err := result.VerifyInclusionProofs(); err != nil {
+		return nil, leaf, err
 	}
 	leaf, _, err = accountLeafAndAnchor(ctx, o.ethClient, account, exec)
 	if err != nil {

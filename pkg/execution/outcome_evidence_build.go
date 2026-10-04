@@ -14,6 +14,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/rlp"
 
+	"github.com/certen/independant-validator/pkg/ethproof"
 	"github.com/certen/independant-validator/pkg/execution/contracts"
 )
 
@@ -291,7 +292,9 @@ func (c *AgreedOutcomeChain) TransactionInclusion(ctx context.Context, tx common
 		return nil, nil, outcomeNotYet("%s's receipt names block %s, the agreed block at %d is %s", tx.Hex(), r.BlockHash.Hex(),
 			r.BlockNumber.Uint64(), hdr.Hash().Hex())
 	}
-	txp, rcp, err := c.observer.inclusionProofsFromRaw(ctx, hdr, r.TransactionIndex)
+	// The block's transactions and receipts are read through the agreeing providers and proven by the one proof
+	// implementation the settlement gate and the strategy observer use (pkg/ethproof).
+	s, err := ethproof.Build(ctx, c.reader, hdr.Hash(), tx, uint64(r.TransactionIndex))
 	if err != nil {
 		return nil, nil, readErr(fmt.Errorf("inclusion proofs of %s in block %d: %w", tx.Hex(), hdr.Number.Uint64(), err))
 	}
@@ -299,11 +302,11 @@ func (c *AgreedOutcomeChain) TransactionInclusion(ctx context.Context, tx common
 	if err != nil {
 		return nil, nil, err
 	}
-	out := &ChainInclusionEvidence{Header: raw, Index: uint64(r.TransactionIndex), Transaction: txp.LeafValue, Receipt: rcp.LeafValue}
-	for _, n := range txp.ProofNodes {
+	out := &ChainInclusionEvidence{Header: raw, Index: uint64(r.TransactionIndex), Transaction: s.Tx.LeafValue, Receipt: s.Receipt.LeafValue}
+	for _, n := range s.Tx.ProofNodes {
 		out.TransactionProof = append(out.TransactionProof, n)
 	}
-	for _, n := range rcp.ProofNodes {
+	for _, n := range s.Receipt.ProofNodes {
 		out.ReceiptProof = append(out.ReceiptProof, n)
 	}
 	return out, hdr, nil

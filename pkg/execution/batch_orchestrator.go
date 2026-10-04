@@ -13,7 +13,9 @@ import (
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/rpc"
 
+	"github.com/certen/independant-validator/pkg/ethrpc"
 	"github.com/certen/independant-validator/pkg/execution/contracts"
 )
 
@@ -162,6 +164,32 @@ type BatchOrchestrator struct {
 	// scanned is, per anchor, the last finalized block already searched for earlier windows' attempts.
 	scanMu  sync.Mutex
 	scanned map[[32]byte]uint64
+
+	// agreed is the chain's agreeing reader (RB5-F53), built on first use over every provider configured for the chain:
+	// what the orchestrator records about a transaction it did not send - another validator's anchor creation - is read
+	// through it, never from its own single client.
+	agreedMu sync.Mutex
+	agreed   *ethrpc.AgreeingReader
+}
+
+// agreedReader is the chain's agreeing reader: the orchestrator's own endpoint and every fallback configured for the
+// chain (ethrpc.EndpointsForChainID). Fewer than ethrpc.MinAgreeingProviders independent providers is refused by name.
+func (o *BatchOrchestrator) agreedReader(ctx context.Context, chainID int64) (*ethrpc.AgreeingReader, error) {
+	o.agreedMu.Lock()
+	defer o.agreedMu.Unlock()
+	if o.agreed != nil {
+		return o.agreed, nil
+	}
+	primary := ""
+	if o.ecm != nil && o.ecm.config != nil {
+		primary = o.ecm.config.EthereumRPC
+	}
+	r, err := ethrpc.NewAgreeingReader(ctx, chainID, ethrpc.EndpointsForChainID(chainID, primary), ethrpc.DefaultReadTimeout)
+	if err != nil {
+		return nil, fmt.Errorf("the agreeing providers of chain %d: %w", chainID, err)
+	}
+	o.agreed = r
+	return r, nil
 }
 
 // NewBatchOrchestrator wires an orchestrator to a chain.
@@ -902,18 +930,24 @@ func (c anchorCreation) onTree(tree *BatchTree) {
 
 // existingAnchorCreation locates the transaction that created an anchor another validator created (see
 // LocateAnchorCreate) and reads it back: accepted only as the successful createBatchAnchor call of this
-// bundle and root at this anchor, signed by the creator the anchor records. Anything it cannot read is a
-// read error - the anchor exists, and the pass that retries will find it.
+// bundle and root at this anchor, signed by the creator the anchor records. Every fact it records - the anchor's
+// record, the block, the receipt, the head - is read through the chain's agreeing providers (agreedReader); one
+// provider's word is never written to the tree. Anything it cannot read is a read error - the anchor exists, and
+// the pass that retries will find it.
 func (o *BatchOrchestrator) existingAnchorCreation(ctx context.Context, tree *BatchTree, gasUsed uint64) (anchorCreation, error) {
-	head, err := o.ecm.client.BlockNumber(ctx)
+	agreed, err := o.agreedReader(ctx, tree.ChainID)
+	if err != nil {
+		return anchorCreation{}, readErr(fmt.Errorf("locating anchor 0x%x's creation: %w", tree.BundleID[:8], err))
+	}
+	head, err := agreed.HeaderByNumber(ctx, big.NewInt(int64(rpc.LatestBlockNumber)))
 	if err != nil {
 		return anchorCreation{}, readErr(fmt.Errorf("reading the head to locate anchor 0x%x's creation: %w", tree.BundleID[:8], err))
 	}
-	loc, err := LocateAnchorCreate(ctx, clientCreateChain{o.ecm.client}, o.anchorV7, tree.BundleID, tree.Root, head)
+	loc, err := LocateAnchorCreate(ctx, agreedCreateChain{agreed}, o.anchorV7, tree.BundleID, tree.Root, head.Number.Uint64())
 	if err != nil {
 		return anchorCreation{}, readErr(fmt.Errorf("locating the transaction that created anchor 0x%x: %w", tree.BundleID[:8], err))
 	}
-	reading, err := ReadAnchorTxFrom(ctx, o.ecm.client, tree.ChainID, loc.TxHash)
+	reading, err := ReadAnchorTxAgreed(ctx, agreed, tree.ChainID, loc.TxHash)
 	if err != nil {
 		return anchorCreation{}, readErr(fmt.Errorf("reading anchor 0x%x's create transaction %s: %w", tree.BundleID[:8], loc.TxHash, err))
 	}

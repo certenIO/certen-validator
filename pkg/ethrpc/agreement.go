@@ -3,6 +3,7 @@ package ethrpc
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
@@ -309,6 +310,42 @@ func (r *AgreeingReader) HeaderByHash(ctx context.Context, hash common.Hash) (*t
 	return picked, nil
 }
 
+// AgreedLists returns a list of byte strings - a block's transactions or receipts in their consensus encoding - when
+// every provider that answered returns the identical list and at least MinAgreeingProviders answered. read is asked of
+// each verified provider's raw client and reduces that provider's answer to the list; what names the list in errors.
+//
+// It exists for what the decoded reads cannot carry: go-ethereum decodes neither an OP-stack deposit transaction (0x7e)
+// nor an Arbitrum internal one (0x6a), and re-encodes a deposit receipt without its deposit fields, so a block's bodies
+// are compared here as the caller encodes them (pkg/ethproof).
+func (r *AgreeingReader) AgreedLists(ctx context.Context, what string, read func(context.Context, *rpc.Client) ([][]byte, error)) ([][]byte, error) {
+	as := askAll(ctx, r, func(c context.Context, cl *ethclient.Client) ([][]byte, error) {
+		return read(c, cl.Client())
+	})
+	var picked [][]byte
+	answered := 0
+	for _, a := range as {
+		if a.err != nil {
+			continue
+		}
+		answered++
+		if answered == 1 {
+			picked = a.value
+			continue
+		}
+		same := len(a.value) == len(picked)
+		for i := 0; same && i < len(picked); i++ {
+			same = bytes.Equal(a.value[i], picked[i])
+		}
+		if !same {
+			return nil, fmt.Errorf("%w: chain %d %s: %s serves a different list", ErrProvidersDisagree, r.chainID, what, a.host)
+		}
+	}
+	if answered < MinAgreeingProviders {
+		return nil, fmt.Errorf("%w: chain %d %s: %d of %d (%s)", ErrTooFewProviders, r.chainID, what, answered, len(as), unanswered(as))
+	}
+	return picked, nil
+}
+
 // RecentStateDepth is how far below the lowest latest head of the answering providers RecentAgreedHeader reads: deep
 // enough that every provider has the block, shallow enough that every provider still serves its state (a provider that
 // keeps no historical state - Arbitrum Sepolia's publicnode at the finalized block, measured 2026-10-03 - serves the
@@ -434,4 +471,15 @@ func (l LocatorClient) TransactionByHash(ctx context.Context, hash common.Hash) 
 		return found{tx, pending}, err
 	})
 	return f.tx, f.pending, err
+}
+
+// RawTransactionByHash is the provider's eth_getTransactionByHash answer as JSON ("null" when it does not hold the
+// transaction), asked again while the provider answers transiently. A caller takes the transaction from it only as signed
+// and hashing to hash; where the provider says it was mined is a locator's claim, established by an agreed read.
+func (l LocatorClient) RawTransactionByHash(ctx context.Context, hash common.Hash) (json.RawMessage, error) {
+	return askProvider(ctx, l.health, l.Host, l.hint, l.budget(), 0, func(c context.Context) (json.RawMessage, error) {
+		var raw json.RawMessage
+		err := l.Client.Client().CallContext(c, &raw, "eth_getTransactionByHash", hash)
+		return raw, err
+	})
 }

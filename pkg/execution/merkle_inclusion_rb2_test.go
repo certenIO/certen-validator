@@ -7,8 +7,9 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
-	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/trie"
+
+	"github.com/certen/independant-validator/pkg/ethproof"
 )
 
 // RB-2: independent trie.VerifyProof inclusion-proof tests.
@@ -48,34 +49,23 @@ func buildTestTxs(n int) []*types.Transaction {
 	return txs
 }
 
-// buildTxProof mirrors ExternalChainObserver.constructTxInclusionProof without RPC.
+// buildTxProof proves txs[idx] the way both observers do (pkg/ethproof), without RPC.
 func buildTxProof(t *testing.T, txs []*types.Transaction, idx uint) (*MerkleInclusionProof, common.Hash) {
 	t.Helper()
-	txTrie := trie.NewEmpty(nil)
+	values := make([][]byte, len(txs))
 	for i, tx := range txs {
-		key, _ := rlp.EncodeToBytes(uint(i))
 		val, err := tx.MarshalBinary()
 		if err != nil {
 			t.Fatalf("marshal tx %d: %v", i, err)
 		}
-		txTrie.Update(key, val)
+		values[i] = val
 	}
-	root := txTrie.Hash()
-
-	key, _ := rlp.EncodeToBytes(uint(idx))
-	collector := NewMerkleProofCollector()
-	if err := txTrie.Prove(key, collector); err != nil {
+	root := ethproof.TrieRoot(values)
+	proof, err := ethproof.Prove(values, uint64(idx), root)
+	if err != nil {
 		t.Fatalf("prove: %v", err)
 	}
-	leafVal, _ := txs[idx].MarshalBinary()
-	return &MerkleInclusionProof{
-		LeafHash:     [32]byte(crypto.Keccak256Hash(leafVal)),
-		LeafIndex:    uint64(idx),
-		ExpectedRoot: [32]byte(root),
-		ProofNodes:   collector.GetNodes(),
-		LeafValue:    leafVal,
-		Verified:     true,
-	}, root
+	return proof, root
 }
 
 func TestRB2_InclusionProofVerifiesAndBindsHeaderRoot(t *testing.T) {

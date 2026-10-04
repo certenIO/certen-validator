@@ -726,54 +726,153 @@ func signatureScheme(details json.RawMessage) string {
 	return d.Scheme
 }
 
-// EthAnchorTxReader reads anchor transactions over each chain's configured RPC endpoints.
+// EthAnchorTxReader reads anchor transactions for the repairs (`validator repair anchor-blocks`, `repair projections`),
+// which WRITE what they read to the database. So every fact a repair records is an agreed read over every provider
+// configured for the chain (ethrpc.AgreeingReader, the rule of RB5-F53): the receipt (its status and block), the block's
+// hash, number and time, its place in the canonical chain, and the head each hold only when at least two independent
+// providers answer them identically and none contradicts them; headers are read BY HASH once the receipt is agreed. The
+// transaction itself is located through any provider and taken only as signed (signedTransaction): it authenticates
+// itself by its hash and signature. These reads used to go through ethrpc.Pool - one provider at a time - so a single
+// provider's receipt, block or anchor record was written as the chain's.
 type EthAnchorTxReader struct {
-	mu    sync.Mutex
-	pools map[int64]*ethrpc.Pool
+	mu      sync.Mutex
+	readers map[int64]*ethrpc.AgreeingReader
 }
 
-// NewEthAnchorTxReader creates a reader; pools are built per chain on first use.
+// NewEthAnchorTxReader creates a reader; each chain's agreeing reader is built on first use, over every endpoint
+// configured for it (ethrpc.EndpointsForChain), and refused with fewer than two independent providers.
 func NewEthAnchorTxReader() *EthAnchorTxReader {
-	return &EthAnchorTxReader{pools: map[int64]*ethrpc.Pool{}}
+	return &EthAnchorTxReader{readers: map[int64]*ethrpc.AgreeingReader{}}
 }
 
-func (r *EthAnchorTxReader) pool(chainID int64) (*ethrpc.Pool, error) {
+func (r *EthAnchorTxReader) reader(ctx context.Context, chainID int64) (*ethrpc.AgreeingReader, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if p, ok := r.pools[chainID]; ok {
-		return p, nil
+	if a, ok := r.readers[chainID]; ok {
+		return a, nil
 	}
 	key := ethrpc.ChainKeyForID(chainID)
 	if key == "" {
 		return nil, fmt.Errorf("chain %d is not known to this build", chainID)
 	}
-	p, err := ethrpc.PoolForChain(key, nil)
-	if err != nil {
-		return nil, err
+	urls := ethrpc.EndpointsForChain(key)
+	if len(urls) == 0 {
+		return nil, fmt.Errorf("no endpoint configured for chain %d (set %s_RPC_URL and %s_URL_FALLBACKS)", chainID,
+			ethrpc.ChainEnvPrefix(key), ethrpc.ChainEnvPrefix(key))
 	}
-	r.pools[chainID] = p
-	return p, nil
+	a, err := ethrpc.NewAgreeingReader(ctx, chainID, urls, ethrpc.DefaultReadTimeout)
+	if err != nil {
+		return nil, fmt.Errorf("chain %d: %w", chainID, err)
+	}
+	r.readers[chainID] = a
+	return a, nil
 }
 
-// ReadAnchorTx implements AnchorTxReader. It reads over the pool so that an endpoint lacking the history
-// (see ReadAnchorTxFrom) hands the read to the next provider instead of ending it.
+// ReadAnchorTx implements AnchorTxReader through the chain's agreeing providers (see EthAnchorTxReader).
 func (r *EthAnchorTxReader) ReadAnchorTx(ctx context.Context, chainID int64, txHash string) (*AnchorTxReading, error) {
-	p, err := r.pool(chainID)
+	a, err := r.reader(ctx, chainID)
 	if err != nil {
 		return nil, err
 	}
-	var reading *AnchorTxReading
-	err = p.Do(ctx, func(c *ethclient.Client) error {
-		got, err := ReadAnchorTxFrom(ctx, c, chainID, txHash)
-		if err == nil {
-			reading = got
+	return ReadAnchorTxAgreed(ctx, a, chainID, txHash)
+}
+
+// ReadAnchorTxAgreed reads a transaction, its receipt and the head through agreeing providers:
+//   - the transaction from the first provider that holds it, accepted only as signed for chainID and hashing to txHash;
+//   - its receipt agreed by hash or, where a provider's transaction index lacks it, agreed from its block's receipts;
+//   - the block's header agreed BY the receipt's block hash, and the header at its height agreed to be that block;
+//   - the head as the lowest any provider reports.
+//
+// A transaction no provider holds is unreadable (ethrpc.ErrEndpointLacksHistory), never absent; facts the providers do
+// not agree on are refused by name (ethrpc.ErrProvidersDisagree, ethrpc.ErrTooFewProviders).
+func ReadAnchorTxAgreed(ctx context.Context, a *ethrpc.AgreeingReader, chainID int64, txHash string) (*AnchorTxReading, error) {
+	hash := common.HexToHash(txHash)
+	var (
+		signed   *types.Transaction
+		from     common.Address
+		stated   rpcTransaction
+		failures []string
+	)
+	for _, loc := range a.Locators() {
+		raw, err := loc.RawTransactionByHash(ctx, hash)
+		if err != nil {
+			failures = append(failures, fmt.Sprintf("%s: %v", loc.Host, err))
+			continue
 		}
-		return err
-	})
-	if err != nil {
-		return nil, err
+		if len(raw) == 0 || string(raw) == "null" {
+			continue
+		}
+		if signed, from, err = signedTransaction(raw, chainID, hash); err != nil {
+			return nil, fmt.Errorf("%s: %w", loc.Host, err)
+		}
+		if err := json.Unmarshal(raw, &stated); err != nil {
+			return nil, fmt.Errorf("transaction %s from %s: %w", txHash, loc.Host, err)
+		}
+		break
 	}
-	return reading, nil
+	if signed == nil {
+		if len(failures) > 0 {
+			return nil, fmt.Errorf("transaction %s: %w (%s)", txHash, ethrpc.ErrEndpointLacksHistory, strings.Join(failures, "; "))
+		}
+		// Unknown to every provider: unreadable here, not proven absent.
+		return nil, fmt.Errorf("transaction %s: %w", txHash, ethrpc.ErrEndpointLacksHistory)
+	}
+
+	receipt, err := a.TransactionReceipt(ctx, hash)
+	if errors.Is(err, ethereum.NotFound) {
+		receipt, err = nil, nil
+		if stated.BlockHash == nil {
+			return &AnchorTxReading{Found: true}, nil // pending: no block to state
+		}
+		receipts, blockErr := a.BlockReceipts(ctx, rpc.BlockNumberOrHashWithHash(*stated.BlockHash, false))
+		if blockErr != nil {
+			return nil, fmt.Errorf("receipt of %s, from block %s's receipts: %w", txHash, stated.BlockHash.Hex(), blockErr)
+		}
+		for _, candidate := range receipts {
+			if candidate != nil && candidate.TxHash == hash {
+				receipt = candidate
+				break
+			}
+		}
+		if receipt == nil {
+			return nil, fmt.Errorf("receipt of %s: not in the agreed receipts of block %s: %w", txHash, stated.BlockHash.Hex(), ethrpc.ErrEndpointLacksHistory)
+		}
+	}
+	if err != nil {
+		return nil, fmt.Errorf("receipt of %s: %w", txHash, err)
+	}
+	if receipt.BlockNumber == nil || (stated.BlockHash != nil && receipt.BlockHash != *stated.BlockHash) {
+		return nil, fmt.Errorf("the agreed receipt of %s names block %v %s; the provider that served the transaction states %v",
+			txHash, receipt.BlockNumber, receipt.BlockHash.Hex(), stated.BlockHash)
+	}
+	block := receipt.BlockNumber.Uint64()
+	header, err := a.HeaderByHash(ctx, receipt.BlockHash)
+	if err != nil {
+		return nil, fmt.Errorf("header of block %d (%s): %w", block, receipt.BlockHash.Hex(), err)
+	}
+	if header == nil || header.Number == nil || header.Number.Uint64() != block || header.Hash() != receipt.BlockHash || header.Time == 0 {
+		return nil, fmt.Errorf("the header for block hash %s is not block %d", receipt.BlockHash.Hex(), block)
+	}
+	canonical, err := a.HeaderByNumber(ctx, new(big.Int).SetUint64(block))
+	if err != nil {
+		return nil, fmt.Errorf("the canonical block at %d: %w", block, err)
+	}
+	if canonical.Hash() != receipt.BlockHash {
+		return nil, fmt.Errorf("transaction %s's block %s is not the canonical block %d (%s)", txHash, receipt.BlockHash.Hex(), block, canonical.Hash().Hex())
+	}
+	head, err := a.HeaderByNumber(ctx, big.NewInt(int64(rpc.LatestBlockNumber)))
+	if err != nil {
+		return nil, fmt.Errorf("the head: %w", err)
+	}
+	to := ""
+	if signed.To() != nil {
+		to = strings.ToLower(signed.To().Hex())
+	}
+	return &AnchorTxReading{
+		Found: true, Succeeded: receipt.Status == types.ReceiptStatusSuccessful,
+		BlockNumber: block, BlockHash: receipt.BlockHash.Hex(), Head: head.Number.Uint64(), Input: signed.Data(),
+		From: strings.ToLower(from.Hex()), To: to, BlockTime: header.Time,
+	}, nil
 }
 
 // rpcTransaction is the part of eth_getTransactionByHash the reading needs besides the signed transaction:
@@ -815,7 +914,8 @@ func signedTransaction(raw json.RawMessage, chainID int64, want common.Hash) (*t
 	return &tx, from, nil
 }
 
-// ReadAnchorTxFrom reads a transaction, its receipt and the head from one endpoint. The receipt is taken
+// ReadAnchorTxFrom reads a transaction, its receipt and the head from ONE endpoint. The repairs, which write what they
+// read, use ReadAnchorTxAgreed instead. The receipt is taken
 // by hash, or else from its block's receipts, which do not depend on a transaction index. An endpoint that
 // returns the transaction but neither receipt does not hold that block's receipts; that is
 // ethrpc.ErrEndpointLacksHistory, never "no such transaction".
@@ -893,7 +993,9 @@ func ReadAnchorTxFrom(ctx context.Context, c *ethclient.Client, chainID int64, t
 func (r *EthAnchorTxReader) Close() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	for _, p := range r.pools {
-		p.Close()
+	for _, a := range r.readers {
+		for _, loc := range a.Locators() {
+			loc.Client.Close()
+		}
 	}
 }

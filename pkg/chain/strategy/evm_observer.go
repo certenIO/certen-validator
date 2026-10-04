@@ -1,19 +1,23 @@
 // Copyright 2025 Certen Protocol
 //
 // EVM Chain Observer
-// Watches EVM transactions until finalization and constructs Merkle proofs
+// Watches EVM transactions until finalization and proves them in their block
 //
 // Per Unified Multi-Chain Architecture:
 // - Extracted from pkg/execution/external_chain_observer.go
 // - Implements transaction observation for EVM chains
-// - Constructs Merkle inclusion proofs for transactions and receipts
+// - Builds Merkle-Patricia inclusion proofs of the transaction and its receipt against the block's transactionsRoot and
+//   receiptsRoot (pkg/ethproof, shared with the settlement gate), verifies them, and binds them into the signed result
+//   hash (RB5-F16)
 
 package strategy
 
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log"
 	"math/big"
@@ -25,6 +29,7 @@ import (
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/rlp"
 
+	"github.com/certen/independant-validator/pkg/ethproof"
 	"github.com/certen/independant-validator/pkg/ethrpc"
 )
 
@@ -179,9 +184,137 @@ func (o *EVMObserver) ObserveTransaction(ctx context.Context, txHash common.Hash
 		o.pendingLock.Unlock()
 	}()
 
-	// Every chain but TRON: the receipt as the FINALIZED chain holds it - its block at or below the chain's finalized tag,
-	// canonical at its height, the receipt that block's own (ethrpc.SettledInFinalizedChain, RB5-F49). It used to wait for
-	// a count of confirmations (2 on testnets) on whatever block the receipt named - a block a reorg may have replaced.
+	if tronChainIDs[o.chainID] {
+		return o.observeTron(ctx, txHash, deadline)
+	}
+	result, err := o.observeSettled(ctx, txHash, deadline)
+	if err != nil {
+		return nil, err
+	}
+	if o.onFinalized != nil {
+		o.onFinalized(result)
+	}
+	return result, nil
+}
+
+// observeSettled is the observation on every chain but TRON.
+//
+//   - The receipt is the one the FINALIZED chain holds: its block at or below the chain's finalized tag, canonical at its
+//     height, the receipt that block's own (ethrpc.SettledInFinalizedChain, RB5-F49), all read from agreeing providers
+//     (RB5-F53).
+//   - The transaction and its receipt are proven in that block by Merkle-Patricia inclusion proofs against the header's
+//     transactionsRoot and receiptsRoot (pkg/ethproof, RB5-F16), built from the block's agreed bodies and verified before
+//     use. The proofs and the header are carried on the result, verify offline (VerifyObservationProofs), and are bound
+//     into its ResultHash - the hash Phase 8 signs.
+//   - What the transaction called and who sent it are read from the proven transaction itself, not from a provider's
+//     paraphrase of it.
+//
+// A settlement that cannot be proven is refused by name; it is never observed without its proofs.
+func (o *EVMObserver) observeSettled(ctx context.Context, txHash common.Hash, deadline time.Time) (*ObservationResult, error) {
+	if o.finality == nil {
+		return nil, fmt.Errorf("chain %d: no agreeing providers to observe %s with: %v", o.chainID, txHash.Hex(), o.finalityErr)
+	}
+	receipt, err := ethrpc.SettledInFinalizedChain(ctx, o.finality, txHash, deadline, o.pollingInterval, log.Printf)
+	if err != nil {
+		return nil, fmt.Errorf("observe %s in the finalized chain %d: %w", txHash.Hex(), o.chainID, err)
+	}
+	// By HASH, from the agreeing providers: a read by height could be answered by a backend on another fork.
+	header, err := o.finality.HeaderByHash(ctx, receipt.BlockHash)
+	if err != nil {
+		return nil, fmt.Errorf("read the finalized header %s on chain %d: %w", receipt.BlockHash.Hex(), o.chainID, err)
+	}
+	if header.Hash() != receipt.BlockHash {
+		return nil, fmt.Errorf("the finalized header at %d on chain %d is %s, the receipt names %s", receipt.BlockNumber.Uint64(),
+			o.chainID, header.Hash().Hex(), receipt.BlockHash.Hex())
+	}
+	src, ok := o.finality.(ethproof.Source)
+	if !ok {
+		return nil, fmt.Errorf("chain %d: the finality reader (%T) cannot serve a block's agreed bodies, so %s cannot be proven in its block",
+			o.chainID, o.finality, txHash.Hex())
+	}
+	settlement, err := ethproof.BuildWithin(ctx, src, receipt.BlockHash, txHash, uint64(receipt.TransactionIndex), deadline, o.pollingInterval)
+	if err != nil {
+		return nil, fmt.Errorf("prove %s in block %s on chain %d: %w", txHash.Hex(), receipt.BlockHash.Hex(), o.chainID, err)
+	}
+
+	result := o.finalizedResult(ctx, receipt, header)
+	// What the transaction called and who signed it, from the proven transaction.
+	var tx types.Transaction
+	if err := tx.UnmarshalBinary(settlement.Tx.LeafValue); err != nil {
+		return nil, fmt.Errorf("the proven transaction %s on chain %d does not decode: %w", txHash.Hex(), o.chainID, err)
+	}
+	if to := tx.To(); to != nil {
+		result.TxTo = to.Hex()
+	}
+	if data := tx.Data(); len(data) >= 4 {
+		result.TxSelector = hex.EncodeToString(data[:4])
+	}
+	from, err := types.Sender(types.LatestSignerForChainID(big.NewInt(o.chainID)), &tx)
+	if err != nil {
+		return nil, fmt.Errorf("recover the sender of %s on chain %d: %w", txHash.Hex(), o.chainID, err)
+	}
+	result.TxFrom = from.Hex()
+	result.ObserverValidatorID = o.validatorID
+	result.ObservedAt = time.Now().UTC()
+	if err := bindInclusion(result, settlement); err != nil {
+		return nil, fmt.Errorf("chain %d: %w", o.chainID, err)
+	}
+	return result, nil
+}
+
+// bindInclusion carries a settlement's proofs on the observation exactly as they are emitted - the transaction proof as
+// MerkleProof, the receipt proof as ReceiptProof (each the JSON of an ethproof.InclusionProof), the header as
+// BlockHeaderRLP, and the proven receipt as RawReceipt - verifies them as a reader would, from those bytes alone, takes
+// the block's roots from the verified header, and binds all of it into the ResultHash.
+func bindInclusion(result *ObservationResult, s *ethproof.Settlement) error {
+	txJSON, err := json.Marshal(s.Tx)
+	if err != nil {
+		return fmt.Errorf("encode the transaction proof of %s: %w", s.TxHash.Hex(), err)
+	}
+	rcJSON, err := json.Marshal(s.Receipt)
+	if err != nil {
+		return fmt.Errorf("encode the receipt proof of %s: %w", s.TxHash.Hex(), err)
+	}
+	result.MerkleProof, result.ReceiptProof, result.BlockHeaderRLP = txJSON, rcJSON, common.CopyBytes(s.Header)
+	result.RawReceipt = common.CopyBytes(s.Receipt.LeafValue)
+	header, receipt, err := VerifyObservationProofs(result)
+	if err != nil {
+		return err
+	}
+	copy(result.StateRoot[:], header.Root.Bytes())
+	copy(result.TransactionsRoot[:], header.TxHash.Bytes())
+	copy(result.ReceiptsRoot[:], header.ReceiptHash.Bytes())
+	if receipt.Succeeded() != (result.Status == 1) {
+		return fmt.Errorf("the proven receipt of %s says succeeded=%v, the observation states status %d", s.TxHash.Hex(), receipt.Succeeded(), result.Status)
+	}
+	result.ResultHash = computeResultHash(result)
+	return nil
+}
+
+// VerifyObservationProofs verifies, from the observation's own bytes, that its transaction and its receipt are included
+// in its block: BlockHeaderRLP hashes to BlockHash, MerkleProof proves TxHash and ReceiptProof its receipt at the same
+// index, against that header's transactionsRoot and receiptsRoot (ethproof.VerifySettlement). It returns the header and
+// the proven receipt.
+func VerifyObservationProofs(result *ObservationResult) (*types.Header, *ethproof.ReceiptLeaf, error) {
+	var txProof, rcProof ethproof.InclusionProof
+	if err := json.Unmarshal(result.MerkleProof, &txProof); err != nil {
+		return nil, nil, fmt.Errorf("the transaction proof of %s does not decode: %w", result.TxHash, err)
+	}
+	if err := json.Unmarshal(result.ReceiptProof, &rcProof); err != nil {
+		return nil, nil, fmt.Errorf("the receipt proof of %s does not decode: %w", result.TxHash, err)
+	}
+	header, receipt, err := ethproof.VerifySettlement(common.HexToHash(result.BlockHash), result.BlockHeaderRLP,
+		common.HexToHash(result.TxHash), &txProof, &rcProof)
+	if err != nil {
+		return nil, nil, fmt.Errorf("the inclusion proofs of %s: %w", result.TxHash, err)
+	}
+	return header, receipt, nil
+}
+
+// observeTron is the observation on TRON's EVM-compatible networks (outside the supported scope; restored by runbook
+// RB8). TRON's nodes serve headers go-ethereum cannot decode, so it keeps its receipt-only path. It carries no inclusion
+// proofs - none is built from what TRON serves, and none is claimed.
+func (o *EVMObserver) observeTron(ctx context.Context, txHash common.Hash, deadline time.Time) (*ObservationResult, error) {
 	var (
 		receipt   *types.Receipt
 		header    *types.Header
@@ -189,99 +322,81 @@ func (o *EVMObserver) ObserveTransaction(ctx context.Context, txHash common.Hash
 		result    *ObservationResult
 		err       error
 	)
-	if !tronChainIDs[o.chainID] {
-		if o.finality == nil {
-			return nil, fmt.Errorf("chain %d: no agreeing providers to observe %s with: %v", o.chainID, txHash.Hex(), o.finalityErr)
+	// TRON (outside the settled chains' scope): unchanged.
+	if receipt, err = o.waitForReceipt(ctx, txHash, deadline); err != nil {
+		return nil, fmt.Errorf("wait for receipt: %w", err)
+	}
+	// TRON returns non-standard fields ("stateRoot":"0x") that break Go's header unmarshal, so a receipt-only observation
+	// stands in when its header cannot be read.
+	header, headerErr = o.client.HeaderByHash(ctx, receipt.BlockHash)
+	if headerErr != nil {
+		// Fallback: build result from receipt only (TRON, non-standard EVM chains)
+		log.Printf("⚠️ [EVM-OBSERVER] HeaderByHash failed (non-standard chain): %v — using receipt-only observation", headerErr)
+		result = &ObservationResult{
+			TxHash:                receipt.TxHash.Hex(),
+			BlockNumber:           receipt.BlockNumber.Uint64(),
+			BlockHash:             receipt.BlockHash.Hex(),
+			BlockTimestamp:        time.Now().UTC(), // Best approximation
+			Status:                uint8(receipt.Status),
+			RequiredConfirmations: o.requiredConfirmations,
+			GasUsed:               receipt.GasUsed,
+			ChainIDNumeric:        o.chainID,
 		}
-		receipt, err = ethrpc.SettledInFinalizedChain(ctx, o.finality, txHash, deadline, o.pollingInterval, log.Printf)
-		if err != nil {
-			return nil, fmt.Errorf("observe %s in the finalized chain %d: %w", txHash.Hex(), o.chainID, err)
+		for _, l := range receipt.Logs {
+			topics := make([]string, len(l.Topics))
+			for i, t := range l.Topics {
+				topics[i] = t.Hex()
+			}
+			result.Logs = append(result.Logs, EventLog{
+				Address:  l.Address.Hex(),
+				Topics:   topics,
+				Data:     l.Data,
+				LogIndex: l.Index,
+			})
 		}
-		// By HASH, from the agreeing providers: a read by height could be answered by a backend on another fork.
-		if header, err = o.finality.HeaderByHash(ctx, receipt.BlockHash); err != nil {
-			return nil, fmt.Errorf("read the finalized header %s on chain %d: %w", receipt.BlockHash.Hex(), o.chainID, err)
+
+		// Wait for confirmations using BlockNumber() (works on TRON jsonrpc even though HeaderByHash doesn't)
+		confirmTicker := time.NewTicker(o.pollingInterval)
+		defer confirmTicker.Stop()
+		confirmed := false
+		for !confirmed {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-confirmTicker.C:
+				if time.Now().After(deadline) {
+					// Timeout — mark as finalized anyway since we have a receipt
+					log.Printf("⚠️ [EVM-OBSERVER] Confirmation timeout on non-standard chain, accepting receipt as finalized")
+					confirmed = true
+					break
+				}
+				currentBlock, err := o.client.BlockNumber(ctx)
+				if err != nil {
+					continue
+				}
+				confirmations := int(currentBlock - receipt.BlockNumber.Uint64())
+				result.Confirmations = confirmations
+				if confirmations >= o.requiredConfirmations {
+					confirmed = true
+				}
+			}
 		}
-		if header.Hash() != receipt.BlockHash {
-			return nil, fmt.Errorf("the finalized header at %d on chain %d is %s, the receipt names %s", receipt.BlockNumber.Uint64(),
-				o.chainID, header.Hash().Hex(), receipt.BlockHash.Hex())
-		}
-		result = o.finalizedResult(ctx, receipt, header)
+		result.IsFinalized = true
+		result.ResultHash = computeResultHash(result)
 	} else {
-		// TRON (outside the settled chains' scope): unchanged.
-		if receipt, err = o.waitForReceipt(ctx, txHash, deadline); err != nil {
-			return nil, fmt.Errorf("wait for receipt: %w", err)
+		// Wait for required confirmations
+		result, err = o.waitForConfirmationsFromHeader(ctx, receipt, header, deadline)
+		if err != nil {
+			return nil, fmt.Errorf("wait for confirmations: %w", err)
 		}
-		// TRON returns non-standard fields ("stateRoot":"0x") that break Go's header unmarshal, so a receipt-only observation
-		// stands in when its header cannot be read.
-		header, headerErr = o.client.HeaderByHash(ctx, receipt.BlockHash)
-		if headerErr != nil {
-			// Fallback: build result from receipt only (TRON, non-standard EVM chains)
-			log.Printf("⚠️ [EVM-OBSERVER] HeaderByHash failed (non-standard chain): %v — using receipt-only observation", headerErr)
-			result = &ObservationResult{
-				TxHash:                receipt.TxHash.Hex(),
-				BlockNumber:           receipt.BlockNumber.Uint64(),
-				BlockHash:             receipt.BlockHash.Hex(),
-				BlockTimestamp:        time.Now().UTC(), // Best approximation
-				Status:                uint8(receipt.Status),
-				RequiredConfirmations: o.requiredConfirmations,
-				GasUsed:               receipt.GasUsed,
-				ChainIDNumeric:        o.chainID,
-			}
-			for _, l := range receipt.Logs {
-				topics := make([]string, len(l.Topics))
-				for i, t := range l.Topics {
-					topics[i] = t.Hex()
-				}
-				result.Logs = append(result.Logs, EventLog{
-					Address:  l.Address.Hex(),
-					Topics:   topics,
-					Data:     l.Data,
-					LogIndex: l.Index,
-				})
-			}
-
-			// Wait for confirmations using BlockNumber() (works on TRON jsonrpc even though HeaderByHash doesn't)
-			confirmTicker := time.NewTicker(o.pollingInterval)
-			defer confirmTicker.Stop()
-			confirmed := false
-			for !confirmed {
-				select {
-				case <-ctx.Done():
-					return nil, ctx.Err()
-				case <-confirmTicker.C:
-					if time.Now().After(deadline) {
-						// Timeout — mark as finalized anyway since we have a receipt
-						log.Printf("⚠️ [EVM-OBSERVER] Confirmation timeout on non-standard chain, accepting receipt as finalized")
-						confirmed = true
-						break
-					}
-					currentBlock, err := o.client.BlockNumber(ctx)
-					if err != nil {
-						continue
-					}
-					confirmations := int(currentBlock - receipt.BlockNumber.Uint64())
-					result.Confirmations = confirmations
-					if confirmations >= o.requiredConfirmations {
-						confirmed = true
-					}
-				}
-			}
-			result.IsFinalized = true
-			result.ResultHash = computeResultHash(result)
-		} else {
-			// Wait for required confirmations
-			result, err = o.waitForConfirmationsFromHeader(ctx, receipt, header, deadline)
-			if err != nil {
-				return nil, fmt.Errorf("wait for confirmations: %w", err)
-			}
-		}
-
 	}
 
-	// Try full block fetch for Merkle proofs (best-effort — fails on OP Stack and TRON chains)
-	block, blockErr := o.client.BlockByHash(ctx, receipt.BlockHash)
-	if blockErr == nil {
-		result, _ = o.addMerkleProofs(ctx, result, receipt, block)
+	// The block's roots, from whichever read TRON's node answers.
+	if block, blockErr := o.client.BlockByHash(ctx, receipt.BlockHash); blockErr == nil {
+		copy(result.StateRoot[:], block.Root().Bytes())
+		copy(result.TransactionsRoot[:], block.TxHash().Bytes())
+		copy(result.ReceiptsRoot[:], block.ReceiptHash().Bytes())
+		result.ResultHash = computeResultHash(result)
 	} else if headerErr == nil {
 		// Populate block roots from header directly (only if we have a valid header)
 		copy(result.StateRoot[:], header.Root.Bytes())
@@ -333,13 +448,9 @@ func (o *EVMObserver) ObserveTransaction(ctx context.Context, txHash common.Hash
 		signer := types.LatestSignerForChainID(big.NewInt(o.chainID))
 		if from, sErr := types.Sender(signer, tx); sErr == nil {
 			result.TxFrom = from.Hex()
-		} else if !tronChainIDs[o.chainID] {
-			return nil, fmt.Errorf("recover the sender of %s on chain %d: %w", txHash.Hex(), o.chainID, sErr)
 		} else {
 			log.Printf("⚠️ [EVM-OBSERVER] types.Sender failed (non-standard chain?): %v", sErr)
 		}
-	} else if txErr != nil && !tronChainIDs[o.chainID] {
-		return nil, fmt.Errorf("read transaction %s on chain %d: %w", txHash.Hex(), o.chainID, txErr)
 	} else if txErr != nil {
 		log.Printf("⚠️ [EVM-OBSERVER] TransactionByHash failed: %v — trying raw RPC fallback for tx_from", txErr)
 		// Fallback: raw JSON-RPC call to extract "from" field (works on TRON jsonrpc)
@@ -474,81 +585,14 @@ func (o *EVMObserver) waitForConfirmationsFromHeader(ctx context.Context, receip
 	}
 }
 
-// addMerkleProofs adds Merkle inclusion proofs to the observation result
-func (o *EVMObserver) addMerkleProofs(ctx context.Context, result *ObservationResult, receipt *types.Receipt, block *types.Block) (*ObservationResult, error) {
-	// Store block roots
-	copy(result.StateRoot[:], block.Root().Bytes())
-	copy(result.TransactionsRoot[:], block.TxHash().Bytes())
-	copy(result.ReceiptsRoot[:], block.ReceiptHash().Bytes())
+// resultHashInclusionTag opens the part of the result hash that binds the inclusion proofs (RB5-F16).
+const resultHashInclusionTag = "certen:evm-observation:inclusion:v1"
 
-	// Get all transactions in the block for Merkle proof
-	txs := block.Transactions()
-	txIndex := -1
-	for i, tx := range txs {
-		if tx.Hash() == receipt.TxHash {
-			txIndex = i
-			break
-		}
-	}
-
-	if txIndex >= 0 {
-		// Construct transaction Merkle proof
-		txProof, err := constructTxMerkleProof(txs, txIndex)
-		if err == nil {
-			result.MerkleProof = txProof
-		}
-	}
-
-	// Compute result hash
-	resultHash := computeResultHash(result)
-	result.ResultHash = resultHash
-
-	// Store raw receipt
-	rawReceipt, err := rlp.EncodeToBytes(receipt)
-	if err == nil {
-		result.RawReceipt = rawReceipt
-	}
-
-	return result, nil
-}
-
-// =============================================================================
-// MERKLE PROOF CONSTRUCTION
-// =============================================================================
-
-// constructTxMerkleProof constructs a Merkle proof for a transaction
-func constructTxMerkleProof(txs types.Transactions, txIndex int) ([]byte, error) {
-	if txIndex < 0 || txIndex >= len(txs) {
-		return nil, fmt.Errorf("invalid transaction index")
-	}
-
-	if len(txs) == 0 {
-		return nil, fmt.Errorf("no transactions in block")
-	}
-
-	// Build proof data containing:
-	// 1. The target transaction hash
-	// 2. All sibling transaction hashes for verification
-	var proofData []byte
-
-	// Add the target transaction hash first
-	targetTx := txs[txIndex]
-	proofData = append(proofData, targetTx.Hash().Bytes()...)
-
-	// Add sibling hashes for Merkle proof verification
-	// This is a simplified proof - for full verification, we'd need
-	// the actual Merkle tree path, but for our attestation purposes
-	// the transaction hash + block's tx root is sufficient
-	for i, tx := range txs {
-		if i != txIndex {
-			proofData = append(proofData, tx.Hash().Bytes()...)
-		}
-	}
-
-	return proofData, nil
-}
-
-// computeResultHash computes a deterministic hash of the observation result
+// computeResultHash computes a deterministic hash of the observation result: the transaction, its block and status, the
+// block's roots, and - domain-tagged and length-prefixed - the exact inclusion proofs and header the observation carries
+// (MerkleProof, ReceiptProof, BlockHeaderRLP). A signature over it therefore signs the proofs, byte for byte, that
+// VerifyObservationProofs checks; every validator that proves the same settlement from the same block computes the same
+// bytes. TRON's observation carries none, and binds that it carries none.
 func computeResultHash(result *ObservationResult) [32]byte {
 	h := sha256.New()
 
@@ -559,6 +603,14 @@ func computeResultHash(result *ObservationResult) [32]byte {
 	h.Write(result.StateRoot[:])
 	h.Write(result.TransactionsRoot[:])
 	h.Write(result.ReceiptsRoot[:])
+
+	h.Write([]byte(resultHashInclusionTag))
+	var n [8]byte
+	for _, part := range [][]byte{result.MerkleProof, result.ReceiptProof, result.BlockHeaderRLP} {
+		binary.BigEndian.PutUint64(n[:], uint64(len(part)))
+		h.Write(n[:])
+		h.Write(part)
+	}
 
 	var hash [32]byte
 	copy(hash[:], h.Sum(nil))

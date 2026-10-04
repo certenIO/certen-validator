@@ -58,7 +58,5 @@ func settlementInclusionProven(cycle *activeCycle) bool {
 	if cycle == nil || cycle.SettlementProof == nil {
 		return false
 	}
-	p := cycle.SettlementProof
-	return p.TxInclusionProof != nil && p.TxInclusionProof.Verify() &&
-		p.ReceiptInclusionProof != nil && p.ReceiptInclusionProof.Verify()
+	return cycle.SettlementProof.VerifyInclusionProofs() == nil
 }

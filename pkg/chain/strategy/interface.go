@@ -358,11 +358,17 @@ type ObservationResult struct {
 	// ResultHash is the hash of the execution result
 	ResultHash [32]byte `json:"result_hash"`
 
-	// MerkleProof for transaction inclusion (chain-specific)
+	// MerkleProof is the transaction's inclusion proof. On an EVM chain it is the JSON of an ethproof.InclusionProof
+	// against TransactionsRoot (RB5-F16), bound into ResultHash.
 	MerkleProof []byte `json:"merkle_proof,omitempty"`
 
-	// ReceiptProof for receipt inclusion (EVM-specific)
+	// ReceiptProof is the receipt's inclusion proof (EVM): the JSON of an ethproof.InclusionProof against ReceiptsRoot,
+	// bound into ResultHash.
 	ReceiptProof []byte `json:"receipt_proof,omitempty"`
+
+	// BlockHeaderRLP is the block header the EVM inclusion proofs resolve from: it hashes to BlockHash, so the proofs
+	// verify offline from the observation alone (ethproof.VerifySettlement). Bound into ResultHash.
+	BlockHeaderRLP []byte `json:"block_header_rlp,omitempty"`
 
 	// StateRoot from the block (for state proofs)
 	StateRoot [32]byte `json:"state_root,omitempty"`
@@ -373,7 +379,7 @@ type ObservationResult struct {
 	// ReceiptsRoot from the block (EVM)
 	ReceiptsRoot [32]byte `json:"receipts_root,omitempty"`
 
-	// RawReceipt is the raw transaction receipt
+	// RawReceipt is the receipt's consensus encoding; on an EVM chain, exactly the leaf ReceiptProof proves.
 	RawReceipt []byte `json:"raw_receipt,omitempty"`
 
 	// Logs from transaction execution
