@@ -64,6 +64,14 @@ func NewSpine(genesis *network.GlobalValues, next uint64) (*Spine, error) {
 	return &Spine{globals: genesis.Copy(), NextMajor: next}, nil
 }
 
+// Clone returns an independent copy, so one verified spine can be extended to several targets.
+func (s *Spine) Clone() *Spine {
+	c := *s
+	c.globals = s.globals.Copy()
+	c.Applied = append([]AppliedUpdate(nil), s.Applied...)
+	return &c
+}
+
 // Globals returns the validator set and globals as of the last verified anchor.
 func (s *Spine) Globals() *network.GlobalValues { return s.globals }
 
