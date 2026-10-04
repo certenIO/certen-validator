@@ -58,8 +58,12 @@ The verifier outputs one verdict per statement plus an overall verdict. A missin
 3. **L4 from the spine.** The Directory set is derived by induction from the incarnation anchor through
    `major-header-range` / `minor-root-range` to the exact root S1 ends at:
    - each window's anchor signatures are checked against the set in force;
-   - at every window, `dn.acme/network` and `dn.acme/globals` are proven against that window's certified root (closes
-     update omission, stale-globals replay, window skipping, a forged major-index entry);
+   - **completeness by main-chain accounting** (refined 2026-10-04, see note): at the target block, the state of
+     `dn.acme/network` and `dn.acme/globals` (including their main-chain roots and heights) is proven against the
+     certified root; every update the walk applied must be an entry of that main chain, and the walk must have applied
+     every entry (count = height − genesis). This closes update omission, stale-globals replay and window skipping using
+     only state at the target block, which is inside retention when the proof is built. Each update's window is checked
+     against the block its main-chain entry was recorded in;
    - a proof-authorized (signature-less, Kourou) anchor counts only as a Merkle path to an already-verified root;
    - the proof carries its spine segment. CERTEN-published checkpoints are accelerators the verifier re-derives, never
      inputs (measured: all 473 Kermit majors verify in 1.7 s / 887 KB).
@@ -71,12 +75,21 @@ The verifier outputs one verdict per statement plus an overall verdict. A missin
    replayed stale globals; skipped window; forged major-index entry; signature-less anchor presented as signed; receipt to
    an uncertified root.
 
+**Note (2026-10-04, from the live node):** r2 as signed off proved network/globals at *every* window. Historical state
+for old windows is not servable (~900-block retention, no archival node), so that check could never run for most of
+history. Main-chain accounting at the target block proves the same completeness from state that is servable, and is
+strictly stronger (it accounts for every write ever made, not only the windows a proof happens to cross).
+
 ## 5. Governance proof v2
 
 1. **G0:** the execution receipt bound to a certified Directory root (S1's receipt).
 2. **G1(a) — pages as they were:** for execution block B, each signer page and the principal's authority set queried
    `ForHeight=B`, `StartsAtMainState` required, `sha256(served bytes) == receipt.start`, combined to a certified root,
    signatures judged against the pages as proven. Every delegate page on every partition at its own recorded block.
+   **Captured at discovery**, not at proof build: the public node keeps state history for only ~900 state-changing
+   blocks (measured 2026-10-04: BVN1 [13591922, 13592814], DN [10377007, 10377923]; ~20 minutes on average, shorter
+   under load), and with no archival node (owner, 2026-10-04) the pages must be read within that window. Missed →
+   `g1_historical_unavailable`, by name.
    - Shadow cross-check: v1's replayed page must equal v2's served page for every intent; a disagreement is stop-the-line.
    - RB5-F19/B4: the enumeration route reads delegate pages as of execution, its window bounded at execution.
 3. **G1(b) — completeness:** proof that the authority set judged is the complete set in force at B (no omitted
