@@ -175,6 +175,11 @@ type OutcomeMemberEvidence struct {
 	AuthorityBook string           `json:"authorityBook"`
 	AuthorityPage uint64           `json:"authorityPage"`
 	Legs          []OutcomeTreeLeg `json:"legs"`
+	// LeafVersion is the account leaf version the member's batch leaf is of (RB5-F57): absent for v3, as the tree keeps it.
+	// NotBefore is the notBefore a v4 leaf binds (unix seconds; its notAfter is Deadline), and absent for v3, which binds
+	// no window.
+	LeafVersion AccountLeafVersion `json:"leafVersion,omitempty"`
+	NotBefore   int64              `json:"notBefore,omitempty"`
 	// Deadline (unix seconds) and FinalityMargin (seconds): a member not settled is decided at the first block past
 	// deadline + margin.
 	Deadline       int64 `json:"deadline"`
@@ -821,12 +826,34 @@ func (m OutcomeMemberEvidence) batchLeaf(chainID int64, a *anchorFacts, leaf Out
 	if err != nil {
 		return account, evidenceFail("the member's committed calls: %v", err)
 	}
-	exec := memberExecutionCommitment(chainID, calls)
-	got := ComputeBatchLeafV3(chainID, BatchLeafInput{ADIURL: m.ADIURL, ExecutionCommitment: exec, OperationID: leaf.OperationID,
-		AuthorityBook: book, AuthorityPage: m.AuthorityPage})
+	in := BatchLeafInput{ADIURL: m.ADIURL, ExecutionCommitment: memberExecutionCommitment(chainID, calls),
+		OperationID: leaf.OperationID, AuthorityBook: book, AuthorityPage: m.AuthorityPage}
+	// The leaf is recomputed as the version the member states (absent is v3), never another (RB5-F57).
+	version := AccountLeafV3
+	if m.LeafVersion != "" {
+		if version, err = ParseAccountLeafVersion(string(m.LeafVersion)); err != nil {
+			return account, evidenceFail("the member's leaf version: %v", err)
+		}
+	}
+	var got [32]byte
+	switch version {
+	case AccountLeafV3:
+		if m.NotBefore != 0 {
+			return account, evidenceFail("the member states a notBefore, and a v3 leaf binds no window")
+		}
+		got = ComputeBatchLeafV3(chainID, in)
+	case AccountLeafV4:
+		if m.NotBefore <= 0 {
+			return account, evidenceFail("a v4 leaf binds [notBefore, deadline], and the member states no notBefore")
+		}
+		in.NotBefore, in.NotAfter = uint64(m.NotBefore), uint64(m.Deadline)
+		got = ComputeBatchLeafV4(chainID, in)
+	default:
+		return account, evidenceFail("the member's leaf version %s has no recomputation", version)
+	}
 	if got != leaf.BatchLeaf {
-		return account, evidenceFail("the member's ADI, %d committed call(s), operation and authority recompute batch leaf 0x%x, the "+
-			"outcome leaf names 0x%x", len(calls), got[:8], leaf.BatchLeaf[:8])
+		return account, evidenceFail("the member's ADI, %d committed call(s), operation and authority recompute batch leaf 0x%x as %s, "+
+			"the outcome leaf names 0x%x", len(calls), got[:8], version, leaf.BatchLeaf[:8])
 	}
 	branch, err := evBranch(m.BatchBranch, "member.batchBranch")
 	if err != nil {
@@ -836,8 +863,8 @@ func (m OutcomeMemberEvidence) batchLeaf(chainID int64, a *anchorFacts, leaf Out
 		return account, evidenceFail("batch leaf 0x%x does not reach the anchor's batch root 0x%x over its %d-step branch", got[:8],
 			a.batchRoot[:8], len(branch))
 	}
-	chk.proved("member: batch leaf 0x%x recomputed from %s, its %d committed call(s), operation 0x%x and authority page %d, "+
-		"under the anchor's batch root", got[:8], m.ADIURL, len(calls), leaf.OperationID[:8], m.AuthorityPage)
+	chk.proved("member: %s batch leaf 0x%x recomputed from %s, its %d committed call(s), operation 0x%x and authority page %d, "+
+		"under the anchor's batch root", version, got[:8], m.ADIURL, len(calls), leaf.OperationID[:8], m.AuthorityPage)
 	return account, nil
 }
 

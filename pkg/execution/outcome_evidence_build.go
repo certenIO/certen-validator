@@ -184,7 +184,7 @@ func BuildOutcomeEvidence(ctx context.Context, c OutcomeEvidenceSource, in Outco
 		if err != nil {
 			return nil, err
 		}
-		ev.Member, err = buildMemberEvidence(ctx, c, m, leaf, ob, bb)
+		ev.Member, err = buildMemberEvidence(ctx, c, keptLeafVersion(t.LeafVersion), m, leaf, ob, bb)
 		if err != nil {
 			return nil, fmt.Errorf("member %d (operation 0x%x): %w", i, m.OperationID[:8], err)
 		}
@@ -204,7 +204,7 @@ func hexBranch(b [][32]byte) []string {
 	return out
 }
 
-func buildMemberEvidence(ctx context.Context, c OutcomeEvidenceSource, m OutcomeTreeMember, leaf OutcomeLeaf, outcomeBranch,
+func buildMemberEvidence(ctx context.Context, c OutcomeEvidenceSource, leafVersion AccountLeafVersion, m OutcomeTreeMember, leaf OutcomeLeaf, outcomeBranch,
 	batchBranch [][32]byte) (OutcomeMemberEvidence, error) {
 	h := func(b [32]byte) string { return "0x" + hex.EncodeToString(b[:]) }
 	ev := OutcomeMemberEvidence{
@@ -214,6 +214,7 @@ func buildMemberEvidence(ctx context.Context, c OutcomeEvidenceSource, m Outcome
 		OutcomeBranch: hexBranch(outcomeBranch), BatchBranch: hexBranch(batchBranch),
 		Account: strings.ToLower(m.Account.Hex()), ADIURL: m.ADIURL, AuthorityBook: h(m.AuthorityBook), AuthorityPage: m.AuthorityPage,
 		Legs: m.Legs, Deadline: m.Deadline, FinalityMargin: int64(nonSettlementFinality.Seconds()),
+		LeafVersion: leafVersion, NotBefore: m.NotBefore,
 	}
 	switch leaf.Status {
 	case OutcomeExecuted, OutcomeEffectsNotProven, OutcomeConsumedElsewhere:
