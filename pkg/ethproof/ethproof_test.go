@@ -101,6 +101,8 @@ func TestTheCapturedBlocksCoverTheChainsTransactionTypes(t *testing.T) {
 		ethprooftest.SepoliaSetCode:  {0x0, 0x2, 0x3, 0x4},
 		ethprooftest.BaseSepolia:     {0x0, 0x2, 0x7e},
 		ethprooftest.ArbitrumSepolia: {0x2, 0x6a},
+		ethprooftest.ArbitrumRetry:   {0x68, 0x69, 0x6a},
+		ethprooftest.ArbitrumDeposit: {0x64, 0x6a},
 	}
 	for name, types := range want {
 		_, b, _ := settlement(t, name)
@@ -320,5 +322,41 @@ func TestTheCommitmentBindsEveryByteOfTheProof(t *testing.T) {
 	c.Receipt.LeafIndex++
 	if c.Receipt.Commitment() == base {
 		t.Fatal("a changed index left the commitment unchanged")
+	}
+}
+
+// An Arbitrum Nitro transaction whose JSON lacks a field its consensus encoding carries is refused by name, never
+// encoded with a zero in its place.
+func TestANitroTransactionMissingAConsensusFieldIsRefused(t *testing.T) {
+	for _, c := range []struct {
+		name, typ, field string
+	}{
+		{ethprooftest.ArbitrumRetry, "0x68", "ticketId"},
+		{ethprooftest.ArbitrumRetry, "0x69", "retryData"},
+		{ethprooftest.ArbitrumRetry, "0x69", "beneficiary"},
+		{ethprooftest.ArbitrumDeposit, "0x64", "requestId"},
+	} {
+		f := ethprooftest.Load(t, c.name)
+		found := false
+		for _, tx := range f.Transactions() {
+			var typ string
+			_ = json.Unmarshal(tx["type"], &typ)
+			if typ != c.typ {
+				continue
+			}
+			found = true
+			raw, _ := json.Marshal(tx)
+			if _, _, err := ethproof.EncodeTxJSON(raw); err != nil {
+				t.Fatalf("%s type %s as served: %v", c.name, c.typ, err)
+			}
+			delete(tx, c.field)
+			raw, _ = json.Marshal(tx)
+			if _, _, err := ethproof.EncodeTxJSON(raw); err == nil || !strings.Contains(err.Error(), c.field) {
+				t.Fatalf("%s type %s without %s: %v", c.name, c.typ, c.field, err)
+			}
+		}
+		if !found {
+			t.Fatalf("%s holds no type-%s transaction", c.name, c.typ)
+		}
 	}
 }

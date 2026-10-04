@@ -75,16 +75,21 @@ func (f *Fixture) index() {
 //   - Sepolia 11792612: 224 transactions of types 0, 2 and 3 (blob), holding the real settlement 0x9d980cdd… at index 163;
 //   - Sepolia 11837286: 79 transactions of types 0, 2, 3 and 4 (EIP-7702 set-code); its "settlement" is the type-4 one;
 //   - Base Sepolia 47368146: types 0, 2 and the OP-stack deposit 0x7e, holding the real settlement 0x7a2c8522… at index 7;
-//   - Arbitrum Sepolia 312921216: types 2 and Nitro's internal 0x6a, holding the real settlement 0x5ec65d4b… at index 19.
+//   - Arbitrum Sepolia 312921216: types 2 and Nitro's internal 0x6a, holding the real settlement 0x5ec65d4b… at index 19;
+//   - Arbitrum Sepolia 315455204: Nitro's submit-retryable 0x69, its auto-redeem retry 0x68 and the internal 0x6a; its
+//     "settlement" is the submit-retryable;
+//   - Arbitrum Sepolia 313235886: Nitro's L1 ETH deposit 0x64 and the internal 0x6a; its "settlement" is the deposit.
 const (
 	Sepolia         = "sepolia_11792612"
 	SepoliaSetCode  = "sepolia_11837286"
 	BaseSepolia     = "base_sepolia_47368146"
 	ArbitrumSepolia = "arbitrum_sepolia_312921216"
+	ArbitrumRetry   = "arbitrum_sepolia_315455204"
+	ArbitrumDeposit = "arbitrum_sepolia_313235886"
 )
 
 // All names every captured block.
-var All = []string{Sepolia, SepoliaSetCode, BaseSepolia, ArbitrumSepolia}
+var All = []string{Sepolia, SepoliaSetCode, BaseSepolia, ArbitrumSepolia, ArbitrumRetry, ArbitrumDeposit}
 
 func testdataDir() string {
 	_, file, _, _ := runtime.Caller(0)

@@ -4,6 +4,7 @@ package ethproof
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/big"
 
@@ -26,7 +27,17 @@ import (
 //   - OP-stack deposit transaction (0x7e): 0x7e || rlp([sourceHash, from, to, mint, value, gas, isSystemTx, data])
 //   - OP-stack deposit receipt (0x7e), post-Canyon: 0x7e || rlp([status, cumulativeGasUsed, logsBloom, logs, depositNonce,
 //     depositReceiptVersion]) (pre-Canyon receipts carry depositNonce only; each field is included when present)
-//   - Arbitrum Nitro internal transaction (0x6a): 0x6a || rlp([chainId, data])
+//   - Arbitrum Nitro transactions (OffchainLabs go-ethereum, core/types/arb_types.go), each type || rlp(fields):
+//       0x64 deposit:           [chainId, l1RequestId, from, to, value]
+//       0x65 unsigned:          [chainId, from, nonce, gasFeeCap, gas, to, value, data]
+//       0x66 contract:          [chainId, requestId, from, gasFeeCap, gas, to, value, data]
+//       0x68 retry:             [chainId, nonce, from, gasFeeCap, gas, to, value, data, ticketId, refundTo, maxRefund,
+//                                submissionFeeRefund]
+//       0x69 submit retryable:  [chainId, requestId, from, l1BaseFee, depositValue, gasFeeCap, gas, retryTo, retryValue,
+//                                beneficiary, maxSubmissionFee, feeRefundAddr, retryData]
+//       0x6a internal:          [chainId, data]
+//     A nil `to`/`retryTo` (a creation) encodes as the empty string. The RPC states gasFeeCap as maxFeePerGas, l1RequestId
+//     as requestId and feeRefundAddr as refundTo; a submit-retryable's `input` is not consensus (its retryData is).
 //   - Arbitrum Nitro receipts: the standard typed receipt encoding (Nitro's extra receipt fields are not consensus).
 //
 // Any other unknown type is refused by name.
@@ -44,6 +55,22 @@ type rawTx struct {
 	Input      hexutil.Bytes   `json:"input"`
 	ChainID    *hexutil.Big    `json:"chainId"`
 	Data       hexutil.Bytes   `json:"data"`
+
+	// Arbitrum Nitro fields.
+	Nonce               hexutil.Uint64  `json:"nonce"`
+	MaxFeePerGas        *hexutil.Big    `json:"maxFeePerGas"`
+	RequestID           *common.Hash    `json:"requestId"`
+	TicketID            *common.Hash    `json:"ticketId"`
+	RefundTo            *common.Address `json:"refundTo"`
+	MaxRefund           *hexutil.Big    `json:"maxRefund"`
+	SubmissionFeeRefund *hexutil.Big    `json:"submissionFeeRefund"`
+	L1BaseFee           *hexutil.Big    `json:"l1BaseFee"`
+	DepositValue        *hexutil.Big    `json:"depositValue"`
+	RetryTo             *common.Address `json:"retryTo"`
+	RetryValue          *hexutil.Big    `json:"retryValue"`
+	RetryData           *hexutil.Bytes  `json:"retryData"`
+	Beneficiary         *common.Address `json:"beneficiary"`
+	MaxSubmissionFee    *hexutil.Big    `json:"maxSubmissionFee"`
 }
 
 type rawLog struct {
@@ -68,6 +95,11 @@ type rawReceipt struct {
 
 const (
 	opDepositTxType    = 0x7e
+	arbDepositTxType   = 0x64
+	arbUnsignedTxType  = 0x65
+	arbContractTxType  = 0x66
+	arbRetryTxType     = 0x68
+	arbSubmitRetryable = 0x69
 	arbInternalTxType  = 0x6a
 	maxGethKnownTxType = types.SetCodeTxType // every type go-ethereum decodes natively
 )
@@ -119,6 +151,9 @@ func EncodeTxJSON(raw json.RawMessage) ([]byte, common.Hash, error) {
 			return nil, t.Hash, err
 		}
 		return append([]byte{arbInternalTxType}, body...), t.Hash, nil
+	case uint64(t.Type) >= arbDepositTxType && uint64(t.Type) <= arbSubmitRetryable && uint64(t.Type) != 0x67:
+		enc, err := encodeNitroTx(&t)
+		return enc, t.Hash, err
 	default:
 		return nil, t.Hash, fmt.Errorf("transaction type 0x%x (%s) has no encoder here; no inclusion proof can be built for its block until one is added",
 			uint64(t.Type), t.Hash.Hex())
@@ -186,4 +221,96 @@ func encodeReceiptJSON(raw json.RawMessage) ([]byte, *rawReceipt, error) {
 		return nil, nil, fmt.Errorf("receipt of %s has type 0x%x, outside EIP-2718", r.TransactionHash.Hex(), uint64(r.Type))
 	}
 	return append([]byte{byte(r.Type)}, body...), &r, nil
+}
+
+// encodeNitroTx encodes an Arbitrum Nitro transaction of type 0x64, 0x65, 0x66, 0x68 or 0x69 (see the table above). Every
+// field the type's encoding carries must be stated by the RPC; a missing one is refused by name, never zero-filled.
+func encodeNitroTx(t *rawTx) ([]byte, error) {
+	missing := func(field string) error {
+		return fmt.Errorf("arbitrum type-0x%x transaction %s states no %s", uint64(t.Type), t.Hash.Hex(), field)
+	}
+	num := func(v *hexutil.Big, field string) (*big.Int, error) {
+		if v == nil {
+			return nil, missing(field)
+		}
+		return v.ToInt(), nil
+	}
+	hash := func(v *common.Hash, field string) (common.Hash, error) {
+		if v == nil {
+			return common.Hash{}, missing(field)
+		}
+		return *v, nil
+	}
+	addr := func(v *common.Address, field string) (common.Address, error) {
+		if v == nil {
+			return common.Address{}, missing(field)
+		}
+		return *v, nil
+	}
+	var fields []interface{}
+	var err error
+	chainID, err := num(t.ChainID, "chainId")
+	if err != nil {
+		return nil, err
+	}
+	switch uint64(t.Type) {
+	case arbDepositTxType:
+		requestID, e1 := hash(t.RequestID, "requestId")
+		to, e2 := addr(t.To, "to")
+		value, e3 := num(t.Value, "value")
+		if err = errors.Join(e1, e2, e3); err == nil {
+			fields = []interface{}{chainID, requestID, t.From, to, value}
+		}
+	case arbUnsignedTxType:
+		feeCap, e1 := num(t.MaxFeePerGas, "maxFeePerGas")
+		value, e2 := num(t.Value, "value")
+		if err = errors.Join(e1, e2); err == nil {
+			fields = []interface{}{chainID, t.From, uint64(t.Nonce), feeCap, uint64(t.Gas), t.To, value, []byte(t.Input)}
+		}
+	case arbContractTxType:
+		requestID, e1 := hash(t.RequestID, "requestId")
+		feeCap, e2 := num(t.MaxFeePerGas, "maxFeePerGas")
+		value, e3 := num(t.Value, "value")
+		if err = errors.Join(e1, e2, e3); err == nil {
+			fields = []interface{}{chainID, requestID, t.From, feeCap, uint64(t.Gas), t.To, value, []byte(t.Input)}
+		}
+	case arbRetryTxType:
+		feeCap, e1 := num(t.MaxFeePerGas, "maxFeePerGas")
+		value, e2 := num(t.Value, "value")
+		ticketID, e3 := hash(t.TicketID, "ticketId")
+		refundTo, e4 := addr(t.RefundTo, "refundTo")
+		maxRefund, e5 := num(t.MaxRefund, "maxRefund")
+		feeRefund, e6 := num(t.SubmissionFeeRefund, "submissionFeeRefund")
+		if err = errors.Join(e1, e2, e3, e4, e5, e6); err == nil {
+			fields = []interface{}{chainID, uint64(t.Nonce), t.From, feeCap, uint64(t.Gas), t.To, value, []byte(t.Input),
+				ticketID, refundTo, maxRefund, feeRefund}
+		}
+	case arbSubmitRetryable:
+		requestID, e1 := hash(t.RequestID, "requestId")
+		l1BaseFee, e2 := num(t.L1BaseFee, "l1BaseFee")
+		deposit, e3 := num(t.DepositValue, "depositValue")
+		feeCap, e4 := num(t.MaxFeePerGas, "maxFeePerGas")
+		retryValue, e5 := num(t.RetryValue, "retryValue")
+		beneficiary, e6 := addr(t.Beneficiary, "beneficiary")
+		maxSubmissionFee, e7 := num(t.MaxSubmissionFee, "maxSubmissionFee")
+		feeRefundAddr, e8 := addr(t.RefundTo, "refundTo")
+		var e9 error
+		if t.RetryData == nil {
+			e9 = missing("retryData")
+		}
+		if err = errors.Join(e1, e2, e3, e4, e5, e6, e7, e8, e9); err == nil {
+			fields = []interface{}{chainID, requestID, t.From, l1BaseFee, deposit, feeCap, uint64(t.Gas), t.RetryTo, retryValue,
+				beneficiary, maxSubmissionFee, feeRefundAddr, []byte(*t.RetryData)}
+		}
+	default:
+		return nil, fmt.Errorf("transaction type 0x%x (%s) is not an Arbitrum Nitro type this encoder knows", uint64(t.Type), t.Hash.Hex())
+	}
+	if err != nil {
+		return nil, err
+	}
+	body, err := rlp.EncodeToBytes(fields)
+	if err != nil {
+		return nil, err
+	}
+	return append([]byte{byte(t.Type)}, body...), nil
 }
