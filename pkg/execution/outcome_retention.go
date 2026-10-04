@@ -251,19 +251,11 @@ func (t *OutcomeTree) Verify() error {
 		if len(m.Legs) == 0 || m.Deadline <= 0 || m.Account == (common.Address{}) {
 			return fmt.Errorf("%w: kept tree 0x%x: member %d lacks its legs, deadline or account", ErrOutcome, t.BundleID[:8], i)
 		}
-		calls := make([]BatchCall, 0, len(m.Legs))
-		for _, l := range m.Legs {
-			if l.Value == nil {
-				return fmt.Errorf("%w: kept tree 0x%x: member %d has a leg without a value", ErrOutcome, t.BundleID[:8], i)
-			}
-			calls = append(calls, BatchCall{Target: l.Target, Value: l.Value.ToInt(), Data: l.Data})
+		calls, err := memberLegCalls(m.Legs)
+		if err != nil {
+			return fmt.Errorf("%w: kept tree 0x%x: member %d: %v", ErrOutcome, t.BundleID[:8], i, err)
 		}
-		var exec [32]byte
-		if len(calls) == 1 {
-			exec = computeExecutionCommitment(t.ChainID, calls[0].Target, calls[0].Value, calls[0].Data)
-		} else {
-			exec = computeBatchExecutionCommitment(t.ChainID, calls)
-		}
+		exec := memberExecutionCommitment(t.ChainID, calls)
 		in := BatchLeafInput{
 			ADIURL: m.ADIURL, ExecutionCommitment: exec, OperationID: m.OperationID, AuthorityBook: m.AuthorityBook,
 			AuthorityPage: m.AuthorityPage, GovernanceCommitment: m.GovernanceCommitment, LegacyNoGovernance: m.LegacyNoGovernance,

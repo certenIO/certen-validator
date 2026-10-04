@@ -324,6 +324,36 @@ func (r *BatchOutcomeRepository) AttestedAnchorsWithoutOutcome(ctx context.Conte
 	return out, rows.Err()
 }
 
+// RecordedAnchorsWithoutProofEvidence lists the anchors of a chain whose outcome is recorded and some of whose members'
+// proofs - by their standing layer 5 - carry no standing outcome evidence (layer 6), oldest record first: a HINT of the
+// outcome evidence still to attach (RB5-F15). The chain decides; nothing is concluded from this list.
+func (r *BatchOutcomeRepository) RecordedAnchorsWithoutProofEvidence(ctx context.Context, chainID int64, limit int) ([]string, error) {
+	rows, err := r.client.DB().QueryContext(ctx, `
+		SELECT o.bundle_id FROM batch_outcome_records o
+		WHERE o.chain_id = $1 AND EXISTS (
+			SELECT 1 FROM chained_proof_layers l5
+			WHERE l5.layer_number = 5 AND l5.superseded_at IS NULL AND l5.proof_id IS NOT NULL
+			  AND (l5.layer_json->>'chainId')::bigint = o.chain_id
+			  AND regexp_replace(lower(l5.layer_json->'commitment'->>'bundleId'), '^0x', '') = regexp_replace(o.bundle_id, '^0x', '')
+			  AND NOT EXISTS (SELECT 1 FROM chained_proof_layers l6
+				WHERE l6.proof_id = l5.proof_id AND l6.layer_number = 6 AND l6.superseded_at IS NULL))
+		ORDER BY o.recorded_at
+		LIMIT $2`, chainID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var b string
+		if err := rows.Scan(&b); err != nil {
+			return nil, err
+		}
+		out = append(out, strings.ToLower(b))
+	}
+	return out, rows.Err()
+}
+
 // AnchorMemberHint is what the database recorded about one member of an anchor - a HINT for rebuilding the tree, which
 // the rebuild verifies against the anchor on the chain.
 type AnchorMemberHint struct {

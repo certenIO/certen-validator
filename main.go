@@ -1793,7 +1793,9 @@ func startValidator(
 		Chains: make(map[int64]execution.OutcomeRecorderChain, len(outcomeChains)), Registries: execution.OutcomeRegistryAddresses(outcomeChains),
 		Attempts: execution.StackAttemptSource{Stack: stack}, Submitter: execution.ResolverOutcomeSubmitter{Resolver: resolver},
 		Records: database.NewBatchOutcomeRepository(dbClient), Peers: peers, Timeout: execution.DefaultOutcomeRequestTimeout,
-		Logf: log.Printf,
+		// Each final record's offline evidence is attached to its members' proofs (RB5-F15) before the tree is released.
+		Evidence: execution.ProofOutcomeEvidence{Proofs: database.NewProofArtifactRepository(dbClient.DB()), Logf: log.Printf},
+		Logf:     log.Printf,
 	}
 	for id, c := range outcomeChains {
 		outcomeRecorder.Chains[id] = c

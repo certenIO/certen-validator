@@ -27,6 +27,11 @@
 // Verification performs no network access. The --offline flag does not enable
 // that — it installs a dialer that makes any outbound connection a hard error,
 // so "offline" is enforced rather than asserted.
+//
+// --outcome also checks the recorded ON-CHAIN OUTCOME of the batch the proof
+// settled in (RB5-F15, outcome.go), from the proof's stored evidence; and
+// --outcome-file checks an exported outcome evidence file with no database at
+// all.
 package main
 
 import (
@@ -46,6 +51,7 @@ import (
 	"github.com/certen/independant-validator/pkg/database"
 	"github.com/certen/independant-validator/pkg/execution"
 	certenproof "github.com/certen/independant-validator/pkg/proof"
+	gnarklogger "github.com/consensys/gnark/logger"
 	"github.com/google/uuid"
 	_ "github.com/lib/pq"
 )
@@ -72,21 +78,42 @@ func main() {
 		verbose = flag.Bool("v", false, "print the reassembled proof's layer summary")
 		govern  = flag.Bool("governance", false, "also recompute the stored G0/G1/G2 receipts from level_json")
 		l5      = flag.Bool("l5", false, "also recompute the stored external-anchor binding (leaf -> batch root)")
-		online  = flag.String("online-rpc", "", "with --l5 and --offline=false: also check, at this JSON-RPC endpoint of "+
-			"the anchor's chain, that the anchor-create transaction published the batch root and batch operation id")
+		online  = flag.String("online-rpc", "", "with --l5 and/or --outcome and --offline=false: also check, at this JSON-RPC "+
+			"endpoint of the anchor's chain, that the anchor-create transaction published the batch root and batch operation id "+
+			"(--l5), and that the outcome registry records exactly the verified outcome in the stated, canonical blocks (--outcome)")
+		outcome     = flag.Bool("outcome", false, "also verify, offline, the recorded on-chain outcome of the batch the proof settled in")
+		outcomeFile = flag.String("outcome-file", "", "verify an exported outcome evidence file offline, with no database "+
+			"(the JSON of a proof's layer 6)")
 		incarnation = flag.String("incarnation", "", "with --l5: the Accumulate incarnation you trust (hex32, docs/l4/"+
 			"INCARNATION_ANCHOR.md; derive it with cmd/incarnation). Without it, which Accumulate chain a V8.2 anchor's "+
 			"committed validator set belongs to rests on the anchor alone")
 	)
 	flag.Parse()
+	// The Groth16 verifier's debug lines are not part of a verdict.
+	gnarklogger.Disable()
 
+	if *outcomeFile != "" {
+		if *proofID != "" || *outcome || *l5 || *govern {
+			fmt.Fprintln(os.Stderr, "--outcome-file verifies a file on its own: no --proof-id, --outcome, --l5 or --governance")
+			os.Exit(exitUsage)
+		}
+		if *online != "" && *offline {
+			fmt.Fprintln(os.Stderr, "--online-rpc checks the outcome on its chain: it needs --offline=false")
+			os.Exit(exitUsage)
+		}
+		if *offline {
+			cutNetwork()
+		}
+		os.Exit(reportOutcomeFile(context.Background(), os.Stdout, *outcomeFile, *online))
+	}
 	if *proofID == "" || *dsn == "" {
-		fmt.Fprintln(os.Stderr, "usage: proofverify --proof-id <uuid> --db <dsn> [--offline] [--governance] [--l5] "+
+		fmt.Fprintln(os.Stderr, "usage: proofverify --proof-id <uuid> --db <dsn> [--offline] [--governance] [--l5] [--outcome] "+
 			"[--online-rpc <url> --offline=false] [-v]")
+		fmt.Fprintln(os.Stderr, "       proofverify --outcome-file <evidence.json> [--online-rpc <url> --offline=false]")
 		os.Exit(exitUsage)
 	}
-	if *online != "" && (*offline || !*l5) {
-		fmt.Fprintln(os.Stderr, "--online-rpc checks the anchor on its chain: it needs --l5 and --offline=false")
+	if *online != "" && (*offline || !(*l5 || *outcome)) {
+		fmt.Fprintln(os.Stderr, "--online-rpc checks the anchor or the outcome on its chain: it needs --l5 or --outcome, and --offline=false")
 		os.Exit(exitUsage)
 	}
 	id, err := uuid.Parse(*proofID)
@@ -109,9 +136,7 @@ func main() {
 	// mistaken for "we happened not to call out this time". The database
 	// connection is made through lib/pq's own dialer, not http.
 	if *offline {
-		dead := &http.Transport{DialContext: refusingDialer{}.DialContext, ResponseHeaderTimeout: time.Millisecond}
-		http.DefaultTransport = dead
-		http.DefaultClient = &http.Client{Transport: dead}
+		cutNetwork()
 	}
 
 	db, err := sql.Open("postgres", *dsn)
@@ -201,8 +226,11 @@ func main() {
 			code = worseExit(code, reportGovernanceDecision(ctx, store, id))
 			code = worseExit(code, reportIntentCertificate(ctx, db, store, id, cp, pinned))
 		}
-		if *online != "" {
+		if *online != "" && *l5 {
 			code = worseExit(code, reportLayer5Online(ctx, store, id, *online))
+		}
+		if *outcome {
+			code = worseExit(code, reportOutcome(ctx, os.Stdout, store, id, *online))
 		}
 		os.Exit(code)
 
@@ -214,13 +242,25 @@ func main() {
 		fmt.Printf("  flight. What is missing is the evidence needed to check it again, and it cannot\n")
 		fmt.Printf("  be recovered. (The governance root is not anchored anywhere: it was used only in\n")
 		fmt.Printf("  each validator's own pre-execution signature - RB4-F66.)\n")
-		os.Exit(exitSummaryOnly)
+		code := exitSummaryOnly
+		if *outcome {
+			// The recorded outcome rests on its own evidence, not on L1-L4's, so it is checked all the same.
+			code = worseExit(code, reportOutcome(ctx, os.Stdout, store, id, *online))
+		}
+		os.Exit(code)
 
 	default:
 		fmt.Printf("FAILED  %s\n", id)
 		fmt.Printf("  %v\n", err)
 		os.Exit(exitFailed)
 	}
+}
+
+// cutNetwork makes any outbound HTTP connection a hard error, so "offline" is enforced rather than asserted.
+func cutNetwork() {
+	dead := &http.Transport{DialContext: refusingDialer{}.DialContext, ResponseHeaderTimeout: time.Millisecond}
+	http.DefaultTransport = dead
+	http.DefaultClient = &http.Client{Transport: dead}
 }
 
 func short(hexStr string) string {

@@ -3,6 +3,7 @@ package execution
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"math/big"
@@ -407,9 +408,12 @@ func (c *AgreedOutcomeChain) OutcomeMessage(ctx context.Context, bundleID, root 
 // RecordedOutcomeTx is a recordBatchOutcome transaction as the chain holds it: its agreed receipt's
 // BatchOutcomeRecorded event and the proof its calldata carried.
 type RecordedOutcomeTx struct {
-	BundleID    [32]byte
-	Tx          common.Hash
+	BundleID [32]byte
+	Tx       common.Hash
+	// Block and BlockHash are the block the transaction is in, from its receipt - this chain's own block, which on
+	// Arbitrum is not the registry's recordedInBlock (an L1 block number there).
 	Block       uint64
+	BlockHash   common.Hash
 	Recorder    common.Address
 	Root        [32]byte
 	MessageHash [32]byte
@@ -422,12 +426,21 @@ var batchOutcomeRecordedTopic = outcomeRegistryABI.Events["BatchOutcomeRecorded"
 // RecordedOutcome is the transaction that recorded bundleID's outcome in block (the registry's recordedInBlock): its
 // event located through each provider, established by its agreed receipt, and its calldata read from a provider and
 // bound to its hash.
+//
+// On Arbitrum a contract's block.number is the L1 block number, so recordedInBlock names an L1 block: the event is then
+// located in the L2 blocks that L1 block covers (each Nitro header carries its L1 block number).
 func (c *AgreedOutcomeChain) RecordedOutcome(ctx context.Context, bundleID [32]byte, block uint64) (*RecordedOutcomeTx, error) {
-	q := ethereum.FilterQuery{Addresses: []common.Address{c.registry}, FromBlock: new(big.Int).SetUint64(block),
-		ToBlock: new(big.Int).SetUint64(block), Topics: [][]common.Hash{{batchOutcomeRecordedTopic}, {common.Hash(bundleID)}}}
+	from, to := block, block
+	if contractBlockIsL1(c.chainID) {
+		var err error
+		if from, to, err = c.l2BlocksOfL1Block(ctx, block); err != nil {
+			return nil, err
+		}
+	}
+	q := ethereum.FilterQuery{Addresses: []common.Address{c.registry}, Topics: [][]common.Hash{{batchOutcomeRecordedTopic}, {common.Hash(bundleID)}}}
 	var failures []string
 	for _, loc := range c.reader.Locators() {
-		logs, err := loc.FilterLogs(ctx, q)
+		logs, err := filterLogsSplitting(ctx, loc, q, from, to)
 		if err != nil {
 			failures = append(failures, fmt.Sprintf("%s: %v", loc.Host, err))
 			continue
@@ -442,8 +455,8 @@ func (c *AgreedOutcomeChain) RecordedOutcome(ctx context.Context, bundleID [32]b
 					lg.Topics[1] != common.Hash(bundleID) || len(lg.Data) != 32 {
 					continue
 				}
-				out := &RecordedOutcomeTx{BundleID: bundleID, Tx: l.TxHash, Block: r.BlockNumber.Uint64(), Recorder: common.BytesToAddress(lg.Topics[3][12:]),
-					Root: lg.Topics[2]}
+				out := &RecordedOutcomeTx{BundleID: bundleID, Tx: l.TxHash, Block: r.BlockNumber.Uint64(), BlockHash: r.BlockHash,
+					Recorder: common.BytesToAddress(lg.Topics[3][12:]), Root: lg.Topics[2]}
 				copy(out.MessageHash[:], lg.Data)
 				if err := c.recordedProof(ctx, out); err != nil {
 					return nil, err
@@ -453,9 +466,71 @@ func (c *AgreedOutcomeChain) RecordedOutcome(ctx context.Context, bundleID [32]b
 		}
 	}
 	if len(failures) > 0 {
-		return nil, readErr(fmt.Errorf("locating BatchOutcomeRecorded(0x%x) in block %d: %s", bundleID[:8], block, strings.Join(failures, "; ")))
+		return nil, readErr(fmt.Errorf("locating BatchOutcomeRecorded(0x%x) in blocks %d-%d: %s", bundleID[:8], from, to, strings.Join(failures, "; ")))
 	}
-	return nil, outcomeNotYet("no provider returns the BatchOutcomeRecorded event of 0x%x in block %d", bundleID[:8], block)
+	return nil, outcomeNotYet("no provider returns the BatchOutcomeRecorded event of 0x%x in blocks %d-%d", bundleID[:8], from, to)
+}
+
+// contractBlockIsL1 reports whether a contract's block.number on the chain is its parent chain's block number: Arbitrum
+// (Nitro), whose recordedInBlock is therefore an L1 block number.
+func contractBlockIsL1(chainID int64) bool { return chainID == 421614 || chainID == 42161 }
+
+// arbitrumL1Block is the L1 block number an Arbitrum Nitro header carries: mixHash bytes 8-16.
+func arbitrumL1Block(h *types.Header) uint64 {
+	return binary.BigEndian.Uint64(h.MixDigest[8:16])
+}
+
+// l2BlocksOfL1Block is the range of agreed L2 blocks whose L1 block number is l1 (L1 numbers never decrease along the L2
+// chain), at or below a recent agreed head.
+func (c *AgreedOutcomeChain) l2BlocksOfL1Block(ctx context.Context, l1 uint64) (uint64, uint64, error) {
+	head, err := c.reader.RecentAgreedHeader(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
+	if arbitrumL1Block(head) < l1 {
+		return 0, 0, outcomeNotYet("L1 block %d is past the agreed L2 head %d (L1 %d)", l1, head.Number.Uint64(), arbitrumL1Block(head))
+	}
+	// floor: an L2 block below l1, found back from the head in doubling steps, so the search reads recent headers only.
+	floor := uint64(0)
+	for d := uint64(1024); d <= head.Number.Uint64(); d *= 2 {
+		h, err := c.HeaderAt(ctx, head.Number.Uint64()-d)
+		if err != nil {
+			return 0, 0, err
+		}
+		if arbitrumL1Block(h) < l1 {
+			floor = h.Number.Uint64()
+			break
+		}
+	}
+	// first is the lowest L2 block above the floor whose L1 block number is at least want.
+	first := func(want uint64) (uint64, error) {
+		lo, hi := floor, head.Number.Uint64()+1
+		for lo < hi {
+			mid := lo + (hi-lo)/2
+			h, err := c.HeaderAt(ctx, mid)
+			if err != nil {
+				return 0, err
+			}
+			if arbitrumL1Block(h) >= want {
+				hi = mid
+			} else {
+				lo = mid + 1
+			}
+		}
+		return lo, nil
+	}
+	from, err := first(l1)
+	if err != nil {
+		return 0, 0, err
+	}
+	next, err := first(l1 + 1)
+	if err != nil {
+		return 0, 0, err
+	}
+	if next <= from {
+		return 0, 0, fmt.Errorf("no L2 block carries L1 block %d", l1)
+	}
+	return from, next - 1, nil
 }
 
 // recordedProof reads the record transaction's calldata - from any provider, bound to the transaction's hash - and

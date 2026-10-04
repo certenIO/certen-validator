@@ -18,3 +18,6 @@ go.sum text eol=lf
 # a6d06c0b… for 00000_baseline.sql where production held dacf9261…, the LF hash of the same file.
 db/migrations/*.sql text eol=lf
 db/*.fingerprint text eol=lf
+
+# The deployed ZK verification key is embedded by its exact bytes (pkg/crypto/bls_zkp/verifier_v2.go pins its SHA-256).
+pkg/crypto/bls_zkp/*.bin binary

@@ -17,13 +17,17 @@ import (
 // only as hints plus the signed intents, and kept only when they rebuild the anchor on the chain exactly.
 
 type fakeBackfillHints struct {
-	bundles []string
-	hints   *database.AnchorMemberHints
-	pages   map[string][2]string
+	bundles  []string
+	recorded []string
+	hints    *database.AnchorMemberHints
+	pages    map[string][2]string
 }
 
 func (f *fakeBackfillHints) AttestedAnchorsWithoutOutcome(context.Context, int64, int) ([]string, error) {
 	return f.bundles, nil
+}
+func (f *fakeBackfillHints) RecordedAnchorsWithoutProofEvidence(context.Context, int64, int) ([]string, error) {
+	return f.recorded, nil
 }
 func (f *fakeBackfillHints) AnchorMemberHints(context.Context, int64, string) (*database.AnchorMemberHints, error) {
 	if f.hints == nil {
@@ -223,5 +227,27 @@ func TestOnlyAttestedUnrecordedAnchorsAreBackfilled(t *testing.T) {
 	}
 	if _, err := f.store.Load(84532, f.tree.BundleID); !errors.Is(err, ErrOutcomeTreeNotHeld) {
 		t.Fatalf("kept: %v", err)
+	}
+}
+
+// RB5-F15: an anchor whose outcome is recorded while some of its members' proofs lack its evidence (recorded before
+// evidence was attached, its tree since released) is rebuilt with Recorded, so the recorder attaches the evidence; an
+// anchor not recorded yet is left to the default mode.
+func TestARecordedAnchorWithoutProofEvidenceIsRebuilt(t *testing.T) {
+	f := newTreeBackfillFixture(t)
+	f.b.Apply, f.b.Recorded = true, true
+	f.hints.recorded = f.hints.bundles
+	f.reader.view.RecordedRoot = [32]byte{1}
+	if res, _ := f.b.Run(context.Background()); len(res) != 1 || res[0].Outcome != "kept" {
+		t.Fatalf("%+v", res)
+	}
+	if _, err := f.store.Load(84532, f.tree.BundleID); err != nil {
+		t.Fatalf("not kept: %v", err)
+	}
+	g := newTreeBackfillFixture(t)
+	g.b.Apply, g.b.Recorded = true, true
+	g.hints.recorded = g.hints.bundles
+	if res, _ := g.b.Run(context.Background()); len(res) != 1 || res[0].Outcome != "not-recorded" {
+		t.Fatalf("%+v", res)
 	}
 }

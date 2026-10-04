@@ -89,6 +89,7 @@ func OutcomeRecorderFor(roster []string, chainID int64, bundleID [32]byte, resol
 // OutcomeRecorderChain is what the recorder reads of one chain.
 type OutcomeRecorderChain interface {
 	OutcomeChainReader
+	OutcomeEvidenceReader
 	RecordedOutcome(ctx context.Context, bundleID [32]byte, block uint64) (*RecordedOutcomeTx, error)
 }
 
@@ -127,7 +128,9 @@ type BatchOutcomeRecorder struct {
 	Attempts    OutcomeAttemptSource
 	Submitter   OutcomeSubmitter
 	Records     OutcomeRecordStore
-	Peers       []string
+	// Evidence attaches a final record's offline evidence to its members' proofs (RB5-F15) before the tree is released.
+	Evidence OutcomeEvidenceAttacher
+	Peers    []string
 	// Key is this validator's BLS key and SetRoot the CERTEN set it signs for; nil reads the process's.
 	Key           func() *bls.PrivateKey
 	SetRoot       func() ([32]byte, error)
@@ -200,6 +203,9 @@ func (r *BatchOutcomeRecorder) Validate() error {
 	}
 	if r.Records == nil {
 		missing = append(missing, "record store")
+	}
+	if r.Evidence == nil {
+		missing = append(missing, "outcome evidence store")
 	}
 	for id := range r.Chains {
 		if r.Registries[id] == (common.Address{}) {
@@ -369,7 +375,7 @@ func (r *BatchOutcomeRecorder) hintsFor(ctx context.Context, t *OutcomeTree) (ma
 }
 
 // recorded handles an anchor whose outcome the registry holds: compared with this validator's own derivation, stored,
-// and its tree released once the record is final.
+// and - once the record is final - its offline evidence attached to the members' proofs and its tree released.
 func (r *BatchOutcomeRecorder) recorded(ctx context.Context, c OutcomeRecorderChain, t *OutcomeTree, view *OutcomeAnchorView) (OutcomeStep, error) {
 	hints, err := r.hintsFor(ctx, t)
 	if err != nil {
@@ -391,13 +397,36 @@ func (r *BatchOutcomeRecorder) recorded(ctx context.Context, c OutcomeRecorderCh
 	if err := r.storeRecorded(ctx, c, t, view, derived); err != nil {
 		return OutcomeStepRecorded, err
 	}
+	// The record is final once its transaction's block is at or below the finalized block and canonical at its height.
+	// It is judged by that block, never by recordedInBlock: on Arbitrum a contract's block.number is the L1 block number.
+	rec, err := c.RecordedOutcome(ctx, t.BundleID, view.RecordedIn)
+	if err != nil {
+		return OutcomeStepRecorded, err
+	}
 	fin, err := c.FinalizedHeader(ctx)
 	if err != nil {
 		return OutcomeStepRecorded, err
 	}
-	if view.RecordedIn == 0 || view.RecordedIn > fin.Number.Uint64() {
+	if rec.Block == 0 || rec.Block > fin.Number.Uint64() {
 		return OutcomeStepRecorded, nil // released once the record is final
 	}
+	if hdr, err := c.HeaderAt(ctx, rec.Block); err != nil {
+		return OutcomeStepRecorded, err
+	} else if hdr.Hash() != rec.BlockHash {
+		return OutcomeStepRecorded, fmt.Errorf("the record %s names block %s, the finalized block at %d is %s", rec.Tx.Hex(),
+			rec.BlockHash.Hex(), rec.Block, hdr.Hash().Hex())
+	}
+	in := OutcomeEvidenceInput{Registry: r.Registries[t.ChainID], Anchor: c.Anchor(), Tree: t, Leaves: derived.Leaves, View: view, Record: rec}
+	if row, err := r.Records.BatchOutcome(ctx, t.ChainID, "0x"+hex.EncodeToString(t.BundleID[:])); err == nil && row != nil &&
+		row.EvidenceSource == database.BatchOutcomeEvidenceRecorder && strings.EqualFold(row.RecordTx, rec.Tx.Hex()) {
+		in.AggregateSignature, in.AggregatePublicKey = row.AggregateSignature, row.AggregatePublicKey
+	}
+	n, err := r.Evidence.AttachOutcomeEvidence(ctx, c, in)
+	if err != nil {
+		return OutcomeStepRecorded, fmt.Errorf("the record is final; its offline evidence is not attached to the members' proofs, so "+
+			"the tree is kept: %w", err)
+	}
+	r.logf("🧾 [OUTCOME] chain %d anchor 0x%x: offline evidence attached to %d member proof(s)", t.ChainID, t.BundleID[:8], n)
 	if err := r.Trees.Release(t.ChainID, t.BundleID); err != nil {
 		return OutcomeStepRecorded, err
 	}
