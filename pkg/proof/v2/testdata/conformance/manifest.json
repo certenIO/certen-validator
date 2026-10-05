@@ -1,0 +1,551 @@
+{
+  "base": "valid.json.gz",
+  "cases": [
+    {
+      "name": "valid",
+      "expect": "verified",
+      "report": {
+        "incarnation": "cac6698ed49a286ad8a3de94540a3354dfe964f366a439f4fdfb34533059fda0",
+        "majors": 491,
+        "certifiedBlock": 10380432,
+        "certifiedRoot": "241adbc1087bb2c3464d363160ad445847d22ca7140e33d1a1c5db9ef968c75e",
+        "checkBlock": 10380432,
+        "setVerdict": "verified",
+        "validators": 3,
+        "threshold": 2,
+        "partition": "acc://bvn-BVN1.acme",
+        "anchorBlock": 13595785,
+        "pages": 3
+      }
+    },
+    {
+      "name": "receipt-step",
+      "expect": "refused",
+      "attack": "a step of the transaction's receipt changed",
+      "patch": [
+        {
+          "path": [
+            "evidence",
+            "receipt",
+            "entries",
+            3,
+            "hash"
+          ],
+          "set": "e562e7daf98ced519c9e13f946ed110e5a9c154a2255faf6348944c51d44ff70"
+        }
+      ]
+    },
+    {
+      "name": "tx-swap",
+      "expect": "refused",
+      "attack": "a different transaction claimed",
+      "patch": [
+        {
+          "path": [
+            "evidence",
+            "txHash"
+          ],
+          "set": "3cfb04cfa69ca105fd4bf269e3f0c284a4735ef4c42fbfda54d4b6cc529e4150"
+        }
+      ]
+    },
+    {
+      "name": "sigs-stripped",
+      "expect": "refused",
+      "attack": "the certifying anchor's signatures stripped (a signature-less anchor presented as certified)",
+      "patch": [
+        {
+          "path": [
+            "evidence",
+            "certify",
+            1,
+            "signatures"
+          ],
+          "truncate": 0
+        }
+      ]
+    },
+    {
+      "name": "sig-forged",
+      "expect": "refused",
+      "attack": "one signature on the certifying anchor forged",
+      "patch": [
+        {
+          "path": [
+            "evidence",
+            "certify",
+            1,
+            "signatures",
+            0,
+            "signature"
+          ],
+          "set": "7df2335fcea807c276677374b0145f404505e399787cec5fd5b14335a8c19f8b18a88893ef81e133a5a5457de0b899cda5ec125762a058caa69b97c7b160f100"
+        }
+      ]
+    },
+    {
+      "name": "root-fork",
+      "expect": "refused",
+      "attack": "the certifying run forked off the verified root",
+      "patch": [
+        {
+          "path": [
+            "evidence",
+            "certify",
+            1,
+            "rootProof",
+            "merkleState",
+            "pending",
+            0
+          ],
+          "set": "8a3dc36609e5315443ccda5c0a89935f9aa8e781a7a3acebd44369690223a820"
+        }
+      ]
+    },
+    {
+      "name": "major-skipped",
+      "expect": "refused",
+      "attack": "a major block replaced by the next one (a window skipped)",
+      "patch": [
+        {
+          "path": [
+            "majors",
+            5,
+            "anchor",
+            "message",
+            "transaction",
+            "body",
+            "minorBlockIndex"
+          ],
+          "set": 119896
+        },
+        {
+          "path": [
+            "majors",
+            5,
+            "anchor",
+            "message",
+            "transaction",
+            "body",
+            "rootChainAnchor"
+          ],
+          "set": "8b797090b61dbb928c1910217e1081cec908a73f32c35560db5807575992508c"
+        },
+        {
+          "path": [
+            "majors",
+            5,
+            "anchor",
+            "message",
+            "transaction",
+            "body",
+            "rootChainIndex"
+          ],
+          "set": 2346
+        },
+        {
+          "path": [
+            "majors",
+            5,
+            "anchor",
+            "message",
+            "transaction",
+            "body",
+            "stateTreeAnchor"
+          ],
+          "set": "f98cf25d8d045025b082de3b908ed8f32cdccce9c67adceb250417a2db35486d"
+        },
+        {
+          "path": [
+            "majors",
+            5,
+            "anchor",
+            "number"
+          ],
+          "set": 273
+        },
+        {
+          "path": [
+            "majors",
+            5,
+            "entry",
+            "blockIndex"
+          ],
+          "set": 7
+        },
+        {
+          "path": [
+            "majors",
+            5,
+            "entry",
+            "blockTime"
+          ],
+          "set": "2026-02-04T12:00:00Z"
+        },
+        {
+          "path": [
+            "majors",
+            5,
+            "entry",
+            "rootIndexIndex"
+          ],
+          "set": 722
+        },
+        {
+          "path": [
+            "majors",
+            5,
+            "entry",
+            "source"
+          ],
+          "set": 564
+        },
+        {
+          "path": [
+            "majors",
+            5,
+            "index"
+          ],
+          "set": 7
+        },
+        {
+          "path": [
+            "majors",
+            5,
+            "signatures",
+            0,
+            "signature"
+          ],
+          "set": "bf8dac4307d055b55d99b400ef3cb960c8bbe45dacdb8d04e222a79d73c705bac305d211c390153964308d5decd6c66c7b0f8b2893aeedfa1b4807ad4ed10502"
+        },
+        {
+          "path": [
+            "majors",
+            5,
+            "signatures",
+            0,
+            "timestamp"
+          ],
+          "set": 1770206405488
+        },
+        {
+          "path": [
+            "majors",
+            5,
+            "signatures",
+            0,
+            "transactionHash"
+          ],
+          "set": "2882fedd536d4cb2715676df7b808703512cb43a3c4e733f82659c43245a5d8e"
+        },
+        {
+          "path": [
+            "majors",
+            5,
+            "signatures",
+            1,
+            "signature"
+          ],
+          "set": "400226012687339990f95eebb5e451239157dcd53aa7e07e624fe0c91d3c285059148f9b13207a69e0b0c5a64dcfb0200d4ded6b7ceb603244f3ab09886e630f"
+        },
+        {
+          "path": [
+            "majors",
+            5,
+            "signatures",
+            1,
+            "timestamp"
+          ],
+          "set": 1770206405487
+        },
+        {
+          "path": [
+            "majors",
+            5,
+            "signatures",
+            1,
+            "transactionHash"
+          ],
+          "set": "2882fedd536d4cb2715676df7b808703512cb43a3c4e733f82659c43245a5d8e"
+        },
+        {
+          "path": [
+            "majors",
+            5,
+            "signatures",
+            2,
+            "signature"
+          ],
+          "set": "bc0bb59357258345240345816c5d595465b37874e3226a9de05d992caa85ca3bb3b7833e1ce52b4e7eaaeca87aff547bd44a1c00d393a02b028cda9ad2051209"
+        },
+        {
+          "path": [
+            "majors",
+            5,
+            "signatures",
+            2,
+            "timestamp"
+          ],
+          "set": 1770206405488
+        },
+        {
+          "path": [
+            "majors",
+            5,
+            "signatures",
+            2,
+            "transactionHash"
+          ],
+          "set": "2882fedd536d4cb2715676df7b808703512cb43a3c4e733f82659c43245a5d8e"
+        }
+      ]
+    },
+    {
+      "name": "archive-short",
+      "expect": "refused",
+      "attack": "one major block fewer than the evidence builds on",
+      "patch": [
+        {
+          "path": [
+            "majors"
+          ],
+          "truncate": 490
+        }
+      ]
+    },
+    {
+      "name": "anchor-major-altered",
+      "expect": "refused",
+      "attack": "a major block's anchor altered",
+      "patch": [
+        {
+          "path": [
+            "majors",
+            10,
+            "anchor",
+            "message",
+            "transaction",
+            "body",
+            "minorBlockIndex"
+          ],
+          "set": 190831
+        }
+      ]
+    },
+    {
+      "name": "network-entry-altered",
+      "expect": "refused",
+      "attack": "the proven network account's validator set altered",
+      "patch": [
+        {
+          "path": [
+            "evidence",
+            "check",
+            "network",
+            "account",
+            "entry",
+            "data",
+            0
+          ],
+          "set": "01064465764e65740308010442564e3102020308010442564e3202020308010442564e330202030d01094469726563746f72790201045c012040e6e8b96de7e7ed4c38815448abe22ab555236418d813b3a02cb6a7bc42871b02309068791543793065c5a36c15bbcfa5259c707dbc3ab8cccde45c8a8928d7fb040d01094469726563746f727902010408010442564e310201045c0120625b03bfad7d82b11d69be478954ca6290468694f7868a8dfe64d0923a81b262023184b7252ea7c152e7398a255b5423fd825f1199ce53e9a051a53f503bd2a356040d01094469726563746f727902010408010442564e320201045c01200f9f714a43c0c33731f6e097aea9567f8d0b8817b86510d888e333c84d0b819102364d06669499526150676cbd922dadccd4e0155352e9477eefc79346ab15de89040d01094469726563746f727902010408010442564e330201"
+        }
+      ]
+    },
+    {
+      "name": "network-record-altered",
+      "expect": "refused",
+      "attack": "the decoded network record disagrees with the account's entry",
+      "patch": [
+        {
+          "path": [
+            "evidence",
+            "check",
+            "network",
+            "record",
+            "validators",
+            0,
+            "publicKey"
+          ],
+          "set": "40e6e8b96de7e7ed4c38815448abe22ab555236418d813b3a02cb6a7bc428710"
+        }
+      ]
+    },
+    {
+      "name": "main-height-understated",
+      "expect": "refused",
+      "attack": "the network account's main chain height changed (an update omitted)",
+      "patch": [
+        {
+          "path": [
+            "evidence",
+            "check",
+            "network",
+            "chains",
+            0,
+            "pending"
+          ],
+          "set": [
+            "e43be90e349210456662d8b8bdc9cc9e5e46ccb07f2129e7b57a8195e5e916d5",
+            "abababababababababababababababababababababababababababababababab"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "set-run-dropped",
+      "expect": "refused",
+      "attack": "the set check's minor-root run dropped",
+      "patch": [
+        {
+          "path": [
+            "evidence",
+            "check",
+            "hops"
+          ],
+          "truncate": 0
+        }
+      ]
+    },
+    {
+      "name": "page-threshold",
+      "expect": "refused",
+      "attack": "a page's threshold changed",
+      "patch": [
+        {
+          "path": [
+            "evidence",
+            "pages",
+            0,
+            "account",
+            "acceptThreshold"
+          ],
+          "set": 2
+        }
+      ]
+    },
+    {
+      "name": "page-step-dropped",
+      "expect": "refused",
+      "attack": "a page proven to a different root (a receipt step dropped)",
+      "patch": [
+        {
+          "path": [
+            "evidence",
+            "pages",
+            0,
+            "receipt",
+            "entries"
+          ],
+          "truncate": 15
+        }
+      ]
+    },
+    {
+      "name": "page-url-swap",
+      "expect": "refused",
+      "attack": "a page presented as another account's",
+      "patch": [
+        {
+          "path": [
+            "evidence",
+            "pages",
+            0,
+            "url"
+          ],
+          "set": "acc://certen-protocol.acme/book/2"
+        }
+      ]
+    },
+    {
+      "name": "anchor-block-altered",
+      "expect": "refused",
+      "attack": "the partition anchor names another block",
+      "patch": [
+        {
+          "path": [
+            "evidence",
+            "anchor",
+            "message",
+            "message",
+            "transaction",
+            "body",
+            "minorBlockIndex"
+          ],
+          "set": 13595786
+        }
+      ]
+    },
+    {
+      "name": "pin-other",
+      "expect": "refused",
+      "attack": "another incarnation pinned",
+      "patch": [
+        {
+          "path": [
+            "pin"
+          ],
+          "set": "cac6698ed49a286ad8a3de94540a3354dfe964f366a439f4fdfb34533059fda1"
+        }
+      ]
+    },
+    {
+      "name": "genesis-record-altered",
+      "expect": "refused",
+      "attack": "the genesis network record altered",
+      "patch": [
+        {
+          "path": [
+            "genesis",
+            "networkRecord"
+          ],
+          "set": "01064465764e65740308010442564e3102020308010442564e3202020308010442564e330202030d01094469726563746f72790201045c012040e6e8b96de7e7ed4c38815448abe22ab555236418d813b3a02cb6a7bc42871b02309068791543793065c5a36c15bbcfa5259c707dbc3ab8cccde45c8a8928d7fb040d01094469726563746f727902010408010442564e310201045c0120625b03bfad7d82b11d69be478954ca6290468694f7868a8dfe64d0923a81b262023184b7252ea7c152e7398a255b5423fd825f1199ce53e9a051a53f503bd2a356040d01094469726563746f727902010408010442564e320201045c01200f9f714a43c0c33731f6e097aea9567f8d0b8817b86510d888e333c84d0b819102364d06669499526150676cbd922dadccd4e0155352e9477eefc79346ab15de89040d01094469726563746f727902010408010442564e330201"
+        }
+      ]
+    },
+    {
+      "name": "genesis-json-altered",
+      "expect": "refused",
+      "attack": "the decoded genesis network disagrees with its record",
+      "patch": [
+        {
+          "path": [
+            "genesis",
+            "network",
+            "validators",
+            0,
+            "publicKey"
+          ],
+          "set": "40e6e8b96de7e7ed4c38815448abe22ab555236418d813b3a02cb6a7bc428710"
+        }
+      ]
+    },
+    {
+      "name": "version-unknown",
+      "expect": "refused",
+      "attack": "a version the verifier does not know",
+      "patch": [
+        {
+          "path": [
+            "evidence",
+            "version"
+          ],
+          "set": "1.0"
+        }
+      ]
+    },
+    {
+      "name": "format-unknown",
+      "expect": "refused",
+      "attack": "a portable format the verifier does not know",
+      "patch": [
+        {
+          "path": [
+            "format"
+          ],
+          "set": "certen-proof-v2-accumulate-portable/0"
+        }
+      ]
+    }
+  ],
+  "format": "certen-proof-v2-accumulate-portable/1"
+}
