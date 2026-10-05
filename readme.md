@@ -190,6 +190,10 @@ The included `docker-compose.yml` deploys a complete testnet:
 | `ARBITRUM_SEPOLIA_RPC_URL` | No | - | Arbitrum Sepolia RPC |
 | `OPTIMISM_SEPOLIA_RPC_URL` | No | - | Optimism Sepolia RPC |
 | `BASE_SEPOLIA_RPC_URL` | No | - | Base Sepolia RPC |
+| `CERTEN_SETTLEMENT_CHAINS` | Yes | - | The enabled chains, by id, of the chain catalogue (`pkg/supportedchains`: 11155111, 84532, 421614, 2017). Identical on every validator; a leg on any other chain is refused at consensus by name |
+| `TELCOIN_ADIRI_RPC_URL`, `TELCOIN_ADIRI_URL_FALLBACKS` | When 2017 is enabled | - | Telcoin Adiri (2017) RPC providers; Adiri is disabled by default |
+| `TELCOIN_ADIRI_MAX_GAS_PRICE_GWEI`, `TELCOIN_ADIRI_GAS_LIMIT_ANCHOR` | When 2017 is enabled | none compiled in | Gas ceiling (gwei of TEL) and anchor gas limit for Adiri |
+| `CERTEN_ANCHOR_V8_2017`, `CERTEN_OUTCOME_REGISTRY_2017` | When 2017 is enabled | - | Adiri anchor and outcome registry; plus `2017=v4` in `CERTEN_ACCOUNT_LEAF_VERSIONS` |
 
 #### CometBFT Consensus
 
