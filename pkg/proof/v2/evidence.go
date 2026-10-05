@@ -90,18 +90,33 @@ func Verify(ev *Evidence, ar *Archive, inc *proof.IncarnationEvidence, pinned [3
 	if ev == nil || ev.Version != Version {
 		return nil, fmt.Errorf("not a v2 Accumulate proof")
 	}
-	rep := &Report{}
-
 	// The trust base: the genesis network values of the pinned incarnation.
 	ir, err := inc.Verify()
 	if err != nil {
 		return nil, fmt.Errorf("incarnation evidence: %w", err)
 	}
-	if ir.Incarnation != pinned {
-		return nil, fmt.Errorf("incarnation evidence is for %x, not the pinned %x", ir.Incarnation, pinned)
+	return VerifyFromGenesis(ev, ar, ir.Inputs, pinned)
+}
+
+// VerifyFromGenesis is Verify given the incarnation's inputs rather than its full evidence. The genesis network and
+// globals records the spine starts from are bound to the pin by the incarnation identity itself: it is a keccak over
+// the inputs including sha256 of both records, so records other than the pinned genesis's cannot reproduce it. That
+// is the binding the spine needs; the full evidence additionally proves the genesis anchor's quorum and the records'
+// chain history.
+func VerifyFromGenesis(ev *Evidence, ar *Archive, in proof.IncarnationInputs, pinned [32]byte) (*Report, error) {
+	if ev == nil || ev.Version != Version {
+		return nil, fmt.Errorf("not a v2 Accumulate proof")
 	}
-	rep.Incarnation = ir.Incarnation
-	g, err := genesisValues(ir.Inputs.NetworkRecord, ir.Inputs.GlobalsRecord)
+	rep := &Report{}
+	id, err := proof.ComputeIncarnation(in)
+	if err != nil {
+		return nil, err
+	}
+	if id != pinned {
+		return nil, fmt.Errorf("incarnation evidence is for %x, not the pinned %x", id, pinned)
+	}
+	rep.Incarnation = id
+	g, err := genesisValues(in.NetworkRecord, in.GlobalsRecord)
 	if err != nil {
 		return nil, err
 	}
