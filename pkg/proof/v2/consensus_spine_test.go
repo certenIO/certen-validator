@@ -80,3 +80,19 @@ func TestConsensusSpineMatchesTheWalk(t *testing.T) {
 		t.Fatalf("a skipped major block: %v", err)
 	}
 }
+
+// A proposer bounds the builder to the major blocks the chain has verified; the evidence then starts at that
+// checkpoint and its own runs cover the rest.
+func TestBuilderStartsAtABoundedCheckpoint(t *testing.T) {
+	b := &Builder{majors: make([]*Spine, 5)}
+	for i := range b.majors {
+		b.majors[i] = &Spine{LastMinorBlock: uint64(100 * (i + 1))}
+	}
+	if n, _, err := b.lastMajorBefore(450); err != nil || n != 4 {
+		t.Fatalf("unbounded: major %d, %v", n, err)
+	}
+	b.MaxMajors = 2
+	if n, _, err := b.lastMajorBefore(450); err != nil || n != 2 {
+		t.Fatalf("bounded to 2: major %d, %v", n, err)
+	}
+}

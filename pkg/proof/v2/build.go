@@ -27,6 +27,11 @@ type Builder struct {
 	C *jsonrpc.Client
 	Q proof.AccumulateQuerier
 
+	// MaxMajors, when set, bounds the major blocks a proof may build on: a proof judged in consensus must start at a
+	// checkpoint the chain has verified, so the proposer sets it to the consensus spine's height. Its own minor-root
+	// runs cover the blocks past it.
+	MaxMajors uint64
+
 	inc    [32]byte
 	incEv  *proof.IncarnationEvidence
 	ar     *Archive
@@ -91,7 +96,11 @@ func (b *Builder) extend(ctx context.Context, sp *Spine) error {
 
 // lastMajorBefore returns the number of major blocks whose closing anchor precedes block, and the spine after them.
 func (b *Builder) lastMajorBefore(block uint64) (uint64, *Spine, error) {
-	for i := len(b.majors) - 1; i >= 0; i-- {
+	top := len(b.majors) - 1
+	if b.MaxMajors > 0 && int(b.MaxMajors)-1 < top {
+		top = int(b.MaxMajors) - 1
+	}
+	for i := top; i >= 0; i-- {
 		if b.majors[i].LastMinorBlock < block {
 			return uint64(i + 1), b.majors[i].Clone(), nil
 		}
@@ -239,6 +248,9 @@ func (b *Builder) buildSetCheckAt(ctx context.Context, majors uint64, cert *Spin
 // retention, and its state receipt passes through the state root the anchor certifies whatever later root it ends at.
 func (b *Builder) buildSetCheck(ctx context.Context, atLeast uint64) (*SetCheck, error) {
 	n := uint64(len(b.majors))
+	if b.MaxMajors > 0 && b.MaxMajors < n {
+		n = b.MaxMajors
+	}
 	chk := b.majors[n-1].Clone()
 	var hops []string
 	for {
