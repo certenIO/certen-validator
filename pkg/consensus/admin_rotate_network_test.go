@@ -320,7 +320,7 @@ func TestAdminRotationRehearsalOnALiveNetwork(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if info.Response.AppVersion != executionRulesV12 {
+		if info.Response.AppVersion != CurrentExecutionRulesVersion {
 			t.Fatalf("%s reports app version %d", n.name, info.Response.AppVersion)
 		}
 		got := hex.EncodeToString(info.Response.LastBlockAppHash)
@@ -346,7 +346,11 @@ func checkLiveHistory(t *testing.T, n *rehearsalNode) int {
 	if err != nil {
 		t.Fatal(err)
 	}
-	records := &CommittedRecords{Policy: policy, Registry: registry}
+	spine, err := store.LoadAccumulateSpine()
+	if err != nil {
+		t.Fatal(err)
+	}
+	records := &CommittedRecords{Policy: policy, Registry: registry, Spine: spine}
 	hist := storeHistory{blocks: n.node.BlockStore(), results: sm.NewStore(n.dbs["state"], sm.StoreOptions{})}
 	// A block is in the block store just before CometBFT stores its results: wait until the newest one has them.
 	waitNetwork(t, n.name+"'s newest block to have its results", 30*time.Second, func() bool {

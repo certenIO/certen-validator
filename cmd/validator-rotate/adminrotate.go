@@ -441,13 +441,18 @@ func writeAdminRotate(tx *consensus.AdminRotateTx, path string, replace bool) er
 	return writeNewSecret(path, b)
 }
 
-// historyCheckV12 reads every committed block of the chain and its result codes and judges them as a v12 node judges
-// its history before it starts (consensus.CommittedBlockViolations). Against a v12 node it also reads the committed
-// records - the admin record and the BLS registry log - and an accepted registry, re-seal or admin rotation without
-// its record is FOUND. A node on older rules serves no records over RPC: every acceptance whose record could not be
-// read is then listed as such - never reported as checked - and every v12 node checks it against its own ledger when
-// it starts; an accepted admin rotation, which no older node can have recorded, is FOUND.
-func historyCheckV12(rpc string, c rpcDoer) error {
+// spineRulesVersion is the execution-rules version that recognises the Accumulate spine kinds.
+const spineRulesVersion = 13
+
+// historyCheckRules reads every committed block of the chain and its result codes and judges them as a node of this
+// binary judges its history before it starts (consensus.CommittedBlockViolations), reporting the verdict for rules
+// (12 or 13: the version whose deploy the check is run before). Against a v12 node it also reads the committed
+// records - the admin record and the BLS registry log, and from a v13 node the spine log - and an accepted registry,
+// re-seal, admin rotation or spine transaction without its record is FOUND. A node on older rules serves no records
+// over RPC: every acceptance whose record could not be read is then listed as such - never reported as checked - and
+// every node of this binary checks it against its own ledger when it starts; an accepted admin rotation or spine
+// transaction, which no older node can have recorded, is FOUND.
+func historyCheckRules(rpc string, c rpcDoer, rules uint64) error {
 	n, err := readNode(c, rpc)
 	if err != nil {
 		return err
@@ -486,6 +491,13 @@ func historyCheckV12(rpc string, c rpcDoer) error {
 			return err
 		}
 		records = &consensus.CommittedRecords{Policy: v.Policy(), Registry: registry}
+		// A v13 node serves the spine log; an older one never accepted a spine transaction, so it has none to serve
+		// (records.Spine stays nil, and an accepted spine transaction is FOUND).
+		if n.appVersion >= spineRulesVersion {
+			if records.Spine, err = readAccumulateSpineLog(c, rpc); err != nil {
+				return err
+			}
+		}
 	}
 	kinds := map[string]int{}
 	scheduledAt := map[uint64]int64{} // policy version -> the height that accepted it first
@@ -562,21 +574,48 @@ func historyCheckV12(rpc string, c rpcDoer) error {
 		for _, f := range found {
 			fmt.Println("  FOUND:", f)
 		}
-		return &checkExit{code: exitHistoryFound, msg: "FOUND: the chain holds history rules v12 decide differently: v12 must NOT continue this state"}
+		return &checkExit{code: exitHistoryFound, msg: fmt.Sprintf("FOUND: the chain holds history rules v%d decide differently: "+
+			"v%d must NOT continue this state", rules, rules)}
 	}
 	if len(unread) > 0 {
 		for _, u := range unread {
 			fmt.Printf("  RECORD NOT READ: %s - %s\n", u, unreadReason)
 		}
-		fmt.Printf("INCOMPLETE, NOT VERIFIED: nothing found that rules v12 decide differently, but the %d acceptance(s) above "+
-			"were not checked against their records here (%s). Every v12 node checks each against its own ledger when it "+
+		fmt.Printf("INCOMPLETE, NOT VERIFIED: nothing found that rules v%d decide differently, but the %d acceptance(s) above "+
+			"were not checked against their records here (%s). Every v%d node checks each against its own ledger when it "+
 			"starts and refuses to start on one without its record; run this again against a node that serves the records.\n",
-			len(unread), unreadReason)
+			rules, len(unread), unreadReason, rules)
 		return &checkExit{code: exitHistoryIncomplete, msg: fmt.Sprintf("INCOMPLETE: %d record(s) not read; nothing found wrong, "+
 			"history NOT verified", len(unread))}
 	}
-	fmt.Println("no transaction rules v12 decide differently: v12 continues this chain's history exactly")
+	fmt.Printf("no transaction rules v%d decide differently: v%d continues this chain's history exactly\n", rules, rules)
 	return nil
+}
+
+// readAccumulateSpineLog reads a node's committed Accumulate spine log (/certen/accumulate_spine, rules v13).
+func readAccumulateSpineLog(c rpcDoer, base string) (*ledger.AccumulateSpineLog, error) {
+	var q struct {
+		Response struct {
+			Code  uint32 `json:"code"`
+			Log   string `json:"log"`
+			Value string `json:"value"`
+		} `json:"response"`
+	}
+	if err := rpcCall(c, base, "abci_query", map[string]any{"path": "/certen/accumulate_spine"}, &q); err != nil {
+		return nil, err
+	}
+	if q.Response.Code != 0 {
+		return nil, fmt.Errorf("%s: the Accumulate spine log is not available (%s)", base, q.Response.Log)
+	}
+	raw, err := base64.StdEncoding.DecodeString(q.Response.Value)
+	if err != nil {
+		return nil, err
+	}
+	var l ledger.AccumulateSpineLog
+	if err := json.Unmarshal(raw, &l); err != nil {
+		return nil, fmt.Errorf("%s: unreadable Accumulate spine log: %w", base, err)
+	}
+	return &l, nil
 }
 
 // errQueryNotServed is a node answering that it does not know a query path: it predates that query.

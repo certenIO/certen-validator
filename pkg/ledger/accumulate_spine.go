@@ -17,6 +17,10 @@ type AccumulateSpineLog struct {
 	Genesis     *AccumulateSpineGenesis     `json:"genesis,omitempty"`
 	Checkpoints []AccumulateSpineCheckpoint `json:"checkpoints"`
 	Sets        []AccumulateSpineSet        `json:"sets"`
+	// Previous is the log this one replaced when the BLS registry moved to a new Accumulate incarnation and a genesis
+	// for it was accepted (rules v13): the dead incarnation's spine, kept so the chain's state below the replacing block
+	// can still be read back exactly - a re-execution of that block, and the history check, need it.
+	Previous *AccumulateSpineLog `json:"previous,omitempty"`
 }
 
 // AccumulateSpineGenesis is the spine's starting point: the incarnation's genesis facts, accepted only when they

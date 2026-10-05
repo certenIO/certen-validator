@@ -189,8 +189,28 @@ const (
 	// refuses an admin rotation (committedRulesVersion).
 	executionRulesV12 uint64 = 12
 
+	// v13 - the Accumulate validator-set spine becomes consensus state (accumulate_spine.go, RB6; docs/proof/PROOF_V2.md,
+	// GOVROOT_V3.md): a proof v2 must be judged inside FinalizeBlock with no I/O, so the chain itself holds the spine its
+	// validator sets are traced along. Two recognised transaction kinds:
+	// `certen.accumulate.spine.genesis/v1`, accepted only when its facts recompute the Accumulate incarnation of the BLS
+	// registry in force and the recorded spine is not already of that incarnation - so the spine starts from the
+	// registry's incarnation and follows it when an admin-signed registry moves to a new one, replacing the dead
+	// incarnation's spine - and `certen.accumulate.spine.extend/v1`, the next major blocks in sequence after the last
+	// checkpoint, each verified from the spine the chain holds (pkg/proof/v2 consensus_spine.go), on a spine of the
+	// registry's incarnation only. Accepted, each contributes its id to the app hash; refused, a genesis returns code 13,
+	// an extension code 14, or code 15 when the chain has already verified its first major block (a lost race between
+	// submitters, told apart from an invalid extension). v12 judged the same bytes as a ValidatorBlock and decided them
+	// with a ValidatorBlock's code, so the version is bumped.
+	//
+	// v13 CONTINUES v7..v12 state without a reset: the kinds are new, so no committed history contains them, and that is
+	// checked, not assumed - IndexCommittedHistory refuses to start on any committed spine-kind transaction that v13 did
+	// not decide (a ValidatorBlock's code, or an acceptance with no record of it in the committed spine log). Every other
+	// kind is decided exactly as v12 decided it. The state stays stamped with the older version until a block accepts
+	// or refuses a spine transaction (committedRulesVersion).
+	executionRulesV13 uint64 = 13
+
 	// CurrentExecutionRulesVersion is what THIS binary implements.
-	CurrentExecutionRulesVersion = executionRulesV12
+	CurrentExecutionRulesVersion = executionRulesV13
 )
 
 // compatibleContinuations names the older rules whose committed state this binary may continue, and why
@@ -205,11 +225,13 @@ var compatibleContinuations = map[uint64]uint64{
 	// v11 adds only the re-seal kind, which no committed history contains (checked at every start), and judges admin
 	// signatures by the set in force, which is the genesis seal until a re-seal is committed.
 	// v12 adds only the admin-rotation kind, which no committed history contains (checked at every start).
-	executionRulesV7:  executionRulesV12,
-	executionRulesV8:  executionRulesV12,
-	executionRulesV9:  executionRulesV12,
-	executionRulesV10: executionRulesV12,
-	executionRulesV11: executionRulesV12,
+	// v13 adds only the two spine kinds, which no committed history contains (checked at every start).
+	executionRulesV7:  executionRulesV13,
+	executionRulesV8:  executionRulesV13,
+	executionRulesV9:  executionRulesV13,
+	executionRulesV10: executionRulesV13,
+	executionRulesV11: executionRulesV13,
+	executionRulesV12: executionRulesV13,
 }
 
 // ExecutionRulesMismatchError explains a refusal to start in terms an operator
