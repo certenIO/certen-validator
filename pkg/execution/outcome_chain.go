@@ -19,6 +19,7 @@ import (
 
 	"github.com/certen/independant-validator/pkg/ethrpc"
 	"github.com/certen/independant-validator/pkg/execution/contracts"
+	"github.com/certen/independant-validator/pkg/supportedchains"
 )
 
 // =============================================================================
@@ -472,8 +473,14 @@ func (c *AgreedOutcomeChain) RecordedOutcome(ctx context.Context, bundleID [32]b
 }
 
 // contractBlockIsL1 reports whether a contract's block.number on the chain is its parent chain's block number: Arbitrum
-// (Nitro), whose recordedInBlock is therefore an L1 block number.
-func contractBlockIsL1(chainID int64) bool { return chainID == 421614 || chainID == 42161 }
+// (Nitro), whose recordedInBlock is therefore an L1 block number. A catalogued chain answers from its catalogue entry
+// (supportedchains.Chain.ContractBlockIsParent); Arbitrum One (42161), not catalogued, is Nitro too.
+func contractBlockIsL1(chainID int64) bool {
+	if c, ok := supportedchains.Lookup(chainID); ok {
+		return c.ContractBlockIsParent
+	}
+	return chainID == 42161
+}
 
 // arbitrumL1Block is the L1 block number an Arbitrum Nitro header carries: mixHash bytes 8-16.
 func arbitrumL1Block(h *types.Header) uint64 {

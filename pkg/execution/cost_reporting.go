@@ -17,6 +17,7 @@ import (
 
 	"github.com/certen/independant-validator/pkg/billing"
 	"github.com/certen/independant-validator/pkg/config"
+	"github.com/certen/independant-validator/pkg/supportedchains"
 )
 
 var (
@@ -133,25 +134,23 @@ func resolveCostEndpointForChain(chain string) (string, string, error) {
 // evmCanonicalSlugForChainID is the single spelling this fleet uses for each EVM chain.
 //
 // Deliberately the inverse of evmChainIDForName's ACCEPTED names rather than a second list of
-// aliases: many names map in, exactly one comes out.
+// aliases: many names map in, exactly one comes out. A catalogued chain's spelling is its catalogue Name
+// (supportedchains); the retired chains below keep the spellings their history was recorded under.
 func evmCanonicalSlugForChainID(chainID int64) (string, bool) {
+	if c, ok := supportedchains.Lookup(chainID); ok {
+		return c.Name, true
+	}
 	switch chainID {
 	case 1:
 		return "ethereum", true
-	case 11155111:
-		return "ethereum-sepolia", true
 	case 42161:
 		return "arbitrum", true
-	case 421614:
-		return "arbitrum-sepolia", true
 	case 10:
 		return "optimism", true
 	case 11155420:
 		return "optimism-sepolia", true
 	case 8453:
 		return "base", true
-	case 84532:
-		return "base-sepolia", true
 	case 137:
 		return "polygon", true
 	case 80002:
@@ -175,24 +174,26 @@ func evmCanonicalSlugForChainID(chainID int64) (string, bool) {
 // evmChainIDForName maps a chain name to its numeric id for config lookup.
 // Deliberately explicit rather than a fuzzy match: resolving "base" to
 // Ethereum's config would probe the wrong node and silently report no cost.
+//
+// A catalogued chain is resolved by the catalogue: its Name, Network, RPC key and aliases
+// (supportedchains.LookupName). The retired chains below keep their recorded names. "arb" is not one of
+// them: it used to resolve to 42161, Arbitrum ONE (mainnet), which this fleet has never settled on, so a
+// cost event labelled "arb" was attributed to a chain it never touched. It names no chain now.
 func evmChainIDForName(name string) (int64, bool) {
+	if c, ok := supportedchains.LookupName(name); ok {
+		return c.ID, true
+	}
 	switch name {
 	case "ethereum", "eth":
 		return 1, true
-	case "ethereum-sepolia", "eth-sepolia", "sepolia":
-		return 11155111, true
-	case "arbitrum", "arb", "arbitrum-one":
+	case "arbitrum", "arbitrum-one":
 		return 42161, true
-	case "arbitrum-sepolia":
-		return 421614, true
 	case "optimism", "op", "op-mainnet":
 		return 10, true
 	case "optimism-sepolia", "op-sepolia":
 		return 11155420, true
 	case "base", "base-mainnet":
 		return 8453, true
-	case "base-sepolia":
-		return 84532, true
 	case "polygon", "matic":
 		return 137, true
 	case "polygon-amoy", "amoy":

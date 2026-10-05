@@ -1177,9 +1177,10 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 		}, nil
 	}
 
-	// SUPPORTED TARGET CHAINS. CERTEN executes only on Ethereum Sepolia, Base Sepolia and Arbitrum
-	// Sepolia; every other chain runs retired contracts. Refused here, on every validator, before
-	// anything is queued, signed or sent. See supported_chains.go.
+	// ENABLED TARGET CHAINS. CERTEN executes only on the chains of the chain catalogue that
+	// CERTEN_SETTLEMENT_CHAINS enables (pkg/supportedchains); a leg on any other chain - retired, unknown,
+	// or catalogued but not enabled - is refused here, on every validator, by name, before anything is
+	// queued, signed or sent. See supported_chains.go.
 	if err := CheckIntentTargetChains(certenIntent); err != nil {
 		bv.logger.Printf("🚫 [TARGET-CHAIN] refusing intent %s: %v", certenIntent.IntentID, err)
 		return &ExecutionTaskResult{

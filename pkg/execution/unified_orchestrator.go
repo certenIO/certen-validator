@@ -44,6 +44,7 @@ import (
 	"github.com/certen/independant-validator/pkg/ethrpc"
 	"github.com/certen/independant-validator/pkg/proof"
 	"github.com/certen/independant-validator/pkg/strategy"
+	"github.com/certen/independant-validator/pkg/supportedchains"
 )
 
 // =============================================================================
@@ -1397,20 +1398,25 @@ func (o *UnifiedOrchestrator) persistChainExecution(ctx context.Context, cycle *
 	return o.config.UnifiedRepo.CreateChainExecutionResult(ctx, input)
 }
 
-// getNetworkName returns human-readable network name from chain ID
+// getNetworkName returns the human-readable network name of a chain ID: a catalogued chain's canonical name
+// (supportedchains.Chain.Name - "ethereum-sepolia", "base-sepolia", "arbitrum-sepolia", "telcoin-adiri"), else the
+// name a retired chain was recorded under, else unknown-<id>.
 func getNetworkName(chainID string) string {
+	if id, err := strconv.ParseInt(strings.TrimSpace(chainID), 10, 64); err == nil {
+		if c, ok := supportedchains.Lookup(id); ok {
+			return c.Name
+		}
+	}
+	// Retired and non-EVM chains, never settled on now (RB8 restores each through the catalogue).
 	networkNames := map[string]string{
 		"1":           "ethereum-mainnet",
-		"11155111":    "ethereum-sepolia",
 		"137":         "polygon-mainnet",
 		"80001":       "polygon-mumbai",
 		"80002":       "polygon-amoy",
 		"42161":       "arbitrum-one",
-		"421614":      "arbitrum-sepolia",
 		"10":          "optimism-mainnet",
 		"11155420":    "optimism-sepolia",
 		"8453":        "base-mainnet",
-		"84532":       "base-sepolia",
 		"43114":       "avalanche-mainnet",
 		"43113":       "avalanche-fuji",
 		"56":          "bsc-mainnet",

@@ -70,7 +70,8 @@ func TestCanonicalChainSlug_NonEVMPassesThroughWithZeroID(t *testing.T) {
 func TestCanonicalChainSlug_RoundTripsForEveryKnownName(t *testing.T) {
 	names := []string{
 		"ethereum", "eth", "ethereum-sepolia", "eth-sepolia", "sepolia",
-		"arbitrum", "arb", "arbitrum-one", "arbitrum-sepolia",
+		"arbitrum", "arbitrum-one", "arbitrum-sepolia",
+		"telcoin-adiri", "adiri", "tel-adiri", "Telcoin Adiri",
 		"optimism", "op", "op-mainnet", "optimism-sepolia", "op-sepolia",
 		"base", "base-mainnet", "base-sepolia",
 		"polygon", "matic", "polygon-amoy", "amoy",
