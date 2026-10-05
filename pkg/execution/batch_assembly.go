@@ -108,6 +108,11 @@ func NewEVMChainResolverFromEnv(anchorCfg *config.AnchorConfig, chainIDs []int64
 		if err := requireGasSettings(anchorCfg.GetEVMChainConfig(id)); err != nil {
 			return nil, err
 		}
+		// A chain that does not pay gas in ETH needs its own native-token price (CERTEN_NATIVE_USD_<id>): ETH's would
+		// price it at the wrong asset's rate.
+		if _, err := nativeUSDMicroFor(id); err != nil {
+			return nil, fmt.Errorf("%w: chain %d is a chain CERTEN settles on", err, id)
+		}
 		out[id] = common.HexToAddress(v)
 	}
 	return NewEVMChainResolver(anchorCfg, out)

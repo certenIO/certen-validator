@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/certen/independant-validator/pkg/consensus"
+	"github.com/certen/independant-validator/pkg/supportedchains"
 	"github.com/ethereum/go-ethereum/common"
 )
 
@@ -393,8 +394,12 @@ func (p *PendingBatchIntent) provenance() MemberProvenance {
 		} else {
 			prov.Amount = "0"
 		}
-		// The batch path settles native value; a contract-call leg moves none, and says so as "0".
-		prov.TokenSymbol = "ETH"
+		// The batch path settles native value - in the leg chain's own gas token (the catalogue's: ETH on the Sepolia
+		// chains, TEL on Telcoin Adiri); a contract-call leg moves none, and says so as "0". A chain the catalogue does not
+		// hold names no token.
+		if c, ok := supportedchains.Lookup(leg.ChainID); ok {
+			prov.TokenSymbol = c.NativeSymbol
+		}
 	}
 	return prov
 }
