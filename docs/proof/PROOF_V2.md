@@ -92,6 +92,18 @@ strictly stronger (it accounts for every write ever made, not only the windows a
    `g1_historical_unavailable`, by name.
    - Shadow cross-check: v1's replayed page must equal v2's served page for every intent; a disagreement is stop-the-line.
    - RB5-F19/B4: the enumeration route reads delegate pages as of execution, its window bounded at execution.
+   - **Refined 2026-10-05 (from v1's vote model): the certified timeline.** v1 judges each signature against the
+     states the page may have been in during the signature's own arrival block, from a timeline replayed from the
+     page's main-chain history; a page "as of B" can only anchor that timeline's end. So v2 certifies the timeline:
+     1. **The page's main chain at B is proven.** The capture records the page's chain roots and the state hasher's
+        secondary and pending components; the verifier recomputes H(chains || pending) and requires it to be the
+        state receipt's second sibling at B. Roots that moved between B and the capture fail that check
+        (`g1_chain_moved`), never assumed.
+     2. **The replayed history is exactly that chain.** v1's history entry hashes, genesis first, must fold to the
+        proven main-chain root with the proven height: no entry inserted, omitted or reordered.
+     3. **The replay ends in the proven state** at B.
+     4. **Each signature's arrival receipt is certified** into the certified Directory root (as the transaction's is).
+     5. **v1's own evaluation** (`govvote.Evaluate`) runs on that certified timeline; its verdict must equal v1's.
 3. **G1(b) — completeness:** proof that the authority set judged is the complete set in force at B (no omitted
    authority, no disabled one counted). Argument in `docs/proof/G1_COMPLETENESS_ARGUMENT.md`, implemented only if sound;
    until then S3 reports completeness by name as unproven.
@@ -160,8 +172,10 @@ tool, never a proof).
 1. New packages beside v1: `proof/chained_proof_v2`, `proof/governance_proof_v2` (liteclient), `pkg/proof/v2`, and
    `pkg/finality` (validator). v1 bytes and verdicts never change.
 2. `proof_artifacts.proof_version = '2.0'`; the bundle carries it; `proofverify` dispatches on it; unknown → refused.
-3. New domain tags, never reused: `certen:chain-proof:v2`, `certen:l4gov:v3`, `certen:g1:v2`, `certen:g2:v2`,
-   `certen:finality:v1`, `certen:contract-identity:v1`. New evidence beside hashed summaries, never inside them.
+3. New domain tags, never reused. **Corrected 2026-10-05:** govRoot v2 (RB5-F19) already uses `certen:g0:v2`,
+   `certen:g1:v2` and `certen:g2:v2`, so the proof v2 levels use `:v3` - see `docs/proof/GOVROOT_V3.md` for every
+   slot (`certen:l1:v3`, `certen:l2:v3`, `certen:l3:v3`, `certen:l4gov:v3`, `certen:g0:v3`, `certen:g1:v3`,
+   `certen:g2:v3`, root `certen:govroot:v3`); Phase B adds `certen:finality:v1` and `certen:contract-identity:v1`. New evidence beside hashed summaries, never inside them.
 4. govRoot changes → atomic fleet switch after shadow; v2 goldens are new files.
 5. Named states include: `g1_historical_unavailable`, `l4_spine_unavailable`, `historical_state_unavailable`,
    `g1_completeness_unproven`, `finality_pending` (with the level reached), `consensus_engine_unsupported`.

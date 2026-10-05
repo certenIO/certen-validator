@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	chained_proof "github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/working-proof_do_not_edit"
 	"github.com/certen/independant-validator/pkg/proof"
@@ -27,10 +28,26 @@ type Builder struct {
 	C *jsonrpc.Client
 	Q proof.AccumulateQuerier
 
-	inc    [32]byte
-	incEv  *proof.IncarnationEvidence
-	ar     *Archive
-	majors []*Spine // majors[i] is the spine after major block i+1
+	inc   [32]byte
+	incEv *proof.IncarnationEvidence
+
+	// mu guards ar and majors, which Refresh appends to while builds read them: a build works on a view (view).
+	mu      sync.RWMutex
+	refresh sync.Mutex
+	ar      *Archive
+	majors  []*Spine // majors[i] is the spine after major block i+1
+}
+
+// view returns the spines and records of the first max major blocks walked (all of them for max 0). Both only ever
+// grow, so a view stays valid while Refresh appends.
+func (b *Builder) view(max uint64) ([]*Spine, *Archive) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	n := len(b.majors)
+	if max > 0 && max < uint64(n) {
+		n = int(max)
+	}
+	return b.majors[:n:n], &Archive{Majors: b.ar.Majors[:n:n]}
 }
 
 // NewBuilder walks the spine from the pinned incarnation's genesis once; every Build extends a copy of it. The
@@ -58,12 +75,51 @@ func NewBuilder(ctx context.Context, c *jsonrpc.Client, q proof.AccumulateQuerie
 	return b, nil
 }
 
-// Archive returns the major records walked so far.
-func (b *Builder) Archive() *Archive { return b.ar }
+// NewBuilderFromArchive is NewBuilder that walks the given major records instead of fetching them, and then follows
+// the network through c as NewBuilder's does. The records are verified by the walk, as fetched ones are.
+func NewBuilderFromArchive(c *jsonrpc.Client, q proof.AccumulateQuerier, inc *proof.IncarnationEvidence, pinned [32]byte, ar *Archive) (*Builder, error) {
+	ir, err := inc.Verify()
+	if err != nil {
+		return nil, fmt.Errorf("incarnation evidence: %w", err)
+	}
+	if ir.Incarnation != pinned {
+		return nil, fmt.Errorf("incarnation evidence is for %x, not the pinned %x", ir.Incarnation, pinned)
+	}
+	g, err := genesisValues(ir.Inputs.NetworkRecord, ir.Inputs.GlobalsRecord)
+	if err != nil {
+		return nil, err
+	}
+	sp, err := NewSpine(g, 1)
+	if err != nil {
+		return nil, err
+	}
+	b := &Builder{C: c, Q: q, inc: pinned, incEv: inc, ar: &Archive{}}
+	for _, r := range ar.Majors {
+		if err := sp.Advance(r); err != nil {
+			return nil, fmt.Errorf("spine: %w", err)
+		}
+		b.ar.Majors = append(b.ar.Majors, r)
+		b.majors = append(b.majors, sp.Clone())
+	}
+	if len(b.majors) == 0 {
+		return nil, fmt.Errorf("the archive holds no major block")
+	}
+	return b, nil
+}
 
-// Refresh walks any major blocks closed since the last walk.
+// Archive returns the major records walked so far.
+func (b *Builder) Archive() *Archive {
+	_, ar := b.view(0)
+	return ar
+}
+
+// Refresh walks any major blocks closed since the last walk. Concurrent refreshes would walk the same blocks twice, so
+// they are serialised.
 func (b *Builder) Refresh(ctx context.Context) error {
-	return b.extend(ctx, b.majors[len(b.majors)-1].Clone())
+	b.refresh.Lock()
+	defer b.refresh.Unlock()
+	majors, _ := b.view(0)
+	return b.extend(ctx, majors[len(majors)-1].Clone())
 }
 
 func (b *Builder) extend(ctx context.Context, sp *Spine) error {
@@ -73,7 +129,7 @@ func (b *Builder) extend(ctx context.Context, sp *Spine) error {
 			// A range past the newest major block is refused whole; ask for one at a time to reach the end.
 			recs, err = b.C.MajorHeaderRange(ctx, api.MajorHeaderRangeOptions{Partition: protocol.Directory, Start: sp.NextMajor, End: sp.NextMajor})
 			if err != nil {
-				if len(b.majors) == 0 {
+				if majors, _ := b.view(0); len(majors) == 0 {
 					return fmt.Errorf("spine: no major block could be read: %w", err)
 				}
 				return nil
@@ -83,17 +139,19 @@ func (b *Builder) extend(ctx context.Context, sp *Spine) error {
 			if err := sp.Advance(r); err != nil {
 				return fmt.Errorf("spine: %w", err)
 			}
+			b.mu.Lock()
 			b.ar.Majors = append(b.ar.Majors, r)
 			b.majors = append(b.majors, sp.Clone())
+			b.mu.Unlock()
 		}
 	}
 }
 
 // lastMajorBefore returns the number of major blocks whose closing anchor precedes block, and the spine after them.
-func (b *Builder) lastMajorBefore(block uint64) (uint64, *Spine, error) {
-	for i := len(b.majors) - 1; i >= 0; i-- {
-		if b.majors[i].LastMinorBlock < block {
-			return uint64(i + 1), b.majors[i].Clone(), nil
+func lastMajorBefore(majors []*Spine, block uint64) (uint64, *Spine, error) {
+	for i := len(majors) - 1; i >= 0; i-- {
+		if majors[i].LastMinorBlock < block {
+			return uint64(i + 1), majors[i].Clone(), nil
 		}
 	}
 	return 0, nil, fmt.Errorf("DN block %d precedes the first major block", block)
@@ -102,6 +160,17 @@ func (b *Builder) lastMajorBefore(block uint64) (uint64, *Spine, error) {
 // Build proves one transaction (S1-S2), its partition anchor, the captured pages (G1(a)) and the validator set in
 // force (the set check). Pages are captured with CapturePage at discovery, while their block is inside retention.
 func (b *Builder) Build(ctx context.Context, account, txHash, bvn string, pages ...*PageState) (*Evidence, error) {
+	return b.BuildBounded(ctx, 0, account, txHash, bvn, pages...)
+}
+
+// BuildBounded is Build on no more than the first maxMajors major blocks (0: all walked). A proof judged in consensus
+// must start at a checkpoint the chain has verified, so a proposer bounds it by the consensus spine's height; the
+// proof's own minor-root runs cover the blocks past it.
+func (b *Builder) BuildBounded(ctx context.Context, maxMajors uint64, account, txHash, bvn string, pages ...*PageState) (*Evidence, error) {
+	majors, ar := b.view(maxMajors)
+	if len(majors) == 0 {
+		return nil, fmt.Errorf("no major block has been walked")
+	}
 	cp, err := chained_proof.NewProofBuilder(b.C, false).BuildProof(ctx, chained_proof.ProofInput{Account: account, TxHash: txHash, BVN: bvn})
 	if err != nil {
 		return nil, fmt.Errorf("account and partition legs: %w", err)
@@ -116,7 +185,7 @@ func (b *Builder) Build(ctx context.Context, account, txHash, bvn string, pages 
 	}
 
 	// Certify the Directory block the Directory leg reached, from the last major block before it.
-	n, cert, err := b.lastMajorBefore(cp.Layer3.DNSelfAnchorRecordedAtMinorBlockIndex)
+	n, cert, err := lastMajorBefore(majors, cp.Layer3.DNSelfAnchorRecordedAtMinorBlockIndex)
 	if err != nil {
 		return nil, err
 	}
@@ -194,7 +263,7 @@ func (b *Builder) Build(ctx context.Context, account, txHash, bvn string, pages 
 		trimmed = append(trimmed, *t)
 	}
 
-	set, err := b.buildSetCheck(ctx, cert.LastMinorBlock)
+	set, err := b.buildSetCheckAt(ctx, majors, n, cert)
 	if err != nil {
 		return nil, err
 	}
@@ -212,18 +281,34 @@ func (b *Builder) Build(ctx context.Context, account, txHash, bvn string, pages 
 	}
 
 	// The producer verifies its own output, so a malformed proof never reaches storage.
-	if _, err := Verify(ev, b.ar, b.incEv, b.inc); err != nil {
+	if _, err := Verify(ev, ar, b.incEv, b.inc); err != nil {
 		return nil, fmt.Errorf("built evidence that does not verify: %w", err)
 	}
 	return ev, nil
 }
 
+// buildSetCheckAt proves the validator set at the certified block itself, reusing the certification: no runs of its
+// own, which keeps the evidence small enough for a consensus block. The certified block is recent when a proof is built
+// promptly, so its state is inside the node's retention; when it is not (a proof built later), the set is proven at
+// the newest certified block instead (buildSetCheck). Both are the same guarantee: the set proven at a certified block
+// at or after the certified one.
+func (b *Builder) buildSetCheckAt(ctx context.Context, majors []*Spine, n uint64, cert *Spine) (*SetCheck, error) {
+	set, err := proof.BuildValidatorSetProofAt(ctx, b.Q, b.inc, cert.LastMinorBlock, cert.StateTreeAnchor)
+	if err != nil {
+		if strings.Contains(err.Error(), "retained") {
+			return b.buildSetCheck(ctx, majors, cert.LastMinorBlock)
+		}
+		return nil, fmt.Errorf("set check: %w", err)
+	}
+	return &SetCheck{Majors: n, Set: *set}, nil
+}
+
 // buildSetCheck walks a copy of the spine from the last major block to the newest certified block, keeping every
 // minor-root run, and proves the validator set there. The newest certified block is inside the public node's
 // retention, and its state receipt passes through the state root the anchor certifies whatever later root it ends at.
-func (b *Builder) buildSetCheck(ctx context.Context, atLeast uint64) (*SetCheck, error) {
-	n := uint64(len(b.majors))
-	chk := b.majors[n-1].Clone()
+func (b *Builder) buildSetCheck(ctx context.Context, majors []*Spine, atLeast uint64) (*SetCheck, error) {
+	n := uint64(len(majors))
+	chk := majors[n-1].Clone()
 	var hops []string
 	for {
 		mr, err := b.C.MinorRootRange(ctx, api.MinorRootRangeOptions{Partition: protocol.Directory, Since: chk.LastMinorBlock})

@@ -14,6 +14,7 @@ import (
 	abcitypes "github.com/cometbft/cometbft/abci/types"
 
 	"github.com/certen/independant-validator/pkg/ledger"
+	proofv2 "github.com/certen/independant-validator/pkg/proof/v2"
 )
 
 // A validator's ValidatorBlock for an operation commits once (RB3-F141).
@@ -116,6 +117,10 @@ func (app *ValidatorApp) recordCommittedOperations(height int64) {
 	if app.blockRulesV12Verdict {
 		app.recordFirstVerdict(executionRulesV12, &app.rulesV12FirstVerdict, height)
 		app.blockRulesV12Verdict = false
+	}
+	if app.blockRulesV13Verdict {
+		app.recordFirstVerdict(executionRulesV13, &app.rulesV13FirstVerdict, height)
+		app.blockRulesV13Verdict = false
 	}
 	// This binary decided this block, so it holds nothing this version decides differently (checkCommittedKinds).
 	if err := app.ledgerStore.AdvanceKindsChecked(CurrentExecutionRulesVersion, CommittedHistoryCheckVersion, height); err != nil {
@@ -295,6 +300,8 @@ func (app *ValidatorApp) indexCommittedOperations(h committedHistory) error {
 				app.recordFirstVerdict(executionRulesV11, &app.rulesV11FirstVerdict, height)
 			} else if _, ok := DecodeAdminRotate(tx); ok {
 				app.recordFirstVerdict(executionRulesV12, &app.rulesV12FirstVerdict, height)
+			} else if isSpineTx(tx) {
+				app.recordFirstVerdict(executionRulesV13, &app.rulesV13FirstVerdict, height)
 			}
 		}
 		violations = append(violations, found...)
@@ -402,11 +409,24 @@ func isValidatorBlockTx(tx []byte) bool {
 	if _, ok := DecodeAdminRotate(tx); ok {
 		return false
 	}
+	if isSpineTx(tx) {
+		return false
+	}
 	return true
 }
 
+// isSpineTx reports whether a transaction is of either spine kind (rules v13).
+func isSpineTx(tx []byte) bool {
+	if _, ok := DecodeAccumulateSpineGenesis(tx); ok {
+		return true
+	}
+	_, ok := DecodeAccumulateSpineExtend(tx)
+	return ok
+}
+
 // kindViolation judges one committed transaction of a kind a rules version after v9 added - the BLS registry (v10),
-// the admin re-seal (v11), the admin rotation (v12) - and a policy update, against what this binary decides for it.
+// the admin re-seal (v11), the admin rotation (v12), the spine genesis and extension (v13) - and a policy update, against
+// what this binary decides for it.
 // isKind says whether the transaction is one of those kinds; violation, when not empty, says how its recorded outcome
 // is one this binary does not reproduce: the version before judged those bytes as a ValidatorBlock, with a
 // ValidatorBlock's code - or it was accepted and the committed state holds no record of it.
@@ -416,10 +436,13 @@ func (app *ValidatorApp) kindViolation(height int64, i int, tx []byte, code uint
 }
 
 // CommittedRecords is the committed state a history check finds an accepted transaction's record in: the policy (the
-// re-seal's and every admin rotation's record, and the schedule) and the BLS registry log.
+// re-seal's and every admin rotation's record, and the schedule), the BLS registry log and the Accumulate spine log.
 type CommittedRecords struct {
 	Policy   *ledger.EntitlementPolicyState // nil: the chain sealed none
 	Registry *ledger.BLSRegistryLog         // nil: the registry log could not be read (every accepted registry is then unread)
+	// Spine nil: the node serves no spine log - it runs rules before v13, which never accepted a spine transaction, so an
+	// accepted one is a violation, never unread.
+	Spine *ledger.AccumulateSpineLog
 }
 
 // committedRecords reads this node's committed records.
@@ -432,7 +455,11 @@ func (app *ValidatorApp) committedRecords() (*CommittedRecords, error) {
 	if err != nil {
 		return nil, fmt.Errorf("the BLS registry log: %w", err)
 	}
-	return &CommittedRecords{Policy: policy, Registry: registry}, nil
+	spine, err := app.ledgerStore.LoadAccumulateSpine()
+	if err != nil {
+		return nil, fmt.Errorf("the Accumulate spine log: %w", err)
+	}
+	return &CommittedRecords{Policy: policy, Registry: registry, Spine: spine}, nil
 }
 
 // kindViolationWith is kindViolation with the committed records read through records, only when an acceptance has to
@@ -552,7 +579,90 @@ func kindViolationWith(height int64, i int, tx []byte, code uint32,
 				"v12 decides it as an admin rotation", height, i, code), true, "", nil
 		}
 	}
+	if gt, ok := DecodeAccumulateSpineGenesis(tx); ok {
+		// v12 judged a spine-kind transaction as a ValidatorBlock. v13 refuses a genesis with code 13 - a code no earlier
+		// version returns - or accepts it and records it, at its height, in the spine log (or, once a later genesis
+		// replaced that log, in a Previous of it). Anything else is a ValidatorBlock's verdict, which v13 does not
+		// reproduce; an acceptance without its record is divergent or corrupt.
+		switch code {
+		case codeSpineGenesisRefused:
+			return "", true, "", nil
+		case 0:
+			rec, err := records()
+			if err != nil {
+				return "", true, "", fmt.Errorf("the committed records, to check the spine genesis at height %d: %w", height, err)
+			}
+			if rec != nil && spineGenesisRecorded(rec.Spine, gt, height) {
+				return "", true, "", nil
+			}
+			return fmt.Sprintf("height %d tx %d is a spine genesis that was accepted, but the committed spine log holds no "+
+				"record of it at that height: v12 accepted it as a ValidatorBlock; v13 decides it as a spine genesis",
+				height, i), true, "", nil
+		default:
+			return fmt.Sprintf("height %d tx %d is a spine genesis that v12 judged as a ValidatorBlock (code %d); "+
+				"v13 decides it as a spine genesis", height, i, code), true, "", nil
+		}
+	}
+	if et, ok := DecodeAccumulateSpineExtend(tx); ok {
+		// As the genesis: v13 refuses an extension with code 14 or 15, or accepts it and records a checkpoint for every
+		// major block it carries, at its height.
+		switch code {
+		case codeSpineExtendRefused, codeSpineExtendStale:
+			return "", true, "", nil
+		case 0:
+			rec, err := records()
+			if err != nil {
+				return "", true, "", fmt.Errorf("the committed records, to check the spine extension at height %d: %w", height, err)
+			}
+			if rec != nil && spineExtensionRecorded(rec.Spine, et, height) {
+				return "", true, "", nil
+			}
+			return fmt.Sprintf("height %d tx %d is a spine extension that was accepted, but the committed spine log holds no "+
+				"checkpoints for it at that height: v12 accepted it as a ValidatorBlock; v13 decides it as a spine extension",
+				height, i), true, "", nil
+		default:
+			return fmt.Sprintf("height %d tx %d is a spine extension that v12 judged as a ValidatorBlock (code %d); "+
+				"v13 decides it as a spine extension", height, i, code), true, "", nil
+		}
+	}
 	return "", false, "", nil
+}
+
+// spineGenesisRecorded reports whether the spine log, or a log it replaced, records genesis gt as accepted at height:
+// the genesis there is gt's facts and set.
+func spineGenesisRecorded(l *ledger.AccumulateSpineLog, gt *AccumulateSpineGenesisTx, height int64) bool {
+	in, err := gt.Inputs()
+	if err != nil {
+		return false
+	}
+	set := proofv2.SpineSetHash(in.NetworkRecord, in.GlobalsRecord)
+	for ; l != nil; l = l.Previous {
+		g := l.Genesis
+		if g != nil && g.Height == height && g.MinorBlockIndex == gt.MinorBlockIndex && g.RootChainAnchor == gt.RootChainAnchor &&
+			g.StateTreeAnchor == gt.StateTreeAnchor && g.TimeUnix == gt.TimeUnix && g.SetHash == set {
+			return true
+		}
+	}
+	return false
+}
+
+// spineExtensionRecorded reports whether the spine log, or a log it replaced, records a checkpoint accepted at height
+// for every major block extension et carries.
+func spineExtensionRecorded(l *ledger.AccumulateSpineLog, et *AccumulateSpineExtendTx, height int64) bool {
+	if et.First == 0 || len(et.Records) == 0 {
+		return false
+	}
+	for ; l != nil; l = l.Previous {
+		found := true
+		for m := et.First; m < et.First+uint64(len(et.Records)); m++ {
+			c, ok := l.Checkpoint(m)
+			found = found && ok && c.Height == height
+		}
+		if found {
+			return true
+		}
+	}
+	return false
 }
 
 // CommittedHistoryCheckVersion names the set of checks checkCommittedKinds runs over committed history: kindViolation
@@ -568,7 +678,9 @@ func kindViolationWith(height int64, i int, tx []byte, code uint32,
 //   - 2: an accepted (code 0) BLS registry, admin re-seal or admin rotation must have its record in the committed
 //     records (RB5-F37, PR #106). That change kept rules v12, so nodes that ran the earlier v12 binary held a v12
 //     watermark at their height and never ran the record checks against their own ledger; under this key they do.
-const CommittedHistoryCheckVersion uint64 = 2
+//   - 3: the spine kinds of rules v13 - a committed spine genesis or extension must be decided as v13 decides it, and an
+//     accepted one must have its record in the committed spine log (spineGenesisRecorded, spineExtensionRecorded).
+const CommittedHistoryCheckVersion uint64 = 3
 
 // checkCommittedKinds checks every committed block above the kinds watermark (ledger KindsCheckedThrough, for this rules
 // version and CommittedHistoryCheckVersion) with kindViolation and rotationBlockVerdicts, and advances the watermark to
@@ -669,12 +781,12 @@ func rotationBlockVerdicts(height int64, txs [][]byte, codes []uint32) (violatio
 }
 
 // CommittedBlockViolations judges one committed block - its transactions and the result codes it committed - the way
-// every node judges its history before it starts (IndexCommittedHistory): each transaction of a kind rules v10-v12
+// every node judges its history before it starts (IndexCommittedHistory): each transaction of a kind rules v10-v13
 // added and each policy update, and the block's validator rotations as a whole. records is the chain's committed
 // records, or nil when they cannot be read (a node on rules before v12 serves none over RPC): then every accepted
 // registry and re-seal is returned in unchecked - its record is checked by every v12 node against its own ledger when
-// it starts - and an accepted admin rotation, which no such node can have recorded, is a violation. Tools run it over
-// a chain before an upgrade.
+// it starts - and an accepted admin rotation or spine transaction, which no such node can have recorded, is a
+// violation. Tools run it over a chain before an upgrade.
 func CommittedBlockViolations(height int64, txs [][]byte, codes []uint32, records *CommittedRecords) (violations, unchecked []string, err error) {
 	if len(codes) != len(txs) {
 		return nil, nil, fmt.Errorf("block %d has %d transactions and %d results", height, len(txs), len(codes))

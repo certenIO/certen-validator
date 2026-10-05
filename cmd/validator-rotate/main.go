@@ -42,6 +42,10 @@
 //	    Exit 0: verified. 3: INCOMPLETE - nothing found wrong, but some records could not be read from this node
 //	    (NOT verified). 4: FOUND. 1: the check could not run.
 //
+//	validator-rotate history-check --rules 13 --rpc http://v1:26657
+//	    The same, judged as a v13 node does: also no spine genesis or extension decided the older way, and every
+//	    accepted one found in the node's spine log (from a v13 node). Run against the live chain before deploying v13.
+//
 //	validator-rotate admin-rotate keygen|status|request|possess|sign|preflight|submit
 //	    Rotate CERTEN's admin set with the admin quorum in force (rules v12; adminrotate.go).
 package main
@@ -116,6 +120,8 @@ func main() {
 		err = adminReseal(os.Args[2:], http.DefaultClient)
 	case "admin-rotate":
 		err = adminRotate(os.Args[2:], http.DefaultClient)
+	case "spine-genesis":
+		err = spineGenesis(os.Args[2:], http.DefaultClient)
 	case "-h", "--help", "help":
 		usage()
 		return
@@ -146,7 +152,7 @@ func usage() {
   submit     commit the rotation
   status     the chain's rotation log
   tick       make the chain produce blocks (empty blocks are disabled)
-  history-check  prove no committed transaction is of a kind rules v8 adds (--rules 12: judge history as v12 does)
+  history-check  prove no committed transaction is of a kind rules v8 adds (--rules 12 / 13: judge history as v12 / v13 does)
 
   bls-possession          on a validator: its BLS registry entry and the key's proof of possession
   bls-registry-propose    assemble the BLS registry (RB5 D3), verify every possession, first admin signature
@@ -163,6 +169,11 @@ func usage() {
   admin-rotate sign       a current admin's approval, offline
   admin-rotate preflight  every node on rules v12 reports the same admin set, and the chain's rule accepts the rotation
   admin-rotate submit     preflight, then commit it (--dry-run: preflight only)
+
+  spine-genesis propose    the Accumulate spine genesis from verified incarnation evidence, first admin signature (rules v13)
+  spine-genesis sign       add another admin signature
+  spine-genesis preflight  every node on rules v13 agrees; the admin quorum signed it; it is the registry's incarnation
+  spine-genesis submit     preflight, then commit it and confirm it is recorded
 
 Run any subcommand with --help for its flags. The runbook is RUNBOOK_F95_CONSENSUS_KEY_ROTATION.md.
 `)
@@ -790,7 +801,7 @@ func kindOf(tx []byte) string {
 func historyCheck(args []string, c rpcDoer) error {
 	fs := flag.NewFlagSet("history-check", flag.ContinueOnError)
 	rpc := fs.String("rpc", "", "one validator's CometBFT RPC (it must hold every block from 1)")
-	rules := fs.Int("rules", 8, "the rules whose continuation to check: 8 (the kinds v8 adds) or 12 (history as v12 judges it)")
+	rules := fs.Int("rules", 8, "the rules whose continuation to check: 8 (the kinds v8 adds), 12 or 13 (history as v12 or v13 judges it)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -799,10 +810,10 @@ func historyCheck(args []string, c rpcDoer) error {
 	}
 	switch *rules {
 	case 8:
-	case 12:
-		return historyCheckV12(*rpc, c)
+	case 12, 13:
+		return historyCheckRules(*rpc, c, uint64(*rules))
 	default:
-		return fmt.Errorf("--rules is 8 or 12")
+		return fmt.Errorf("--rules is 8, 12 or 13")
 	}
 	var st struct {
 		SyncInfo struct {

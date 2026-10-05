@@ -102,7 +102,7 @@ func run(dsn, incPath, pinHex, only string) (int, error) {
 	}
 	defer rows.Close()
 
-	var total, verified, failures, pending, agree, disagree, v1missing int
+	var total, verified, failures, pending, agree, disagree, v1missing, accAgree, accPending int
 	for rows.Next() {
 		var id, tx, verdict, buildErr, captureErr string
 		var evRaw []byte
@@ -131,6 +131,28 @@ func run(dsn, incPath, pinHex, only string) (int, error) {
 			failures++
 			fmt.Printf("FAILED   %s: stored evidence does not verify offline: %v\n", id, err)
 			continue
+		}
+		// RB6 acceptance: the spine-derived set's root must be the root every V8.2 anchor of this intent committed.
+		roots, err := committedRoots(db, id, tx)
+		if err != nil {
+			return 0, err
+		}
+		want := "0x" + hex.EncodeToString(rep.AccumulateSetRoot[:])
+		mismatch := false
+		for _, r := range roots {
+			if !strings.EqualFold(r, want) {
+				mismatch = true
+				fmt.Printf("FAILED   %s: an anchor committed accumulate set root %s; the spine derives %s\n", id, r, want)
+			}
+		}
+		if mismatch {
+			failures++
+			continue
+		}
+		if len(roots) == 0 {
+			accPending++
+		} else {
+			accAgree++
 		}
 		verified++
 		note := ""
@@ -172,6 +194,8 @@ func run(dsn, incPath, pinHex, only string) (int, error) {
 	}
 	fmt.Printf("\n%d intents: %d verified, %d failed, %d pending; pages: %d agree, %d DISAGREE, %d without a v1 replay\n",
 		total, verified, failures, pending, agree, disagree, v1missing)
+	fmt.Printf("accumulate set root: %d intents equal to every anchor's committed root, %d with no V8.2 anchor recorded yet\n",
+		accAgree, accPending)
 	if failures > 0 || disagree > 0 {
 		fmt.Println("shadow exit: NOT MET")
 		return 1, nil
@@ -206,6 +230,27 @@ func liveIncarnation(endpoint, pinHex string) (string, error) {
 	defer f.Close()
 	_, err = f.Write(j)
 	return f.Name(), err
+}
+
+// committedRoots returns the accumulate set roots the V8.2 anchors of an intent's proofs committed.
+func committedRoots(db *sql.DB, intentID, tx string) ([]string, error) {
+	rows, err := db.Query(`
+		SELECT DISTINCT ab.accumulate_set_root FROM proof_artifacts pa
+		JOIN anchor_batches ab ON ab.id = pa.batch_id
+		WHERE (pa.intent_id = $1 OR pa.accum_tx_hash = $2) AND ab.anchor_version = 'v8_2' AND ab.accumulate_set_root IS NOT NULL`, intentID, tx)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var r string
+		if err := rows.Scan(&r); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }
 
 func loadSpine(db *sql.DB) (*proofv2.Archive, error) {

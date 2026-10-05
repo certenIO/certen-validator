@@ -7,6 +7,7 @@ package proof
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/govvote"
 	chained_proof "github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/working-proof_do_not_edit"
@@ -57,6 +58,10 @@ type CertenProof struct {
 
 	// Real lite client proof components
 	LiteClientProof *LiteClientProofData `json:"lite_client_proof"`
+
+	// ProofV2 is the intent's proof v2 evidence (pkg/proof/v2 Evidence, JSON), carried exactly when the chain requires
+	// the v3 intent certificate (docs/proof/GOVROOT_V3.md). Raw here: pkg/proof/v2 builds on this package.
+	ProofV2 json.RawMessage `json:"proof_v2,omitempty"`
 
 	// BFT consensus components for ValidatorBlock building
 	BLSAggregateSignature string   `json:"bls_aggregate_signature,omitempty"` // From governance authorization

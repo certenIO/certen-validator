@@ -38,6 +38,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -51,6 +52,7 @@ import (
 	"github.com/certen/independant-validator/pkg/database"
 	"github.com/certen/independant-validator/pkg/execution"
 	certenproof "github.com/certen/independant-validator/pkg/proof"
+	proofv2 "github.com/certen/independant-validator/pkg/proof/v2"
 	gnarklogger "github.com/consensys/gnark/logger"
 	"github.com/google/uuid"
 	_ "github.com/lib/pq"
@@ -87,8 +89,12 @@ func main() {
 		incarnation = flag.String("incarnation", "", "with --l5: the Accumulate incarnation you trust (hex32, docs/l4/"+
 			"INCARNATION_ANCHOR.md; derive it with cmd/incarnation). Without it, which Accumulate chain a V8.2 anchor's "+
 			"committed validator set belongs to rests on the anchor alone")
+		incEvidence = flag.String("incarnation-evidence", "", "with --governance: the incarnation's genesis evidence (JSON, "+
+			"cmd/incarnation), from which a v3 intent certificate's proof v2 is verified, walking the Directory's major "+
+			"blocks stored in the database from that genesis")
 	)
 	flag.Parse()
+	incEvidencePath = *incEvidence
 	// The Groth16 verifier's debug lines are not part of a verdict.
 	gnarklogger.Disable()
 
@@ -602,14 +608,28 @@ func reportIntentCertificate(ctx context.Context, db *sql.DB, store *certenproof
 		fmt.Printf("FAILED (intent certificate)  %s\n  %v\n", id, err)
 		return exitFailed
 	}
-	got, err := execution.CheckIntentCertificate(row, cp, levels, l5, pinned)
+	trust, err := proofV2Trust(ctx, db, incEvidencePath)
+	if err != nil {
+		fmt.Printf("FAILED (intent certificate)  %s\n  %v\n", id, err)
+		return exitFailed
+	}
+	got, err := execution.CheckIntentCertificate(row, cp, levels, l5, pinned, trust)
 	switch {
+	case errors.Is(err, execution.ErrProofV2TrustMissing):
+		fmt.Printf("SUMMARY-ONLY (intent certificate)  %s\n  %v\n", id, err)
+		fmt.Printf("  Pass --incarnation-evidence to verify it. Nothing about the proof is known to be wrong.\n")
+		return exitSummaryOnly
 	case err == nil:
 		fmt.Printf("  QC  CERTEN's quorum certified this intent: %d signers, %s of %s power (registry v%d, %s), at CERTEN\n",
 			got.Signers, got.SignedPower, got.TotalPower, got.RegistryVersion, got.CertenChainID)
 		fmt.Printf("      height %d, over message %s… - the message this stored proof computes: its operation,\n",
 			got.CertifiedHeight, short(strings.TrimPrefix(got.Message, "0x")))
-		fmt.Printf("      govRoot v2 over its L1-L4 and G0-G2, its Directory leg's validator set, its governance\n")
+		if got.ProofV3 {
+			fmt.Printf("      govRoot v3 over its proof v2 (verified here from the incarnation's genesis) and G0-G2, its\n")
+			fmt.Printf("      validator set as the spine derived it and the Directory leg agrees, its governance\n")
+		} else {
+			fmt.Printf("      govRoot v2 over its L1-L4 and G0-G2, its Directory leg's validator set, its governance\n")
+		}
 		fmt.Printf("      decision; the registry is the CERTEN quorum the anchor committed")
 		if got.IncarnationPinned {
 			fmt.Printf(", under the incarnation you pinned")
@@ -630,4 +650,37 @@ func reportIntentCertificate(ctx context.Context, db *sql.DB, store *certenproof
 		fmt.Printf("FAILED (intent certificate)  %s\n  %v\n", id, err)
 		return exitFailed
 	}
+}
+
+// incEvidencePath is --incarnation-evidence.
+var incEvidencePath string
+
+// proofV2Trust is the trust base a v3 certificate's proof v2 is verified from: the incarnation evidence the user gave
+// (verified here), and the major records the validator stored, which the spine walks from that genesis. Nil without
+// --incarnation-evidence.
+func proofV2Trust(ctx context.Context, db *sql.DB, path string) (*execution.ProofV2Trust, error) {
+	if path == "" {
+		return nil, nil
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("--incarnation-evidence: %w", err)
+	}
+	var ev certenproof.IncarnationEvidence
+	if err := json.Unmarshal(raw, &ev); err != nil {
+		return nil, fmt.Errorf("--incarnation-evidence: %w", err)
+	}
+	rep, err := ev.Verify()
+	if err != nil {
+		return nil, fmt.Errorf("--incarnation-evidence does not verify: %w", err)
+	}
+	recs, err := database.NewProofV2ShadowRepository(database.NewClientFromDB(db)).Spine(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("the stored major-block records: %w", err)
+	}
+	ar, err := proofv2.ArchiveFromRecords(recs)
+	if err != nil {
+		return nil, fmt.Errorf("the stored major-block records: %w", err)
+	}
+	return &execution.ProofV2Trust{Archive: ar, Inputs: rep.Inputs}, nil
 }

@@ -58,10 +58,10 @@ func TestTheProposerCertifiesWithItsOwnKey(t *testing.T) {
 	bv := &BFTValidator{validatorID: "validator-1"}
 
 	vb := intentBlock(t, "validator-1")
-	if err := bv.certifyIntent(vb, intentChain, reg, cert, intentKeyPage, intentKeyBook, fx.record(t), vote); err != nil {
+	if err := bv.certifyIntent(vb, intentChain, reg, nil, cert, intentKeyPage, intentKeyBook, fx.record(t), vote); err != nil {
 		t.Fatalf("certifying: %v", err)
 	}
-	if _, err := VerifyIntentCertificate(vb, intentChain, reg); err != nil {
+	if _, err := VerifyIntentCertificate(vb, intentChain, reg, nil); err != nil {
 		t.Fatalf("FinalizeBlock refuses what the proposer built: %v", err)
 	}
 	if b, _ := json.Marshal(vb); !bytes.Contains(b, []byte(`"intent_certificate"`)) {
@@ -73,17 +73,17 @@ func TestTheProposerCertifiesWithItsOwnKey(t *testing.T) {
 		"no lite proof":    {},
 	} {
 		vb := intentBlock(t, "validator-1")
-		if err := bv.certifyIntent(vb, intentChain, reg, c, intentKeyPage, intentKeyBook, fx.record(t), vote); err == nil ||
+		if err := bv.certifyIntent(vb, intentChain, reg, nil, c, intentKeyPage, intentKeyBook, fx.record(t), vote); err == nil ||
 			!strings.Contains(err.Error(), "chained proof") {
 			t.Errorf("%s: %v", name, err)
 		}
 	}
-	if err := bv.certifyIntent(intentBlock(t, "validator-1"), intentChain, reg, cert, intentKeyPage, intentKeyBook,
+	if err := bv.certifyIntent(intentBlock(t, "validator-1"), intentChain, reg, nil, cert, intentKeyPage, intentKeyBook,
 		fx.record(t), nil); err == nil || !strings.Contains(err.Error(), "vote evidence") {
 		t.Errorf("no vote evidence: %v", err)
 	}
 	// Under validator-2's name the same key is not the registered one.
-	if err := bv.certifyIntent(intentBlock(t, "validator-2"), intentChain, reg, cert, intentKeyPage, intentKeyBook,
+	if err := bv.certifyIntent(intentBlock(t, "validator-2"), intentChain, reg, nil, cert, intentKeyPage, intentKeyBook,
 		fx.record(t), vote); err == nil {
 		t.Error("certified under another validator's name")
 	}

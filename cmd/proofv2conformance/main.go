@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/certen/independant-validator/pkg/intentcert"
 	"github.com/certen/independant-validator/pkg/proof"
 	proofv2 "github.com/certen/independant-validator/pkg/proof/v2"
 )
@@ -43,6 +44,19 @@ type Report struct {
 	Partition      string `json:"partition"`
 	AnchorBlock    uint64 `json:"anchorBlock"`
 	Pages          int    `json:"pages"`
+
+	// GovRootV3 is the govRoot v3 (docs/proof/GOVROOT_V3.md) of the verified report with the proof's govRootV3Inputs.
+	GovRootV3 string `json:"govRootV3"`
+}
+
+// govRootV3Inputs are the fixed synthetic governance results, key page, key book and operation id the valid case
+// carries; pkg/intentcert's golden test uses the same values and pins the root the manifest reports.
+func govRootV3Inputs(rep *proofv2.Report, ev *proofv2.Evidence) intentcert.GovRootV3Inputs {
+	g0 := proof.G0Result{Scope: "acc://govroot-v3-golden.acme", Chain: "main", Principal: "acc://govroot-v3-golden.acme", G0ProofComplete: true}
+	g1 := proof.G1Result{G0Result: g0, RequiredThreshold: 1, UniqueValidKeys: 1, ThresholdSatisfied: true, G1ProofComplete: true}
+	g2 := proof.G2Result{G1Result: g1, PayloadVerified: true, EffectVerified: true, G2ProofComplete: true}
+	return intentcert.GovRootV3Inputs{Report: rep, Evidence: ev, G0: &g0, G1: &g1, G2: &g2,
+		KeyPageURL: "acc://govroot-v3-golden.acme/book/1", KeyBookURL: "acc://govroot-v3-golden.acme/book", OperationID: [32]byte{7}}
 }
 
 func main() {
@@ -78,6 +92,29 @@ func run(src, incPath, evidence, out string) error {
 	if err != nil {
 		return err
 	}
+
+	// The valid case, and what any verifier must report for it: verified as another language's verifier reads it,
+	// with govRoot v3 over that report and the evidence read back.
+	pev, par, pin, ppin, err := proofv2.Import(p)
+	if err != nil {
+		return err
+	}
+	rep, err := proofv2.VerifyFromGenesis(pev, par, pin, ppin)
+	if err != nil {
+		return fmt.Errorf("the valid case does not verify: %w", err)
+	}
+	gin := govRootV3Inputs(rep, pev)
+	govRoot, _, err := intentcert.GovRootV3(gin)
+	if err != nil {
+		return fmt.Errorf("the valid case's govRoot v3: %w", err)
+	}
+	if p.GovRootV3Inputs, err = intentcert.PortableGovRootV3Inputs(gin); err != nil {
+		return err
+	}
+	// The suite's verifiers compute the root from the portable inputs; they must give the root the results give.
+	if again, _, err := intentcert.GovRootV3FromPortable(rep, pev, p.GovRootV3Inputs); err != nil || again != govRoot {
+		return fmt.Errorf("govRoot v3 from the portable inputs is %x (%v), from the results %x", again, err, govRoot)
+	}
 	base, err := json.Marshal(p)
 	if err != nil {
 		return err
@@ -104,11 +141,6 @@ func run(src, incPath, evidence, out string) error {
 		return z.Close()
 	}
 
-	// The valid case, and what any verifier must report for it.
-	rep, err := proofv2.VerifyPortable(p)
-	if err != nil {
-		return fmt.Errorf("the valid case does not verify: %w", err)
-	}
 	if err := write("valid.json.gz", p); err != nil {
 		return err
 	}
@@ -116,6 +148,7 @@ func run(src, incPath, evidence, out string) error {
 		Incarnation: fmt.Sprintf("%x", rep.Incarnation), Majors: rep.Majors, CertifiedBlock: rep.CertifiedBlock,
 		CertifiedRoot: fmt.Sprintf("%x", rep.CertifiedRoot), CheckBlock: rep.CheckBlock, SetVerdict: string(rep.SetVerdict),
 		Validators: rep.Validators, Threshold: rep.Threshold, Partition: rep.Partition, AnchorBlock: rep.AnchorBlock, Pages: len(rep.Pages),
+		GovRootV3: fmt.Sprintf("%x", govRoot),
 	}})
 
 	// Each attack edits a fresh copy of the JSON. The Go verifier must refuse it here, or the suite is not written.
@@ -292,8 +325,14 @@ var attacks = []attack{
 		}
 		return fmt.Errorf("no main chain")
 	}},
-	{"set-run-dropped", "the set check's minor-root run dropped", func(d map[string]any) error {
-		return set(get(d, "evidence", "check").v.(map[string]any), "hops", []any{})
+	{"set-check-majors-mismatch", "the set check's runs dropped and its spine position changed", func(d map[string]any) error {
+		chk := get(d, "evidence", "check").v.(map[string]any)
+		majors, ok := get(d, "evidence", "majors").v.(float64)
+		if !ok || majors < 2 {
+			return fmt.Errorf("evidence.majors is %v", get(d, "evidence", "majors").v)
+		}
+		chk["majors"] = majors - 1
+		return set(chk, "hops", []any{})
 	}},
 	{"page-threshold", "a page's threshold changed", func(d map[string]any) error {
 		return bump(get(d, "evidence", "pages", 0, "account", "acceptThreshold"))

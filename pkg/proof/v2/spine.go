@@ -13,6 +13,7 @@ package proofv2
 
 import (
 	"bytes"
+	"reflect"
 	"strings"
 
 	"gitlab.com/accumulatenetwork/accumulate/pkg/api/v3"
@@ -50,6 +51,33 @@ type Spine struct {
 
 	// Applied lists every update the walk applied, in order.
 	Applied []AppliedUpdate
+
+	// priorNetworkUpdates counts the writes to the network definition applied before this walk started, when it was
+	// restored from a checkpoint (RestoreSpine) rather than walked from genesis.
+	priorNetworkUpdates uint64
+}
+
+// NetworkUpdates is the number of writes to acc://dn.acme/network the spine has applied since genesis: what the network
+// account's main chain must account for, beside its genesis entry.
+func (s *Spine) NetworkUpdates() uint64 {
+	n := s.priorNetworkUpdates
+	for _, a := range s.Applied {
+		if a.Principal == protocol.DnUrl().JoinPath(protocol.Network).String() {
+			n++
+		}
+	}
+	return n
+}
+
+// RestoreSpine rebuilds a spine at a checkpoint the chain verified: the set in force, the next major block, the last
+// verified anchor's minor block and roots, and how many network-definition writes were applied up to it.
+func RestoreSpine(g *network.GlobalValues, next, lastMinor uint64, root, state [32]byte, networkUpdates uint64) (*Spine, error) {
+	s, err := NewSpine(g, next)
+	if err != nil {
+		return nil, err
+	}
+	s.LastMinorBlock, s.RootChainAnchor, s.StateTreeAnchor, s.priorNetworkUpdates = lastMinor, root, state, networkUpdates
+	return s, nil
 }
 
 // NewSpine constructs a spine walk starting from the given trust anchor state, expecting major block `next` as the
@@ -172,14 +200,31 @@ func (s *Spine) verifyAndCommit(body *protocol.DirectoryAnchor, anchor *messagin
 	return nil
 }
 
+// checkDirectorySelfAnchor returns the Directory anchor a record's anchor message carries.
+//
+// CERTEN: every field it reads is checked present first. A record is chosen by whoever submits it - a spine extension
+// in CERTEN's consensus - and a missing field must be a named error, never a nil dereference: in FinalizeBlock a panic
+// stops every node judging the transaction (upstream reads Body.Type() of a nil body to word its error).
 func checkDirectorySelfAnchor(anchor *messaging.SequencedMessage) (*protocol.DirectoryAnchor, error) {
+	if anchor == nil {
+		return nil, errors.BadRequest.With("the record has no anchor")
+	}
 	txnMsg, ok := anchor.Message.(*messaging.TransactionMessage)
-	if !ok {
+	if !ok || txnMsg == nil {
 		return nil, errors.BadRequest.With("anchor is not a transaction")
+	}
+	if txnMsg.Transaction == nil || txnMsg.Transaction.Body == nil {
+		return nil, errors.BadRequest.With("the anchor transaction or its body is missing")
 	}
 	body, ok := txnMsg.Transaction.Body.(*protocol.DirectoryAnchor)
 	if !ok {
 		return nil, errors.BadRequest.WithFormat("anchor is %v, not a directory anchor", txnMsg.Transaction.Body.Type())
+	}
+	if body == nil {
+		return nil, errors.BadRequest.With("the directory anchor body is missing")
+	}
+	if anchor.Source == nil || anchor.Destination == nil || txnMsg.Transaction.Header.Principal == nil {
+		return nil, errors.BadRequest.With("anchor is not a directory self-anchor: its source, destination or principal is missing")
 	}
 	if !protocol.DnUrl().Equal(anchor.Source) ||
 		!protocol.DnUrl().Equal(anchor.Destination) ||
@@ -192,6 +237,10 @@ func checkDirectorySelfAnchor(anchor *messaging.SequencedMessage) (*protocol.Dir
 func verifyQuorum(g *network.GlobalValues, anchor *messaging.SequencedMessage, sigs []protocol.KeySignature) error {
 	seen := map[[32]byte]bool{}
 	for _, sig := range sigs {
+		// CERTEN: an empty signature entry is refused by name, never dereferenced (checkDirectorySelfAnchor).
+		if isNil(sig) {
+			return errors.BadRequest.With("the record carries an empty signature")
+		}
 		if !sig.Verify(nil, anchor) {
 			return errors.Unauthenticated.With("invalid signature")
 		}
@@ -229,10 +278,15 @@ func findDirectoryValidator(g *network.GlobalValues, key []byte) (*protocol.Vali
 // keeps that rule but still records the write: every write to the account must be accounted for against its main
 // chain, and a skipped stale definition is a write like any other.
 func applyProvenUpdate(g *network.GlobalValues, u *api.NetworkUpdateProof, root [32]byte) (*AppliedUpdate, error) {
-	if u.Transaction == nil || u.Receipt == nil {
+	// CERTEN: an empty update, or one without its principal, is refused by name, never dereferenced.
+	if u == nil || u.Transaction == nil || u.Receipt == nil || u.Transaction.Header.Principal == nil {
 		return nil, errors.BadRequest.With("incomplete network update proof")
 	}
-	if !bytes.Equal(u.Receipt.Start, u.Transaction.GetHash()) {
+	txHash, err := transactionHash(u.Transaction)
+	if err != nil {
+		return nil, err
+	}
+	if !bytes.Equal(u.Receipt.Start, txHash) {
 		return nil, errors.Unauthenticated.With("network update receipt does not start at the transaction")
 	}
 	if !bytes.Equal(u.Receipt.Anchor, root[:]) {
@@ -243,6 +297,9 @@ func applyProvenUpdate(g *network.GlobalValues, u *api.NetworkUpdateProof, root 
 	}
 
 	wd, ok := u.Transaction.Body.(*protocol.WriteData)
+	if ok && (wd == nil || isNil(wd.Entry)) {
+		wd = &protocol.WriteData{} // CERTEN: a typed-nil entry reads as missing (ParseNetwork/ParseGlobals refuse it by name)
+	}
 	if !ok {
 		// Other transaction types do not affect the consensus validator set
 		return nil, nil
@@ -250,7 +307,7 @@ func applyProvenUpdate(g *network.GlobalValues, u *api.NetworkUpdateProof, root 
 
 	principal := u.Transaction.Header.Principal
 	var h [32]byte
-	copy(h[:], u.Transaction.GetHash())
+	copy(h[:], txHash)
 	switch {
 	case protocol.DnUrl().JoinPath(protocol.Network).Equal(principal):
 		a := &AppliedUpdate{Principal: principal.String(), TxHash: h}
@@ -263,4 +320,29 @@ func applyProvenUpdate(g *network.GlobalValues, u *api.NetworkUpdateProof, root 
 		return &AppliedUpdate{Principal: principal.String(), TxHash: h}, g.ParseGlobals(wd.Entry)
 	}
 	return nil, nil
+}
+
+// isNil reports whether v is nil or a nil pointer inside an interface (CERTEN: a decoded record can hold either).
+func isNil(v any) bool {
+	if v == nil {
+		return true
+	}
+	rv := reflect.ValueOf(v)
+	return rv.Kind() == reflect.Pointer && rv.IsNil()
+}
+
+// transactionHash is tx's hash, or a named error for a transaction it cannot be computed for. CERTEN: Accumulate's
+// GetHash dereferences the body and panics when the body does not marshal; a record a submitter chose can hold either,
+// so the body is checked present here and a marshalling panic inside Accumulate's code, which this package cannot
+// change, is returned as an error rather than stopping the node.
+func transactionHash(tx *protocol.Transaction) (h []byte, err error) {
+	if isNil(tx.Body) {
+		return nil, errors.BadRequest.With("the network update transaction has no body")
+	}
+	defer func() {
+		if p := recover(); p != nil {
+			h, err = nil, errors.BadRequest.WithFormat("the network update transaction cannot be hashed: %v", p)
+		}
+	}()
+	return tx.GetHash(), nil
 }

@@ -1,10 +1,13 @@
 package execution
 
 import (
+	"bytes"
+	"compress/gzip"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math/big"
 	"os"
 	"strings"
@@ -19,6 +22,7 @@ import (
 	"github.com/certen/independant-validator/pkg/intentcert"
 	"github.com/certen/independant-validator/pkg/ledger"
 	certenproof "github.com/certen/independant-validator/pkg/proof"
+	proofv2 "github.com/certen/independant-validator/pkg/proof/v2"
 )
 
 const kermitIncarnation = "0xcac6698ed49a286ad8a3de94540a3354dfe964f366a439f4fdfb34533059fda0"
@@ -30,6 +34,7 @@ type storedIntentCase struct {
 	cp     *chained_proof.ChainedProof
 	levels []certenproof.StoredGovernanceLevel
 	l5     *Layer5
+	trust  *ProofV2Trust // set for a v3 case
 }
 
 func newStoredIntentCase(t *testing.T) *storedIntentCase {
@@ -38,12 +43,38 @@ func newStoredIntentCase(t *testing.T) *storedIntentCase {
 	if err != nil {
 		t.Fatal(err)
 	}
+	return newStoredIntentCaseFrom(t, b, false)
+}
+
+// newStoredIntentCaseV3 is production proof 6c831fec with a v3 certificate: govRoot v3 over the proof v2 the shadow
+// built for it, which the check verifies from Kermit's genesis.
+func newStoredIntentCaseV3(t *testing.T) *storedIntentCase {
+	t.Helper()
+	gz, err := os.ReadFile("../consensus/testdata/intent_cert/proof_6c831fec_v3.json.gz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := gzip.NewReader(bytes.NewReader(gz))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return newStoredIntentCaseFrom(t, b, true)
+}
+
+func newStoredIntentCaseFrom(t *testing.T, b []byte, v3 bool) *storedIntentCase {
+	t.Helper()
 	var fx struct {
 		ChainedProof  *chained_proof.ChainedProof `json:"chained_proof"`
 		G0            json.RawMessage             `json:"g0"`
 		G1            json.RawMessage             `json:"g1"`
 		G2            json.RawMessage             `json:"g2"`
 		Authorization json.RawMessage             `json:"authorization"`
+		ProofV2       *proofv2.Evidence           `json:"proof_v2"`
+		Archive       json.RawMessage             `json:"archive"`
 	}
 	if err := json.Unmarshal(b, &fx); err != nil {
 		t.Fatal(err)
@@ -107,8 +138,39 @@ func newStoredIntentCase(t *testing.T) *storedIntentCase {
 	}
 	mi := intentcert.MessageInputs{CertenChainID: "certen-testnet", OperationID: op, GovRootV2: govRoot, AccumulateSetRoot: acc,
 		Incarnation: inc, GovernanceCommitment: certenproof.GovernanceCommitment(gdr), CertenSetRoot: root}
-	msg, err := intentcert.Message(mi)
-	if err != nil {
+	var msg, govRoot3 [32]byte
+	if v3 {
+		ar, err := proofv2.UnmarshalArchive(fx.Archive)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err := os.ReadFile("../proof/testdata/incarnation/kermit.json")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var ie certenproof.IncarnationEvidence
+		if err := json.Unmarshal(raw, &ie); err != nil {
+			t.Fatal(err)
+		}
+		ir, err := ie.Verify()
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.trust = &ProofV2Trust{Archive: ar, Inputs: ir.Inputs}
+		rep, err := proofv2.VerifyFromGenesis(fx.ProofV2, ar, ir.Inputs, inc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if govRoot3, _, err = intentcert.GovRootV3(intentcert.GovRootV3Inputs{Report: rep, Evidence: fx.ProofV2, G0: &g0, G1: &g1, G2: &g2,
+			KeyPageURL: page, KeyBookURL: book, OperationID: op}); err != nil {
+			t.Fatal(err)
+		}
+		msg, err = intentcert.MessageV3(intentcert.MessageInputsV3{CertenChainID: mi.CertenChainID, OperationID: op, GovRootV3: govRoot3,
+			AccumulateSetRoot: acc, Incarnation: inc, GovernanceCommitment: mi.GovernanceCommitment, CertenSetRoot: root})
+		if err != nil {
+			t.Fatal(err)
+		}
+	} else if msg, err = intentcert.Message(mi); err != nil {
 		t.Fatal(err)
 	}
 
@@ -142,6 +204,9 @@ func newStoredIntentCase(t *testing.T) *storedIntentCase {
 	inputs := consensus.IntentMessageInputs{CertenChainID: "certen-testnet", OperationID: opHex, GovRootV2: h(govRoot),
 		AccumulateSetRoot: h(acc), Incarnation: kermitIncarnation, GovernanceCommitment: h(mi.GovernanceCommitment),
 		CertenSetRoot: reg.CertenSetRoot, KeyPageURL: page, KeyBookURL: book}
+	if v3 {
+		inputs.GovRootV2, inputs.GovRootV3, inputs.ProofV2 = "", h(govRoot3), fx.ProofV2
+	}
 	cb, _ := json.Marshal(cert)
 	rb, _ := json.Marshal(reg)
 	ib, _ := json.Marshal(inputs)
@@ -155,14 +220,14 @@ func newStoredIntentCase(t *testing.T) *storedIntentCase {
 func TestAStoredProofsIntentCertificateIsCheckedOffline(t *testing.T) {
 	c := newStoredIntentCase(t)
 	pin, _ := hex32Of(kermitIncarnation)
-	got, err := CheckIntentCertificate(c.row, c.cp, c.levels, c.l5, &pin)
+	got, err := CheckIntentCertificate(c.row, c.cp, c.levels, c.l5, &pin, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.Signers != 5 || got.SignedPower != "500" || got.TotalPower != "700" || !got.IncarnationPinned {
 		t.Fatalf("check: %+v", got)
 	}
-	if _, err := CheckIntentCertificate(nil, c.cp, c.levels, c.l5, &pin); !errors.Is(err, ErrNoIntentCertificate) {
+	if _, err := CheckIntentCertificate(nil, c.cp, c.levels, c.l5, &pin, nil); !errors.Is(err, ErrNoIntentCertificate) {
 		t.Fatalf("no certificate: %v", err)
 	}
 }
@@ -226,7 +291,7 @@ func TestAStoredIntentCertificateThatIsNotTheProofsIsRefused(t *testing.T) {
 	} {
 		c := newStoredIntentCase(t)
 		pin := mut(c)
-		if _, err := CheckIntentCertificate(c.row, c.cp, c.levels, c.l5, pin); err == nil || errors.Is(err, ErrNoIntentCertificate) {
+		if _, err := CheckIntentCertificate(c.row, c.cp, c.levels, c.l5, pin, nil); err == nil || errors.Is(err, ErrNoIntentCertificate) {
 			t.Errorf("%s: %v", name, err)
 		}
 	}
@@ -241,16 +306,66 @@ func TestTheAnchoredBatchCommitsTheCertificate(t *testing.T) {
 	}
 	c.l5.Governance.Version = BatchOperationIDV3
 	c.l5.Governance.CertifiedIntentMessage = cert.Message
-	got, err := CheckIntentCertificate(c.row, c.cp, c.levels, c.l5, nil)
+	got, err := CheckIntentCertificate(c.row, c.cp, c.levels, c.l5, nil, nil)
 	if err != nil || !got.AnchoredInBatch {
 		t.Fatalf("anchored: %+v %v", got, err)
 	}
 	c.l5.Governance.CertifiedIntentMessage = "0x" + strings.Repeat("ee", 32)
-	if _, err := CheckIntentCertificate(c.row, c.cp, c.levels, c.l5, nil); err == nil {
+	if _, err := CheckIntentCertificate(c.row, c.cp, c.levels, c.l5, nil, nil); err == nil {
 		t.Fatal("a certificate over another message than the batch anchored was accepted")
 	}
 	c.l5.Governance.Version = BatchOperationIDV2
-	if got, err := CheckIntentCertificate(c.row, c.cp, c.levels, c.l5, nil); err != nil || got.AnchoredInBatch {
+	if got, err := CheckIntentCertificate(c.row, c.cp, c.levels, c.l5, nil, nil); err != nil || got.AnchoredInBatch {
 		t.Fatalf("a pre-v3 batch: %+v %v", got, err)
+	}
+}
+
+// A v3 certificate is checked offline from the incarnation's genesis: its proof v2 verified by walking the major
+// records, bound to the stored G0 and G1, its govRoot v3 and v3 message recomputed. Without a trust base it is named
+// as unverifiable here, never passed; and a tampered proof v2, a v2 root claimed beside it, or records of another
+// network are refused.
+func TestAV3IntentCertificateIsCheckedOfflineFromGenesis(t *testing.T) {
+	pin, _ := hex32Of(kermitIncarnation)
+	c := newStoredIntentCaseV3(t)
+	got, err := CheckIntentCertificate(c.row, c.cp, c.levels, c.l5, &pin, c.trust)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.ProofV3 || got.Signers != 5 {
+		t.Fatalf("check: %+v", got)
+	}
+	if _, err := CheckIntentCertificate(c.row, c.cp, c.levels, c.l5, &pin, nil); !errors.Is(err, ErrProofV2TrustMissing) {
+		t.Fatalf("no trust base: %v", err)
+	}
+	for name, mut := range map[string]func(c *storedIntentCase){
+		"a tampered proof v2": func(c *storedIntentCase) {
+			var in consensus.IntentMessageInputs
+			_ = json.Unmarshal(c.row.MessageInputs, &in)
+			r := []byte(in.ProofV2.Receipt)
+			r[len(r)-3] ^= 1
+			in.ProofV2.Receipt = string(r)
+			c.row.MessageInputs, _ = json.Marshal(in)
+		},
+		"a govRoot v2 claimed beside v3": func(c *storedIntentCase) {
+			var in consensus.IntentMessageInputs
+			_ = json.Unmarshal(c.row.MessageInputs, &in)
+			in.GovRootV2 = in.GovRootV3
+			c.row.MessageInputs, _ = json.Marshal(in)
+		},
+		"another network's major records": func(c *storedIntentCase) {
+			c.trust.Archive.Majors = c.trust.Archive.Majors[1:]
+		},
+		"another stored G0 block": func(c *storedIntentCase) {
+			var g map[string]interface{}
+			_ = json.Unmarshal(c.levels[0].Result, &g)
+			g["exec_mbi"] = g["exec_mbi"].(float64) + 1
+			c.levels[0].Result, _ = json.Marshal(g)
+		},
+	} {
+		c := newStoredIntentCaseV3(t)
+		mut(c)
+		if _, err := CheckIntentCertificate(c.row, c.cp, c.levels, c.l5, &pin, c.trust); err == nil || errors.Is(err, ErrProofV2TrustMissing) {
+			t.Errorf("%s: %v", name, err)
+		}
 	}
 }

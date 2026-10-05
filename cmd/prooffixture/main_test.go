@@ -35,7 +35,7 @@ func TestTheExtractorRefusesASessionThatCanWrite(t *testing.T) {
 	}
 
 	out := filepath.Join(t.TempDir(), "fixture.json")
-	err = run(dsn, "00000000", out)
+	err = run(dsn, "00000000", out, "")
 	if err == nil || !strings.Contains(err.Error(), "not read-only") {
 		t.Fatalf("a read-write session: %v", err)
 	}
@@ -46,7 +46,7 @@ func TestTheExtractorRefusesASessionThatCanWrite(t *testing.T) {
 	if strings.Contains(dsn, "?") {
 		sep = "&"
 	}
-	if err := run(dsn+sep+"options=-c%20default_transaction_read_only%3Don", "00000000-no-such", out); err == nil ||
+	if err := run(dsn+sep+"options=-c%20default_transaction_read_only%3Don", "00000000-no-such", out, ""); err == nil ||
 		!strings.Contains(err.Error(), "names 0 proofs") {
 		t.Fatalf("a read-only session and a prefix of no proof: %v", err)
 	}

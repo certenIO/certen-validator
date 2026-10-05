@@ -70,6 +70,20 @@ func load(t *testing.T) fixture {
 	return fx
 }
 
+// A set check with no runs of its own is the set proven at the certified block, reusing the certification: a valid,
+// smaller proof. This fixture's check block is its certified block, so dropping its runs gives exactly that form.
+func TestSetCheckAtTheCertifiedBlock(t *testing.T) {
+	fx := load(t)
+	fx.ev.Check.Hops = nil
+	rep, err := Verify(fx.ev, fx.ar, fx.inc, fx.pin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.CheckBlock != rep.CertifiedBlock || rep.SetVerdict != proof.VerdictVerified {
+		t.Fatalf("checked at DN %d, certified %d, verdict %s", rep.CheckBlock, rep.CertifiedBlock, rep.SetVerdict)
+	}
+}
+
 func TestVerifyLiveKermitProof(t *testing.T) {
 	fx := load(t)
 	rep, err := Verify(fx.ev, fx.ar, fx.inc, fx.pin)
@@ -79,6 +93,11 @@ func TestVerifyLiveKermitProof(t *testing.T) {
 	if rep.SetVerdict != proof.VerdictVerified {
 		t.Fatalf("set verdict %s, want verified", rep.SetVerdict)
 	}
+	// The root of the set the spine derived is the root production V8.2 anchors committed (anchor_batches, 2026-10-05,
+	// every chain): Kermit's validator set has not changed, so one value covers the fixture and the live anchors.
+	if got := hex.EncodeToString(rep.AccumulateSetRoot[:]); got != "afa6bd344b04b6ff9645c97b09254af9c25a214991e0b442538e9084d4136bf5" {
+		t.Fatalf("spine-derived accumulate set root %s is not the committed one", got)
+	}
 	if rep.AnchorBlock != 13595785 || len(rep.Pages) != 3 || rep.Partition != "acc://bvn-BVN1.acme" {
 		t.Fatalf("anchor block %d, %d pages, partition %s", rep.AnchorBlock, len(rep.Pages), rep.Partition)
 	}
@@ -87,6 +106,40 @@ func TestVerifyLiveKermitProof(t *testing.T) {
 	}
 	if rep.Majors == 0 || rep.CertifiedBlock == 0 || rep.CheckBlock < rep.CertifiedBlock || rep.Validators != 3 || rep.Threshold != 2 {
 		t.Fatalf("unexpected report %+v", rep)
+	}
+}
+
+// The facts govRoot v3 commits beyond the v2 report: the transaction, the partition anchor transaction and that
+// anchor's state root, each equal to what the evidence's own bytes fix (the receipt's start, the anchor message's
+// hash, every page receipt's end) and none left zero.
+func TestVerifyReportsGovRootV3Facts(t *testing.T) {
+	fx := load(t)
+	rep, err := Verify(fx.ev, fx.ar, fx.inc, fx.pin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var zero [32]byte
+	if rep.TxHash == zero || rep.AnchorTxHash == zero || rep.AnchorStateRoot == zero {
+		t.Fatalf("a govRoot v3 fact is zero: tx %x anchor tx %x anchor state root %x", rep.TxHash, rep.AnchorTxHash, rep.AnchorStateRoot)
+	}
+	if got := hex.EncodeToString(rep.TxHash[:]); got != fx.ev.TxHash {
+		t.Fatalf("tx hash %s, evidence %s", got, fx.ev.TxHash)
+	}
+	_, _, anchorTx, err := anchorBody(fx.ev.Anchor.Message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hex.EncodeToString(rep.AnchorTxHash[:]) != hex.EncodeToString(anchorTx) {
+		t.Fatalf("anchor tx hash %x, anchor message hashes to %x", rep.AnchorTxHash, anchorTx)
+	}
+	for _, p := range fx.ev.Pages {
+		r, err := decodeReceipt(p.Receipt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if hex.EncodeToString(r.Anchor) != hex.EncodeToString(rep.AnchorStateRoot[:]) {
+			t.Fatalf("%s is proven to %x, the reported anchor state root is %x", p.URL, r.Anchor, rep.AnchorStateRoot)
+		}
 	}
 }
 
@@ -164,9 +217,10 @@ func TestVerifyRefusesTampering(t *testing.T) {
 				}
 			}
 		}, "set check"},
-		{"the set check run dropped", func(t *testing.T, fx *fixture) {
+		{"the set check's runs dropped and its spine position changed", func(t *testing.T, fx *fixture) {
 			fx.ev.Check.Hops = nil
-		}, "no minor-root run"},
+			fx.ev.Check.Majors = fx.ev.Majors - 1
+		}, "no minor-root run of its own"},
 		{"a page's state changed (a key added)", func(t *testing.T, fx *fixture) {
 			fx.ev.Pages[0].State = flipHexByte(fx.ev.Pages[0].State, len(fx.ev.Pages[0].State)/2-2)
 		}, "page"},

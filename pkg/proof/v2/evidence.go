@@ -12,7 +12,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/certen/independant-validator/pkg/ledger"
+	"strings"
 
+	"github.com/certen/independant-validator/pkg/accumulateset"
 	"github.com/certen/independant-validator/pkg/proof"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/api/v3"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/database/merkle"
@@ -72,9 +75,25 @@ type Report struct {
 	Partition   string
 	AnchorBlock uint64
 	Pages       []protocol.Account
+	PageChains  []PageChain // per page, in the same order: whether its chains are proven at AnchorBlock
 	SetVerdict  proof.Verdict
 	Validators  int
 	Threshold   uint64
+
+	// TxHash is the transaction the receipt starts at; AnchorTxHash the partition anchor transaction proven into the
+	// certified root, and AnchorStateRoot that anchor's StateTreeAnchor: the partition's state root at AnchorBlock,
+	// which every page is proven into. govRoot v3 commits all three (docs/proof/GOVROOT_V3.md L1, L3).
+	TxHash          [32]byte
+	AnchorTxHash    [32]byte
+	AnchorStateRoot [32]byte
+	// AnchorRootChainAnchor is that anchor's RootChainAnchor: the partition's root at AnchorBlock, which the
+	// transaction's receipt passes through. G0's execution witness must be exactly it (intentcert.BindG0ToProofV2).
+	AnchorRootChainAnchor [32]byte
+
+	// AccumulateSetRoot is the certen:accval:v1 root of the validator set the spine derived (proven equal to the
+	// network account at the check block), with its threshold, under the pinned incarnation: the value a V8.2 anchor
+	// must have committed for the proof to be about this set (RB6 acceptance: spine-derived L4 equals committed accRoot).
+	AccumulateSetRoot [32]byte
 }
 
 // Archive is the Directory's major-block records from major block 1, shared by every proof.
@@ -140,7 +159,45 @@ func VerifyFromGenesis(ev *Evidence, ar *Archive, in proof.IncarnationInputs, pi
 		}
 	}
 	rep.Majors = need
+	return verifyFrom(ev, rep, at, pinned)
+}
 
+// VerifyFromSpine verifies ev against the validator-set spine as CERTEN's consensus state holds it (the spine log a
+// FinalizeBlock reads): the evidence's starting checkpoints are taken from the log, never walked from local state, so
+// every validator judging the same block reaches the same verdict with no I/O. The log's genesis must be the pinned
+// incarnation's.
+func VerifyFromSpine(ev *Evidence, l *ledger.AccumulateSpineLog, pinned [32]byte) (*Report, error) {
+	if ev == nil || ev.Version != Version {
+		return nil, fmt.Errorf("not a v2 Accumulate proof")
+	}
+	if l == nil || l.Genesis == nil {
+		return nil, fmt.Errorf("the chain has no Accumulate spine")
+	}
+	if !strings.EqualFold(strings.TrimPrefix(l.Genesis.Incarnation, "0x"), hex.EncodeToString(pinned[:])) {
+		return nil, fmt.Errorf("the chain's spine is incarnation %s, not the pinned %x", l.Genesis.Incarnation, pinned)
+	}
+	need := max(ev.Majors, ev.Check.Majors)
+	if ev.Majors == 0 || need > uint64(len(l.Checkpoints)) {
+		return nil, fmt.Errorf("evidence builds on %d major blocks; the chain has verified %d", need, len(l.Checkpoints))
+	}
+	at := map[uint64]*Spine{}
+	for _, n := range []uint64{ev.Majors, ev.Check.Majors} {
+		if _, ok := at[n]; ok {
+			continue
+		}
+		sp, err := SpineAt(l, n)
+		if err != nil {
+			return nil, err
+		}
+		at[n] = sp
+	}
+	return verifyFrom(ev, &Report{Incarnation: pinned, Majors: need}, at, pinned)
+}
+
+// verifyFrom checks everything after the spine's starting points: at holds the spine after ev.Majors and after
+// ev.Check.Majors major blocks.
+func verifyFrom(ev *Evidence, rep *Report, at map[uint64]*Spine, pinned [32]byte) (*Report, error) {
+	var err error
 	// S1-S2: the receipt from the transaction to a certified root.
 	cert := at[ev.Majors].Clone()
 	if len(ev.Certify) == 0 {
@@ -173,6 +230,7 @@ func VerifyFromGenesis(ev *Evidence, ar *Archive, in proof.IncarnationInputs, pi
 		return nil, fmt.Errorf("receipt does not validate")
 	}
 	rep.CertifiedBlock, rep.CertifiedRoot = cert.LastMinorBlock, cert.RootChainAnchor
+	copy(rep.TxHash[:], tx)
 
 	// The partition anchor: executed by the Directory, proven into the same certified root, naming the block whose
 	// root chain the transaction's receipt passes through and whose state root the pages are proven into.
@@ -190,20 +248,33 @@ func VerifyFromGenesis(ev *Evidence, ar *Archive, in proof.IncarnationInputs, pi
 	if prefixTo(r, body.RootChainAnchor[:]) == nil {
 		return nil, fmt.Errorf("the transaction's receipt does not pass through the anchor's root chain anchor %x", body.RootChainAnchor)
 	}
+	if len(anchorTx) != 32 {
+		return nil, fmt.Errorf("partition anchor: its transaction hash is %d bytes, not 32", len(anchorTx))
+	}
 	rep.Partition, rep.AnchorBlock = seq.Source.String(), body.MinorBlockIndex
+	copy(rep.AnchorTxHash[:], anchorTx)
+	rep.AnchorStateRoot, rep.AnchorRootChainAnchor = body.StateTreeAnchor, body.RootChainAnchor
 	for i := range ev.Pages {
-		acct, err := verifyPage(&ev.Pages[i], body.StateTreeAnchor[:])
+		acct, pc, err := verifyPage(&ev.Pages[i], body.StateTreeAnchor[:])
 		if err != nil {
 			return nil, fmt.Errorf("page: %w", err)
 		}
 		rep.Pages = append(rep.Pages, acct)
+		rep.PageChains = append(rep.PageChains, pc)
 	}
 
 	// The validator set: walked to a certified block at or after the certified one, proven there, equal to the set
 	// the walk derived. Every write the walk applied must be accounted for by the network account's main chain.
-	chk := at[ev.Check.Majors].Clone()
+	// The set is checked either at the certified block itself (no runs: the check reuses the certification, which
+	// keeps a proof small enough to travel in a consensus block) or at a later certified block reached by its own runs.
+	var chk *Spine
 	if len(ev.Check.Hops) == 0 {
-		return nil, fmt.Errorf("set check has no minor-root run")
+		if ev.Check.Majors != ev.Majors {
+			return nil, fmt.Errorf("set check has no minor-root run of its own but builds on %d major blocks, not the certification's %d", ev.Check.Majors, ev.Majors)
+		}
+		chk = cert.Clone()
+	} else {
+		chk = at[ev.Check.Majors].Clone()
 	}
 	for i, h := range ev.Check.Hops {
 		mr, err := decodeMinorRoot(h)
@@ -247,14 +318,12 @@ func VerifyFromGenesis(ev *Evidence, ar *Archive, in proof.IncarnationInputs, pi
 	if !ok {
 		return nil, fmt.Errorf("set check: no main chain on the network account")
 	}
-	applied := uint64(0)
-	for _, a := range chk.Applied {
-		if a.Principal == protocol.DnUrl().JoinPath(protocol.Network).String() {
-			applied++
-		}
-	}
+	applied := chk.NetworkUpdates()
 	if height != 1+applied {
 		return nil, fmt.Errorf("set check: the network account's main chain has %d entries but the walk applied %d updates after genesis", height, applied)
+	}
+	if rep.AccumulateSetRoot, err = accumulateset.AccumulateSetRoot(derived, thr, pinned); err != nil {
+		return nil, fmt.Errorf("set check: the accumulate set root: %w", err)
 	}
 	rep.Validators = len(chk.Globals().Network.Validators)
 	rep.Threshold = chk.Globals().ValidatorThreshold(protocol.Directory)
@@ -342,12 +411,21 @@ func UnmarshalArchive(j []byte) (*Archive, error) {
 	if err := json.Unmarshal(j, &in); err != nil {
 		return nil, err
 	}
-	ar := &Archive{Majors: make([]*api.MajorHeaderRecord, len(in))}
+	recs := make([][]byte, len(in))
 	for i, h := range in {
 		b, err := hex.DecodeString(h)
 		if err != nil {
 			return nil, fmt.Errorf("major %d: %w", i+1, err)
 		}
+		recs[i] = b
+	}
+	return ArchiveFromRecords(recs)
+}
+
+// ArchiveFromRecords decodes major records in their binary encoding, from major block 1, as the validator stores them.
+func ArchiveFromRecords(recs [][]byte) (*Archive, error) {
+	ar := &Archive{Majors: make([]*api.MajorHeaderRecord, len(recs))}
+	for i, b := range recs {
 		r := new(api.MajorHeaderRecord)
 		if err := r.UnmarshalBinary(b); err != nil {
 			return nil, fmt.Errorf("major %d: %w", i+1, err)

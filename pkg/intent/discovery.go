@@ -29,6 +29,7 @@ import (
 	"github.com/certen/independant-validator/pkg/consensus"
 	"github.com/certen/independant-validator/pkg/database"
 	"github.com/certen/independant-validator/pkg/proof"
+	proofv2 "github.com/certen/independant-validator/pkg/proof/v2"
 )
 
 // BFTConsensusProtocol interface for direct BFT consensus operations (to avoid import cycle)
@@ -195,6 +196,8 @@ type IntentDiscovery struct {
 
 	// v2Shadow builds proof v2 beside v1 (RB6 Phase A); nil when not configured. It can never fail or delay an intent.
 	v2Shadow ProofV2Shadow
+	// v2Gate decides when proof v2 stops being a shadow and is built for the intent certificate (v3).
+	v2Gate ProofV2Gate
 
 	// PHASE 5: Batch system integration for PostgreSQL persistence and proof assembly
 
@@ -346,14 +349,25 @@ func (id *IntentDiscovery) SetBFTConsensus(consensus BFTConsensusProtocol) {
 }
 
 // SetRepositories configures database repositories for intent lifecycle tracking
-// ProofV2Shadow captures an intent's governing pages at discovery and builds its v2 proof after the v1 proof.
+// ProofV2Shadow captures an intent's governing pages at discovery and builds its v2 proof after the v1 proof: in the
+// background (Build) until the chain requires the v3 intent certificate, then at once for the certificate (Prove).
 type ProofV2Shadow interface {
 	Capture(intentID, account, tx string)
 	Build(intentID, account, tx, bvn string)
+	Prove(ctx context.Context, intentID, account, tx, bvn string, maxMajors uint64) (*proofv2.Evidence, error)
 }
 
 // SetProofV2Shadow installs the proof v2 shadow.
 func (id *IntentDiscovery) SetProofV2Shadow(s ProofV2Shadow) { id.v2Shadow = s }
+
+// ProofV2Gate says, from the chain's committed state, whether the next block requires the v3 intent certificate, and
+// how many major blocks of the Accumulate spine the chain has verified - what a proof v2 may build on.
+type ProofV2Gate interface {
+	ProofV2Bound() (required bool, maxMajors uint64, err error)
+}
+
+// SetProofV2Gate installs the gate; without one, no intent is proven for a v3 certificate.
+func (id *IntentDiscovery) SetProofV2Gate(g ProofV2Gate) { id.v2Gate = g }
 
 func (id *IntentDiscovery) SetRepositories(repos *database.Repositories) {
 	id.repos = repos
@@ -1362,6 +1376,37 @@ func chainedRetryBackoff(base time.Duration, step, maxShift int, capDur time.Dur
 // CometBFT RPC failures. Fail-closed: returns the last error if every attempt fails (the
 // underlying ProofBuilder is itself fail-closed — it recomputes each Merkle receipt and binds
 // the BVN+DN consensus app_hash, so a returned proof is already cryptographically verified).
+// proveV2 completes an intent's proof with its proof v2 once the chain requires the v3 intent certificate: built now,
+// on the checkpoints the chain has verified, and the intent fails closed (retryably) without it, as it does without
+// its chained proof. Before that, proof v2 is a shadow built in the background.
+func (id *IntentDiscovery) proveV2(ctx context.Context, intentID, accountURL, txHash, partition string, cp *proof.CertenProof) error {
+	required, maxMajors := false, uint64(0)
+	if id.v2Gate != nil {
+		var err error
+		if required, maxMajors, err = id.v2Gate.ProofV2Bound(); err != nil {
+			return fmt.Errorf("intent %s: %w: whether proof v2 is required: %v", intentID, errChainedProofUnavailable, err)
+		}
+	}
+	switch {
+	case required && id.v2Shadow == nil:
+		return fmt.Errorf("intent %s: %w: the chain requires proof v2 and no prover is configured", intentID, errChainedProofTerminal)
+	case required:
+		ev, err := id.v2Shadow.Prove(ctx, intentID, accountURL, txHash, partition, maxMajors)
+		if err != nil {
+			return fmt.Errorf("intent %s: %w: %v", intentID, errChainedProofUnavailable, err)
+		}
+		raw, err := json.Marshal(ev)
+		if err != nil {
+			return fmt.Errorf("intent %s: encode proof v2: %w", intentID, err)
+		}
+		cp.ProofV2 = raw
+		id.logger.Printf("✅ [PROOF-V2] intent %s proven for its v3 certificate on %d verified major blocks", intentID, maxMajors)
+	case id.v2Shadow != nil:
+		id.v2Shadow.Build(intentID, accountURL, txHash, partition)
+	}
+	return nil
+}
+
 func (id *IntentDiscovery) buildChainedCertenProof(ctx context.Context, accountURL, txHash, partition, intentID string, maxAttempts int) (*proof.CertenProof, error) {
 	if maxAttempts < 1 {
 		maxAttempts = 1
@@ -1659,8 +1704,8 @@ func (id *IntentDiscovery) processIntent(intent *CertenIntent, blockHeight uint6
 			if perr != nil {
 				id.logger.Printf("⚠️ [REAL-PROOF] L1-L4 chained proof unavailable for %s: %v", intent.IntentID, perr)
 			} else {
-				if id.v2Shadow != nil {
-					id.v2Shadow.Build(intent.IntentID, accountURL, intent.TransactionHash, intent.ProofPartition)
+				if err := id.proveV2(ctx, intent.IntentID, accountURL, intent.TransactionHash, intent.ProofPartition, cp); err != nil {
+					return consensus.TargetChainFailed, err
 				}
 				certenProof = cp
 				id.logger.Printf("✅ [REAL-PROOF] CertenProof created with L1-L4 chained proof for %s", intent.IntentID)
@@ -1824,8 +1869,8 @@ func (id *IntentDiscovery) processMultiLegIntent(intent *CertenIntent, blockHeig
 			if perr != nil {
 				id.logger.Printf("⚠️ [MULTI-LEG] L1-L3 chained proof unavailable for %s: %v", intent.IntentID, perr)
 			} else {
-				if id.v2Shadow != nil {
-					id.v2Shadow.Build(intent.IntentID, accountURL, intent.TransactionHash, intent.ProofPartition)
+				if err := id.proveV2(ctx, intent.IntentID, accountURL, intent.TransactionHash, intent.ProofPartition, cp); err != nil {
+					return consensus.TargetChainFailed, err
 				}
 				certenProof = cp
 				id.logger.Printf("✅ [MULTI-LEG] CertenProof created for all legs of %s", intent.IntentID)

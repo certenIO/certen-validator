@@ -1,6 +1,7 @@
 package consensus
 
 import (
+	"errors"
 	"fmt"
 
 	abcitypes "github.com/cometbft/cometbft/abci/types"
@@ -114,7 +115,17 @@ func (app *ValidatorApp) judgeIntentCertificate(vb *ValidatorBlock) *abcitypes.E
 	case reg == nil:
 		return refuse("the block carries an intent certificate, but no BLS registry is in force to verify it")
 	}
-	if _, err := VerifyIntentCertificate(vb, app.cometChainID, reg); err != nil {
+	// Judged with the spine as this block sees it: committed below it and accepted earlier in it. No spine of the
+	// registry's incarnation means v3 is not required (ProofV3Required); an unreadable one would judge differently
+	// here than on nodes that can read it, so the node stops.
+	spine, err := app.accumulateSpineAt(int64(app.currentBlockHeight))
+	if errors.Is(err, ErrSpineNotRegistryIncarnation) {
+		spine, err = nil, nil
+	}
+	if err != nil {
+		app.logger.Fatalf("❌ [INTENT-CERT] the Accumulate spine could not be read at height %d: %v", app.currentBlockHeight, err)
+	}
+	if _, err := VerifyIntentCertificate(vb, app.cometChainID, reg, spine); err != nil {
 		return refuse(err.Error())
 	}
 	return nil
@@ -137,4 +148,34 @@ func (app *ValidatorApp) IntentCertificateContext() (string, *ledger.BLSRegistry
 		return "", nil, fmt.Errorf("the BLS registry could not be read: %w", err)
 	}
 	return app.cometChainID, RegistryAt(log, app.latestHeight+1), nil
+}
+
+// CommittedAccumulateSpine is the Accumulate spine as committed: what a proposer builds a v3 intent certificate
+// against (ProofV3Required, and the checkpoints its proof v2 may start from). An unreadable spine is an error, never
+// an empty one, which would build a v2 certificate the chain refuses.
+func (app *ValidatorApp) CommittedAccumulateSpine() (*ledger.AccumulateSpineLog, error) {
+	app.mu.RLock()
+	defer app.mu.RUnlock()
+	if app.ledgerStore == nil {
+		return nil, fmt.Errorf("the validator app has no ledger store")
+	}
+	spine, err := app.ledgerStore.LoadAccumulateSpine()
+	if err != nil {
+		return nil, fmt.Errorf("the Accumulate spine could not be read: %w", err)
+	}
+	return spine, nil
+}
+
+// ProofV2Bound implements intent.ProofV2Gate from committed state: whether the next block requires the v3 intent
+// certificate, and how many major blocks the chain has verified.
+func (app *ValidatorApp) ProofV2Bound() (bool, uint64, error) {
+	_, reg, err := app.IntentCertificateContext()
+	if err != nil {
+		return false, 0, err
+	}
+	spine, err := app.CommittedAccumulateSpine()
+	if err != nil {
+		return false, 0, err
+	}
+	return ProofV3Required(spine, reg), uint64(len(spine.Checkpoints)), nil
 }

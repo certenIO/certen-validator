@@ -32,6 +32,23 @@ type Portable struct {
 	Genesis  PortableGenesis   `json:"genesis"`
 	Majors   []json.RawMessage `json:"majors"` // api.MajorHeaderRecord from major block 1
 	Evidence PortableEvidence  `json:"evidence"`
+
+	// GovRootV3Inputs, when present, carries the per-intent inputs govRoot v3 commits beyond the verified report
+	// (docs/proof/GOVROOT_V3.md), so another language's verifier can reproduce the root. It is not evidence: Verify
+	// neither reads nor checks it.
+	GovRootV3Inputs *PortableGovRootV3Inputs `json:"govRootV3Inputs,omitempty"`
+}
+
+// PortableGovRootV3Inputs are govRoot v3's inputs that are not proof facts: sha256 of each governance level's
+// canonical v2 JSON (the G0-G2 slot payloads' first field), hex32, and the key page, key book and operation id
+// (hex32), committed exactly as govRoot v2 commits them.
+type PortableGovRootV3Inputs struct {
+	G0Hash      string `json:"g0Hash"`
+	G1Hash      string `json:"g1Hash"`
+	G2Hash      string `json:"g2Hash"`
+	KeyPageURL  string `json:"keyPageUrl"`
+	KeyBookURL  string `json:"keyBookUrl"`
+	OperationID string `json:"operationId"`
 }
 
 type PortableGenesis struct {
@@ -61,9 +78,12 @@ type PortableEvidence struct {
 }
 
 type PortablePage struct {
-	URL     string          `json:"url"`
-	Account json.RawMessage `json:"account"` // protocol.Account
-	Receipt json.RawMessage `json:"receipt"` // merkle.Receipt
+	URL         string            `json:"url"`
+	Account     json.RawMessage   `json:"account"` // protocol.Account
+	Receipt     json.RawMessage   `json:"receipt"` // merkle.Receipt
+	Chains      []proof.ChainRoot `json:"chains,omitempty"`
+	PendingHash string            `json:"pendingHash,omitempty"`
+	ChainError  string            `json:"chainError,omitempty"`
 }
 
 type PortableCheck struct {
@@ -150,7 +170,7 @@ func Export(ev *Evidence, ar *Archive, in proof.IncarnationInputs, pin [32]byte)
 		if err != nil {
 			return nil, err
 		}
-		e.Pages = append(e.Pages, PortablePage{URL: pg.URL, Account: acct, Receipt: r})
+		e.Pages = append(e.Pages, PortablePage{URL: pg.URL, Account: acct, Receipt: r, Chains: pg.Chains, PendingHash: pg.PendingHash, ChainError: pg.ChainError})
 	}
 
 	e.Check.Majors, e.Check.Incarnation = ev.Check.Majors, ev.Check.Set.Incarnation
@@ -251,7 +271,7 @@ func Import(p *Portable) (*Evidence, *Archive, proof.IncarnationInputs, [32]byte
 		if err != nil {
 			return fail(err)
 		}
-		ev.Pages = append(ev.Pages, PageState{URL: pg.URL, State: hex.EncodeToString(st), Receipt: r})
+		ev.Pages = append(ev.Pages, PageState{URL: pg.URL, State: hex.EncodeToString(st), Receipt: r, Chains: pg.Chains, PendingHash: pg.PendingHash, ChainError: pg.ChainError})
 	}
 
 	ev.Check.Majors, ev.Check.Set.Incarnation = e.Check.Majors, e.Check.Incarnation
