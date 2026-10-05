@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/certen/independant-validator/pkg/ledger"
+	"gitlab.com/accumulatenetwork/accumulate/pkg/api/v3"
 )
 
 // The spine as CERTEN's consensus state holds it: a genesis accepted only under the registry's incarnation, extended
@@ -86,16 +87,15 @@ func TestConsensusSpineMatchesTheWalk(t *testing.T) {
 // A proposer bounds the builder to the major blocks the chain has verified; the evidence then starts at that
 // checkpoint and its own runs cover the rest.
 func TestBuilderStartsAtABoundedCheckpoint(t *testing.T) {
-	b := &Builder{majors: make([]*Spine, 5)}
-	for i := range b.majors {
-		b.majors[i] = &Spine{LastMinorBlock: uint64(100 * (i + 1))}
+	b := &Builder{ar: &Archive{Majors: make([]*api.MajorHeaderRecord, 5)}}
+	for i := 0; i < 5; i++ {
+		b.majors = append(b.majors, &Spine{LastMinorBlock: uint64(100 * (i + 1))})
 	}
-	if n, _, err := b.lastMajorBefore(450); err != nil || n != 4 {
-		t.Fatalf("unbounded: major %d, %v", n, err)
-	}
-	b.MaxMajors = 2
-	if n, _, err := b.lastMajorBefore(450); err != nil || n != 2 {
-		t.Fatalf("bounded to 2: major %d, %v", n, err)
+	for _, c := range []struct{ max, want uint64 }{{0, 4}, {9, 4}, {2, 2}} {
+		majors, ar := b.view(c.max)
+		if n, _, err := lastMajorBefore(majors, 450); err != nil || n != c.want || len(ar.Majors) != len(majors) {
+			t.Fatalf("bounded to %d: major %d (want %d), %d records for %d spines, %v", c.max, n, c.want, len(ar.Majors), len(majors), err)
+		}
 	}
 }
 
