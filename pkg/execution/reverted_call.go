@@ -226,25 +226,28 @@ func honestSettlementGas(exec *accountExecution) uint64 {
 // proofExecutedTopic is keccak256("ProofExecuted(bytes32,bytes32,bool,bool,bool,uint256)").
 var proofExecutedTopic = crypto.Keccak256Hash([]byte("ProofExecuted(bytes32,bytes32,bool,bool,bool,uint256)"))
 
-// proofExecutedLookback bounds how far before an attempt its anchor's attestation is searched
-// for, in chunks (split further wherever the RPC caps the range - filterLogsSplitting).
-const (
-	proofExecutedLookback = 60000
-	proofExecutedChunk    = 2000
-)
+// proofExecutedChunk is the width of each ProofExecuted query (split further wherever the RPC caps the range -
+// filterLogsSplitting).
+const proofExecutedChunk = 2000
 
 // anchorAttestedBefore reports whether the anchor's ProofExecuted event precedes the attempt: in an
 // earlier block, or earlier in the same block. The anchor's CURRENT state cannot answer this - an
 // attempt sent before the quorum proof landed reverts on "anchor proof not executed", and the
 // anchor reads attested a moment later.
-func anchorAttestedBefore(ctx context.Context, chain attemptChain, anchor common.Address, anchorID [32]byte, receipt *types.Receipt) (bool, error) {
+//
+// The search runs back from the attempt to the first block whose time is at or after the anchor's creation (createdAt,
+// the anchor's own recorded block.timestamp): no attestation of the anchor can precede its creation, and every block
+// from there to the attempt is searched. It used to stop a fixed 60,000 blocks back, which is eight days on Sepolia
+// but about four hours on Arbitrum (~0.25 s blocks): an anchor attested earlier than that was reported as "not
+// attested before the attempt" although it was (RB7-ARB-F1).
+func anchorAttestedBefore(ctx context.Context, chain attemptChain, anchor common.Address, anchorID [32]byte, createdAt uint64, receipt *types.Receipt) (bool, error) {
 	if receipt.BlockNumber == nil {
 		return false, fmt.Errorf("receipt has no block")
 	}
 	to := receipt.BlockNumber.Uint64()
-	floor := uint64(0)
-	if to > proofExecutedLookback {
-		floor = to - proofExecutedLookback
+	floor, err := firstBlockAtOrAfter(ctx, chain, createdAt, to)
+	if err != nil {
+		return false, err
 	}
 	for hi := to; ; {
 		lo := floor
@@ -268,6 +271,61 @@ func anchorAttestedBefore(ctx context.Context, chain attemptChain, anchor common
 		}
 		hi = lo - 1
 	}
+}
+
+// firstBlockAtOrAfter is the first block in [0, to] whose time is at or after t (block times never decrease), found
+// by galloping back from to and then bisecting; to itself when no earlier block qualifies.
+func firstBlockAtOrAfter(ctx context.Context, chain attemptChain, t, to uint64) (uint64, error) {
+	timeOf := func(n uint64) (uint64, error) {
+		h, err := chain.HeaderByNumber(ctx, new(big.Int).SetUint64(n))
+		if err != nil {
+			return 0, readErr(fmt.Errorf("header %d: %w", n, err))
+		}
+		if h == nil {
+			return 0, readErr(fmt.Errorf("header %d: none", n))
+		}
+		return h.Time, nil
+	}
+	// hi is a block at or after t (or to itself), lo one before t (or 0).
+	hi, lo := to, uint64(0)
+	for step := uint64(proofExecutedChunk); ; step *= 2 {
+		if step >= hi {
+			lo = 0
+			break
+		}
+		at, err := timeOf(hi - step)
+		if err != nil {
+			return 0, err
+		}
+		if at < t {
+			lo = hi - step
+			break
+		}
+		hi -= step
+	}
+	if lo == 0 {
+		at, err := timeOf(0)
+		if err != nil {
+			return 0, err
+		}
+		if at >= t {
+			return 0, nil
+		}
+	}
+	// time(lo) < t <= time(hi) (or hi == to): bisect for the first block at or after t.
+	for hi-lo > 1 {
+		mid := lo + (hi-lo)/2
+		at, err := timeOf(mid)
+		if err != nil {
+			return 0, err
+		}
+		if at >= t {
+			hi = mid
+		} else {
+			lo = mid
+		}
+	}
+	return hi, nil
 }
 
 const accountAttemptABIJSON = `[` +
@@ -430,7 +488,10 @@ func checkAuthorizedAttempt(
 		return fmt.Errorf("anchor 0x%x is not attested; the attempt was not authorised", exec.AnchorID[:8])
 	}
 	// Attested BEFORE the attempt, not merely by now.
-	if before, err := anchorAttestedBefore(ctx, chain, anchorAddr, exec.AnchorID, receipt); err != nil {
+	if st.Timestamp == nil || st.Timestamp.Sign() <= 0 || !st.Timestamp.IsUint64() {
+		return fmt.Errorf("anchor 0x%x records no creation time; when it was attested cannot be bounded", exec.AnchorID[:8])
+	}
+	if before, err := anchorAttestedBefore(ctx, chain, anchorAddr, exec.AnchorID, st.Timestamp.Uint64(), receipt); err != nil {
 		return err
 	} else if !before {
 		return fmt.Errorf("anchor 0x%x was not attested before the attempt; it reverted on authorisation", exec.AnchorID[:8])

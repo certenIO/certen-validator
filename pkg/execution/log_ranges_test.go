@@ -33,7 +33,7 @@ func TestAnchorAttestedBeforeOnARangeCappedRPC(t *testing.T) {
 	anchor := common.HexToAddress("0xEA9eeeE42a7971792B11Fd2f682C9c1172490272")
 	receipt := &types.Receipt{BlockNumber: big.NewInt(50000), TransactionIndex: 3}
 	chain := &rangeCappedChain{logChain: logChain{logs: []types.Log{{BlockNumber: 46500}}}, maxSpan: 1000}
-	ok, err := anchorAttestedBefore(context.Background(), chain, anchor, [32]byte{0x5f}, receipt)
+	ok, err := anchorAttestedBefore(context.Background(), chain, anchor, [32]byte{0x5f}, 0, receipt)
 	if err != nil || !ok {
 		t.Fatalf("an attestation 3,500 blocks earlier was not found on a 1,000-block RPC: ok=%v err=%v", ok, err)
 	}
