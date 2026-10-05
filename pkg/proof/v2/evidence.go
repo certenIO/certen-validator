@@ -78,6 +78,13 @@ type Report struct {
 	Validators  int
 	Threshold   uint64
 
+	// TxHash is the transaction the receipt starts at; AnchorTxHash the partition anchor transaction proven into the
+	// certified root, and AnchorStateRoot that anchor's StateTreeAnchor: the partition's state root at AnchorBlock,
+	// which every page is proven into. govRoot v3 commits all three (docs/proof/GOVROOT_V3.md L1, L3).
+	TxHash          [32]byte
+	AnchorTxHash    [32]byte
+	AnchorStateRoot [32]byte
+
 	// AccumulateSetRoot is the certen:accval:v1 root of the validator set the spine derived (proven equal to the
 	// network account at the check block), with its threshold, under the pinned incarnation: the value a V8.2 anchor
 	// must have committed for the proof to be about this set (RB6 acceptance: spine-derived L4 equals committed accRoot).
@@ -180,6 +187,7 @@ func VerifyFromGenesis(ev *Evidence, ar *Archive, in proof.IncarnationInputs, pi
 		return nil, fmt.Errorf("receipt does not validate")
 	}
 	rep.CertifiedBlock, rep.CertifiedRoot = cert.LastMinorBlock, cert.RootChainAnchor
+	copy(rep.TxHash[:], tx)
 
 	// The partition anchor: executed by the Directory, proven into the same certified root, naming the block whose
 	// root chain the transaction's receipt passes through and whose state root the pages are proven into.
@@ -197,7 +205,12 @@ func VerifyFromGenesis(ev *Evidence, ar *Archive, in proof.IncarnationInputs, pi
 	if prefixTo(r, body.RootChainAnchor[:]) == nil {
 		return nil, fmt.Errorf("the transaction's receipt does not pass through the anchor's root chain anchor %x", body.RootChainAnchor)
 	}
+	if len(anchorTx) != 32 {
+		return nil, fmt.Errorf("partition anchor: its transaction hash is %d bytes, not 32", len(anchorTx))
+	}
 	rep.Partition, rep.AnchorBlock = seq.Source.String(), body.MinorBlockIndex
+	copy(rep.AnchorTxHash[:], anchorTx)
+	rep.AnchorStateRoot = body.StateTreeAnchor
 	for i := range ev.Pages {
 		acct, pc, err := verifyPage(&ev.Pages[i], body.StateTreeAnchor[:])
 		if err != nil {
