@@ -15,7 +15,8 @@
         "threshold": 2,
         "partition": "acc://bvn-BVN1.acme",
         "anchorBlock": 13595785,
-        "pages": 3
+        "pages": 3,
+        "govRootV3": "0477ea2c8f1d2ad8d3a84a5dc3f87f241e57efc97688016f88cb4001521dcee2"
       }
     },
     {
@@ -392,9 +393,9 @@
       ]
     },
     {
-      "name": "set-run-dropped",
+      "name": "set-check-majors-mismatch",
       "expect": "refused",
-      "attack": "the set check's minor-root run dropped",
+      "attack": "the set check's runs dropped and its spine position changed",
       "patch": [
         {
           "path": [
@@ -403,6 +404,14 @@
             "hops"
           ],
           "truncate": 0
+        },
+        {
+          "path": [
+            "evidence",
+            "check",
+            "majors"
+          ],
+          "set": 490
         }
       ]
     },

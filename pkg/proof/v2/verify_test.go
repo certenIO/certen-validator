@@ -109,6 +109,40 @@ func TestVerifyLiveKermitProof(t *testing.T) {
 	}
 }
 
+// The facts govRoot v3 commits beyond the v2 report: the transaction, the partition anchor transaction and that
+// anchor's state root, each equal to what the evidence's own bytes fix (the receipt's start, the anchor message's
+// hash, every page receipt's end) and none left zero.
+func TestVerifyReportsGovRootV3Facts(t *testing.T) {
+	fx := load(t)
+	rep, err := Verify(fx.ev, fx.ar, fx.inc, fx.pin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var zero [32]byte
+	if rep.TxHash == zero || rep.AnchorTxHash == zero || rep.AnchorStateRoot == zero {
+		t.Fatalf("a govRoot v3 fact is zero: tx %x anchor tx %x anchor state root %x", rep.TxHash, rep.AnchorTxHash, rep.AnchorStateRoot)
+	}
+	if got := hex.EncodeToString(rep.TxHash[:]); got != fx.ev.TxHash {
+		t.Fatalf("tx hash %s, evidence %s", got, fx.ev.TxHash)
+	}
+	_, _, anchorTx, err := anchorBody(fx.ev.Anchor.Message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hex.EncodeToString(rep.AnchorTxHash[:]) != hex.EncodeToString(anchorTx) {
+		t.Fatalf("anchor tx hash %x, anchor message hashes to %x", rep.AnchorTxHash, anchorTx)
+	}
+	for _, p := range fx.ev.Pages {
+		r, err := decodeReceipt(p.Receipt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if hex.EncodeToString(r.Anchor) != hex.EncodeToString(rep.AnchorStateRoot[:]) {
+			t.Fatalf("%s is proven to %x, the reported anchor state root is %x", p.URL, r.Anchor, rep.AnchorStateRoot)
+		}
+	}
+}
+
 // mutate re-encodes one minor-root record of the evidence after f changes it.
 func mutateMinorRoot(t *testing.T, h *string, f func(*api.MinorRootRecord)) {
 	t.Helper()
