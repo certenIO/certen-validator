@@ -50,6 +50,33 @@ type Spine struct {
 
 	// Applied lists every update the walk applied, in order.
 	Applied []AppliedUpdate
+
+	// priorNetworkUpdates counts the writes to the network definition applied before this walk started, when it was
+	// restored from a checkpoint (RestoreSpine) rather than walked from genesis.
+	priorNetworkUpdates uint64
+}
+
+// NetworkUpdates is the number of writes to acc://dn.acme/network the spine has applied since genesis: what the network
+// account's main chain must account for, beside its genesis entry.
+func (s *Spine) NetworkUpdates() uint64 {
+	n := s.priorNetworkUpdates
+	for _, a := range s.Applied {
+		if a.Principal == protocol.DnUrl().JoinPath(protocol.Network).String() {
+			n++
+		}
+	}
+	return n
+}
+
+// RestoreSpine rebuilds a spine at a checkpoint the chain verified: the set in force, the next major block, the last
+// verified anchor's minor block and roots, and how many network-definition writes were applied up to it.
+func RestoreSpine(g *network.GlobalValues, next, lastMinor uint64, root, state [32]byte, networkUpdates uint64) (*Spine, error) {
+	s, err := NewSpine(g, next)
+	if err != nil {
+		return nil, err
+	}
+	s.LastMinorBlock, s.RootChainAnchor, s.StateTreeAnchor, s.priorNetworkUpdates = lastMinor, root, state, networkUpdates
+	return s, nil
 }
 
 // NewSpine constructs a spine walk starting from the given trust anchor state, expecting major block `next` as the
