@@ -86,6 +86,9 @@ type Report struct {
 	TxHash          [32]byte
 	AnchorTxHash    [32]byte
 	AnchorStateRoot [32]byte
+	// AnchorRootChainAnchor is that anchor's RootChainAnchor: the partition's root at AnchorBlock, which the
+	// transaction's receipt passes through. G0's execution witness must be exactly it (intentcert.BindG0ToProofV2).
+	AnchorRootChainAnchor [32]byte
 
 	// AccumulateSetRoot is the certen:accval:v1 root of the validator set the spine derived (proven equal to the
 	// network account at the check block), with its threshold, under the pinned incarnation: the value a V8.2 anchor
@@ -250,7 +253,7 @@ func verifyFrom(ev *Evidence, rep *Report, at map[uint64]*Spine, pinned [32]byte
 	}
 	rep.Partition, rep.AnchorBlock = seq.Source.String(), body.MinorBlockIndex
 	copy(rep.AnchorTxHash[:], anchorTx)
-	rep.AnchorStateRoot = body.StateTreeAnchor
+	rep.AnchorStateRoot, rep.AnchorRootChainAnchor = body.StateTreeAnchor, body.RootChainAnchor
 	for i := range ev.Pages {
 		acct, pc, err := verifyPage(&ev.Pages[i], body.StateTreeAnchor[:])
 		if err != nil {
