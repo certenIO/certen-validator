@@ -99,8 +99,10 @@ func TestANewHistoryCheckRunsOverHistoryAnOlderBinaryMarkedChecked(t *testing.T)
 	if err := recorded.IndexCommittedHistory(hist); err != nil {
 		t.Fatalf("the same history with the registry's record: %v", err)
 	}
-	if got := rawHeight(t, kv, "abci:kinds_checked_through:v12:checks2"); got != top {
-		t.Fatalf("the history-check v2 watermark is %d after a full check, want %d", got, top)
+	// The watermark of this binary's rules and checks (v13 and history-check v3 since rules v13; v12:checks2 before).
+	current := fmt.Sprintf("abci:kinds_checked_through:v%d:checks%d", CurrentExecutionRulesVersion, CommittedHistoryCheckVersion)
+	if got := rawHeight(t, kv, current); got != top {
+		t.Fatalf("the %s watermark is %d after a full check, want %d", current, got, top)
 	}
 	if got := rawHeight(t, kv, "abci:kinds_checked_through:v12"); got != top {
 		t.Fatalf("the old watermark was changed to %d", got)
@@ -113,12 +115,14 @@ func TestANewHistoryCheckRunsOverHistoryAnOlderBinaryMarkedChecked(t *testing.T)
 
 // historyChecks are the declarations that decide what checkCommittedKinds finds in committed history. Any change to one
 // of them is a change to the checks.
-var historyChecks = []string{"kindViolation", "kindViolationWith", "CommittedRecords", "committedRecords", "rotationBlockVerdicts"}
+var historyChecks = []string{"kindViolation", "kindViolationWith", "CommittedRecords", "committedRecords", "rotationBlockVerdicts",
+	"spineGenesisRecorded", "spineExtensionRecorded"}
 
 // historyCheckFingerprints pins the checks each CommittedHistoryCheckVersion names. Version 1 is the checks of the
 // binaries before history-check versions, which kept their watermark under the rules version alone.
 var historyCheckFingerprints = map[uint64]string{
 	2: "f9217e186c5e8bcd4d7e332f3f81a7008f8c1fae85e0b09f5048ca19ae039df2",
+	3: "5cb03fe7b01d38fd1185a8fa3e15490b7218f6978227061b6f27adaa8d95a0a2",
 }
 
 // historyCheckFingerprint hashes historyChecks as code: comments and layout are dropped, so only a change to what the

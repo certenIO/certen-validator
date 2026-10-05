@@ -114,11 +114,13 @@ type ValidatorApp struct {
 	blockRulesV10Verdict bool
 	blockRulesV11Verdict bool
 	blockRulesV12Verdict bool
+	blockRulesV13Verdict bool
 	rulesV8FirstVerdict  int64
 	rulesV9FirstVerdict  int64
 	rulesV10FirstVerdict int64
 	rulesV11FirstVerdict int64
 	rulesV12FirstVerdict int64
+	rulesV13FirstVerdict int64
 
 	// blockAdminSetChanged: this execution of the block has accepted an admin-set change (a re-seal or an admin
 	// rotation). At most one lands per block (rules v12, admin_rotate_apply.go). Reset by FinalizeBlock.
@@ -131,6 +133,9 @@ type ValidatorApp struct {
 	blockPolicyChanges   []ledger.ScheduledPolicyChange
 	blockRotationRecords []ledger.ValidatorRotationRecord
 	blockRegistryRecords []ledger.BLSRegistryRecord
+	// blockSpine is the spine genesis and extensions THIS execution of the block accepted (rules v13,
+	// accumulate_spine_apply.go), under the same discipline. Reset by FinalizeBlock.
+	blockSpine spineAcceptances
 }
 
 // EntitlementMode is the entitlement mode this chain enforces now: the sealed policy, as changed by every policy
@@ -152,13 +157,16 @@ func (app *ValidatorApp) EntitlementMode() EntitlementMode {
 //   - v8 from then on,
 //   - v9 once a block is decided in a way only v9 decides it: a refused second block for a committed
 //     operation, or a block naming no validator that v8 would have accepted under the chain's name.
-//   - v10, v11 and v12 once a block decides a transaction of the kind each adds (registry, re-seal, admin
-//     rotation), accepted or refused - each older version judged those bytes as a ValidatorBlock.
+//   - v10, v11, v12 and v13 once a block decides a transaction of the kind each adds (registry, re-seal, admin
+//     rotation, spine genesis or extension), accepted or refused - each older version judged those bytes as a
+//     ValidatorBlock.
 //
 // Stamping it (rather than the binary's version) is truthful, and it leaves the older binary able to start
 // on this state until a block makes that genuinely impossible.
 func (app *ValidatorApp) committedRulesVersion() uint64 {
 	switch {
+	case app.rulesV13FirstVerdict > 0:
+		return executionRulesV13
 	case app.rulesV12FirstVerdict > 0:
 		return executionRulesV12
 	case app.rulesV11FirstVerdict > 0:
@@ -281,7 +289,7 @@ func NewValidatorApp(ledgerStore *ledger.LedgerStore, chainID string) *Validator
 			into    *int64
 		}{{executionRulesV8, &app.rulesV8FirstVerdict}, {executionRulesV9, &app.rulesV9FirstVerdict},
 			{executionRulesV10, &app.rulesV10FirstVerdict}, {executionRulesV11, &app.rulesV11FirstVerdict},
-			{executionRulesV12, &app.rulesV12FirstVerdict}} {
+			{executionRulesV12, &app.rulesV12FirstVerdict}, {executionRulesV13, &app.rulesV13FirstVerdict}} {
 			first, err := ledgerStore.RulesFirstVerdict(v.version)
 			if err != nil {
 				app.logger.Fatalf("❌ the first v%d verdict could not be read: %v - not starting on a ledger this node cannot read", v.version, err)
@@ -525,6 +533,21 @@ func (app *ValidatorApp) CheckTx(ctx context.Context, req *abcitypes.RequestChec
 	if ar, ok := DecodeAdminRotate(req.Tx); ok {
 		if err := ar.CheckShape(); err != nil {
 			return &abcitypes.ResponseCheckTx{Code: codeAdminRotateRefused, Log: "admin rotation refused: " + err.Error()}, nil
+		}
+		return &abcitypes.ResponseCheckTx{Code: 0, GasWanted: 1, GasUsed: 1}, nil
+	}
+	// The Accumulate spine (rules v13): the shape filters the mempool - hex well formed, every record a major header
+	// record, sizes bounded; the chain, the registry in force, the sequence and the records' verification are judged
+	// in FinalizeBlock.
+	if gt, ok := DecodeAccumulateSpineGenesis(req.Tx); ok {
+		if err := gt.CheckShape(); err != nil {
+			return &abcitypes.ResponseCheckTx{Code: codeSpineGenesisRefused, Log: "spine genesis refused: " + err.Error()}, nil
+		}
+		return &abcitypes.ResponseCheckTx{Code: 0, GasWanted: 1, GasUsed: 1}, nil
+	}
+	if et, ok := DecodeAccumulateSpineExtend(req.Tx); ok {
+		if err := et.CheckShape(); err != nil {
+			return &abcitypes.ResponseCheckTx{Code: codeSpineExtendRefused, Log: "spine extension refused: " + err.Error()}, nil
 		}
 		return &abcitypes.ResponseCheckTx{Code: 0, GasWanted: 1, GasUsed: 1}, nil
 	}
@@ -837,7 +860,9 @@ func (app *ValidatorApp) FinalizeBlock(ctx context.Context, req *abcitypes.Reque
 	app.blockRulesV10Verdict = false
 	app.blockRulesV11Verdict = false
 	app.blockRulesV12Verdict = false
+	app.blockRulesV13Verdict = false
 	app.blockAdminSetChanged = false
+	app.blockSpine = spineAcceptances{}
 	app.blockPolicyChanges, app.blockRotationRecords, app.blockRegistryRecords = nil, nil, nil
 	// A fresh slice, never [:0]: the previous block's slice may already belong to the persister.
 	app.blockValidatorBlocks = nil
@@ -874,6 +899,19 @@ func (app *ValidatorApp) FinalizeBlock(ctx context.Context, req *abcitypes.Reque
 		if ar, ok := DecodeAdminRotate(tx); ok {
 			app.blockRulesV12Verdict = true
 			result := app.processAdminRotate(ar, req.Height)
+			txResults[i] = &result
+			continue
+		}
+		// Nor is the Accumulate spine (rules v13). v12 judged both kinds as ValidatorBlocks.
+		if gt, ok := DecodeAccumulateSpineGenesis(tx); ok {
+			app.blockRulesV13Verdict = true
+			result := app.processAccumulateSpineGenesis(gt, req.Height)
+			txResults[i] = &result
+			continue
+		}
+		if et, ok := DecodeAccumulateSpineExtend(tx); ok {
+			app.blockRulesV13Verdict = true
+			result := app.processAccumulateSpineExtend(et, req.Height)
 			txResults[i] = &result
 			continue
 		}
@@ -1148,6 +1186,23 @@ func (app *ValidatorApp) Query(ctx context.Context, req *abcitypes.RequestQuery)
 		log, err := app.ledgerStore.LoadBLSRegistry()
 		if err != nil {
 			return &abcitypes.ResponseQuery{Code: 1, Log: "failed to read the BLS registry log: " + err.Error()}, nil
+		}
+		b, err := json.Marshal(log)
+		if err != nil {
+			return &abcitypes.ResponseQuery{Code: 1, Log: err.Error()}, nil
+		}
+		return &abcitypes.ResponseQuery{Code: 0, Value: b, Height: app.latestHeight}, nil
+
+	case "/certen/accumulate_spine":
+		// The committed Accumulate spine log (rules v13): the genesis, every verified major block's checkpoint and the
+		// validator sets they reference - what a history check finds each accepted spine transaction's record in
+		// (validator-rotate history-check --rules 13), and what a submitter reads for the next extension's first block.
+		if app.ledgerStore == nil {
+			return &abcitypes.ResponseQuery{Code: 1, Log: "ledger store not available"}, nil
+		}
+		log, err := app.ledgerStore.LoadAccumulateSpine()
+		if err != nil {
+			return &abcitypes.ResponseQuery{Code: 1, Log: "failed to read the spine log: " + err.Error()}, nil
 		}
 		b, err := json.Marshal(log)
 		if err != nil {
