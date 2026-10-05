@@ -129,28 +129,53 @@ func (s *Shadow) capture(ctx context.Context, account, tx string) (uint64, []*pr
 	return block, pages, nil
 }
 
-// governingPages returns the principal account and every page of each key book governing it. A book of another
-// identity may live on another partition, whose block numbering differs; those are returned as skipped, by name.
+// governingPages returns the accounts whose state decides who may sign for account: the account itself, every account
+// the authority set is inherited through, and every page of each key book in the set it resolves to. Resolution
+// follows Accumulate's own rule (internal/core/block/shared GetAccountAuthoritySet): a full account that lists any
+// authorities uses them; one that lists none inherits from its parent identity, recursively, up to the root identity.
+// Each account on the way is captured, because its proven state is what shows it lists none.
+//
+// A book of another identity may live on another partition, whose block numbering differs; those are returned as
+// skipped, by name.
 func (s *Shadow) governingPages(ctx context.Context, account string) ([]string, []string, error) {
+	return governing(ctx, account, func(ctx context.Context, u *url.URL) (protocol.Account, error) {
+		r, err := s.c.Query(ctx, u, &api.DefaultQuery{})
+		if err != nil {
+			return nil, err
+		}
+		ar, ok := r.(*api.AccountRecord)
+		if !ok {
+			return nil, fmt.Errorf("got %T", r)
+		}
+		return ar.Account, nil
+	})
+}
+
+// governing resolves the governing accounts through get, which reads one account's current state.
+func governing(ctx context.Context, account string, get func(context.Context, *url.URL) (protocol.Account, error)) ([]string, []string, error) {
 	u, err := url.Parse(account)
 	if err != nil {
 		return nil, nil, err
 	}
-	r, err := s.c.Query(ctx, u, &api.DefaultQuery{})
-	if err != nil {
-		return nil, nil, fmt.Errorf("principal %s: %w", account, err)
+	var out, skipped []string
+	var auth *protocol.AccountAuth
+	for cur := u; ; {
+		acct, err := get(ctx, cur)
+		if err != nil {
+			return nil, nil, fmt.Errorf("account %v: %w", cur, err)
+		}
+		out = append(out, cur.String())
+		full, ok := acct.(protocol.FullAccount)
+		if !ok {
+			return nil, nil, fmt.Errorf("account %v is %T, which is not governed by key books", cur, acct)
+		}
+		if len(full.GetAuth().Authorities) > 0 || cur.IsRootIdentity() {
+			auth = full.GetAuth()
+			break
+		}
+		cur = cur.Identity()
 	}
-	ar, ok := r.(*api.AccountRecord)
-	if !ok {
-		return nil, nil, fmt.Errorf("principal %s: got %T", account, r)
-	}
-	full, ok := ar.Account.(protocol.FullAccount)
-	if !ok {
-		return nil, nil, fmt.Errorf("principal %s is %T, which has no authorities", account, ar.Account)
-	}
-	out := []string{account}
-	var skipped []string
-	for _, a := range full.GetAuth().Authorities {
+	for _, a := range auth.Authorities {
 		if a.Disabled {
 			continue
 		}
@@ -158,18 +183,15 @@ func (s *Shadow) governingPages(ctx context.Context, account string) ([]string, 
 			skipped = append(skipped, a.Url.String())
 			continue
 		}
-		br, err := s.c.Query(ctx, a.Url, &api.DefaultQuery{})
+		ba, err := get(ctx, a.Url)
 		if err != nil {
 			return nil, nil, fmt.Errorf("key book %v: %w", a.Url, err)
 		}
-		bar, ok := br.(*api.AccountRecord)
+		book, ok := ba.(*protocol.KeyBook)
 		if !ok {
-			return nil, nil, fmt.Errorf("key book %v: got %T", a.Url, br)
+			return nil, nil, fmt.Errorf("authority %v is %T, not a key book", a.Url, ba)
 		}
-		book, ok := bar.Account.(*protocol.KeyBook)
-		if !ok {
-			return nil, nil, fmt.Errorf("authority %v is %T, not a key book", a.Url, bar.Account)
-		}
+		out = append(out, a.Url.String())
 		for i := uint64(0); i < book.PageCount; i++ {
 			out = append(out, protocol.FormatKeyPageUrl(a.Url, i).String())
 		}
