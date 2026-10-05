@@ -103,13 +103,23 @@ func (b *Builder) CapturePage(ctx context.Context, account string, block uint64)
 		return p, nil
 	}
 	zero := hex.EncodeToString(make([]byte, 32))
-	if err := proof.VerifyChainBinding(toChainedReceipt(&ar.Receipt.Receipt), chains, zero); err != nil {
+	receipt := toChainedReceipt(&ar.Receipt.Receipt)
+	if err := proof.VerifyChainBinding(receipt, chains, zero); err != nil {
 		if ar.Pending != nil && ar.Pending.Total > 0 {
 			p.ChainError = fmt.Sprintf("g1_chain_unbound_pending: %d transactions pending on the account", ar.Pending.Total)
-		} else {
-			p.ChainError = fmt.Sprintf("g1_chain_unbound_pending_or_moved: %v", err)
+			return p, nil
 		}
-		return p, nil
+		// The chains moved since the block (a busy page): read their roots as of the block instead.
+		at, aerr := proof.FetchChainRootsAt(ctx, b.Q, account, block)
+		if aerr != nil {
+			p.ChainError = fmt.Sprintf("g1_chain_unread_at_block: %v", aerr)
+			return p, nil
+		}
+		if berr := proof.VerifyChainBinding(receipt, at, zero); berr != nil {
+			p.ChainError = fmt.Sprintf("g1_chain_unbound: neither the current roots nor the roots at block %d bind: %v", block, berr)
+			return p, nil
+		}
+		chains = at
 	}
 	p.Chains, p.PendingHash = chains, zero
 	return p, nil
