@@ -172,8 +172,10 @@ tool, never a proof).
 1. New packages beside v1: `proof/chained_proof_v2`, `proof/governance_proof_v2` (liteclient), `pkg/proof/v2`, and
    `pkg/finality` (validator). v1 bytes and verdicts never change.
 2. `proof_artifacts.proof_version = '2.0'`; the bundle carries it; `proofverify` dispatches on it; unknown → refused.
-3. New domain tags, never reused: `certen:chain-proof:v2`, `certen:l4gov:v3`, `certen:g1:v2`, `certen:g2:v2`,
-   `certen:finality:v1`, `certen:contract-identity:v1`. New evidence beside hashed summaries, never inside them.
+3. New domain tags, never reused. **Corrected 2026-10-05:** govRoot v2 (RB5-F19) already uses `certen:g0:v2`,
+   `certen:g1:v2` and `certen:g2:v2`, so the proof v2 levels use `:v3` - see `docs/proof/GOVROOT_V3.md` for every
+   slot (`certen:l1:v3`, `certen:l2:v3`, `certen:l3:v3`, `certen:l4gov:v3`, `certen:g0:v3`, `certen:g1:v3`,
+   `certen:g2:v3`, root `certen:govroot:v3`); Phase B adds `certen:finality:v1` and `certen:contract-identity:v1`. New evidence beside hashed summaries, never inside them.
 4. govRoot changes → atomic fleet switch after shadow; v2 goldens are new files.
 5. Named states include: `g1_historical_unavailable`, `l4_spine_unavailable`, `historical_state_unavailable`,
    `g1_completeness_unproven`, `finality_pending` (with the level reached), `consensus_engine_unsupported`.
