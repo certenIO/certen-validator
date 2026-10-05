@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/certen/independant-validator/pkg/accumulateset"
 	"github.com/certen/independant-validator/pkg/proof"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/api/v3"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/database/merkle"
@@ -76,6 +77,11 @@ type Report struct {
 	SetVerdict  proof.Verdict
 	Validators  int
 	Threshold   uint64
+
+	// AccumulateSetRoot is the certen:accval:v1 root of the validator set the spine derived (proven equal to the
+	// network account at the check block), with its threshold, under the pinned incarnation: the value a V8.2 anchor
+	// must have committed for the proof to be about this set (RB6 acceptance: spine-derived L4 equals committed accRoot).
+	AccumulateSetRoot [32]byte
 }
 
 // Archive is the Directory's major-block records from major block 1, shared by every proof.
@@ -257,6 +263,9 @@ func VerifyFromGenesis(ev *Evidence, ar *Archive, in proof.IncarnationInputs, pi
 	}
 	if height != 1+applied {
 		return nil, fmt.Errorf("set check: the network account's main chain has %d entries but the walk applied %d updates after genesis", height, applied)
+	}
+	if rep.AccumulateSetRoot, err = accumulateset.AccumulateSetRoot(derived, thr, pinned); err != nil {
+		return nil, fmt.Errorf("set check: the accumulate set root: %w", err)
 	}
 	rep.Validators = len(chk.Globals().Network.Validators)
 	rep.Threshold = chk.Globals().ValidatorThreshold(protocol.Directory)

@@ -79,6 +79,11 @@ func TestVerifyLiveKermitProof(t *testing.T) {
 	if rep.SetVerdict != proof.VerdictVerified {
 		t.Fatalf("set verdict %s, want verified", rep.SetVerdict)
 	}
+	// The root of the set the spine derived is the root production V8.2 anchors committed (anchor_batches, 2026-10-05,
+	// every chain): Kermit's validator set has not changed, so one value covers the fixture and the live anchors.
+	if got := hex.EncodeToString(rep.AccumulateSetRoot[:]); got != "afa6bd344b04b6ff9645c97b09254af9c25a214991e0b442538e9084d4136bf5" {
+		t.Fatalf("spine-derived accumulate set root %s is not the committed one", got)
+	}
 	if rep.AnchorBlock != 13595785 || len(rep.Pages) != 3 || rep.Partition != "acc://bvn-BVN1.acme" {
 		t.Fatalf("anchor block %d, %d pages, partition %s", rep.AnchorBlock, len(rep.Pages), rep.Partition)
 	}
