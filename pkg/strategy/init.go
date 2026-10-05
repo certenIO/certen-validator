@@ -4,8 +4,8 @@
 //
 // The registry serves the proof cycle: Phase 7 observes a settlement on its chain, a peer re-observes
 // it, and Phase 8 signs with the attestation scheme the chain's platform uses. CERTEN settles on
-// exactly three chains, all EVM, all attested with BLS12-381 - so the registry holds exactly those
-// three, each observed at the anchor the batch path settles on, and nothing else (RB3-F44).
+// the enabled chains of the chain catalogue (pkg/supportedchains), all EVM, all attested with BLS12-381 - so the
+// registry holds exactly those, each observed at the anchor the batch path settles on, and nothing else (RB3-F44).
 
 package strategy
 
@@ -25,11 +25,11 @@ import (
 	"github.com/certen/independant-validator/pkg/supportedchains"
 )
 
-// SupportedChainIDs are the chains CERTEN settles on: Ethereum Sepolia, Base Sepolia and Arbitrum
-// Sepolia.
+// SupportedChainIDs are the catalogued chains (supportedchains.All): the chains this build can settle on. Which of them it
+// settles on now is the enabled set, CERTEN_SETTLEMENT_CHAINS (RegistryConfig.SettlementChains).
 var SupportedChainIDs = supportedchains.IDs()
 
-// supportedNetworks names each supported chain for its RPC fallback tier (ethrpc.EndpointsForChain).
+// supportedNetworks is each catalogued chain's network label (supportedchains.Chain.Network).
 var supportedNetworks = func() map[int64]string {
 	out := map[int64]string{}
 	for _, c := range supportedchains.All {

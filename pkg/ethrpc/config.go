@@ -3,6 +3,7 @@ package ethrpc
 import (
 	"fmt"
 	"github.com/certen/independant-validator/pkg/envvar"
+	"github.com/certen/independant-validator/pkg/supportedchains"
 	"log"
 	"os"
 	"strings"
@@ -145,18 +146,19 @@ func PoolForChain(chainKey string, logger *log.Logger) (*Pool, error) {
 
 // ChainKeyForID maps an EVM chain ID to the key used for its environment variables.
 //
-// Returns "" for a chain this build does not know, and callers must then fall back to that
-// chain's own single URL rather than to Ethereum's — see EndpointsForChainID.
+// A catalogued chain's key is its catalogue entry's (supportedchains.Chain.RPCKey) - the one source the configuration and
+// the strategy registry read too. The retired chains below are not catalogued and are never settled on; their keys stay
+// so the operator tools that read their history still find their providers (RB8 restores each through the catalogue).
+//
+// Returns "" for a chain this build does not know, and callers must then fall back to that chain's own single URL rather
+// than to Ethereum's — see EndpointsForChainID.
 func ChainKeyForID(chainID int64) string {
+	if c, ok := supportedchains.Lookup(chainID); ok {
+		return c.RPCKey
+	}
 	switch chainID {
 	case 1:
 		return "ethereum"
-	case 11155111:
-		return "ethereum-sepolia"
-	case 84532:
-		return "base-sepolia"
-	case 421614:
-		return "arbitrum-sepolia"
 	case 11155420:
 		return "optimism-sepolia"
 	case 80002:

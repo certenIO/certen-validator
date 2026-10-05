@@ -81,7 +81,7 @@ func anchorCfgWithRPC(ids ...int64) *config.AnchorConfig {
 	c := &config.AnchorConfig{}
 	c.Network.EVMChains = map[int64]*config.EVMChainConfig{}
 	for _, id := range ids {
-		c.Network.EVMChains[id] = &config.EVMChainConfig{ChainID: id, RPCURL: "http://127.0.0.1:1"}
+		c.Network.EVMChains[id] = &config.EVMChainConfig{ChainID: id, RPCURL: "http://127.0.0.1:1", MaxGasPriceGwei: 1, GasLimitAnchor: 2000000}
 	}
 	return c
 }

@@ -79,12 +79,12 @@ func withSecondProviders(t *testing.T) {
 
 // RB5-F53: a settlement chain with one provider is refused at boot, naming the chain and its single host.
 func TestARegistryRefusesASettlementChainWithOneProvider(t *testing.T) {
-	_, err := InitializeRegistry(&RegistryConfig{ValidatorID: "validator-1", BLSPrivateKey: blsKey(t), SettlementChains: SupportedChainIDs, Chains: supportedEndpoints()})
+	_, err := InitializeRegistry(&RegistryConfig{ValidatorID: "validator-1", BLSPrivateKey: blsKey(t), SettlementChains: liveChains, Chains: supportedEndpoints()})
 	if err == nil || !strings.Contains(err.Error(), "RB5-F53") {
 		t.Fatalf("a settlement chain observed through one provider was accepted: %v", err)
 	}
 	withSecondProviders(t)
-	if _, err := InitializeRegistry(&RegistryConfig{ValidatorID: "validator-1", BLSPrivateKey: blsKey(t), SettlementChains: SupportedChainIDs, Chains: supportedEndpoints()}); err != nil {
+	if _, err := InitializeRegistry(&RegistryConfig{ValidatorID: "validator-1", BLSPrivateKey: blsKey(t), SettlementChains: liveChains, Chains: supportedEndpoints()}); err != nil {
 		t.Fatalf("two independent providers per chain were refused: %v", err)
 	}
 }
@@ -99,7 +99,7 @@ func supportedEndpoints() []ChainEndpoint {
 
 func TestRegistryIsExactlyTheSupportedChains(t *testing.T) {
 	withSecondProviders(t)
-	r, err := InitializeRegistry(&RegistryConfig{ValidatorID: "validator-1", BLSPrivateKey: blsKey(t), SettlementChains: SupportedChainIDs, Chains: supportedEndpoints()})
+	r, err := InitializeRegistry(&RegistryConfig{ValidatorID: "validator-1", BLSPrivateKey: blsKey(t), SettlementChains: liveChains, Chains: supportedEndpoints()})
 	if err != nil {
 		t.Fatalf("InitializeRegistry: %v", err)
 	}
@@ -128,7 +128,7 @@ func TestRegistryIsExactlyTheSupportedChains(t *testing.T) {
 
 func TestRegistryLookupsTakeTheChainIDInEitherRecordedForm(t *testing.T) {
 	withSecondProviders(t)
-	r, err := InitializeRegistry(&RegistryConfig{ValidatorID: "validator-1", BLSPrivateKey: blsKey(t), SettlementChains: SupportedChainIDs, Chains: supportedEndpoints()})
+	r, err := InitializeRegistry(&RegistryConfig{ValidatorID: "validator-1", BLSPrivateKey: blsKey(t), SettlementChains: liveChains, Chains: supportedEndpoints()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +169,7 @@ func TestRegistryRefusesAnIncompleteConfiguration(t *testing.T) {
 	wrongChain[1].RPC = rpcFor(11155111) // Base configured with an RPC that serves Sepolia
 	twice := append(supportedEndpoints(), supportedEndpoints()[0])
 
-	all := SupportedChainIDs
+	all := liveChains
 	for name, cfg := range map[string]*RegistryConfig{
 		"no BLS key":                           {SettlementChains: all, Chains: supportedEndpoints()},
 		"unreadable BLS key":                   {BLSPrivateKey: []byte{1, 2, 3}, SettlementChains: all, Chains: supportedEndpoints()},
@@ -207,5 +207,55 @@ func TestTheRegistryObservesExactlyTheSettlementChains(t *testing.T) {
 	}
 	if ids := r.ListChainIDs(); len(ids) != 1 || ids[0] != "84532" {
 		t.Fatalf("observed chains %v, want only 84532", ids)
+	}
+}
+
+// liveChains are the chains production settles on (CERTEN_SETTLEMENT_CHAINS on all seven validators, 2026-10-05). The
+// catalogue holds more (Telcoin Adiri), which are settled on only when named.
+var liveChains = []int64{11155111, 84532, 421614}
+
+// The strategy registry's network names and supported ids come from the catalogue, and the live chains' are what they
+// were at origin/main 0fc818e.
+func TestTheLiveChainsNetworkNamesAreUnchanged(t *testing.T) {
+	for id, want := range map[int64]string{11155111: "sepolia", 84532: "base-sepolia", 421614: "arbitrum-sepolia"} {
+		if supportedNetworks[id] != want {
+			t.Fatalf("chain %d network %q, want %q", id, supportedNetworks[id], want)
+		}
+	}
+	if len(SupportedChainIDs) != 4 || SupportedChainIDs[3] != 2017 {
+		t.Fatalf("supported %v", SupportedChainIDs)
+	}
+}
+
+// RB7 §4.1: Telcoin Adiri, once named with its RPC, anchor and two independent providers, is observed like any settlement
+// chain - and while it is not named, it is neither observed nor required.
+func TestTelcoinAdiriIsObservedOnlyWhenItIsASettlementChain(t *testing.T) {
+	withSecondProviders(t)
+	t.Setenv("TELCOIN_ADIRI_URL_FALLBACKS", secondProviderFor(2017))
+	adiri := ChainEndpoint{ChainID: 2017, RPC: rpcFor(2017), Anchor: common.HexToAddress("0x14885Fe8e7b6a4bE0000000000000000000000a4")}
+	r, err := InitializeRegistry(&RegistryConfig{ValidatorID: "validator-1", BLSPrivateKey: blsKey(t),
+		SettlementChains: append(append([]int64{}, liveChains...), 2017), Chains: append(supportedEndpoints(), adiri)})
+	if err != nil {
+		t.Fatalf("an enabled, configured 2017 was refused: %v", err)
+	}
+	ids := r.ListChainIDs()
+	sort.Strings(ids)
+	if strings.Join(ids, ",") != "11155111,2017,421614,84532" {
+		t.Fatalf("observed %v", ids)
+	}
+	if got, err := r.GetChainConfig("2017"); err != nil || got.NetworkName != "telcoin-adiri" {
+		t.Fatalf("2017 observer %+v %v", got, err)
+	}
+	// Not named: a 2017 endpoint beside the settlement chains is refused, and its absence is not missed.
+	if _, err := InitializeRegistry(&RegistryConfig{ValidatorID: "validator-1", BLSPrivateKey: blsKey(t), SettlementChains: liveChains,
+		Chains: append(supportedEndpoints(), adiri)}); err == nil {
+		t.Fatal("a 2017 endpoint was accepted with 2017 not a settlement chain")
+	}
+	// Named with one provider: refused at boot (RB5-F53), naming the chain.
+	t.Setenv("TELCOIN_ADIRI_URL_FALLBACKS", "")
+	_, err = InitializeRegistry(&RegistryConfig{ValidatorID: "validator-1", BLSPrivateKey: blsKey(t),
+		SettlementChains: []int64{2017}, Chains: []ChainEndpoint{adiri}})
+	if err == nil || !strings.Contains(err.Error(), "settlement chain 2017") {
+		t.Fatalf("2017 with one provider: %v", err)
 	}
 }

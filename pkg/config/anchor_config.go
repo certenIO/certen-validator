@@ -975,46 +975,37 @@ func loadAnchorConfigFromEnv() (*AnchorConfig, error) {
 // Multi-Chain EVM Configuration
 // ==============================================================================
 
-// loadEVMChainsFromEnv loads the configuration of the chains CERTEN settles on - Ethereum Sepolia,
-// Base Sepolia and Arbitrum Sepolia - from environment variables. A chain whose RPC is not set is
-// absent, and the batch path refuses to start without it (execution.NewEVMChainResolverFromEnv).
-// No contract address is compiled in: the anchors are CERTEN_ANCHOR_V8_<chainId>, and a retired
-// default was a different contract with a different validator set (RB3-F44).
+// loadEVMChainsFromEnv loads the configuration of every catalogued chain (supportedchains.All) from environment
+// variables, each under the names its catalogue entry gives. A chain whose RPC is not set is absent, and the batch path
+// refuses to start a settlement chain without it (execution.NewEVMChainResolverFromEnv). A chain whose catalogue entry
+// compiles in no gas ceiling or anchor gas limit has 0 until <G>_MAX_GAS_PRICE_GWEI / <G>_GAS_LIMIT_ANCHOR is set, and
+// the batch path refuses to settle on it with 0. Being configured here does not enable a chain: only
+// CERTEN_SETTLEMENT_CHAINS does. No contract address is compiled in: the anchors are CERTEN_ANCHOR_V8_<chainId>, and a
+// retired default was a different contract with a different validator set (RB3-F44).
 func loadEVMChainsFromEnv() map[int64]*EVMChainConfig {
 	chains := make(map[int64]*EVMChainConfig)
-	for _, c := range []struct {
-		chainID                  int64
-		name, rpcEnv, wsEnv      string
-		gasPrefix, factoryPrefix string
-		maxGasGwei, maxPriority  int64
-		gasLimitAnchor           int64
-		explorer                 string
-	}{
-		{11155111, "Ethereum Sepolia", "ETHEREUM_SEPOLIA_RPC_URL", "ETHEREUM_SEPOLIA_WS_URL", "SEPOLIA", "SEPOLIA", 100, 2, 500000, "https://sepolia.etherscan.io"},
-		{84532, "Base Sepolia", "BASE_SEPOLIA_RPC_URL", "BASE_SEPOLIA_WS_URL", "BASE", "BASE_SEPOLIA", 1, 0, 2000000, "https://sepolia.basescan.org"},
-		{421614, "Arbitrum Sepolia", "ARBITRUM_SEPOLIA_RPC_URL", "ARBITRUM_SEPOLIA_WS_URL", "ARBITRUM", "ARBITRUM_SEPOLIA", 1, 0, 2000000, "https://sepolia.arbiscan.io"},
-	} {
-		rpc := getEnv(c.rpcEnv, "")
-		if c.chainID == 11155111 && rpc == "" {
+	for _, c := range supportedchains.All {
+		rpc := getEnv(c.RPCURLEnv(), "")
+		if rpc == "" && c.LegacyRPCEnv != "" {
 			// Sepolia's RPC has been set as ETHEREUM_URL since before the per-chain names existed.
-			rpc = getEnv("ETHEREUM_URL", "")
+			rpc = getEnv(c.LegacyRPCEnv, "")
 		}
 		if rpc == "" {
 			continue
 		}
-		chains[c.chainID] = &EVMChainConfig{
-			Name:               c.name,
-			ChainID:            c.chainID,
+		chains[c.ID] = &EVMChainConfig{
+			Name:               c.DisplayName,
+			ChainID:            c.ID,
 			RPCURL:             rpc,
-			WSURL:              getEnv(c.wsEnv, ""),
+			WSURL:              getEnv(c.WSURLEnv(), ""),
 			RPCTimeout:         Duration(30 * time.Second),
 			MaxConnections:     10,
 			MaxIdleConnections: 5,
-			AccountFactory:     getEnv(c.factoryPrefix+"_ACCOUNTFACTORY_V6_ADDRESS", getEnv(c.factoryPrefix+"_ACCOUNTFACTORY_ADDRESS", "")),
-			MaxGasPriceGwei:    getEnvInt64(c.gasPrefix+"_MAX_GAS_PRICE_GWEI", c.maxGasGwei),
-			MaxPriorityFeeGwei: getEnvInt64(c.gasPrefix+"_MAX_PRIORITY_FEE_GWEI", c.maxPriority),
-			GasLimitAnchor:     getEnvInt64(c.gasPrefix+"_GAS_LIMIT_ANCHOR", c.gasLimitAnchor),
-			ExplorerURL:        c.explorer,
+			AccountFactory:     getEnv(c.FactoryEnvPrefix+"_ACCOUNTFACTORY_V6_ADDRESS", getEnv(c.FactoryEnvPrefix+"_ACCOUNTFACTORY_ADDRESS", "")),
+			MaxGasPriceGwei:    getEnvInt64(c.MaxGasPriceEnv(), c.DefaultMaxGasPriceGwei),
+			MaxPriorityFeeGwei: getEnvInt64(c.MaxPriorityFeeEnv(), c.DefaultMaxPriorityFeeGwei),
+			GasLimitAnchor:     getEnvInt64(c.GasLimitAnchorEnv(), c.DefaultGasLimitAnchor),
+			ExplorerURL:        c.ExplorerURL,
 		}
 	}
 	return chains

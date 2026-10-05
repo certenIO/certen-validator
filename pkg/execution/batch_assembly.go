@@ -19,6 +19,7 @@ import (
 	"github.com/certen/independant-validator/pkg/config"
 	"github.com/certen/independant-validator/pkg/consensus"
 	"github.com/certen/independant-validator/pkg/database"
+	"github.com/certen/independant-validator/pkg/supportedchains"
 )
 
 // =============================================================================
@@ -104,9 +105,31 @@ func NewEVMChainResolverFromEnv(anchorCfg *config.AnchorConfig, chainIDs []int64
 		if c := anchorCfg.GetEVMChainConfig(id); c == nil || strings.TrimSpace(c.RPCURL) == "" {
 			return nil, fmt.Errorf("chain %d has no RPC configured: chain %d is a chain CERTEN settles on", id, id)
 		}
+		if err := requireGasSettings(anchorCfg.GetEVMChainConfig(id)); err != nil {
+			return nil, err
+		}
 		out[id] = common.HexToAddress(v)
 	}
 	return NewEVMChainResolver(anchorCfg, out)
+}
+
+// requireGasSettings refuses a settlement chain with no gas price ceiling or anchor gas limit. A zero ceiling is no ceiling
+// at all (feeCeiling), and a chain whose catalogue entry compiles in no default (Telcoin Adiri: its ceiling is a fact of
+// its own fee market, in its own token) has zero until it is configured - so enabling such a chain without configuring
+// it is refused here, at boot, by the variable to set (RB7 §4.2).
+func requireGasSettings(c *config.EVMChainConfig) error {
+	maxGasEnv, limitEnv := "its gas price ceiling", "its anchor gas limit"
+	if cat, ok := supportedchains.Lookup(c.ChainID); ok {
+		maxGasEnv, limitEnv = cat.MaxGasPriceEnv(), cat.GasLimitAnchorEnv()
+	}
+	if c.MaxGasPriceGwei <= 0 {
+		return fmt.Errorf("chain %d has no gas price ceiling: set %s (gwei of its native token, from its measured fee market): "+
+			"chain %d is a chain CERTEN settles on", c.ChainID, maxGasEnv, c.ChainID)
+	}
+	if c.GasLimitAnchor <= 0 {
+		return fmt.Errorf("chain %d has no anchor gas limit: set %s: chain %d is a chain CERTEN settles on", c.ChainID, limitEnv, c.ChainID)
+	}
+	return nil
 }
 
 // Endpoint is a configured chain's RPC and its CertenAnchorV8 - what the batch path settles on, and
