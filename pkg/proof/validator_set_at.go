@@ -87,3 +87,31 @@ func ReceiptPrefixTo(r chained_proof.Receipt, root string) (chained_proof.Receip
 		h = s[:]
 	}
 }
+
+// FetchChainRoots reads an account's chains, each with the merkle state the state hasher folds (proof v2 G1).
+func FetchChainRoots(ctx context.Context, q AccumulateQuerier, url string) ([]ChainRoot, error) {
+	return fetchChainRoots(ctx, q, url, false)
+}
+
+// VerifyChainBinding proves an account's chain roots against a state receipt that starts at the account's main state:
+// the state hasher is [main, secondary, chains, pending], so the receipt's second sibling must be
+// H(merkle(chain anchors) || pending). The first sibling is the secondary component, taken from the receipt itself.
+// pendingHash is the pending component; 32 zero bytes when nothing is pending.
+func VerifyChainBinding(r chained_proof.Receipt, chains []ChainRoot, pendingHash string) error {
+	if len(r.Entries) < 2 {
+		return fmt.Errorf("state receipt has %d steps; the state hasher needs at least 2", len(r.Entries))
+	}
+	a := AccountStateProof{StateReceipt: r, Chains: chains, SecondaryHash: r.Entries[0].Hash, PendingHash: pendingHash}
+	return a.verifyChainBinding()
+}
+
+// MainChainHeight returns the height of the chain named main, and whether there is one.
+func MainChainHeight(chains []ChainRoot) (uint64, bool) {
+	for _, c := range chains {
+		if c.Name == "main" {
+			count, _, err := c.derive()
+			return count, err == nil
+		}
+	}
+	return 0, false
+}

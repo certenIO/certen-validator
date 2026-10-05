@@ -61,9 +61,12 @@ type PortableEvidence struct {
 }
 
 type PortablePage struct {
-	URL     string          `json:"url"`
-	Account json.RawMessage `json:"account"` // protocol.Account
-	Receipt json.RawMessage `json:"receipt"` // merkle.Receipt
+	URL         string            `json:"url"`
+	Account     json.RawMessage   `json:"account"` // protocol.Account
+	Receipt     json.RawMessage   `json:"receipt"` // merkle.Receipt
+	Chains      []proof.ChainRoot `json:"chains,omitempty"`
+	PendingHash string            `json:"pendingHash,omitempty"`
+	ChainError  string            `json:"chainError,omitempty"`
 }
 
 type PortableCheck struct {
@@ -150,7 +153,7 @@ func Export(ev *Evidence, ar *Archive, in proof.IncarnationInputs, pin [32]byte)
 		if err != nil {
 			return nil, err
 		}
-		e.Pages = append(e.Pages, PortablePage{URL: pg.URL, Account: acct, Receipt: r})
+		e.Pages = append(e.Pages, PortablePage{URL: pg.URL, Account: acct, Receipt: r, Chains: pg.Chains, PendingHash: pg.PendingHash, ChainError: pg.ChainError})
 	}
 
 	e.Check.Majors, e.Check.Incarnation = ev.Check.Majors, ev.Check.Set.Incarnation
@@ -251,7 +254,7 @@ func Import(p *Portable) (*Evidence, *Archive, proof.IncarnationInputs, [32]byte
 		if err != nil {
 			return fail(err)
 		}
-		ev.Pages = append(ev.Pages, PageState{URL: pg.URL, State: hex.EncodeToString(st), Receipt: r})
+		ev.Pages = append(ev.Pages, PageState{URL: pg.URL, State: hex.EncodeToString(st), Receipt: r, Chains: pg.Chains, PendingHash: pg.PendingHash, ChainError: pg.ChainError})
 	}
 
 	ev.Check.Majors, ev.Check.Set.Incarnation = e.Check.Majors, e.Check.Incarnation

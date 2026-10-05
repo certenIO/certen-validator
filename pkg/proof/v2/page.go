@@ -23,6 +23,7 @@ import (
 	"strings"
 
 	chained_proof "github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/working-proof_do_not_edit"
+	"github.com/certen/independant-validator/pkg/proof"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/api/v3"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/database/merkle"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/types/messaging"
@@ -42,6 +43,22 @@ type PageState struct {
 	URL     string `json:"url"`
 	State   string `json:"state"`   // the account's binary encoding, hex
 	Receipt string `json:"receipt"` // from sha256(State) (binary merkle.Receipt, hex)
+
+	// Chains are the account's chain roots and PendingHash the state hasher's pending component, as captured; the
+	// verifier proves them against the receipt's second sibling (proof.VerifyChainBinding), which makes them the roots
+	// at the anchor's block, the main chain's height included (G1 certified timeline, step 1). ChainError names why
+	// they could not be bound at capture instead.
+	Chains      []proof.ChainRoot `json:"chains,omitempty"`
+	PendingHash string            `json:"pendingHash,omitempty"`
+	ChainError  string            `json:"chainError,omitempty"`
+}
+
+// PageChain is what the verifier established about one page's chains.
+type PageChain struct {
+	URL        string
+	Bound      bool   // the chain roots are proven at the anchor's block
+	MainHeight uint64 // when bound: the main chain's height at the anchor's block
+	Note       string // when not bound: why (from the capture)
 }
 
 // CapturePage reads an account's state as of block, with the node's receipt. It must run while block is inside the
@@ -74,7 +91,36 @@ func (b *Builder) CapturePage(ctx context.Context, account string, block uint64)
 	if err != nil {
 		return nil, err
 	}
-	return &PageState{URL: account, State: hex.EncodeToString(state), Receipt: hex.EncodeToString(rb)}, nil
+	p := &PageState{URL: account, State: hex.EncodeToString(state), Receipt: hex.EncodeToString(rb)}
+
+	// The chain roots. They are read as they are now; the binding check proves they are the roots at the block (the
+	// receipt's second sibling is H(chains || pending) at the block), so roots that moved since fail it and are
+	// named, never assumed. The pending component is 32 zero bytes when nothing is pending; when something is, its
+	// hash covers the network's internal transaction state, which no API serves, so the page is named unbound.
+	chains, err := proof.FetchChainRoots(ctx, b.Q, account)
+	if err != nil {
+		p.ChainError = fmt.Sprintf("g1_chain_unread: %v", err)
+		return p, nil
+	}
+	zero := hex.EncodeToString(make([]byte, 32))
+	if err := proof.VerifyChainBinding(toChainedReceipt(&ar.Receipt.Receipt), chains, zero); err != nil {
+		if ar.Pending != nil && ar.Pending.Total > 0 {
+			p.ChainError = fmt.Sprintf("g1_chain_unbound_pending: %d transactions pending on the account", ar.Pending.Total)
+		} else {
+			p.ChainError = fmt.Sprintf("g1_chain_unbound_pending_or_moved: %v", err)
+		}
+		return p, nil
+	}
+	p.Chains, p.PendingHash = chains, zero
+	return p, nil
+}
+
+func toChainedReceipt(r *merkle.Receipt) chained_proof.Receipt {
+	out := chained_proof.Receipt{Start: hex.EncodeToString(r.Start), Anchor: hex.EncodeToString(r.Anchor)}
+	for _, e := range r.Entries {
+		out.Entries = append(out.Entries, chained_proof.ReceiptStep{Hash: hex.EncodeToString(e.Hash), Right: e.Right})
+	}
+	return out
 }
 
 // trimPage cuts a captured page receipt at the state root, refusing one that never passes through it.
@@ -91,7 +137,7 @@ func trimPage(p *PageState, stateRoot []byte) (*PageState, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &PageState{URL: p.URL, State: p.State, Receipt: hex.EncodeToString(rb)}, nil
+	return &PageState{URL: p.URL, State: p.State, Receipt: hex.EncodeToString(rb), Chains: p.Chains, PendingHash: p.PendingHash, ChainError: p.ChainError}, nil
 }
 
 // anchorBody decodes a delivered partition anchor and returns its body and transaction hash.
@@ -118,8 +164,37 @@ func anchorBody(msgHex string) (*protocol.BlockValidatorAnchor, *messaging.Seque
 	return body, seq, txm.Transaction.GetHash(), nil
 }
 
-// verifyPage checks one page against the block's state root and returns the account as proven.
-func verifyPage(p *PageState, stateRoot []byte) (protocol.Account, error) {
+// verifyPage checks one page against the block's state root and returns the account as proven, and what is proven
+// about its chains.
+func verifyPage(p *PageState, stateRoot []byte) (protocol.Account, PageChain, error) {
+	acct, err := verifyPageState(p, stateRoot)
+	if err != nil {
+		return nil, PageChain{}, err
+	}
+	pc := PageChain{URL: p.URL}
+	if len(p.Chains) == 0 {
+		pc.Note = p.ChainError
+		if pc.Note == "" {
+			pc.Note = "g1_chain_uncaptured"
+		}
+		return acct, pc, nil
+	}
+	r, err := decodeReceipt(p.Receipt)
+	if err != nil {
+		return nil, pc, err
+	}
+	if err := proof.VerifyChainBinding(toChainedReceipt(r), p.Chains, p.PendingHash); err != nil {
+		return nil, pc, fmt.Errorf("%s: chains: %w", p.URL, err)
+	}
+	h, ok := proof.MainChainHeight(p.Chains)
+	if !ok {
+		return nil, pc, fmt.Errorf("%s: no main chain among the bound chains", p.URL)
+	}
+	pc.Bound, pc.MainHeight = true, h
+	return acct, pc, nil
+}
+
+func verifyPageState(p *PageState, stateRoot []byte) (protocol.Account, error) {
 	state, err := hex.DecodeString(p.State)
 	if err != nil {
 		return nil, err

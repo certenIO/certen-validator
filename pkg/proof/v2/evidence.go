@@ -72,6 +72,7 @@ type Report struct {
 	Partition   string
 	AnchorBlock uint64
 	Pages       []protocol.Account
+	PageChains  []PageChain // per page, in the same order: whether its chains are proven at AnchorBlock
 	SetVerdict  proof.Verdict
 	Validators  int
 	Threshold   uint64
@@ -192,11 +193,12 @@ func VerifyFromGenesis(ev *Evidence, ar *Archive, in proof.IncarnationInputs, pi
 	}
 	rep.Partition, rep.AnchorBlock = seq.Source.String(), body.MinorBlockIndex
 	for i := range ev.Pages {
-		acct, err := verifyPage(&ev.Pages[i], body.StateTreeAnchor[:])
+		acct, pc, err := verifyPage(&ev.Pages[i], body.StateTreeAnchor[:])
 		if err != nil {
 			return nil, fmt.Errorf("page: %w", err)
 		}
 		rep.Pages = append(rep.Pages, acct)
+		rep.PageChains = append(rep.PageChains, pc)
 	}
 
 	// The validator set: walked to a certified block at or after the certified one, proven there, equal to the set
