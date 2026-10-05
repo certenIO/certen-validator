@@ -192,7 +192,8 @@ const (
 	// v13 - the Accumulate validator-set spine becomes consensus state (accumulate_spine.go, RB6; docs/proof/PROOF_V2.md,
 	// GOVROOT_V3.md): a proof v2 must be judged inside FinalizeBlock with no I/O, so the chain itself holds the spine its
 	// validator sets are traced along. Two recognised transaction kinds:
-	// `certen.accumulate.spine.genesis/v1`, accepted only when its facts recompute the Accumulate incarnation of the BLS
+	// `certen.accumulate.spine.genesis/v1`, signed by the admin quorum in force (a governed act: it switches the chain to
+	// v3 intent certificates), and accepted only when its facts recompute the Accumulate incarnation of the BLS
 	// registry in force and the recorded spine is not already of that incarnation - so the spine starts from the
 	// registry's incarnation and follows it when an admin-signed registry moves to a new one, replacing the dead
 	// incarnation's spine - and `certen.accumulate.spine.extend/v1`, the next major blocks in sequence after the last

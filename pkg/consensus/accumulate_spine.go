@@ -32,7 +32,11 @@ import (
 //   - The genesis is accepted only if its facts recompute the Accumulate incarnation of the BLS registry IN FORCE for
 //     its block (proofv2.AcceptSpineGenesis): the registry, signed by the admin quorum, already names the incarnation
 //     the quorum attests under, so the spine starts from exactly that network's genesis set and from nothing a
-//     submitter chose. Anyone may submit it; nothing about it is theirs.
+//     submitter chose.
+//   - The genesis is a governed act: the admin quorum in force for its block (AdminSetAt) signs it, as it signs the BLS
+//     registry. Accepting it switches the chain to v3 intent certificates (ProofV3Required), and an incarnation's
+//     genesis replaces a dead incarnation's spine, so WHEN it happens is the admins' decision - never whichever node
+//     submits first. The signatures cover the chain and the genesis facts under the kind's domain (SigningBytes).
 //   - An extension carries the next major blocks in sequence after the last checkpoint (first = checkpoints + 1), and
 //     every record must verify from the spine as the chain already holds it (proofv2.ExtendSpine) - signatures by the
 //     set in force, anchors chained - or the whole extension is refused. Anyone may submit one: a record that does not
@@ -45,8 +49,8 @@ import (
 //     is kept only as the replaced log's Previous, for reading the chain's past state back. Proofs under the dead
 //     incarnation can no longer be judged in consensus, which is right: the registry no longer attests under it.
 //   - An extension is judged only against a spine of the registry's incarnation; against any other it is refused.
-//   - Both kinds are bound to the chain id; neither carries a signature, because neither needs an authority: what they
-//     add is fixed by Accumulate's own consensus and the committed registry.
+//   - Both kinds are bound to the chain id. An extension carries no signature and needs no authority: what it adds is
+//     fixed by Accumulate's own signatures on every record and by the committed spine it must chain from.
 
 // The transaction kinds on the wire.
 const (
@@ -57,8 +61,9 @@ const (
 // The result codes of refused spine transactions (rules v13). Codes 9-12 are the BLS registry, the intent certificate,
 // the admin re-seal and the admin rotation; these are the next free ones, and no earlier rules version returns them.
 const (
-	// codeSpineGenesisRefused: a spine genesis refused - another chain, no registry in force, a spine of the registry's
-	// incarnation already recorded, or facts that do not recompute the registry's incarnation.
+	// codeSpineGenesisRefused: a spine genesis refused - another chain, no admin quorum's signatures, no registry in
+	// force, a spine of the registry's incarnation already recorded, or facts that do not recompute the registry's
+	// incarnation.
 	codeSpineGenesisRefused uint32 = 13
 	// codeSpineExtendRefused: a spine extension refused - another chain, no genesis, a spine that is not the registry's
 	// incarnation, a gap in the sequence, or a record that does not verify.
@@ -94,6 +99,8 @@ type AccumulateSpineGenesisTx struct {
 	TimeUnix        uint64 `json:"time_unix"`
 	NetworkRecord   string `json:"network_record"` // hex, the NetworkDefinition record exactly as stored on chain
 	GlobalsRecord   string `json:"globals_record"` // hex, the NetworkGlobals record exactly as stored on chain
+	// Signatures are the admins' signatures over SigningBytes; they are not part of GenesisID.
+	Signatures []PolicySignature `json:"signatures,omitempty"`
 }
 
 // AccumulateSpineExtendTx carries the major blocks First, First+1, ... after the spine's last checkpoint.
@@ -104,19 +111,53 @@ type AccumulateSpineExtendTx struct {
 	Records []string `json:"records"` // hex, each an api.MajorHeaderRecord's binary encoding, lowercase
 }
 
-// GenesisID is what an accepted genesis contributes to the app hash: "accumulate-spine-genesis:" and the hex sha256 of
-// the transaction's canonical bytes - every field in the order above, length-prefixed (lengthPrefixed), integers in
-// decimal. The encoding is injective and the hex fields have one spelling, so two geneses share an id only if they are
-// the same genesis.
-func (t *AccumulateSpineGenesisTx) GenesisID() string {
+// NewAccumulateSpineGenesis is the unsigned genesis transaction for an incarnation's genesis inputs on chainID, every
+// hex field in its one spelling.
+func NewAccumulateSpineGenesis(chainID string, in proof.IncarnationInputs) *AccumulateSpineGenesisTx {
+	return &AccumulateSpineGenesisTx{Kind: AccumulateSpineGenesisKind, ChainID: chainID, MinorBlockIndex: in.GenesisMinorBlockIndex,
+		RootChainAnchor: hex.EncodeToString(in.GenesisRootChainAnchor[:]), StateTreeAnchor: hex.EncodeToString(in.GenesisStateTreeAnchor[:]),
+		TimeUnix: in.GenesisTimeUnix, NetworkRecord: hex.EncodeToString(in.NetworkRecord), GlobalsRecord: hex.EncodeToString(in.GlobalsRecord)}
+}
+
+// SigningBytes is what the admins sign: sha256 of the transaction's canonical bytes - the kind (its domain), the chain
+// and every genesis fact in the order above, length-prefixed (lengthPrefixed), integers in decimal. The encoding is
+// injective and the hex fields have one spelling, so one signature approves exactly one genesis on one chain, and no
+// other signed message of the chain shares its domain.
+func (t *AccumulateSpineGenesisTx) SigningBytes() []byte {
 	sum := sha256.Sum256(lengthPrefixed(AccumulateSpineGenesisKind, t.ChainID, strconv.FormatUint(t.MinorBlockIndex, 10),
 		t.RootChainAnchor, t.StateTreeAnchor, strconv.FormatUint(t.TimeUnix, 10), t.NetworkRecord, t.GlobalsRecord))
-	return "accumulate-spine-genesis:" + hex.EncodeToString(sum[:])
+	return sum[:]
+}
+
+// GenesisID is what an accepted genesis contributes to the app hash: "accumulate-spine-genesis:" and the hex of
+// SigningBytes. It is over the facts only - never the signatures - so the same genesis signed by another subset of
+// the quorum is the same genesis, with one id (the accepted no-op within its block, refused as recorded after it).
+func (t *AccumulateSpineGenesisTx) GenesisID() string {
+	return "accumulate-spine-genesis:" + hex.EncodeToString(t.SigningBytes())
+}
+
+// VerifyAccumulateSpineGenesisQuorum is the genesis's authority rule for a block at height h: the threshold of distinct
+// keys of the admin set in force for that block (AdminSetAt) signed SigningBytes. FinalizeBlock judges by it against
+// the committed policy, and tools against the policy a node reports (validator-rotate spine-genesis preflight).
+func VerifyAccumulateSpineGenesisQuorum(t *AccumulateSpineGenesisTx, policy *ledger.EntitlementPolicyState, h int64) error {
+	return verifyAdminQuorum(t.SigningBytes(), t.Signatures, withAdminSetAt(policy, h), "Accumulate spine genesis",
+		"no spine genesis can be set")
 }
 
 // ExtensionID is what an accepted extension contributes to the app hash: "accumulate-spine-extend:" and the hex sha256
 // of its canonical bytes - the kind, the chain, First and the number of records in decimal, then every record,
 // length-prefixed.
+//
+// The id names the bytes, not the major blocks: one major block has more than one byte-spelling that verifies. Every
+// one-bit change of Kermit's records (pkg/proof/v2 TestAMalformedMajorRecordIsAnErrorNotAPanic) that still walks
+// changes only what the spine never reads - the index entry's source, block time and root index index (bytes 5-17 of
+// a record are these; only its BlockIndex is checked), a signature's declared transaction hash (the signature is
+// verified over the anchor itself), or a receipt's End - or leaves out a signature beyond the quorum or an update that
+// writes no network account, which the canonical-encoding check (MajorRecords) refuses here when it leaves trailing
+// bytes. Every such spelling yields exactly the checkpoint the real record does; an omitted network write would not
+// (it changes the checkpoint's NetworkUpdates, which a proof accounts against the network accounts' main chains).
+// What the chain keeps is the checkpoint, and a second spelling of a major block already verified is refused as stale
+// (code 15), so two spellings reach the chain only as one acceptance and one stale refusal, with the same spine.
 func (t *AccumulateSpineExtendTx) ExtensionID() string {
 	fields := []string{AccumulateSpineExtendKind, t.ChainID, strconv.FormatUint(t.First, 10), strconv.Itoa(len(t.Records))}
 	fields = append(fields, t.Records...)
@@ -334,11 +375,12 @@ func spineView(stored *ledger.AccumulateSpineLog, h int64, a *spineAcceptances) 
 func incarnationHex(inc [32]byte) string { return "0x" + hex.EncodeToString(inc[:]) }
 
 // refusePanic runs f, which decodes or verifies bytes a submitter chose, and returns a panic inside it as an error that
-// names it. Accumulate's decoders and the spine's verification dereference fields a crafted record can leave nil (the
-// accumulate v1.4.7 MajorHeaderRecord decoder, and proofv2's Spine.Advance via checkDirectorySelfAnchor, both panic on
-// such input), and a panic in CheckTx or FinalizeBlock stops the node - every node, for a transaction in a block: the
-// chain would halt on one malformed transaction. The code is deterministic, so every node panics on the same input and
-// every node refuses it, with the same log.
+// names it. It is DEFENCE IN DEPTH. The spine's own verification (pkg/proof/v2) checks every field it reads and returns
+// named errors - tested over every one-bit change of real records - so a panic there would be a bug. Accumulate's
+// v1.4.7 MajorHeaderRecord decoder, which CERTEN cannot change, does panic on some crafted bytes. And a panic in CheckTx
+// or FinalizeBlock stops the node - every node, for a transaction in a block: the chain would halt on one malformed
+// transaction. The code is deterministic, so every node panics on the same input and every node refuses it, with the
+// same log.
 func refusePanic(what string, f func() error) (err error) {
 	defer func() {
 		if p := recover(); p != nil {

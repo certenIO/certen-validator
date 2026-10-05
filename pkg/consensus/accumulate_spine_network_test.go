@@ -3,9 +3,13 @@ package consensus
 import (
 	"context"
 	"encoding/hex"
+	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -19,9 +23,12 @@ import (
 // The rules v13 spine on a real CometBFT network of four in-process validators running this ValidatorApp, on Kermit's
 // real genesis and major blocks. Sealed at genesis with ops-1..3 (threshold 2):
 //
-//  1. the admins commit the BLS registry under Kermit's incarnation; a spine genesis submitted before it is refused;
-//  2. the genesis commits through one node and the archive's major blocks through the others, an extension per
-//     transaction, in sequence; a stale extension is refused with its own code;
+//  1. a spine genesis before any BLS registry is refused, by the chain and by the preflight; the admins commit the
+//     registry under Kermit's incarnation;
+//  2. the owner's procedure through `validator-rotate spine-genesis`: propose from Kermit's incarnation evidence (refused
+//     against another incarnation), one admin's approval refused by the chain and the preflight, the second admin signs,
+//     preflight GO, submit; then the archive's major blocks through the other nodes, an extension per transaction, in
+//     sequence; a stale extension is refused with its own code;
 //  3. every node holds the same spine log, reaches the same app hash, is stamped v13 and passes the history check every
 //     node runs at start - and the operator's `history-check --rules 13` over RPC;
 //  4. restarted as a whole fleet, the network comes back on one chain, still v13, every node answering the same spine.
@@ -71,18 +78,73 @@ func TestTheSpineOnALiveNetwork(t *testing.T) {
 		})
 	}
 
-	// 1. No registry, no genesis; then the registry.
+	// The operator's procedure, through the tool: the admins' secrets in files as the owner keeps them.
+	run := func(args ...string) (string, error) {
+		t.Helper()
+		out, err := exec.Command(tool, args...).CombinedOutput()
+		return string(out), err
+	}
+	secret := map[string]string{}
+	for i, id := range []string{"ops-1", "ops-2", "ops-3"} {
+		p := filepath.Join(dir, id+".seed")
+		if err := os.WriteFile(p, []byte(strings.Repeat(fmt.Sprintf("%02x", 0xA1+i), 32)+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		secret[id] = "@" + p
+	}
+	var rpcs []string
+	for _, nd := range nodes {
+		rpcs = append(rpcs, nd.rpcURL)
+	}
+	all := strings.Join(rpcs, ",")
+	evidence := "../proof/testdata/incarnation/kermit.json"
+	req := filepath.Join(dir, "spine-genesis.json")
+	if out, err := run("spine-genesis", "propose", "--chain-id", rotChain, "--evidence", evidence, "--incarnation", "0x"+strings.Repeat("ab", 32),
+		"--admin-key-id", "ops-1", "--admin-secret", secret["ops-1"], "--out", req); err == nil || !strings.Contains(out, "recomputes incarnation 0x"+kermitIncarnationHex) {
+		t.Fatalf("propose against another incarnation: %v\n%s", err, out)
+	}
+	if out, err := run("spine-genesis", "propose", "--chain-id", rotChain, "--evidence", evidence, "--incarnation", "0x"+kermitIncarnationHex,
+		"--admin-key-id", "ops-1", "--admin-secret", secret["ops-1"], "--out", req); err != nil {
+		t.Fatalf("propose: %v\n%s", err, out)
+	}
+	raw, err := os.ReadFile(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. No registry, no genesis - by the chain, signed or not, and by the preflight; then the registry.
 	if code, log, _ := submit(nodes[0], fx.genesis(t)); code != codeSpineGenesisRefused || !strings.Contains(log, "no BLS registry") {
 		t.Fatalf("a genesis before the registry: %d %s", code, log)
+	}
+	if out, err := run("spine-genesis", "preflight", "--tx", req, "--rpc", all); err == nil || !strings.Contains(out, "no BLS registry is in force") {
+		t.Fatalf("preflight before the registry: %v\n%s", err, out)
 	}
 	if code, log, _ := submit(nodes[1], rotJSON(t, fx.registry(1, "ops-1", "ops-2"))); code != 0 {
 		t.Fatalf("the registry: %d %s", code, log)
 	}
 
-	// 2. The genesis, then the archive in sequence through the other nodes.
-	code, log, hg := submit(nodes[2], fx.genesis(t))
-	if code != 0 {
-		t.Fatalf("the genesis: %d %s", code, log)
+	// 2. One admin's approval is not the quorum: the chain refuses it and the preflight says NO-GO. The second admin
+	// signs; the tool preflights and commits it. Then the archive in sequence through the other nodes.
+	if code, log, _ := submit(nodes[2], raw); code != codeSpineGenesisRefused || !strings.Contains(log, "Accumulate spine genesis") {
+		t.Fatalf("a genesis one admin signed: %d %s", code, log)
+	}
+	if out, err := run("spine-genesis", "preflight", "--tx", req, "--rpc", all); err == nil || !strings.Contains(out, "NO-GO") {
+		t.Fatalf("preflight with one approval: %v\n%s", err, out)
+	}
+	if out, err := run("spine-genesis", "sign", "--tx", req, "--admin-key-id", "ops-2", "--admin-secret", secret["ops-2"]); err != nil {
+		t.Fatalf("sign: %v\n%s", err, out)
+	}
+	if out, err := run("spine-genesis", "preflight", "--tx", req, "--rpc", all); err != nil {
+		t.Fatalf("preflight: %v\n%s", err, out)
+	}
+	out, err := run("spine-genesis", "submit", "--tx", req, "--rpc", all)
+	m := regexp.MustCompile(`ACCEPTED at height (\d+)`).FindStringSubmatch(out)
+	if err != nil || m == nil {
+		t.Fatalf("submit: %v\n%s", err, out)
+	}
+	hg, _ := strconv.ParseInt(m[1], 10, 64)
+	if out, err := run("spine-genesis", "preflight", "--tx", req, "--rpc", all); err == nil || !strings.Contains(out, "is replaced only when") {
+		t.Fatalf("preflight after the genesis: %v\n%s", err, out)
 	}
 	n := len(fx.records)
 	last := hg
@@ -116,9 +178,9 @@ func TestTheSpineOnALiveNetwork(t *testing.T) {
 			t.Fatalf("%s: %d accepted registries found in their records, want 1", nd.name, got)
 		}
 	}
-	out, err := exec.Command(tool, "history-check", "--rules", "13", "--rpc", nodes[3].rpcURL).CombinedOutput()
-	if err != nil || !strings.Contains(string(out), "v13 continues this chain's history exactly") ||
-		!strings.Contains(string(out), AccumulateSpineExtendKind) {
+	out, err = run("history-check", "--rules", "13", "--rpc", nodes[3].rpcURL)
+	if err != nil || !strings.Contains(out, "v13 continues this chain's history exactly") ||
+		!strings.Contains(out, AccumulateSpineExtendKind) || !strings.Contains(out, AccumulateSpineGenesisKind) {
 		t.Fatalf("history-check --rules 13: %v\n%s", err, out)
 	}
 	sameHashV13(t, nodes)

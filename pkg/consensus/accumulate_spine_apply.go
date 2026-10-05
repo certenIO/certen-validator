@@ -45,6 +45,16 @@ func (app *ValidatorApp) processAccumulateSpineGenesis(gt *AccumulateSpineGenesi
 		app.blockBundles = append(app.blockBundles, id)
 		return abcitypes.ExecTxResult{Code: 0, GasWanted: 1, GasUsed: 1}
 	}
+	// The admin quorum in force for this block authorises it (AdminSetAt): when the chain starts or moves its spine is
+	// a governed decision. (The same genesis again within its block, above, was authorised by its first copy.)
+	policy, err := app.ledgerStore.LoadEntitlementPolicy()
+	if err != nil {
+		// Judging without the admin set would decide here what nodes that can read it decide otherwise: a fork. Stop.
+		app.logger.Fatalf("❌ [SPINE] the committed policy (admin quorum) could not be read at height %d: %v", height, err)
+	}
+	if err := VerifyAccumulateSpineGenesisQuorum(gt, policy, height); err != nil {
+		return refuse(err.Error())
+	}
 	inc, why := app.spineRegistryIncarnation(height)
 	if why != "" {
 		return refuse(why)

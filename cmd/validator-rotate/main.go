@@ -120,6 +120,8 @@ func main() {
 		err = adminReseal(os.Args[2:], http.DefaultClient)
 	case "admin-rotate":
 		err = adminRotate(os.Args[2:], http.DefaultClient)
+	case "spine-genesis":
+		err = spineGenesis(os.Args[2:], http.DefaultClient)
 	case "-h", "--help", "help":
 		usage()
 		return
@@ -167,6 +169,11 @@ func usage() {
   admin-rotate sign       a current admin's approval, offline
   admin-rotate preflight  every node on rules v12 reports the same admin set, and the chain's rule accepts the rotation
   admin-rotate submit     preflight, then commit it (--dry-run: preflight only)
+
+  spine-genesis propose    the Accumulate spine genesis from verified incarnation evidence, first admin signature (rules v13)
+  spine-genesis sign       add another admin signature
+  spine-genesis preflight  every node on rules v13 agrees; the admin quorum signed it; it is the registry's incarnation
+  spine-genesis submit     preflight, then commit it and confirm it is recorded
 
 Run any subcommand with --help for its flags. The runbook is RUNBOOK_F95_CONSENSUS_KEY_ROTATION.md.
 `)
