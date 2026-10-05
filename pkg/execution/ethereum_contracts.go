@@ -2951,9 +2951,12 @@ func (ecm *EthereumContractManager) extractLegsForExecCommitment(
 			value.SetString(leg.AmountWei, 10)
 		}
 
+		// A leg that names no chain is not a Sepolia leg: binding a chain id nobody addressed it to would commit the
+		// call to the wrong chain. The intent's legs are refused, none extracted.
 		chainID := leg.ChainID
 		if chainID == 0 {
-			chainID = 11155111 // Default Sepolia
+			log.Printf("refused: leg %q of the intent names no chain id; no leg of it is extracted for an execution commitment", leg.LegID)
+			return nil
 		}
 
 		legs = append(legs, LegExecution{
