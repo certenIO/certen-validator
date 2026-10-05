@@ -194,6 +194,7 @@ The included `docker-compose.yml` deploys a complete testnet:
 | `TELCOIN_ADIRI_RPC_URL`, `TELCOIN_ADIRI_URL_FALLBACKS` | When 2017 is enabled | - | Telcoin Adiri (2017) RPC providers; Adiri is disabled by default |
 | `TELCOIN_ADIRI_MAX_GAS_PRICE_GWEI`, `TELCOIN_ADIRI_GAS_LIMIT_ANCHOR` | When 2017 is enabled | none compiled in | Gas ceiling (gwei of TEL) and anchor gas limit for Adiri |
 | `CERTEN_ANCHOR_V8_2017`, `CERTEN_OUTCOME_REGISTRY_2017` | When 2017 is enabled | - | Adiri anchor and outcome registry; plus `2017=v4` in `CERTEN_ACCOUNT_LEAF_VERSIONS` |
+| `CERTEN_NATIVE_USD_<chainId>` | For a chain not paying gas in ETH (2017) | - | That chain's native-token USD price for the dollar ceiling; `CERTEN_NATIVE_USD` prices only ETH-native chains |
 
 #### CometBFT Consensus
 
