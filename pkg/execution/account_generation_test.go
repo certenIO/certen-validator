@@ -116,6 +116,7 @@ var attemptFakeABI = func() abi.ABI {
 func (f *attemptFake) CallContract(_ context.Context, msg ethereum.CallMsg, _ *big.Int) ([]byte, error) {
 	if string(msg.Data[:4]) == string(contracts.AnchorsCallData([32]byte{})[:4]) {
 		out := make([]byte, 17*32)
+		out[9*32+31] = 1                    // timestamp: created at time 1, as every real anchor records its creation
 		out[11*32+31], out[12*32+31] = 1, 1 // valid, proofExecuted
 		return out, nil
 	}

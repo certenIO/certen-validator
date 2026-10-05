@@ -86,19 +86,19 @@ func TestAnchorAttestedBeforeTheAttempt(t *testing.T) {
 	id := [32]byte{0x5f}
 	receipt := &types.Receipt{BlockNumber: big.NewInt(5000), TransactionIndex: 3}
 	chain := &logChain{logs: []types.Log{{BlockNumber: 4990}}}
-	if ok, err := anchorAttestedBefore(context.Background(), chain, anchor, id, receipt); err != nil || !ok {
+	if ok, err := anchorAttestedBefore(context.Background(), chain, anchor, id, 0, receipt); err != nil || !ok {
 		t.Fatalf("attested 10 blocks earlier: %v %v", ok, err)
 	}
 	chain = &logChain{logs: []types.Log{{BlockNumber: 5000, TxIndex: 7}}}
-	if ok, _ := anchorAttestedBefore(context.Background(), chain, anchor, id, receipt); ok {
+	if ok, _ := anchorAttestedBefore(context.Background(), chain, anchor, id, 0, receipt); ok {
 		t.Fatal("an attestation later in the same block was taken as preceding the attempt")
 	}
 	chain = &logChain{logs: []types.Log{{BlockNumber: 5000, TxIndex: 1}}}
-	if ok, _ := anchorAttestedBefore(context.Background(), chain, anchor, id, receipt); !ok {
+	if ok, _ := anchorAttestedBefore(context.Background(), chain, anchor, id, 0, receipt); !ok {
 		t.Fatal("an attestation earlier in the same block was missed")
 	}
 	chain = &logChain{}
-	if ok, _ := anchorAttestedBefore(context.Background(), chain, anchor, id, receipt); ok {
+	if ok, _ := anchorAttestedBefore(context.Background(), chain, anchor, id, 0, receipt); ok {
 		t.Fatal("no attestation at all was taken as one")
 	}
 	if chain.calls < 2 {
@@ -110,6 +110,16 @@ type logChain struct {
 	attemptChain
 	logs  []types.Log
 	calls int
+	// blockTime is a block's time; nil: the block number itself.
+	blockTime func(n uint64) uint64
+}
+
+func (c *logChain) HeaderByNumber(_ context.Context, n *big.Int) (*types.Header, error) {
+	t := n.Uint64()
+	if c.blockTime != nil {
+		t = c.blockTime(n.Uint64())
+	}
+	return &types.Header{Number: new(big.Int).Set(n), Time: t}, nil
 }
 
 func (c *logChain) FilterLogs(_ context.Context, q ethereum.FilterQuery) ([]types.Log, error) {
