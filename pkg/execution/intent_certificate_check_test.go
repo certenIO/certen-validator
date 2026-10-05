@@ -155,14 +155,14 @@ func newStoredIntentCase(t *testing.T) *storedIntentCase {
 func TestAStoredProofsIntentCertificateIsCheckedOffline(t *testing.T) {
 	c := newStoredIntentCase(t)
 	pin, _ := hex32Of(kermitIncarnation)
-	got, err := CheckIntentCertificate(c.row, c.cp, c.levels, c.l5, &pin)
+	got, err := CheckIntentCertificate(c.row, c.cp, c.levels, c.l5, &pin, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.Signers != 5 || got.SignedPower != "500" || got.TotalPower != "700" || !got.IncarnationPinned {
 		t.Fatalf("check: %+v", got)
 	}
-	if _, err := CheckIntentCertificate(nil, c.cp, c.levels, c.l5, &pin); !errors.Is(err, ErrNoIntentCertificate) {
+	if _, err := CheckIntentCertificate(nil, c.cp, c.levels, c.l5, &pin, nil); !errors.Is(err, ErrNoIntentCertificate) {
 		t.Fatalf("no certificate: %v", err)
 	}
 }
@@ -226,7 +226,7 @@ func TestAStoredIntentCertificateThatIsNotTheProofsIsRefused(t *testing.T) {
 	} {
 		c := newStoredIntentCase(t)
 		pin := mut(c)
-		if _, err := CheckIntentCertificate(c.row, c.cp, c.levels, c.l5, pin); err == nil || errors.Is(err, ErrNoIntentCertificate) {
+		if _, err := CheckIntentCertificate(c.row, c.cp, c.levels, c.l5, pin, nil); err == nil || errors.Is(err, ErrNoIntentCertificate) {
 			t.Errorf("%s: %v", name, err)
 		}
 	}
@@ -241,16 +241,16 @@ func TestTheAnchoredBatchCommitsTheCertificate(t *testing.T) {
 	}
 	c.l5.Governance.Version = BatchOperationIDV3
 	c.l5.Governance.CertifiedIntentMessage = cert.Message
-	got, err := CheckIntentCertificate(c.row, c.cp, c.levels, c.l5, nil)
+	got, err := CheckIntentCertificate(c.row, c.cp, c.levels, c.l5, nil, nil)
 	if err != nil || !got.AnchoredInBatch {
 		t.Fatalf("anchored: %+v %v", got, err)
 	}
 	c.l5.Governance.CertifiedIntentMessage = "0x" + strings.Repeat("ee", 32)
-	if _, err := CheckIntentCertificate(c.row, c.cp, c.levels, c.l5, nil); err == nil {
+	if _, err := CheckIntentCertificate(c.row, c.cp, c.levels, c.l5, nil, nil); err == nil {
 		t.Fatal("a certificate over another message than the batch anchored was accepted")
 	}
 	c.l5.Governance.Version = BatchOperationIDV2
-	if got, err := CheckIntentCertificate(c.row, c.cp, c.levels, c.l5, nil); err != nil || got.AnchoredInBatch {
+	if got, err := CheckIntentCertificate(c.row, c.cp, c.levels, c.l5, nil, nil); err != nil || got.AnchoredInBatch {
 		t.Fatalf("a pre-v3 batch: %+v %v", got, err)
 	}
 }

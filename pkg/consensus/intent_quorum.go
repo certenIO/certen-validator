@@ -14,6 +14,7 @@ import (
 	"github.com/certen/independant-validator/pkg/crypto/bls_zkp"
 	"github.com/certen/independant-validator/pkg/database"
 	"github.com/certen/independant-validator/pkg/ledger"
+	proofv2 "github.com/certen/independant-validator/pkg/proof/v2"
 )
 
 // The per-intent quorum certificate (RB5 D3).
@@ -270,6 +271,11 @@ type IntentMessageInputs struct {
 	CertenSetRoot        string `json:"certen_set_root"`
 	KeyPageURL           string `json:"key_page_url"`
 	KeyBookURL           string `json:"key_book_url"`
+	// GovRootV3 and ProofV2 are set exactly for a v3 message (ProofV3Required at the certifying block): govRoot v3
+	// replaces GovRootV2 (then empty), and the proof v2 evidence it was computed from is kept so the certificate can
+	// be checked offline from the pinned incarnation alone.
+	GovRootV3 string            `json:"gov_root_v3,omitempty"`
+	ProofV2   *proofv2.Evidence `json:"proof_v2,omitempty"`
 }
 
 // intentCertificateRows is the persister's source of certificates: those the commit of height completed, for the
@@ -315,12 +321,22 @@ func (app *ValidatorApp) intentCertificateRows(height int64, blocks []ValidatorB
 			if reg == nil {
 				return nil, fmt.Errorf("operation %s was certified under registry v%d, which the ledger does not hold", op, c.RegistryVersion)
 			}
-			in, govRoot, accRoot, err := intentInputs(vb, app.cometChainID, reg)
+			// The block was accepted, so its certificate verified when it was judged: a v3 one carries its proof v2
+			// and govRoot v3, kept as claimed (CheckIntentCertificate verifies them again from genesis); the inputs
+			// common to v2 and v3 are recomputed from the block.
+			in, govRoot, accRoot, err := intentInputsV2(vb, app.cometChainID, reg)
 			if err != nil {
 				return nil, fmt.Errorf("operation %s: the inputs of its certified message: %w", op, err)
 			}
+			v2Root := "0x" + hex.EncodeToString(govRoot[:])
+			if ev.ProofV2 != nil {
+				if accRoot, err = hex32(ev.AccumulateSetRoot); err != nil {
+					return nil, fmt.Errorf("operation %s: its v3 certificate's Accumulate set root: %w", op, err)
+				}
+				v2Root = ""
+			}
 			inputs := IntentMessageInputs{CertenChainID: in.CertenChainID, OperationID: op,
-				GovRootV2: "0x" + hex.EncodeToString(govRoot[:]), AccumulateSetRoot: "0x" + hex.EncodeToString(accRoot[:]),
+				GovRootV2: v2Root, GovRootV3: ev.GovRootV3, ProofV2: ev.ProofV2, AccumulateSetRoot: "0x" + hex.EncodeToString(accRoot[:]),
 				Incarnation: "0x" + hex.EncodeToString(in.Incarnation[:]), GovernanceCommitment: "0x" + hex.EncodeToString(in.GovernanceCommitment[:]),
 				CertenSetRoot: "0x" + hex.EncodeToString(in.CertenSetRoot[:]), KeyPageURL: ev.KeyPageURL, KeyBookURL: ev.KeyBookURL}
 			certJSON, err := json.Marshal(c)

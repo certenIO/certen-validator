@@ -13,8 +13,11 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
+	"github.com/certen/independant-validator/pkg/database"
+	proofv2 "github.com/certen/independant-validator/pkg/proof/v2"
 	"os"
 
 	"github.com/google/uuid"
@@ -36,24 +39,29 @@ type Fixture struct {
 	// Authorization and VoteEvidence are the G1 level's vote record and its evidence.
 	Authorization json.RawMessage `json:"authorization"`
 	VoteEvidence  json.RawMessage `json:"vote_evidence"`
+	// ProofV2 is the intent's stored proof v2 evidence and Archive the Directory's major records it builds on (from
+	// major block 1, MarshalArchive), when the intent has a verified v2 build; verified on extraction.
+	ProofV2 json.RawMessage `json:"proof_v2,omitempty"`
+	Archive json.RawMessage `json:"archive,omitempty"`
 }
 
 func main() {
 	dsn := flag.String("db", os.Getenv("CERTEN_DB"), "PostgreSQL DSN (a read-only session)")
 	prefix := flag.String("proof-prefix", "", "a proof id, or a prefix of exactly one")
 	out := flag.String("out", "", "file to write")
+	incEv := flag.String("incarnation-evidence", "", "the incarnation's genesis evidence (JSON), to verify the intent's proof v2 on extraction")
 	flag.Parse()
 	if *dsn == "" || *prefix == "" || *out == "" {
 		fmt.Fprintln(os.Stderr, "usage: prooffixture --db <dsn> --proof-prefix <id or prefix> --out <file>")
 		os.Exit(2)
 	}
-	if err := run(*dsn, *prefix, *out); err != nil {
+	if err := run(*dsn, *prefix, *out, *incEv); err != nil {
 		fmt.Fprintln(os.Stderr, "prooffixture:", err)
 		os.Exit(1)
 	}
 }
 
-func run(dsn, prefix, out string) error {
+func run(dsn, prefix, out, incPath string) error {
 	ctx := context.Background()
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
@@ -120,6 +128,9 @@ func run(dsn, prefix, out string) error {
 	if err := certenproof.VerifyVoteEvidence(ctx, &g0, ev, &rec); err != nil {
 		return fmt.Errorf("the vote record does not evaluate again from its evidence: %w", err)
 	}
+	if err := withProofV2(ctx, db, &f, incPath); err != nil {
+		return fmt.Errorf("proof v2: %w", err)
+	}
 	b, err := json.MarshalIndent(f, "", " ")
 	if err != nil {
 		return err
@@ -129,4 +140,56 @@ func run(dsn, prefix, out string) error {
 	}
 	fmt.Printf("proof %s: L1-L4 verified, vote record evaluated again from its evidence; %d bytes to %s\n", f.ProofID, len(b), out)
 	return nil
+}
+
+// withProofV2 adds the intent's verified proof v2 and the major records it builds on, if the intent has one.
+func withProofV2(ctx context.Context, db *sql.DB, f *Fixture, incPath string) error {
+	var raw []byte
+	err := db.QueryRowContext(ctx, `SELECT s.evidence FROM proof_v2_shadow s JOIN proof_artifacts a ON a.intent_id::text = s.intent_id
+		WHERE a.proof_id = $1 AND s.evidence IS NOT NULL AND s.verdict = 'verified'`, f.ProofID).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var ev proofv2.Evidence
+	if err := json.Unmarshal(raw, &ev); err != nil {
+		return err
+	}
+	recs, err := database.NewProofV2ShadowRepository(database.NewClientFromDB(db)).Spine(ctx)
+	if err != nil {
+		return err
+	}
+	need := max(ev.Majors, ev.Check.Majors)
+	if uint64(len(recs)) < need {
+		return fmt.Errorf("the evidence builds on %d major blocks; %d are stored", need, len(recs))
+	}
+	ar, err := proofv2.ArchiveFromRecords(recs[:need])
+	if err != nil {
+		return err
+	}
+	if incPath == "" {
+		return fmt.Errorf("the intent has a proof v2: pass --incarnation-evidence to verify it on extraction")
+	}
+	b, err := os.ReadFile(incPath)
+	if err != nil {
+		return err
+	}
+	var inc certenproof.IncarnationEvidence
+	if err := json.Unmarshal(b, &inc); err != nil {
+		return err
+	}
+	rep, err := inc.Verify()
+	if err != nil {
+		return err
+	}
+	if _, err := proofv2.VerifyFromGenesis(&ev, ar, rep.Inputs, rep.Incarnation); err != nil {
+		return fmt.Errorf("the stored evidence does not verify: %w", err)
+	}
+	if f.ProofV2, err = json.Marshal(&ev); err != nil {
+		return err
+	}
+	f.Archive, err = proofv2.MarshalArchive(ar)
+	return err
 }

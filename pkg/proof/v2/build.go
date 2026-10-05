@@ -75,6 +75,38 @@ func NewBuilder(ctx context.Context, c *jsonrpc.Client, q proof.AccumulateQuerie
 	return b, nil
 }
 
+// NewBuilderFromArchive is NewBuilder that walks the given major records instead of fetching them, and then follows
+// the network through c as NewBuilder's does. The records are verified by the walk, as fetched ones are.
+func NewBuilderFromArchive(c *jsonrpc.Client, q proof.AccumulateQuerier, inc *proof.IncarnationEvidence, pinned [32]byte, ar *Archive) (*Builder, error) {
+	ir, err := inc.Verify()
+	if err != nil {
+		return nil, fmt.Errorf("incarnation evidence: %w", err)
+	}
+	if ir.Incarnation != pinned {
+		return nil, fmt.Errorf("incarnation evidence is for %x, not the pinned %x", ir.Incarnation, pinned)
+	}
+	g, err := genesisValues(ir.Inputs.NetworkRecord, ir.Inputs.GlobalsRecord)
+	if err != nil {
+		return nil, err
+	}
+	sp, err := NewSpine(g, 1)
+	if err != nil {
+		return nil, err
+	}
+	b := &Builder{C: c, Q: q, inc: pinned, incEv: inc, ar: &Archive{}}
+	for _, r := range ar.Majors {
+		if err := sp.Advance(r); err != nil {
+			return nil, fmt.Errorf("spine: %w", err)
+		}
+		b.ar.Majors = append(b.ar.Majors, r)
+		b.majors = append(b.majors, sp.Clone())
+	}
+	if len(b.majors) == 0 {
+		return nil, fmt.Errorf("the archive holds no major block")
+	}
+	return b, nil
+}
+
 // Archive returns the major records walked so far.
 func (b *Builder) Archive() *Archive {
 	_, ar := b.view(0)

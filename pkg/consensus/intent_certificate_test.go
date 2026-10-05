@@ -81,7 +81,7 @@ func intentBlock(t *testing.T, validatorID string) *ValidatorBlock {
 func buildCert(t *testing.T, vb *ValidatorBlock, reg *ledger.BLSRegistryRecord, sk *bls.PrivateKey) error {
 	t.Helper()
 	f := loadIntentFixture(t)
-	return BuildIntentCertificate(vb, intentChain, reg, sk, intentKeyPage, intentKeyBook, f.record(t), f.VoteEvidence, f.ChainedProof)
+	return BuildIntentCertificate(vb, intentChain, reg, sk, intentKeyPage, intentKeyBook, f.record(t), f.VoteEvidence, f.ChainedProof, nil, nil)
 }
 
 func intentRegistry(t *testing.T) (*registryFixture, *ledger.BLSRegistryRecord) {
@@ -106,7 +106,7 @@ func builtIntentBlock(t *testing.T) (*registryFixture, *ledger.BLSRegistryRecord
 
 func TestAnIntentCertificateIsRecomputedFromTheBlockAndVerified(t *testing.T) {
 	_, reg, vb := builtIntentBlock(t)
-	msg, err := VerifyIntentCertificate(vb, intentChain, reg)
+	msg, err := VerifyIntentCertificate(vb, intentChain, reg, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +122,7 @@ func TestAnIntentCertificateIsRecomputedFromTheBlockAndVerified(t *testing.T) {
 	if err := json.Unmarshal(b, &back); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := VerifyIntentCertificate(&back, intentChain, reg); err != nil {
+	if _, err := VerifyIntentCertificate(&back, intentChain, reg, nil); err != nil {
 		t.Fatalf("after a JSON round trip: %v", err)
 	}
 }
@@ -266,7 +266,7 @@ func TestAnIntentCertificateRefusesWhatItDoesNotProve(t *testing.T) {
 		_, reg2, vb := builtIntentBlock(t)
 		_ = reg
 		vb, r, chain := c.mut(vb, reg2)
-		if _, err := VerifyIntentCertificate(vb, chain, r); !errors.Is(err, c.want) {
+		if _, err := VerifyIntentCertificate(vb, chain, r, nil); !errors.Is(err, c.want) {
 			t.Errorf("%s: got %v, want %v", name, err, c.want)
 		}
 	}
@@ -351,7 +351,7 @@ func TestOnePageNamedTwoWaysIsOneMessage(t *testing.T) {
 	_, reg, vb := builtIntentBlock(t)
 	vb.IntentCertificate.KeyPageURL = "acc://RB4-Phase-C-09282125.acme/book/1/"
 	vb.IntentCertificate.KeyBookURL = "ACC://rb4-phase-c-09282125.ACME/book"
-	if _, err := VerifyIntentCertificate(vb, intentChain, reg); err != nil {
+	if _, err := VerifyIntentCertificate(vb, intentChain, reg, nil); err != nil {
 		t.Fatalf("the same page spelled differently: %v", err)
 	}
 }

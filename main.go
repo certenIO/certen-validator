@@ -2200,8 +2200,11 @@ func startValidator(
 		intentDiscovery.SetRepositories(batchComponents.Repos)
 		log.Printf("✅ Intent lifecycle tracking wired to intent discovery")
 
-		// Proof v2 in shadow (RB6 Phase A): built beside every v1 proof, never feeding govRoot. PROOF_V2_SHADOW=off
-		// turns it off; it starts in the background and cannot hold up or fail an intent.
+		// Proof v2 (RB6): built beside every v1 proof in the background until the chain requires the v3 intent
+		// certificate (consensus state, the gate), then built for every intent's certificate, which fails closed
+		// without it. PROOF_V2_SHADOW=off turns the prover off: before v3 that only stops the shadow; after, every
+		// intent refuses by name, because no certificate can be built without it.
+		intentDiscovery.SetProofV2Gate(validatorApp)
 		if os.Getenv("PROOF_V2_SHADOW") != "off" {
 			if pin, perr := consensus.AccumulateIncarnation(); perr != nil {
 				log.Printf("⚠️ [PROOF-V2-SHADOW] not started: %v", perr)
@@ -2209,6 +2212,9 @@ func startValidator(
 				shadow := proofv2shadow.NewLazy(database.NewProofV2ShadowRepository(dbClient), log.Printf)
 				intentDiscovery.SetProofV2Shadow(shadow)
 				go shadow.Start(strings.TrimSuffix(cfg.AccumulateURL, "/")+"/v3", pin)
+				// Keep the chain's Accumulate spine current (rules v13): the genesis, then each major block as
+				// Accumulate closes it. Every validator proposes the same transactions; the chain verifies them.
+				go shadow.ExtendSpine(context.Background(), validatorApp, cometEngine.BroadcastAppTxSync)
 			}
 		}
 

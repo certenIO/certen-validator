@@ -50,6 +50,23 @@ func (r *ProofV2ShadowRepository) Captured(ctx context.Context, intentID string)
 	return raw, true, nil
 }
 
+// CaptureResult returns an intent's capture once it is recorded: the pages (JSON, nil when none could be read), the
+// named reason the capture fell short ("" when it did not), and whether a capture has been recorded at all.
+func (r *ProofV2ShadowRepository) CaptureResult(ctx context.Context, intentID string) ([]byte, string, bool, error) {
+	var raw []byte
+	var captureErr string
+	var done bool
+	err := r.client.DB().QueryRowContext(ctx, `SELECT captured, COALESCE(capture_error, ''), captured_at IS NOT NULL
+		FROM proof_v2_shadow WHERE intent_id = $1`, intentID).Scan(&raw, &captureErr, &done)
+	if err == sql.ErrNoRows {
+		return nil, "", false, nil
+	}
+	if err != nil {
+		return nil, "", false, err
+	}
+	return raw, captureErr, done, nil
+}
+
 // ProofV2Result is what one shadow build established.
 type ProofV2Result struct {
 	IntentID, TxHash, Account string

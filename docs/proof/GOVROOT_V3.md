@@ -10,9 +10,40 @@ govRoot is the per-intent commitment every validator signs into the intent certi
 - `pkg/consensus/intent_certificate.go` computes it at consensus;
 - `pkg/execution/intent_certificate_check.go` re-computes it before execution.
 
-v3 replaces v2 at both sites from an activation height on: the Accumulate Directory block height
-`PROOF_V3_ACTIVATION_DN_BLOCK`, compared with the intent's certified Directory block. Every validator flips at the same
-block, so the switch is atomic without coordinated restarts. Before the height, v2 is computed exactly as today.
+v3 replaces v2 at both sites once the chain requires it, which is consensus state, not configuration
+(`consensus.ProofV3Required`). It is required exactly when CERTEN's chain holds a verified Accumulate spine under the
+incarnation of the BLS registry in force, with at least one verified major block. Every validator reads the same
+committed state, so all of them flip at the same CERTEN block without coordinated restarts. The act that flips it is
+the spine's acceptance under execution rules v13 (the next section). Before then, v2 is computed exactly as today, and
+a block carrying a v3 certificate is refused (`ErrIntentProofV3NotInForce`). After, a block without one is refused
+(`ErrIntentProofV2Missing`). An earlier draft used a per-node `PROOF_V3_ACTIVATION_DN_BLOCK`; that was dropped,
+because a node configured differently would fork.
+
+## The consensus-held spine (execution rules v13)
+
+A proof v2 is judged inside FinalizeBlock, where no I/O is allowed, against the validator-set spine CERTEN's chain
+holds (`ledger.AccumulateSpineLog`, `proofv2.VerifyFromSpine`). Two consensus transactions build it:
+- `certen.accumulate.spine.genesis/v1` carries the incarnation's genesis facts. It is accepted only if they recompute
+  the BLS registry's `accumulate_incarnation`, so genesis and incarnation are part of CERTEN's chain rules. A registry
+  update to a new incarnation (an Accumulate restart, itself a governed admin act) lets a new genesis replace the spine.
+- `certen.accumulate.spine.extend/v1` carries the next major-block records. Every validator verifies them
+  deterministically from the last checkpoint (`proofv2.ExtendSpine`), and the chain stores one compact checkpoint per
+  major block: last minor block, root and state anchors, set hash and network-update count. A full validator set is
+  stored only when it changes.
+
+A proposer builds its evidence on no more major blocks than the chain has verified (`Builder.BuildBounded`), so the
+evidence starts at an agreed checkpoint, and its own minor-root runs cover the rest. Offline, the same evidence verifies
+from the pinned incarnation's genesis by walking the stored major records (`proofverify --incarnation-evidence`).
+
+## Binding the levels to the proof (`intentcert.BindProofV2`)
+
+govRoot v3 commits the report's facts and the G0-G2 hashes side by side. Consensus and the offline check also require:
+- G0's execution entry is the report's transaction, and G0's receipt starts there;
+- G0's execution witness and block are the root and block of the partition anchor the transaction's receipt passes
+  through. This proves that the anchor block is the execution block (RB6-F14), which the report alone does not;
+- the key page G1 validated against is the certified key page, and it is one of the proven pages.
+
+The spine-derived Accumulate set root must also equal the L4 leg's, so one anchor commits one set.
 
 ## Determinism
 

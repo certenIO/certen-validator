@@ -32,11 +32,24 @@ import (
 	"github.com/certen/independant-validator/pkg/intentcert"
 	"github.com/certen/independant-validator/pkg/ledger"
 	certenproof "github.com/certen/independant-validator/pkg/proof"
+	proofv2 "github.com/certen/independant-validator/pkg/proof/v2"
 )
 
 // ErrNoIntentCertificate: no quorum certificate is recorded for the proof's operation - it settled before a BLS
 // registry was in force. Nothing about the proof is known to be wrong.
 var ErrNoIntentCertificate = errors.New("no intent quorum certificate is recorded for the proof's operation")
+
+// ErrProofV2TrustMissing: the certificate is v3, and no trust base was given to verify its proof v2 from. Nothing about
+// the proof is known to be wrong.
+var ErrProofV2TrustMissing = errors.New("the certified message is v3; its proof v2 needs the Directory's major-block records and the incarnation's genesis evidence to verify")
+
+// ProofV2Trust is what a v3 certificate's proof v2 is checked from offline: the Directory's major-block records and the
+// genesis inputs of the incarnation, which must recompute the registry's (and any pinned) incarnation. The records are
+// not trusted - the spine walks them from genesis - so any copy serves.
+type ProofV2Trust struct {
+	Archive *proofv2.Archive
+	Inputs  certenproof.IncarnationInputs
+}
 
 // IntentCertificateCheck is what CheckIntentCertificate established.
 type IntentCertificateCheck struct {
@@ -52,11 +65,15 @@ type IntentCertificateCheck struct {
 	IncarnationPinned bool
 	// AnchoredInBatch: the proof's batch is v3 and its anchored operation id commits this certified message.
 	AnchoredInBatch bool
+	// ProofV3: the certified message is v3 - govRoot v3 over the proof v2 the certificate carries, verified here
+	// from the incarnation's genesis.
+	ProofV3 bool
 }
 
-// CheckIntentCertificate checks row, the certificate recorded for the proof's operation, against the stored proof.
+// CheckIntentCertificate checks row, the certificate recorded for the proof's operation, against the stored proof. A
+// v3 certificate also needs trust, from which its proof v2 is verified; a v2 certificate ignores it.
 func CheckIntentCertificate(row *database.IntentQuorumCertificateRow, cp *chained_proof.ChainedProof,
-	levels []certenproof.StoredGovernanceLevel, l5 *Layer5, pinned *[32]byte) (*IntentCertificateCheck, error) {
+	levels []certenproof.StoredGovernanceLevel, l5 *Layer5, pinned *[32]byte, trust *ProofV2Trust) (*IntentCertificateCheck, error) {
 	if row == nil {
 		return nil, ErrNoIntentCertificate
 	}
@@ -163,18 +180,37 @@ func CheckIntentCertificate(row *database.IntentQuorumCertificateRow, cp *chaine
 	}
 	recomputed := intentcert.MessageInputs{CertenChainID: row.CertenChainID, OperationID: opBytes, GovRootV2: govRoot,
 		AccumulateSetRoot: accRoot, Incarnation: inc, GovernanceCommitment: certenproof.GovernanceCommitment(gdr), CertenSetRoot: setRoot}
+	v3 := in.GovRootV3 != "" || in.ProofV2 != nil
+	rootName, claimedRoot, isRoot := "govRoot v2", in.GovRootV2, govRoot
+	if v3 {
+		if in.GovRootV2 != "" {
+			return nil, fmt.Errorf("the certified message claims both govRoot v2 %s and govRoot v3 %s", in.GovRootV2, in.GovRootV3)
+		}
+		govRoot3, err := checkProofV2(in, trust, inc, opBytes, accRoot, &g0, &g1, &g2)
+		if err != nil {
+			return nil, err
+		}
+		rootName, claimedRoot, isRoot = "govRoot v3", in.GovRootV3, govRoot3
+	}
 	for _, c := range []struct {
 		name    string
 		claimed string
 		is      [32]byte
-	}{{"govRoot v2", in.GovRootV2, recomputed.GovRootV2}, {"Accumulate set root", in.AccumulateSetRoot, recomputed.AccumulateSetRoot},
+	}{{rootName, claimedRoot, isRoot}, {"Accumulate set root", in.AccumulateSetRoot, recomputed.AccumulateSetRoot},
 		{"governance commitment", in.GovernanceCommitment, recomputed.GovernanceCommitment}, {"incarnation", in.Incarnation, inc},
 		{"CERTEN set root", in.CertenSetRoot, setRoot}} {
 		if got, err := hex32Of(c.claimed); err != nil || got != c.is {
 			return nil, fmt.Errorf("the certified %s %s is not the stored proof's %x", c.name, c.claimed, c.is)
 		}
 	}
-	msg, err := intentcert.Message(recomputed)
+	var msg [32]byte
+	if v3 {
+		msg, err = intentcert.MessageV3(intentcert.MessageInputsV3{CertenChainID: recomputed.CertenChainID, OperationID: opBytes,
+			GovRootV3: isRoot, AccumulateSetRoot: accRoot, Incarnation: inc, GovernanceCommitment: recomputed.GovernanceCommitment,
+			CertenSetRoot: setRoot})
+	} else {
+		msg, err = intentcert.Message(recomputed)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -192,7 +228,37 @@ func CheckIntentCertificate(row *database.IntentQuorumCertificateRow, cp *chaine
 	}
 	return &IntentCertificateCheck{OperationID: op, Message: "0x" + hex.EncodeToString(msg[:]), CertenChainID: row.CertenChainID,
 		RegistryVersion: reg.Version, Signers: len(cert.Signers), SignedPower: cert.SignedPower, TotalPower: cert.TotalPower,
-		CertifiedHeight: row.CertifiedHeight, IncarnationPinned: pinned != nil, AnchoredInBatch: anchored}, nil
+		CertifiedHeight: row.CertifiedHeight, IncarnationPinned: pinned != nil, AnchoredInBatch: anchored, ProofV3: v3}, nil
+}
+
+// checkProofV2 verifies a v3 certificate's proof v2 from the incarnation's genesis and returns its govRoot v3: what
+// consensus checked against the chain's spine (consensus.VerifyIntentCertificate), checked again with no chain - the
+// same binding to G0 and G1, and the same set root as the stored Directory leg's (accRoot).
+func checkProofV2(in consensus.IntentMessageInputs, trust *ProofV2Trust, inc, op, accRoot [32]byte,
+	g0 *certenproof.G0Result, g1 *certenproof.G1Result, g2 *certenproof.G2Result) ([32]byte, error) {
+	var zero [32]byte
+	switch {
+	case in.ProofV2 == nil || in.GovRootV3 == "":
+		return zero, fmt.Errorf("the certified v3 message does not keep both its govRoot v3 and its proof v2")
+	case trust == nil || trust.Archive == nil:
+		return zero, ErrProofV2TrustMissing
+	}
+	rep, err := proofv2.VerifyFromGenesis(in.ProofV2, trust.Archive, trust.Inputs, inc)
+	if err != nil {
+		return zero, fmt.Errorf("the certified proof v2: %w", err)
+	}
+	if err := intentcert.BindProofV2(rep, g0, g1, in.KeyPageURL); err != nil {
+		return zero, err
+	}
+	if rep.AccumulateSetRoot != accRoot {
+		return zero, fmt.Errorf("the certified proof v2 derives Accumulate set root %x, the stored Directory leg %x", rep.AccumulateSetRoot, accRoot)
+	}
+	root, _, err := intentcert.GovRootV3(intentcert.GovRootV3Inputs{Report: rep, Evidence: in.ProofV2, G0: g0, G1: g1, G2: g2,
+		KeyPageURL: in.KeyPageURL, KeyBookURL: in.KeyBookURL, OperationID: op})
+	if err != nil {
+		return zero, fmt.Errorf("govRoot v3 from the certified proof v2: %w", err)
+	}
+	return root, nil
 }
 
 func hex32Of(s string) ([32]byte, error) {

@@ -411,12 +411,21 @@ func UnmarshalArchive(j []byte) (*Archive, error) {
 	if err := json.Unmarshal(j, &in); err != nil {
 		return nil, err
 	}
-	ar := &Archive{Majors: make([]*api.MajorHeaderRecord, len(in))}
+	recs := make([][]byte, len(in))
 	for i, h := range in {
 		b, err := hex.DecodeString(h)
 		if err != nil {
 			return nil, fmt.Errorf("major %d: %w", i+1, err)
 		}
+		recs[i] = b
+	}
+	return ArchiveFromRecords(recs)
+}
+
+// ArchiveFromRecords decodes major records in their binary encoding, from major block 1, as the validator stores them.
+func ArchiveFromRecords(recs [][]byte) (*Archive, error) {
+	ar := &Archive{Majors: make([]*api.MajorHeaderRecord, len(recs))}
+	for i, b := range recs {
 		r := new(api.MajorHeaderRecord)
 		if err := r.UnmarshalBinary(b); err != nil {
 			return nil, fmt.Errorf("major %d: %w", i+1, err)

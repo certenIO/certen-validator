@@ -17,6 +17,7 @@ import (
 	"github.com/certen/independant-validator/pkg/intentcert"
 	"github.com/certen/independant-validator/pkg/ledger"
 	govproof "github.com/certen/independant-validator/pkg/proof"
+	proofv2 "github.com/certen/independant-validator/pkg/proof/v2"
 )
 
 // The per-intent signature CERTEN's quorum certifies (RB5 D3).
@@ -45,10 +46,15 @@ type IntentCertificateEvidence struct {
 	// ChainedProof is the full L1-L4 proof the block's lite_client_proof is the projection of. It is verified, and
 	// the projection required to be exactly the block's (RB5-F11).
 	ChainedProof      *chained_proof.ChainedProof `json:"chained_proof"`
-	GovRootV2         string                      `json:"gov_root_v2"`         // hex32, claimed
+	GovRootV2         string                      `json:"gov_root_v2"`         // hex32, claimed; empty under v3
 	AccumulateSetRoot string                      `json:"accumulate_set_root"` // hex32, claimed
-	Message           string                      `json:"message"`             // hex32, claimed
-	Signature         string                      `json:"signature"`           // hex G1 (compressed), over Message
+	// ProofV2 and GovRootV3 are carried exactly when the chain requires the v3 certificate (ProofV3Required): the
+	// proof v2 evidence, judged against the chain's own spine, and the govRoot v3 it gives. Absent, the block encodes
+	// byte for byte as before v3.
+	ProofV2   *proofv2.Evidence `json:"proof_v2,omitempty"`
+	GovRootV3 string            `json:"gov_root_v3,omitempty"` // hex32, claimed
+	Message   string            `json:"message"`               // hex32, claimed
+	Signature string            `json:"signature"`             // hex G1 (compressed), over Message
 }
 
 // Refusals of an intent certificate, each by name.
@@ -62,10 +68,80 @@ var (
 	ErrIntentSignatureInvalid      = errors.New("the intent signature does not verify against the validator's registered BLS key")
 	ErrIntentGovernanceUnderivable = errors.New("the governance commitment cannot be derived from the block")
 	ErrIntentInputsMissing         = errors.New("the block lacks an input of its intent message")
+	ErrIntentProofV2Missing        = errors.New("the chain requires the v3 intent certificate, and the block carries no proof v2")
+	ErrIntentProofV3NotInForce     = errors.New("the block carries a v3 intent certificate, which the chain does not require yet")
+	ErrIntentProofV2Invalid        = errors.New("the block's proof v2 does not verify against the chain's Accumulate spine")
 )
 
+// ProofV3Required is whether a block judged with spine (the chain's Accumulate spine as committed for its height) and
+// registry reg must carry the v3 intent certificate: exactly when the chain holds a spine under the registry's
+// incarnation with at least one verified major block. That is consensus state, so every validator switches at the
+// same block, and the switch is the governed act that put the spine there (rules v13), never a node's configuration.
+// A registry update to another incarnation (an Accumulate restart) leaves the old spine behind, and v3 is required
+// again only once a spine for the new incarnation is verified.
+func ProofV3Required(spine *ledger.AccumulateSpineLog, reg *ledger.BLSRegistryRecord) bool {
+	if spine == nil || spine.Genesis == nil || reg == nil || len(spine.Checkpoints) == 0 {
+		return false
+	}
+	return strings.EqualFold(strings.TrimPrefix(spine.Genesis.Incarnation, "0x"), strings.TrimPrefix(reg.AccumulateIncarnation, "0x"))
+}
+
+// intentFacts is every input of a block's intent message, recomputed from the block, and which message it is.
+type intentFacts struct {
+	v3      bool
+	in      intentcert.MessageInputs
+	in3     intentcert.MessageInputsV3
+	govRoot [32]byte // v2 or v3, as v3 says
+	accRoot [32]byte
+}
+
+func (f *intentFacts) message() ([32]byte, error) {
+	if f.v3 {
+		return intentcert.MessageV3(f.in3)
+	}
+	return intentcert.Message(f.in)
+}
+
 // intentInputs recomputes every input of the block's intent message from the block and the registry.
-func intentInputs(vb *ValidatorBlock, chainID string, reg *ledger.BLSRegistryRecord) (intentcert.MessageInputs, [32]byte, [32]byte, error) {
+func intentInputs(vb *ValidatorBlock, chainID string, reg *ledger.BLSRegistryRecord, spine *ledger.AccumulateSpineLog) (*intentFacts, error) {
+	in, govRoot, accRoot, err := intentInputsV2(vb, chainID, reg)
+	if err != nil {
+		return nil, err
+	}
+	if !ProofV3Required(spine, reg) {
+		return &intentFacts{in: in, govRoot: govRoot, accRoot: accRoot}, nil
+	}
+	ev, gp := vb.IntentCertificate, &vb.GovernanceProof
+	if ev.ProofV2 == nil {
+		return nil, ErrIntentProofV2Missing
+	}
+	rep, err := proofv2.VerifyFromSpine(ev.ProofV2, spine, in.Incarnation)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrIntentProofV2Invalid, err)
+	}
+	if err := intentcert.BindProofV2(rep, gp.G0Proof, gp.G1Proof, ev.KeyPageURL); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrIntentProofV2Invalid, err)
+	}
+	// One anchor commits one Accumulate set root: the set the spine derived must be the set the L4 leg was verified
+	// against, or the two proofs describe different validator sets and the intent is refused rather than certified
+	// under either.
+	if rep.AccumulateSetRoot != accRoot {
+		return nil, fmt.Errorf("%w: the spine derives set root %x, the L4 leg %x", ErrIntentAccumulateSetMismatch, rep.AccumulateSetRoot, accRoot)
+	}
+	govRoot3, _, err := intentcert.GovRootV3(intentcert.GovRootV3Inputs{Report: rep, Evidence: ev.ProofV2, G0: gp.G0Proof,
+		G1: gp.G1Proof, G2: gp.G2Proof, KeyPageURL: ev.KeyPageURL, KeyBookURL: ev.KeyBookURL, OperationID: in.OperationID})
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrIntentGovRootMismatch, err)
+	}
+	return &intentFacts{v3: true, in: in, govRoot: govRoot3, accRoot: rep.AccumulateSetRoot,
+		in3: intentcert.MessageInputsV3{CertenChainID: in.CertenChainID, OperationID: in.OperationID, GovRootV3: govRoot3,
+			AccumulateSetRoot: rep.AccumulateSetRoot, Incarnation: in.Incarnation, GovernanceCommitment: in.GovernanceCommitment,
+			CertenSetRoot: in.CertenSetRoot}}, nil
+}
+
+// intentInputsV2 recomputes the v2 message's inputs: govRoot v2 over the L1-L4 proof and G0-G2, and the set root of
+// the L4 leg. Under v3 they are still recomputed - the v1 proof is still verified, and its set root must agree.
+func intentInputsV2(vb *ValidatorBlock, chainID string, reg *ledger.BLSRegistryRecord) (intentcert.MessageInputs, [32]byte, [32]byte, error) {
 	ev := vb.IntentCertificate
 	var in intentcert.MessageInputs
 	var govRoot, accRoot [32]byte
@@ -119,7 +195,10 @@ func registryMember(reg *ledger.BLSRegistryRecord, validatorID string) *ledger.B
 
 // VerifyIntentCertificate judges a ValidatorBlock's intent signature against the registry in force at its height
 // (reg) on CERTEN chain chainID. It returns the recomputed message.
-func VerifyIntentCertificate(vb *ValidatorBlock, chainID string, reg *ledger.BLSRegistryRecord) ([32]byte, error) {
+//
+// spine is the chain's Accumulate spine as committed for the block's height; it decides whether the certificate must
+// be v3 (ProofV3Required), and a v3 certificate's proof v2 is judged against it.
+func VerifyIntentCertificate(vb *ValidatorBlock, chainID string, reg *ledger.BLSRegistryRecord, spine *ledger.AccumulateSpineLog) ([32]byte, error) {
 	ev := vb.IntentCertificate
 	if ev == nil {
 		return [32]byte{}, ErrIntentCertificateMissing
@@ -131,7 +210,11 @@ func VerifyIntentCertificate(vb *ValidatorBlock, chainID string, reg *ledger.BLS
 	if member == nil {
 		return [32]byte{}, fmt.Errorf("%w: %q", ErrIntentSignerNotRegistered, vb.ValidatorID)
 	}
-	in, govRoot, accRoot, err := intentInputs(vb, chainID, reg)
+	v3 := ProofV3Required(spine, reg)
+	if !v3 && (ev.ProofV2 != nil || ev.GovRootV3 != "") {
+		return [32]byte{}, ErrIntentProofV3NotInForce
+	}
+	f, err := intentInputs(vb, chainID, reg, spine)
 	if err != nil {
 		return [32]byte{}, err
 	}
@@ -142,13 +225,18 @@ func VerifyIntentCertificate(vb *ValidatorBlock, chainID string, reg *ledger.BLS
 	if err := verifyIntentProof(vb, rec); err != nil {
 		return [32]byte{}, err
 	}
-	if !hexEquals(ev.GovRootV2, govRoot) {
-		return [32]byte{}, fmt.Errorf("%w: claims %s, is %x", ErrIntentGovRootMismatch, ev.GovRootV2, govRoot)
+	switch {
+	case v3 && ev.GovRootV2 != "":
+		return [32]byte{}, fmt.Errorf("%w: a v3 certificate claims govRoot v2 %s", ErrIntentGovRootMismatch, ev.GovRootV2)
+	case v3 && !hexEquals(ev.GovRootV3, f.govRoot):
+		return [32]byte{}, fmt.Errorf("%w: claims govRoot v3 %s, is %x", ErrIntentGovRootMismatch, ev.GovRootV3, f.govRoot)
+	case !v3 && !hexEquals(ev.GovRootV2, f.govRoot):
+		return [32]byte{}, fmt.Errorf("%w: claims %s, is %x", ErrIntentGovRootMismatch, ev.GovRootV2, f.govRoot)
 	}
-	if !hexEquals(ev.AccumulateSetRoot, accRoot) {
-		return [32]byte{}, fmt.Errorf("%w: claims %s, is %x", ErrIntentAccumulateSetMismatch, ev.AccumulateSetRoot, accRoot)
+	if !hexEquals(ev.AccumulateSetRoot, f.accRoot) {
+		return [32]byte{}, fmt.Errorf("%w: claims %s, is %x", ErrIntentAccumulateSetMismatch, ev.AccumulateSetRoot, f.accRoot)
 	}
-	msg, err := intentcert.Message(in)
+	msg, err := f.message()
 	if err != nil {
 		return [32]byte{}, fmt.Errorf("%w: %v", ErrIntentInputsMissing, err)
 	}
@@ -178,7 +266,7 @@ func VerifyIntentCertificate(vb *ValidatorBlock, chainID string, reg *ledger.BLS
 // message with sk, then checks its own result with the verifier - a block this node would refuse is never built.
 func BuildIntentCertificate(vb *ValidatorBlock, chainID string, reg *ledger.BLSRegistryRecord, sk *bls.PrivateKey,
 	keyPageURL, keyBookURL string, authorization *govproof.AuthorizationRecord, voteEvidence json.RawMessage,
-	cp *chained_proof.ChainedProof) error {
+	cp *chained_proof.ChainedProof, spine *ledger.AccumulateSpineLog, pv2 *proofv2.Evidence) error {
 	if reg == nil {
 		return fmt.Errorf("no BLS registry is recorded on this chain")
 	}
@@ -194,22 +282,29 @@ func BuildIntentCertificate(vb *ValidatorBlock, chainID string, reg *ledger.BLSR
 	}
 	vb.IntentCertificate = &IntentCertificateEvidence{RegistryVersion: reg.Version, KeyPageURL: keyPageURL,
 		KeyBookURL: keyBookURL, AuthorizationRecord: rec, VoteEvidence: voteEvidence, ChainedProof: cp}
-	in, govRoot, accRoot, err := intentInputs(vb, chainID, reg)
+	if ProofV3Required(spine, reg) {
+		vb.IntentCertificate.ProofV2 = pv2
+	}
+	f, err := intentInputs(vb, chainID, reg, spine)
 	if err != nil {
 		vb.IntentCertificate = nil
 		return err
 	}
-	msg, err := intentcert.Message(in)
+	msg, err := f.message()
 	if err != nil {
 		vb.IntentCertificate = nil
 		return err
 	}
 	ev := vb.IntentCertificate
-	ev.GovRootV2 = "0x" + hex.EncodeToString(govRoot[:])
-	ev.AccumulateSetRoot = "0x" + hex.EncodeToString(accRoot[:])
+	if f.v3 {
+		ev.GovRootV3 = "0x" + hex.EncodeToString(f.govRoot[:])
+	} else {
+		ev.GovRootV2 = "0x" + hex.EncodeToString(f.govRoot[:])
+	}
+	ev.AccumulateSetRoot = "0x" + hex.EncodeToString(f.accRoot[:])
 	ev.Message = "0x" + hex.EncodeToString(msg[:])
 	ev.Signature = hex.EncodeToString(bls_zkp.SignV6_1PreExec(sk, msg).Bytes())
-	if _, err := VerifyIntentCertificate(vb, chainID, reg); err != nil {
+	if _, err := VerifyIntentCertificate(vb, chainID, reg, spine); err != nil {
 		vb.IntentCertificate = nil
 		return fmt.Errorf("the intent certificate this node built does not verify: %w", err)
 	}

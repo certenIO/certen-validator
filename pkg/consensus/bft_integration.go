@@ -606,6 +606,7 @@ func (bv *BFTValidator) SetKeyPageResolver(r SigningKeyPageResolver) {
 // IntentCertificateSource is the committed state a proposer builds an intent certificate against.
 type IntentCertificateSource interface {
 	IntentCertificateContext() (string, *ledger.BLSRegistryRecord, error)
+	CommittedAccumulateSpine() (*ledger.AccumulateSpineLog, error)
 }
 
 // SetIntentCertificateSource installs the source of the chain id and BLS registry intent certificates are built
@@ -1053,6 +1054,10 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 	if err != nil {
 		return nil, fmt.Errorf("intent %s: intent certificate context: %w", certenIntent.IntentID, err)
 	}
+	certSpine, err := certSource.CommittedAccumulateSpine()
+	if err != nil {
+		return nil, fmt.Errorf("intent %s: intent certificate context: %w", certenIntent.IntentID, err)
+	}
 	certified := certRegistry != nil
 	if certified {
 		blsSignature = ""
@@ -1241,7 +1246,7 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 	}
 
 	if certified {
-		if err := bv.certifyIntent(vb, certChainID, certRegistry, certenProof, resolvedKeyPageURL, resolvedKeyBookURL,
+		if err := bv.certifyIntent(vb, certChainID, certRegistry, certSpine, certenProof, resolvedKeyPageURL, resolvedKeyBookURL,
 			govAuthorization, govVoteEvidence); err != nil {
 			return &ExecutionTaskResult{
 				Success: false,

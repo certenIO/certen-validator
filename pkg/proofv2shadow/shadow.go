@@ -221,8 +221,13 @@ func (s *Shadow) buildLoop() {
 func (s *Shadow) build(j job) {
 	ctx, cancel := context.WithTimeout(context.Background(), certifyWait+10*time.Minute)
 	defer cancel()
+	ev, rep, err := s.buildOne(ctx, j, 0)
+	s.record(ctx, j, ev, rep, err)
+}
+
+// record stores a build's evidence and verdict, or the named reason it failed.
+func (s *Shadow) record(ctx context.Context, j job, ev *proofv2.Evidence, rep *proofv2.Report, err error) {
 	res := database.ProofV2Result{IntentID: j.intentID, TxHash: j.tx, Account: j.account}
-	ev, rep, err := s.buildOne(ctx, j)
 	switch {
 	case err != nil:
 		res.Verdict, res.Error = "failed", err.Error()
@@ -239,7 +244,40 @@ func (s *Shadow) build(j job) {
 	}
 }
 
-func (s *Shadow) buildOne(ctx context.Context, j job) (*proofv2.Evidence, *proofv2.Report, error) {
+// Prove builds an intent's v2 evidence now, for its intent certificate (docs/proof/GOVROOT_V3.md): from the pages
+// captured at discovery - waiting for that capture to be recorded - on no more than maxMajors major blocks, the
+// checkpoints the chain has verified. The result is also stored, as a shadow build's is.
+func (s *Shadow) Prove(ctx context.Context, intentID, account, tx, bvn string, maxMajors uint64) (*proofv2.Evidence, error) {
+	if maxMajors == 0 {
+		return nil, fmt.Errorf("proof v2: the chain has verified no major block to start from")
+	}
+	for {
+		_, captureErr, done, err := s.repo.CaptureResult(ctx, intentID)
+		if err != nil {
+			return nil, fmt.Errorf("proof v2: read the capture: %w", err)
+		}
+		if done {
+			if captureErr != "" {
+				s.logf("[PROOF-V2] %s: capture fell short: %s", intentID, captureErr)
+			}
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("proof v2: the governing pages were not captured in time: %w", ctx.Err())
+		case <-time.After(2 * time.Second):
+		}
+	}
+	j := job{intentID, account, tx, bvn}
+	ev, rep, err := s.buildOne(ctx, j, maxMajors)
+	s.record(ctx, j, ev, rep, err)
+	if err != nil {
+		return nil, fmt.Errorf("proof v2: %w", err)
+	}
+	return ev, nil
+}
+
+func (s *Shadow) buildOne(ctx context.Context, j job, maxMajors uint64) (*proofv2.Evidence, *proofv2.Report, error) {
 	raw, ok, err := s.repo.Captured(ctx, j.intentID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("load captured pages: %w", err)
@@ -261,7 +299,7 @@ func (s *Shadow) buildOne(ctx context.Context, j job) (*proofv2.Evidence, *proof
 	}
 	deadline := time.Now().Add(certifyWait)
 	for {
-		ev, err := s.b.Build(ctx, j.account, j.tx, j.bvn, pages...)
+		ev, err := s.b.BuildBounded(ctx, maxMajors, j.account, j.tx, j.bvn, pages...)
 		if errors.Is(err, proofv2.ErrNotYetCertified) && time.Now().Before(deadline) {
 			select {
 			case <-ctx.Done():
@@ -332,6 +370,14 @@ func (l *Lazy) Build(intentID, account, tx, bvn string) {
 		return
 	}
 	l.notReady(intentID, account, tx)
+}
+
+// Prove implements intent.ProofV2Shadow. Before the spine walk finishes there is nothing to prove from, by name.
+func (l *Lazy) Prove(ctx context.Context, intentID, account, tx, bvn string, maxMajors uint64) (*proofv2.Evidence, error) {
+	if s := l.p.Load(); s != nil {
+		return s.Prove(ctx, intentID, account, tx, bvn, maxMajors)
+	}
+	return nil, fmt.Errorf("proof_v2_not_ready: the spine walk from the pinned incarnation's genesis has not finished")
 }
 
 func (l *Lazy) notReady(intentID, account, tx string) {
