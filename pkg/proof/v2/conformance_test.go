@@ -4,6 +4,7 @@ package proofv2
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"testing"
 )
@@ -52,8 +53,16 @@ func TestConformanceSuite(t *testing.T) {
 				if err != nil {
 					t.Fatalf("refused: %v", err)
 				}
-				got := map[string]any{"certifiedBlock": float64(rep.CertifiedBlock), "anchorBlock": float64(rep.AnchorBlock),
-					"pages": float64(len(rep.Pages)), "setVerdict": string(rep.SetVerdict), "checkBlock": float64(rep.CheckBlock)}
+				got := map[string]any{
+					"incarnation": fmt.Sprintf("%x", rep.Incarnation), "majors": float64(rep.Majors),
+					"certifiedBlock": float64(rep.CertifiedBlock), "certifiedRoot": fmt.Sprintf("%x", rep.CertifiedRoot),
+					"checkBlock": float64(rep.CheckBlock), "setVerdict": string(rep.SetVerdict),
+					"validators": float64(rep.Validators), "threshold": float64(rep.Threshold),
+					"partition": rep.Partition, "anchorBlock": float64(rep.AnchorBlock), "pages": float64(len(rep.Pages)),
+				}
+				if len(got) != len(c.Report) {
+					t.Fatalf("the manifest reports %d fields, the verifier %d", len(c.Report), len(got))
+				}
 				for k, v := range got {
 					if c.Report[k] != v {
 						t.Fatalf("%s: got %v, manifest %v", k, v, c.Report[k])
