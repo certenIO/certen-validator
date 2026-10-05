@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/ed25519"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -77,14 +78,25 @@ func newSpineFixture(t *testing.T) *spineFixture {
 
 // genesisFor is the spine genesis transaction for inputs on chain.
 func genesisFor(chain string, in proof.IncarnationInputs) *AccumulateSpineGenesisTx {
-	return &AccumulateSpineGenesisTx{Kind: AccumulateSpineGenesisKind, ChainID: chain, MinorBlockIndex: in.GenesisMinorBlockIndex,
-		RootChainAnchor: hex.EncodeToString(in.GenesisRootChainAnchor[:]), StateTreeAnchor: hex.EncodeToString(in.GenesisStateTreeAnchor[:]),
-		TimeUnix: in.GenesisTimeUnix, NetworkRecord: hex.EncodeToString(in.NetworkRecord), GlobalsRecord: hex.EncodeToString(in.GlobalsRecord)}
+	return NewAccumulateSpineGenesis(chain, in)
 }
 
-// genesis is Kermit's spine genesis on the test chain, as bytes.
+// genesis is Kermit's spine genesis on the test chain, signed by ops-1 and ops-2 (the sealed set's threshold), as bytes.
 func (fx *spineFixture) genesis(t testing.TB) []byte {
-	return rotJSON(t, genesisFor(rotChain, fx.inputs))
+	return fx.signed(t, genesisFor(rotChain, fx.inputs))
+}
+
+// signed is g signed by the named admins of the fixture (ops-1 and ops-2 when none are named), as bytes.
+func (fx *spineFixture) signed(t testing.TB, g *AccumulateSpineGenesisTx, admins ...string) []byte {
+	if len(admins) == 0 {
+		admins = []string{"ops-1", "ops-2"}
+	}
+	g.Signatures = nil
+	for _, id := range admins {
+		g.Signatures = append(g.Signatures, PolicySignature{KeyID: id,
+			Signature: hex.EncodeToString(ed25519.Sign(fx.admins[id], g.SigningBytes()))})
+	}
+	return rotJSON(t, g)
 }
 
 // extend carries major blocks first..last (1-based, inclusive) of the archive.
@@ -252,10 +264,10 @@ func TestASpineGenesisNeedsTheRegistrysIncarnation(t *testing.T) {
 
 	app, store := fx.spineApp(t)
 	other := genesisFor("another-chain", fx.inputs)
-	wantCode(t, "another chain", finalize(t, app, 2, abcitypes.CommitInfo{}, rotJSON(t, other)).TxResults[0],
+	wantCode(t, "another chain", finalize(t, app, 2, abcitypes.CommitInfo{}, fx.signed(t, other)).TxResults[0],
 		codeSpineGenesisRefused, `is for chain "another-chain"`)
 	inB, _ := fx.incarnationB(t)
-	wantCode(t, "another incarnation", finalize(t, app, 2, abcitypes.CommitInfo{}, rotJSON(t, genesisFor(rotChain, inB))).TxResults[0],
+	wantCode(t, "another incarnation", finalize(t, app, 2, abcitypes.CommitInfo{}, fx.signed(t, genesisFor(rotChain, inB))).TxResults[0],
 		codeSpineGenesisRefused, "not the registry's")
 	if l := spineLog(t, store); l.Genesis != nil {
 		t.Fatalf("a refused genesis was recorded: %+v", l.Genesis)
@@ -286,7 +298,7 @@ func TestASpineGenesisNeedsTheRegistrysIncarnation(t *testing.T) {
 	// Later, the same genesis again, and any other: the spine is the registry's incarnation.
 	wantCode(t, "the genesis replayed", finalize(t, app, 3, abcitypes.CommitInfo{}, append(append([]byte(nil), g...), ' ', ' ')).TxResults[0],
 		codeSpineGenesisRefused, "replaced only when the registry moves")
-	wantCode(t, "another genesis", finalize(t, app, 3, abcitypes.CommitInfo{}, rotJSON(t, genesisFor(rotChain, inB))).TxResults[0],
+	wantCode(t, "another genesis", finalize(t, app, 3, abcitypes.CommitInfo{}, fx.signed(t, genesisFor(rotChain, inB))).TxResults[0],
 		codeSpineGenesisRefused, "replaced only when the registry moves")
 }
 
@@ -448,7 +460,7 @@ func TestTheSpineFollowsTheRegistrysIncarnation(t *testing.T) {
 		t.Fatalf("the A spine under registry B: %v", err)
 	}
 
-	genB := rotJSON(t, genesisFor(rotChain, inB))
+	genB := fx.signed(t, genesisFor(rotChain, inB))
 	block4 := [][]byte{fx.extend(t, 26, 30), genB, fx.genesis(t)}
 	r := finalize(t, app, 4, abcitypes.CommitInfo{}, block4...)
 	wantCode(t, "an extension of the A spine", r.TxResults[0], codeSpineExtendRefused, "the spine is not the registry's incarnation")
@@ -572,67 +584,128 @@ func TestTheSpineQuery(t *testing.T) {
 	}
 }
 
-// A crafted record can make Accumulate's decoder, or the spine's verification, dereference nil. In CheckTx or
-// FinalizeBlock that panic would stop every node on one transaction; instead the transaction is refused by name, the
-// same way on every node. The crafted records here are real Kermit records with one bit flipped, found by trying each.
+// A crafted record can make Accumulate's decoder dereference nil; in CheckTx or FinalizeBlock that panic would stop
+// every node on one transaction. It is refused by name instead, the same way on every node (refusePanic, defence in
+// depth around a decoder CERTEN cannot change). A record the decoder accepts but whose fields the walk finds missing
+// is a named refusal from the walk itself - no panic to catch. The crafted records are real Kermit records with one bit
+// flipped, found by trying each.
 func TestAMalformedRecordIsRefusedNotAPanic(t *testing.T) {
 	fx := newSpineFixture(t)
-	b, _ := hex.DecodeString(fx.records[2])
 	panics := func(f func()) (p bool) {
 		defer func() { p = recover() != nil }()
 		f()
 		return false
 	}
-	var decodePanic, verifyPanic []byte
-	for i := 0; i < len(b) && (decodePanic == nil || verifyPanic == nil); i++ {
-		c := append([]byte(nil), b...)
-		c[i] ^= 1
-		r := new(api.MajorHeaderRecord)
-		var err error
-		if panics(func() { err = r.UnmarshalBinary(c) }) {
-			if decodePanic == nil {
-				decodePanic = c
-			}
-			continue
-		}
-		if err != nil || verifyPanic != nil {
-			continue
-		}
-		in := fx.inputs
-		inc, _ := proof.ComputeIncarnation(in)
-		gen, set, _ := proofv2.AcceptSpineGenesis(in, inc, 1)
-		l := &ledger.AccumulateSpineLog{Genesis: gen, Sets: []ledger.AccumulateSpineSet{set}}
-		recs := make([]*api.MajorHeaderRecord, 3)
-		for j := range recs {
-			recs[j] = new(api.MajorHeaderRecord)
-			rb, _ := hex.DecodeString(fx.records[j])
-			if err := recs[j].UnmarshalBinary(rb); err != nil {
-				t.Fatal(err)
-			}
-		}
-		recs[2] = r
-		if panics(func() { _, _, _ = proofv2.ExtendSpine(l, recs, 1) }) {
-			verifyPanic = c
+	flip := func(idx, i int) []byte {
+		b, _ := hex.DecodeString(fx.records[idx])
+		b[i] ^= 1
+		return b
+	}
+	var decodePanic []byte
+	b, _ := hex.DecodeString(fx.records[2])
+	for i := range b {
+		if c := flip(2, i); panics(func() { _ = new(api.MajorHeaderRecord).UnmarshalBinary(c) }) {
+			decodePanic = c
+			break
 		}
 	}
-	if decodePanic == nil || verifyPanic == nil {
-		t.Fatalf("no bit flip of Kermit's major block 3 panics the decoder (%v) or the verification (%v): the guard is "+
-			"untested here", decodePanic != nil, verifyPanic != nil)
+	if decodePanic == nil {
+		t.Fatal("no bit flip of Kermit's major block 3 panics the decoder: the guard is untested here")
 	}
-	with := func(rec []byte) []byte {
+	// Major block 1 with byte 27 flipped decodes, and its anchor transaction has no body: the walk dereferenced it
+	// before pkg/proof/v2 checked it.
+	noBody := flip(0, 27)
+	if err := new(api.MajorHeaderRecord).UnmarshalBinary(noBody); err != nil {
+		t.Fatalf("the byte-27 flip no longer decodes: %v", err)
+	}
+	with := func(idx int, rec []byte) []byte {
 		recs := append([]string(nil), fx.records[:3]...)
-		recs[2] = hex.EncodeToString(rec)
+		recs[idx] = hex.EncodeToString(rec)
 		return rotJSON(t, &AccumulateSpineExtendTx{Kind: AccumulateSpineExtendKind, ChainID: rotChain, First: 1, Records: recs})
 	}
 	app, _ := fx.spineApp(t)
 	finalize(t, app, 2, abcitypes.CommitInfo{}, fx.genesis(t))
 	commit(t, app)
-	res, err := app.CheckTx(context.Background(), &abcitypes.RequestCheckTx{Tx: with(decodePanic)})
+	res, err := app.CheckTx(context.Background(), &abcitypes.RequestCheckTx{Tx: with(2, decodePanic)})
 	if err != nil || res.Code != codeSpineExtendRefused || !strings.Contains(res.Log, "malformed input") {
 		t.Fatalf("CheckTx on a record that panics the decoder: (%+v, %v)", res, err)
 	}
-	r := finalize(t, app, 3, abcitypes.CommitInfo{}, with(decodePanic), with(verifyPanic), fx.extend(t, 1, 3))
+	r := finalize(t, app, 3, abcitypes.CommitInfo{}, with(2, decodePanic), with(0, noBody), fx.extend(t, 1, 3))
 	wantCode(t, "a record that panics the decoder", r.TxResults[0], codeSpineExtendRefused, "malformed input")
-	wantCode(t, "a record that panics the verification", r.TxResults[1], codeSpineExtendRefused, "malformed input")
+	wantCode(t, "a record the walk finds incomplete", r.TxResults[1], codeSpineExtendRefused, "major block 1")
+	if strings.Contains(r.TxResults[1].Log, "malformed input") {
+		t.Fatalf("the walk panicked on an incomplete record: %s", r.TxResults[1].Log)
+	}
 	wantCode(t, "the real records after them", r.TxResults[2], 0, "")
+}
+
+// The spine genesis is a governed act: the admin quorum in force signs it. Unsigned, under the threshold, signed by a
+// key that is not the admin's, or signed over another genesis's bytes, it is refused by name and recorded nowhere. The
+// same genesis signed by another subset of the quorum is the same genesis (one id): accepted, and within its block the
+// accepted no-op.
+func TestASpineGenesisNeedsTheAdminQuorum(t *testing.T) {
+	fx := newSpineFixture(t)
+	app, store := fx.spineApp(t)
+	g := func() *AccumulateSpineGenesisTx { return genesisFor(rotChain, fx.inputs) }
+	foreign := func() []byte {
+		x := g()
+		x.Signatures = []PolicySignature{
+			{KeyID: "ops-1", Signature: hex.EncodeToString(ed25519.Sign(fx.admins["ops-1"], x.SigningBytes()))},
+			{KeyID: "ops-2", Signature: hex.EncodeToString(ed25519.Sign(seededKey(0xEE), x.SigningBytes()))}}
+		return rotJSON(t, x)
+	}
+	otherBytes := func() []byte {
+		inB, _ := fx.incarnationB(t)
+		b := genesisFor(rotChain, inB)
+		fx.signed(t, b)
+		x := g()
+		x.Signatures = b.Signatures
+		return rotJSON(t, x)
+	}
+	for name, tx := range map[string][]byte{
+		"unsigned":                    rotJSON(t, g()),
+		"one admin of two":            fx.signed(t, g(), "ops-1"),
+		"the same admin twice":        fx.signed(t, g(), "ops-1", "ops-1"),
+		"a foreign key under ops-2":   foreign(),
+		"signed over another genesis": otherBytes(),
+		"signed by a non-admin id": func() []byte {
+			x := g()
+			x.Signatures = []PolicySignature{
+				{KeyID: "ops-1", Signature: hex.EncodeToString(ed25519.Sign(fx.admins["ops-1"], x.SigningBytes()))},
+				{KeyID: "outsider", Signature: hex.EncodeToString(ed25519.Sign(seededKey(0xEF), x.SigningBytes()))}}
+			return rotJSON(t, x)
+		}(),
+	} {
+		r := finalize(t, app, 2, abcitypes.CommitInfo{}, tx).TxResults[0]
+		if r.Code != codeSpineGenesisRefused || !strings.Contains(r.Log, "Accumulate spine genesis") {
+			t.Errorf("%s: %d %q", name, r.Code, r.Log)
+		}
+		// CheckTx is a shape filter: signatures are judged in FinalizeBlock, as the registry's are.
+		if res, err := app.CheckTx(context.Background(), &abcitypes.RequestCheckTx{Tx: tx}); err != nil || res.Code != 0 {
+			t.Errorf("%s: CheckTx (%+v, %v)", name, res, err)
+		}
+	}
+	if l := spineLog(t, store); l.Genesis != nil {
+		t.Fatalf("an unauthorised genesis was recorded: %+v", l.Genesis)
+	}
+
+	byOneTwo, byTwoThree := fx.signed(t, g(), "ops-1", "ops-2"), fx.signed(t, g(), "ops-2", "ops-3")
+	a, _ := DecodeAccumulateSpineGenesis(byOneTwo)
+	b, _ := DecodeAccumulateSpineGenesis(byTwoThree)
+	if a.GenesisID() != b.GenesisID() || a.GenesisID() != "accumulate-spine-genesis:"+hex.EncodeToString(a.SigningBytes()) {
+		t.Fatal("the genesis id depends on who signed")
+	}
+	r := finalize(t, app, 2, abcitypes.CommitInfo{}, byTwoThree, byOneTwo)
+	if r.TxResults[0].Code != 0 || r.TxResults[1].Code != 0 {
+		t.Fatalf("the genesis by two subsets in one block: %s / %s", r.TxResults[0].Log, r.TxResults[1].Log)
+	}
+	alone := finalize(t, newSpineAppFor(t, fx), 2, abcitypes.CommitInfo{}, byOneTwo)
+	if !bytes.Equal(alone.AppHash, r.AppHash) {
+		t.Fatal("a second subset's copy changed the app hash")
+	}
+}
+
+func newSpineAppFor(t *testing.T, fx *spineFixture) *ValidatorApp {
+	app, _ := fx.spineApp(t)
+	return app
 }
