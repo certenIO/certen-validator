@@ -3,6 +3,8 @@
 package proofv2
 
 import (
+	"bytes"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -94,5 +96,65 @@ func TestBuilderStartsAtABoundedCheckpoint(t *testing.T) {
 	b.MaxMajors = 2
 	if n, _, err := b.lastMajorBefore(450); err != nil || n != 2 {
 		t.Fatalf("bounded to 2: major %d, %v", n, err)
+	}
+}
+
+// Evidence judged against the spine the chain holds reaches exactly the verdict and report of a walk from genesis, and
+// evidence that builds past what the chain has verified, or a spine under another incarnation, is refused by name.
+func TestVerifyFromSpineMatchesVerifyFromGenesis(t *testing.T) {
+	fx := load(t)
+	ir, err := fx.inc.Verify()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := VerifyFromGenesis(fx.ev, fx.ar, ir.Inputs, fx.pin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gen, set, err := AcceptSpineGenesis(ir.Inputs, fx.pin, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := &ledger.AccumulateSpineLog{Genesis: gen, Sets: []ledger.AccumulateSpineSet{set}}
+	cps, sets, err := ExtendSpine(l, fx.ar.Majors, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.Checkpoints, l.Sets = cps, append(l.Sets, sets...)
+
+	got, err := VerifyFromSpine(fx.ev, l, fx.pin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Decoded accounts carry internal state, so the pages compare by their encoding.
+	if len(got.Pages) != len(want.Pages) {
+		t.Fatalf("%d pages from the spine, %d from genesis", len(got.Pages), len(want.Pages))
+	}
+	for i := range got.Pages {
+		a, err := got.Pages[i].MarshalBinary()
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := want.Pages[i].MarshalBinary()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(a, b) {
+			t.Fatalf("page %d differs", i)
+		}
+	}
+	got.Pages, want.Pages = nil, nil
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("from the spine:\n%+v\nfrom genesis:\n%+v", got, want)
+	}
+
+	short := &ledger.AccumulateSpineLog{Genesis: gen, Sets: l.Sets, Checkpoints: l.Checkpoints[:fx.ev.Majors-1]}
+	if _, err := VerifyFromSpine(fx.ev, short, fx.pin); err == nil || !strings.Contains(err.Error(), "the chain has verified") {
+		t.Fatalf("evidence past the chain's spine: %v", err)
+	}
+	other := fx.pin
+	other[0] ^= 1
+	if _, err := VerifyFromSpine(fx.ev, l, other); err == nil || !strings.Contains(err.Error(), "not the pinned") {
+		t.Fatalf("a spine under another incarnation: %v", err)
 	}
 }

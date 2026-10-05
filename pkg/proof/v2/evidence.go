@@ -12,6 +12,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/certen/independant-validator/pkg/ledger"
+	"strings"
 
 	"github.com/certen/independant-validator/pkg/accumulateset"
 	"github.com/certen/independant-validator/pkg/proof"
@@ -154,7 +156,45 @@ func VerifyFromGenesis(ev *Evidence, ar *Archive, in proof.IncarnationInputs, pi
 		}
 	}
 	rep.Majors = need
+	return verifyFrom(ev, rep, at, pinned)
+}
 
+// VerifyFromSpine verifies ev against the validator-set spine as CERTEN's consensus state holds it (the spine log a
+// FinalizeBlock reads): the evidence's starting checkpoints are taken from the log, never walked from local state, so
+// every validator judging the same block reaches the same verdict with no I/O. The log's genesis must be the pinned
+// incarnation's.
+func VerifyFromSpine(ev *Evidence, l *ledger.AccumulateSpineLog, pinned [32]byte) (*Report, error) {
+	if ev == nil || ev.Version != Version {
+		return nil, fmt.Errorf("not a v2 Accumulate proof")
+	}
+	if l == nil || l.Genesis == nil {
+		return nil, fmt.Errorf("the chain has no Accumulate spine")
+	}
+	if !strings.EqualFold(strings.TrimPrefix(l.Genesis.Incarnation, "0x"), hex.EncodeToString(pinned[:])) {
+		return nil, fmt.Errorf("the chain's spine is incarnation %s, not the pinned %x", l.Genesis.Incarnation, pinned)
+	}
+	need := max(ev.Majors, ev.Check.Majors)
+	if ev.Majors == 0 || need > uint64(len(l.Checkpoints)) {
+		return nil, fmt.Errorf("evidence builds on %d major blocks; the chain has verified %d", need, len(l.Checkpoints))
+	}
+	at := map[uint64]*Spine{}
+	for _, n := range []uint64{ev.Majors, ev.Check.Majors} {
+		if _, ok := at[n]; ok {
+			continue
+		}
+		sp, err := SpineAt(l, n)
+		if err != nil {
+			return nil, err
+		}
+		at[n] = sp
+	}
+	return verifyFrom(ev, &Report{Incarnation: pinned, Majors: need}, at, pinned)
+}
+
+// verifyFrom checks everything after the spine's starting points: at holds the spine after ev.Majors and after
+// ev.Check.Majors major blocks.
+func verifyFrom(ev *Evidence, rep *Report, at map[uint64]*Spine, pinned [32]byte) (*Report, error) {
+	var err error
 	// S1-S2: the receipt from the transaction to a certified root.
 	cert := at[ev.Majors].Clone()
 	if len(ev.Certify) == 0 {
@@ -275,12 +315,7 @@ func VerifyFromGenesis(ev *Evidence, ar *Archive, in proof.IncarnationInputs, pi
 	if !ok {
 		return nil, fmt.Errorf("set check: no main chain on the network account")
 	}
-	applied := uint64(0)
-	for _, a := range chk.Applied {
-		if a.Principal == protocol.DnUrl().JoinPath(protocol.Network).String() {
-			applied++
-		}
-	}
+	applied := chk.NetworkUpdates()
 	if height != 1+applied {
 		return nil, fmt.Errorf("set check: the network account's main chain has %d entries but the walk applied %d updates after genesis", height, applied)
 	}
