@@ -73,7 +73,7 @@ func run(dsn, incPath, pinHex, only string) (int, error) {
 		return 0, fmt.Errorf("incarnation evidence: %w", err)
 	}
 	var pin [32]byte
-	if b, err := hex.DecodeString(pinHex); err != nil || len(b) != 32 {
+	if b, err := hex.DecodeString(strings.TrimPrefix(strings.ToLower(pinHex), "0x")); err != nil || len(b) != 32 {
 		return 0, fmt.Errorf("-pin must be 32 bytes of hex")
 	} else {
 		copy(pin[:], b)
@@ -184,7 +184,7 @@ func run(dsn, incPath, pinHex, only string) (int, error) {
 // to a temporary file for run.
 func liveIncarnation(endpoint, pinHex string) (string, error) {
 	var pin [32]byte
-	if b, err := hex.DecodeString(pinHex); err != nil || len(b) != 32 {
+	if b, err := hex.DecodeString(strings.TrimPrefix(strings.ToLower(pinHex), "0x")); err != nil || len(b) != 32 {
 		return "", fmt.Errorf("-pin must be 32 bytes of hex")
 	} else {
 		copy(pin[:], b)
