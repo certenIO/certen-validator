@@ -70,6 +70,20 @@ func load(t *testing.T) fixture {
 	return fx
 }
 
+// A set check with no runs of its own is the set proven at the certified block, reusing the certification: a valid,
+// smaller proof. This fixture's check block is its certified block, so dropping its runs gives exactly that form.
+func TestSetCheckAtTheCertifiedBlock(t *testing.T) {
+	fx := load(t)
+	fx.ev.Check.Hops = nil
+	rep, err := Verify(fx.ev, fx.ar, fx.inc, fx.pin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.CheckBlock != rep.CertifiedBlock || rep.SetVerdict != proof.VerdictVerified {
+		t.Fatalf("checked at DN %d, certified %d, verdict %s", rep.CheckBlock, rep.CertifiedBlock, rep.SetVerdict)
+	}
+}
+
 func TestVerifyLiveKermitProof(t *testing.T) {
 	fx := load(t)
 	rep, err := Verify(fx.ev, fx.ar, fx.inc, fx.pin)
@@ -169,9 +183,10 @@ func TestVerifyRefusesTampering(t *testing.T) {
 				}
 			}
 		}, "set check"},
-		{"the set check run dropped", func(t *testing.T, fx *fixture) {
+		{"the set check's runs dropped and its spine position changed", func(t *testing.T, fx *fixture) {
 			fx.ev.Check.Hops = nil
-		}, "no minor-root run"},
+			fx.ev.Check.Majors = fx.ev.Majors - 1
+		}, "no minor-root run of its own"},
 		{"a page's state changed (a key added)", func(t *testing.T, fx *fixture) {
 			fx.ev.Pages[0].State = flipHexByte(fx.ev.Pages[0].State, len(fx.ev.Pages[0].State)/2-2)
 		}, "page"},

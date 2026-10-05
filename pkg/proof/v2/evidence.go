@@ -209,9 +209,16 @@ func VerifyFromGenesis(ev *Evidence, ar *Archive, in proof.IncarnationInputs, pi
 
 	// The validator set: walked to a certified block at or after the certified one, proven there, equal to the set
 	// the walk derived. Every write the walk applied must be accounted for by the network account's main chain.
-	chk := at[ev.Check.Majors].Clone()
+	// The set is checked either at the certified block itself (no runs: the check reuses the certification, which
+	// keeps a proof small enough to travel in a consensus block) or at a later certified block reached by its own runs.
+	var chk *Spine
 	if len(ev.Check.Hops) == 0 {
-		return nil, fmt.Errorf("set check has no minor-root run")
+		if ev.Check.Majors != ev.Majors {
+			return nil, fmt.Errorf("set check has no minor-root run of its own but builds on %d major blocks, not the certification's %d", ev.Check.Majors, ev.Majors)
+		}
+		chk = cert.Clone()
+	} else {
+		chk = at[ev.Check.Majors].Clone()
 	}
 	for i, h := range ev.Check.Hops {
 		mr, err := decodeMinorRoot(h)

@@ -194,7 +194,7 @@ func (b *Builder) Build(ctx context.Context, account, txHash, bvn string, pages 
 		trimmed = append(trimmed, *t)
 	}
 
-	set, err := b.buildSetCheck(ctx, cert.LastMinorBlock)
+	set, err := b.buildSetCheckAt(ctx, n, cert)
 	if err != nil {
 		return nil, err
 	}
@@ -216,6 +216,22 @@ func (b *Builder) Build(ctx context.Context, account, txHash, bvn string, pages 
 		return nil, fmt.Errorf("built evidence that does not verify: %w", err)
 	}
 	return ev, nil
+}
+
+// buildSetCheckAt proves the validator set at the certified block itself, reusing the certification: no runs of its
+// own, which keeps the evidence small enough for a consensus block. The certified block is recent when a proof is built
+// promptly, so its state is inside the node's retention; when it is not (a proof built later), the set is proven at
+// the newest certified block instead (buildSetCheck). Both are the same guarantee: the set proven at a certified block
+// at or after the certified one.
+func (b *Builder) buildSetCheckAt(ctx context.Context, majors uint64, cert *Spine) (*SetCheck, error) {
+	set, err := proof.BuildValidatorSetProofAt(ctx, b.Q, b.inc, cert.LastMinorBlock, cert.StateTreeAnchor)
+	if err != nil {
+		if strings.Contains(err.Error(), "retained") {
+			return b.buildSetCheck(ctx, cert.LastMinorBlock)
+		}
+		return nil, fmt.Errorf("set check: %w", err)
+	}
+	return &SetCheck{Majors: majors, Set: *set}, nil
 }
 
 // buildSetCheck walks a copy of the spine from the last major block to the newest certified block, keeping every

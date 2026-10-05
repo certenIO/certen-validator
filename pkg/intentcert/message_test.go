@@ -61,3 +61,30 @@ func TestEveryIntentInputIsBoundAndRequired(t *testing.T) {
 		}
 	}
 }
+
+// The v3 message is v2's layout under its own domain: identical fields never give the same message.
+func TestMessageV3IsDistinctFromV2(t *testing.T) {
+	w := func(b byte) (v [32]byte) {
+		for i := range v {
+			v[i] = b
+		}
+		return
+	}
+	v2, err := Message(MessageInputs{CertenChainID: "certen-1", OperationID: w(1), GovRootV2: w(2), AccumulateSetRoot: w(3),
+		Incarnation: w(4), GovernanceCommitment: w(5), CertenSetRoot: w(6)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v3, err := MessageV3(MessageInputsV3{CertenChainID: "certen-1", OperationID: w(1), GovRootV3: w(2), AccumulateSetRoot: w(3),
+		Incarnation: w(4), GovernanceCommitment: w(5), CertenSetRoot: w(6)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v2 == v3 {
+		t.Fatal("the v3 message equals the v2 message for the same fields")
+	}
+	if _, err := MessageV3(MessageInputsV3{CertenChainID: "certen-1", OperationID: w(1), AccumulateSetRoot: w(3),
+		Incarnation: w(4), GovernanceCommitment: w(5), CertenSetRoot: w(6)}); err == nil {
+		t.Fatal("a v3 message without govRoot v3 was built")
+	}
+}
