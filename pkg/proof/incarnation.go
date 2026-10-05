@@ -591,8 +591,15 @@ func firstBVN(network *AccountStateProof) (string, error) {
 // incarnation is not the chain it actually reads would commit a false identity in every anchor, so it must not start.
 // A network read that fails is retried within the context; only a derived value that DIFFERS is final at once.
 func VerifyConfiguredIncarnation(ctx context.Context, endpoint string, configured [32]byte, retryEvery time.Duration) (*IncarnationReport, error) {
+	_, rep, err := ConfiguredIncarnationEvidence(ctx, endpoint, configured, retryEvery)
+	return rep, err
+}
+
+// ConfiguredIncarnationEvidence is VerifyConfiguredIncarnation that also returns the evidence, for a proof builder that
+// walks the validator-set spine from the genesis it names (proof v2).
+func ConfiguredIncarnationEvidence(ctx context.Context, endpoint string, configured [32]byte, retryEvery time.Duration) (*IncarnationEvidence, *IncarnationReport, error) {
 	if configured == ([32]byte{}) {
-		return nil, fmt.Errorf("no incarnation is configured")
+		return nil, nil, fmt.Errorf("no incarnation is configured")
 	}
 	var lastErr error
 	for {
@@ -600,19 +607,19 @@ func VerifyConfiguredIncarnation(ctx context.Context, endpoint string, configure
 		if err == nil {
 			rep, verr := ev.Verify()
 			if verr != nil {
-				return nil, fmt.Errorf("the incarnation evidence from %s does not verify: %w", endpoint, verr)
+				return nil, nil, fmt.Errorf("the incarnation evidence from %s does not verify: %w", endpoint, verr)
 			}
 			if rep.Incarnation != configured {
-				return nil, fmt.Errorf("the configured incarnation 0x%x is not the one %s serves (0x%x, network %s, "+
+				return nil, nil, fmt.Errorf("the configured incarnation 0x%x is not the one %s serves (0x%x, network %s, "+
 					"genesis %s): this validator would commit the wrong Accumulate chain in every anchor",
 					configured, endpoint, rep.Incarnation, rep.NetworkName, rep.GenesisTime)
 			}
-			return rep, nil
+			return ev, rep, nil
 		}
 		lastErr = err
 		select {
 		case <-ctx.Done():
-			return nil, fmt.Errorf("could not derive the incarnation of %s before the deadline: %w", endpoint, lastErr)
+			return nil, nil, fmt.Errorf("could not derive the incarnation of %s before the deadline: %w", endpoint, lastErr)
 		case <-time.After(retryEvery):
 		}
 	}

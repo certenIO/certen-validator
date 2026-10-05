@@ -105,6 +105,10 @@ WORKDIR /build
 # the failure mode disappears rather than being documented.
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -trimpath -buildvcs=false -ldflags=-buildid= -o /build/schemamigrate ./cmd/schemamigrate
 
+# The proof v2 shadow's exit check (RB6 Phase A): re-verifies every stored v2 proof offline and compares its pages with
+# v1's replay; run read-only against the validators' database.
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -trimpath -buildvcs=false -ldflags=-buildid= -o /build/proofv2report ./cmd/proofv2report
+
 # ═══════════════════════════════════════════════════════════════
 # Production Stage
 # ═══════════════════════════════════════════════════════════════
@@ -124,6 +128,7 @@ COPY --from=builder /build/validator .
 COPY --from=builder /build/govproof .
 COPY --from=builder /build/txhash .
 COPY --from=builder /build/schemamigrate .
+COPY --from=builder /build/proofv2report .
 
 # Create directories for persistent storage
 RUN mkdir -p /app/bft-keys \

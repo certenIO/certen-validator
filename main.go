@@ -41,6 +41,7 @@ import (
 	"github.com/certen/independant-validator/pkg/metrics"
 	"github.com/certen/independant-validator/pkg/proof"
 	"github.com/certen/independant-validator/pkg/proofrequests"
+	"github.com/certen/independant-validator/pkg/proofv2shadow"
 	"github.com/certen/independant-validator/pkg/server"
 	"github.com/certen/independant-validator/pkg/strategy"
 )
@@ -2198,6 +2199,18 @@ func startValidator(
 		// Wire repositories for intent lifecycle tracking
 		intentDiscovery.SetRepositories(batchComponents.Repos)
 		log.Printf("✅ Intent lifecycle tracking wired to intent discovery")
+
+		// Proof v2 in shadow (RB6 Phase A): built beside every v1 proof, never feeding govRoot. PROOF_V2_SHADOW=off
+		// turns it off; it starts in the background and cannot hold up or fail an intent.
+		if os.Getenv("PROOF_V2_SHADOW") != "off" {
+			if pin, perr := consensus.AccumulateIncarnation(); perr != nil {
+				log.Printf("⚠️ [PROOF-V2-SHADOW] not started: %v", perr)
+			} else {
+				shadow := proofv2shadow.NewLazy(database.NewProofV2ShadowRepository(dbClient), log.Printf)
+				intentDiscovery.SetProofV2Shadow(shadow)
+				go shadow.Start(strings.TrimSuffix(cfg.AccumulateURL, "/")+"/v3", pin)
+			}
+		}
 
 		// Leg counts (legs_completed / legs_failed) and the intent's status are derived from each
 		// chain member's recorded outcome (IntentLifecycleRepository.RecordMemberOutcome, RB3-F50).
