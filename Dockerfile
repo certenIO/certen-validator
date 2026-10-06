@@ -115,7 +115,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -trimpath -buildvcs=
 FROM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
 
 # Install runtime dependencies (versions pinned; see the builder stage)
-RUN apk add --no-cache ca-certificates=20260909-r0 tzdata=2026d-r0
+RUN apk add --no-cache ca-certificates=20260909-r0 tzdata=2026e-r0
 
 # Create unprivileged user for security
 RUN adduser -D -s /bin/sh validator
