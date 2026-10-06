@@ -228,11 +228,11 @@ func deriveMember(ctx context.Context, c OutcomeChain, t *OutcomeTree, m Outcome
 			ErrOutcome, before, claim.Time, horizon)
 	}
 	if asOf < claim.Number.Uint64() {
-		// The leaf is read unconsumed at an agreed block ethrpc.RecentStateDepth below the head: the claim block is
+		// The leaf is read unconsumed at an agreed block ethrpc.RecentStateDepthFor(chain) below the head: the claim block is
 		// covered once the head is that far past it. On a chain whose blocks stop when idle only transactions make
 		// those blocks: the clock's heartbeat is told (RB7 T-9).
 		if a, ok := c.(chainTimeAwaiter); ok {
-			a.AwaitBlock(fmt.Sprintf("the outcome of operation %x", m.OperationID[:8]), claim.Number.Uint64()+ethrpc.RecentStateDepth)
+			a.AwaitBlock(fmt.Sprintf("the outcome of operation %x", m.OperationID[:8]), claim.Number.Uint64()+ethrpc.RecentStateDepthFor(t.ChainID))
 		}
 		return none, time.Time{}, nil, outcomeNotYet("its leaf is known unconsumed only as of block %d, before the claim block %d",
 			asOf, claim.Number.Uint64())

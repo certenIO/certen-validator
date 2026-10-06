@@ -18,6 +18,8 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/rpc"
+
+	"github.com/certen/independant-validator/pkg/supportedchains"
 )
 
 // MinAgreeingProviders is how many independent providers must answer, and agree, before a settlement's finality facts are
@@ -378,6 +380,17 @@ func (r *AgreeingReader) AgreedLists(ctx context.Context, what string, read func
 // head's recent past only).
 const RecentStateDepth = 3
 
+// RecentStateDepthFor is the depth RecentAgreedHeader reads at for chainID: RecentStateDepth, except on a chain the
+// catalogue says is final the moment a block exists (supportedchains.Chain.InstantFinality), whose head is read as it
+// stands: there is no reorg for the depth to ride out, and on a chain that makes a block only when a transaction lands the
+// head can be the very block an anchor was created in.
+func RecentStateDepthFor(chainID int64) uint64 {
+	if c, ok := supportedchains.Lookup(chainID); ok && c.InstantFinality {
+		return 0
+	}
+	return RecentStateDepth
+}
+
 // RecentAgreedHeader is a recent block every answering provider holds identically: the header at RecentStateDepth below
 // the lowest latest head any of them reports. It is the block agreed eth_calls read state at (CallContractAtHash). It is
 // NOT a finalized block; a caller that needs finality establishes it separately.
@@ -387,8 +400,8 @@ func (r *AgreeingReader) RecentAgreedHeader(ctx context.Context) (*types.Header,
 		return nil, err
 	}
 	n := latest.Number.Uint64()
-	if n > RecentStateDepth {
-		n -= RecentStateDepth
+	if d := RecentStateDepthFor(r.chainID); n > d {
+		n -= d
 	}
 	return r.HeaderByNumber(ctx, new(big.Int).SetUint64(n))
 }
