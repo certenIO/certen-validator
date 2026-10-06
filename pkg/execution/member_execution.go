@@ -204,7 +204,7 @@ func (o *ExternalChainObserver) committedSlotsHold(ctx context.Context, result *
 	if len(state) == 0 {
 		return nil, nil
 	}
-	return slotsHoldAt(o.fetchStateProofs(ctx, result.BlockNumber, state), result.StateRoot, state)
+	return slotsHoldAt(o.fetchStateProofs(ctx, result.BlockNumber, result.StateRoot, state), result.StateRoot, state)
 }
 
 // slotsHoldAt is committedSlotsHold over proofs already read: each committed slot needs a proof that

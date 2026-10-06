@@ -328,6 +328,11 @@ type BatchEnqueuer interface {
 	// An error is CERTEN unable to name it, never the intent's defect.
 	AnchorOf(chainID int64) (common.Address, error)
 
+	// StateProofServable is nil when some provider of chainID serves eth_getProof at the chain's finalized depth, which a
+	// leg committing a storage slot (expectedState) is proven with. Otherwise it is the named STATE_PROOF_WINDOW_UNAVAILABLE
+	// refusal wrapping ErrBatchUnavailable: CERTEN's deployment cannot prove it, never the intent's defect.
+	StateProofServable(chainID int64) error
+
 	// EnqueueAfter queues a later member of a sequential cross-chain intent: settled only once its
 	// predecessor (the intent's member on after.ChainID, queued first) has its outcome on chain.
 	// Same errors as EnqueueForBatch.
