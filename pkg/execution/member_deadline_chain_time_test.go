@@ -182,15 +182,16 @@ var wallClockReads = map[string]struct {
 	"g2_outcome_binding.go":    {3, "verification timestamps and duration"},
 	"member_repair_runner.go": {5, "the operator repair's own report: how long it waits for the proof cycle; the member's " +
 		"outcome is untouched"},
-	"outcome_backfill.go":  {1, "RetainedAt: a timestamp"},
-	"outcome_recorder.go":  {1, "the recorder's failover rotation: who records, measured from ResolvedAt (chain time)"},
-	"outcome_retention.go": {1, "RetainedAt: a timestamp"},
-	"proof_recovery.go":    {1, "RequestedAt: a timestamp"},
-	"result_quorum.go":     {1, "CreatedAt: a timestamp"},
-	"unified_adapter.go":   {2, "a duration for the log"},
+	"outcome_backfill.go":      {1, "RetainedAt: a timestamp"},
+	"outcome_recorder.go":      {1, "the recorder's failover rotation: who records, measured from ResolvedAt (chain time)"},
+	"outcome_retention.go":     {1, "RetainedAt: a timestamp"},
+	"proof_recovery.go":        {1, "RequestedAt: a timestamp"},
+	"result_quorum.go":         {1, "CreatedAt: a timestamp"},
+	"unified_adapter.go":       {2, "a duration for the log"},
+	"phase7_chain_decision.go": {1, "QueuedAt: a timestamp (the observation ends only on the chain's decision)"},
 	"unified_orchestrator.go": {18, "timestamps (CompletedAt, VerifiedAt, FinalizedAt, ConfirmedAt), Phase 8's peer rounds " +
 		"and the message-freshness replay guard (a failed Phase 8 records proof_pending, re-driven by ProofRecovery), and " +
-		"durations - see the RB7 Task 4 stream B report for the Phase 7 observation bound (escalated)"},
+		"durations; Phase 7's observation is ended only by the chain (phase7_chain_decision.go)"},
 }
 
 func TestEveryWallClockReadInTheExecutionPathIsClassified(t *testing.T) {
@@ -267,6 +268,36 @@ func TestTheWallClockReleaseRecordsNothing(t *testing.T) {
 		// pastDeadlineOnChain (and, in batch_assembly.go, pastAttestationWindowOnChain through pastAttestationWindow).
 		if n := strings.Count(readSource(t, file), "astDeadlineOnChain(ctx, "); n != want {
 			t.Fatalf("%s reads the chain's deadline %d times, want %d", file, n, want)
+		}
+	}
+}
+
+// The sweep beyond pkg/execution: the Phase 7 observation path and consensus admission. Every read is classified.
+var wallClockReadsBeyond = map[string]struct {
+	n       int
+	verdict string
+}{
+	"../ethrpc/finality.go": {5, "the bound of ONE observation attempt (SettledInFinalizedChain, WaitForFinalizedHeight): Phase 7 " +
+		"re-triggers the next attempt and ends only on the chain's decision"},
+	"../chain/strategy/evm_observer.go": {7, "the bound of one attempt, ObservedAt timestamps, and the TRON-only receipt path " +
+		"(outside the supported set, RB8)"},
+	"../consensus/bft_integration.go": {7, "ESCALATED, unchanged: intent admission judges a NEW intent's expires_at at this " +
+		"machine's clock (deadlineInstant); moving it to a time every validator agrees on changes which intents are proposed " +
+		"and committed - consensus behaviour - so it is the owner's decision (RB7 Task 4 stream B report). The rest are " +
+		"record timestamps and a comment"},
+	"../consensus/committed_operations.go": {2, "a duration for the log"},
+}
+
+func TestEveryWallClockReadInThePhase7AndAdmissionPathsIsClassified(t *testing.T) {
+	for file, w := range wallClockReadsBeyond {
+		n := 0
+		for _, line := range strings.Split(readSource(t, file), string(rune(10))) {
+			if strings.Contains(line, "time.Now()") || strings.Contains(line, "time.Since(") || strings.Contains(line, "time.Until(") {
+				n++
+			}
+		}
+		if n != w.n {
+			t.Errorf("%s reads the wall clock %d time(s), classified %d (%s)", file, n, w.n, w.verdict)
 		}
 	}
 }

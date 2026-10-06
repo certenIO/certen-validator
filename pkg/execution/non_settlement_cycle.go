@@ -288,16 +288,34 @@ func (o *UnifiedOrchestrator) handlePeerNonSettlement(ctx context.Context, req *
 	}
 	var opID [32]byte
 	copy(opID[:], opBytes)
-	own, ok := o.config.MemberLookup(c.ChainID, opID)
-	if !ok {
+	// This validator's own facts of the member: its queued copy, or - once the member has left its queues (its settlement
+	// was sent) - the tree it kept and signed (RB7 D7: a settlement that never reached the finalized chain is handed to
+	// its non-settlement by Phase 7).
+	var facts NonSettlementFacts
+	if own, ok := o.config.MemberLookup(c.ChainID, opID); ok {
+		if own.IntentID != msg.IntentID {
+			return fail(fmt.Sprintf("operation %s is intent %s here, not %s", c.OperationID, own.IntentID, msg.IntentID))
+		}
+		f, ferr := memberFacts(own)
+		if ferr != nil {
+			return fail(fmt.Sprintf("non-settlement not reproduced: %v", ferr))
+		}
+		facts = f
+	} else if kept, ok := o.keptMemberByOperation(c.ChainID, opID); ok {
+		if kept.IntentID != msg.IntentID {
+			return fail(fmt.Sprintf("operation %s is intent %s here, not %s", c.OperationID, kept.IntentID, msg.IntentID))
+		}
+		f, ferr := keptMemberFacts(kept.IntentID, c.ChainID, kept)
+		if ferr != nil {
+			return fail(fmt.Sprintf("non-settlement not reproduced: %v", ferr))
+		}
+		facts = f
+	} else {
 		return fail(fmt.Sprintf("member %s on chain %d is not held by this validator", c.OperationID, c.ChainID))
-	}
-	if own.IntentID != msg.IntentID {
-		return fail(fmt.Sprintf("operation %s is intent %s here, not %s", c.OperationID, own.IntentID, msg.IntentID))
 	}
 	vctx, cancel := context.WithTimeout(ctx, o.config.ObservationTimeout)
 	defer cancel()
-	if err := verifyNonSettlementClaim(vctx, o.config.NonSettlementChain, own, msg); err != nil {
+	if err := verifyNonSettlementFacts(vctx, o.config.NonSettlementChain, facts, msg); err != nil {
 		if errors.Is(err, ErrNotYetFinalized) {
 			// The claim's (pinned) block is not final in this validator's view yet: asked again, not refused (RB5-F49).
 			return notYet(fmt.Sprintf("non-settlement not reproducible yet: %v", err))

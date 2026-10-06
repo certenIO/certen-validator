@@ -280,18 +280,27 @@ func observeNonSettlementAt(ctx context.Context, rd NonSettlementChain, f NonSet
 // copy of the member and its own reads of the chain. It returns nil only when the peer reproduces
 // the claim's result hash exactly.
 func verifyNonSettlementClaim(ctx context.Context, rd NonSettlementChain, own *PendingBatchIntent, msg *attestation.AttestationMessage) error {
-	c := msg.NonSettlement
-	if c == nil {
+	if msg.NonSettlement == nil {
 		return fmt.Errorf("no non-settlement claim")
 	}
 	f, err := memberFacts(own)
 	if err != nil {
 		return err
 	}
+	return verifyNonSettlementFacts(ctx, rd, f, msg)
+}
+
+// verifyNonSettlementFacts is verifyNonSettlementClaim from this validator's own facts of the member: its queued copy,
+// or the tree it kept and signed (keptMemberFacts).
+func verifyNonSettlementFacts(ctx context.Context, rd NonSettlementChain, f NonSettlementFacts, msg *attestation.AttestationMessage) error {
+	c := msg.NonSettlement
+	if c == nil {
+		return fmt.Errorf("no non-settlement claim")
+	}
 	account, leaf, deadline := f.Account, f.Leaf, f.Deadline
 	if !strings.EqualFold(c.Account, account.Hex()) || !strings.EqualFold(c.Leaf, common.Hash(leaf).Hex()) ||
-		c.Deadline != deadline.Unix() || c.ChainID != own.ChainID ||
-		!strings.EqualFold(c.OperationID, common.Hash(own.OperationID).Hex()) {
+		c.Deadline != deadline.Unix() || c.ChainID != f.ChainID ||
+		!strings.EqualFold(c.OperationID, common.Hash(f.OperationID).Hex()) {
 		return fmt.Errorf("the claim's member (account %s, leaf %s, deadline %d) is not this validator's member (account %s, leaf %s, deadline %d)",
 			c.Account, c.Leaf, c.Deadline, account.Hex(), common.Hash(leaf).Hex(), deadline.Unix())
 	}

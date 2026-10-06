@@ -2015,6 +2015,7 @@ func startValidator(
 		MemberLookup:             stack.Mempool.FindMember,
 		NonSettlementChain:       execution.NonSettlementChainFromResolver(resolver),
 		NonSettlements:           nonSettlements,
+		OutcomeTrees:             stack.OutcomeTrees,
 		MemberOutcomes:           memberOutcomes,
 		ProofCompletions:         proofCompletions,
 		// The Accumulate validator-set evidence every V8.2 proof carries (RB5-F4): the Directory's set and threshold
