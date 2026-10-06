@@ -2097,6 +2097,14 @@ func startValidator(
 	}
 	intentDiscovery.SetUnsearchedBlocks(unsearchedBlocks)
 	log.Printf("✅ [DISCOVERY] unsearched blocks kept at %s; searched again every 30s", unsearchedBlocks.Path())
+	// Intents waiting for their consensus-bound proof are kept here until their retry ends, and resumed at start
+	// (RB6-F12): a retry held only in memory was lost with the process and left its intent `authorized` for good.
+	retryJournal, rjErr := intent.OpenFileRetryJournal(filepath.Join(nsDataDir, "intent_retries.json"))
+	if rjErr != nil {
+		return nil, nil, fmt.Errorf("intent discovery: %w", rjErr)
+	}
+	intentDiscovery.SetRetryJournal(retryJournal)
+	log.Printf("✅ [DISCOVERY] pending intent retries kept at %s; resumed at start", retryJournal.Path())
 
 	// This is the critical hook: IntentDiscovery calls the canonical BFT consensus method
 	// BFTValidator.ExecuteCanonicalIntentWithBFTConsensus(ctx, certenIntent, certenProof, blockHeight)

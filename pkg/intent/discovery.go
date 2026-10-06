@@ -147,6 +147,7 @@ type intentRetryJob struct {
 	intent      *CertenIntent
 	blockHeight uint64
 	attempts    int
+	lastErr     error // why the intent is being retried: the cause recorded if its retry ends in failure
 }
 
 // IntentStatus represents the processing state of an intent
@@ -230,12 +231,23 @@ type IntentDiscovery struct {
 	entitlementStore   *entitlement.Store
 	entitlementEnforce func() bool
 
-	// on_demand consensus-bound proof retry queue (decoupled from block workers).
-	// In-session only: after a restart the rewound watermark rediscovers the intent, and a second
-	// execution is prevented where it would happen - its committed ValidatorBlock is not broadcast
-	// again and a member with an outcome is not queued again (RB3-F141). Failed records remain
-	// lifecycle=failed in PostgreSQL for alerting.
+	// on_demand consensus-bound proof retry queue (decoupled from block workers). The queue is in memory;
+	// every job on it is also kept in `retries` until it ends, and the kept retries are put back on the queue
+	// when discovery starts (RB6-F12). This said the rewound watermark rediscovered an intent after a restart -
+	// it does not: its block was passed as searched when the retry was queued, so a retry lost with the process
+	// left the intent `authorized` for good. A second execution of a resumed intent is prevented where it would
+	// happen - its committed ValidatorBlock is not broadcast again and a member with an outcome is not queued
+	// again (RB3-F141).
 	retryCh chan *intentRetryJob
+
+	// retries keeps every queued retry until it ends (retry_journal.go, RB6-F12).
+	retries RetryJournal
+
+	// retryProcess runs one retried intent; nil is processIntent (tests replace it).
+	retryProcess func(intent *CertenIntent, blockHeight uint64) (consensus.TargetChainOutcome, error)
+
+	// failureWriter records an intent's terminal failure; nil is the lifecycle repository (tests replace it).
+	failureWriter lifecycleStatusWriter
 
 	// unsearched keeps blocks whose search failed until they are searched (RB3-F125, unsearched_blocks.go).
 	unsearched UnsearchedBlockStore
@@ -437,8 +449,10 @@ func (id *IntentDiscovery) StartMonitoring() {
 	id.logger.Printf("   - Block workers: %d (catch-up rate scales with this, not with "+
 		"MaxConcurrentBlocks, which only sizes the queue)", workerCount)
 
-	// Start the decoupled on_demand consensus-bound proof retry worker
+	// Start the decoupled on_demand consensus-bound proof retry worker, and put back on its queue every retry
+	// an earlier run left unfinished (RB6-F12).
 	go id.retryWorker()
+	go id.resumeRetriesLoop()
 
 	// Start main monitoring loop
 	go id.monitoringLoop()
@@ -829,6 +843,10 @@ const unsearchedRetryInterval = 30 * time.Second
 // SetUnsearchedBlocks gives discovery the store its unsearched blocks are kept in.
 func (id *IntentDiscovery) SetUnsearchedBlocks(s UnsearchedBlockStore) { id.unsearched = s }
 
+// SetRetryJournal gives discovery the journal its pending retries are kept in (RB6-F12). Without one a retry
+// cannot outlive the process, so none is queued: the intent is recorded failed instead.
+func (id *IntentDiscovery) SetRetryJournal(j RetryJournal) { id.retries = j }
+
 // searchUnsearchedLoop searches kept blocks again until each is searched.
 func (id *IntentDiscovery) searchUnsearchedLoop() {
 	t := time.NewTicker(unsearchedRetryInterval)
@@ -1136,12 +1154,12 @@ func (id *IntentDiscovery) processBlock(job *BlockProcessJob, workerID string) e
 			// is returned before any execution/anchor side effect, so the retry is replay-safe.
 			if errors.Is(err, errChainedProofUnavailable) {
 				id.logger.Printf("🔁 Intent %s requeued for consensus-bound proof retry", intent.IntentID)
-				id.enqueueRetry(&intentRetryJob{intent: intent, blockHeight: job.BlockHeight})
+				id.enqueueRetry(&intentRetryJob{intent: intent, blockHeight: job.BlockHeight, lastErr: err})
 			} else {
 				id.logger.Printf("   Intent %s marked as 'failed'", intent.IntentID)
 				// Intent lifecycle: record terminal failure (non-fatal)
-				if id.repos != nil && id.repos.IntentLifecycle != nil {
-					if lcErr := recordLifecycleFailed(id.repos.IntentLifecycle, intent.IntentID, err); lcErr != nil {
+				if w := id.lifecycleFailureWriter(); w != nil {
+					if lcErr := recordLifecycleFailed(w, intent.IntentID, err); lcErr != nil {
 						id.logger.Printf("⚠️ [LIFECYCLE] Failed to update lifecycle to failed for %s: %v", intent.IntentID, lcErr)
 					}
 				}
@@ -1164,10 +1182,9 @@ func (id *IntentDiscovery) processBlock(job *BlockProcessJob, workerID string) e
 			// and neither was.
 			switch {
 			case outcome == consensus.TargetChainOutcomeUnset:
-				// Declined by the entitlement pre-screen: nothing was submitted, so
-				// there is no settlement to be pending or complete.
-				id.logger.Printf("⏭️ Intent %s handled with no target-chain submission (declined before execution)",
-					intent.IntentID)
+				// Nothing reports no outcome with no error any more: a declined intent is an error, recorded
+				// failed above (RB6-F12). Said by name should it ever happen, never read as a decline.
+				id.logger.Printf("🚨 Intent %s got through consensus with no target-chain outcome reported", intent.IntentID)
 			case outcome.IsConfirmed():
 				id.logger.Printf("✅ Intent %s processed and its target-chain settlement is CONFIRMED",
 					intent.IntentID)
@@ -1468,17 +1485,164 @@ func (id *IntentDiscovery) buildChainedCertenProof(ctx context.Context, accountU
 	return nil, lastErr
 }
 
-// enqueueRetry submits an on_demand intent for decoupled retry. Non-blocking: if the queue is
-// full the retry is dropped and the intent remains failed (lifecycle=failed) for alerting.
+// enqueueRetry queues an intent for another attempt at its consensus-bound proof, kept in the retry journal first
+// so the retry outlives this process (RB6-F12). A retry that cannot be both kept and queued is not dropped: its
+// intent is recorded failed with the cause, so it never stays `authorized` with nothing left to move it. A full
+// queue used to drop the retry with a log line claiming the intent "remains failed" - it was never recorded failed.
 func (id *IntentDiscovery) enqueueRetry(job *intentRetryJob) {
 	if id.retryCh == nil {
+		id.abandonRetry(job, "no retry worker is running")
+		return
+	}
+	if err := id.keepRetry(job); err != nil {
+		id.abandonRetry(job, err.Error())
 		return
 	}
 	select {
 	case id.retryCh <- job:
 	default:
-		id.logger.Printf("⚠️ [RETRY] retry queue full — dropping retry for on_demand intent %s (remains failed)", job.intent.IntentID)
+		id.abandonRetry(job, fmt.Sprintf("the retry queue is full (%d waiting)", cap(id.retryCh)))
 	}
+}
+
+// keepRetry records job in the retry journal.
+func (id *IntentDiscovery) keepRetry(job *intentRetryJob) error {
+	if id.retries == nil {
+		return errors.New("no retry journal is configured, so the retry would not outlive this process")
+	}
+	last := ""
+	if job.lastErr != nil {
+		last = job.lastErr.Error()
+	}
+	if err := id.retries.Keep(PendingRetry{IntentID: job.intent.IntentID, BlockHeight: job.blockHeight,
+		Attempts: job.attempts, LastError: last}); err != nil {
+		return fmt.Errorf("the retry could not be kept: %w", err)
+	}
+	return nil
+}
+
+// retryEnded removes an ended retry from the journal.
+func (id *IntentDiscovery) retryEnded(intentID string) {
+	if id.retries == nil {
+		return
+	}
+	if err := id.retries.Drop(intentID); err != nil {
+		// Kept, it is resumed at the next start and ends again there; never lost.
+		id.logger.Printf("⚠️ [RETRY] intent %s: its ended retry stays in the journal: %v", intentID, err)
+	}
+}
+
+// abandonRetry ends a retry that cannot continue: its intent is recorded failed with the cause it was retried for.
+func (id *IntentDiscovery) abandonRetry(job *intentRetryJob, why string) {
+	cause := job.lastErr
+	if cause == nil {
+		cause = errChainedProofUnavailable
+	}
+	id.retryFailed(job, fmt.Errorf("%w; its retry on this validator ended: %s", cause, why))
+}
+
+// retryFailed records a retried intent's terminal failure and ends its retry. A failure that could not be recorded
+// keeps the retry in the journal, so the next start resumes it rather than leave the intent `authorized`.
+func (id *IntentDiscovery) retryFailed(job *intentRetryJob, cause error) {
+	id.logger.Printf("❌ [RETRY] on_demand intent %s FAILED after %d attempt(s): %v", job.intent.IntentID, job.attempts, cause)
+	w := id.lifecycleFailureWriter()
+	if w == nil {
+		id.logger.Printf("🚨 [LIFECYCLE] intent %s failed but no lifecycle store is wired to record it", job.intent.IntentID)
+		return
+	}
+	if err := recordLifecycleFailed(w, job.intent.IntentID, cause); err != nil {
+		id.logger.Printf("🚨 [LIFECYCLE] intent %s failed and the failure was not recorded (%v); its retry is kept for the next start",
+			job.intent.IntentID, err)
+		return
+	}
+	id.retryEnded(job.intent.IntentID)
+}
+
+// lifecycleFailureWriter is where terminal failures are recorded; nil when none is wired.
+func (id *IntentDiscovery) lifecycleFailureWriter() lifecycleStatusWriter {
+	if id.failureWriter != nil {
+		return id.failureWriter
+	}
+	if id.repos != nil && id.repos.IntentLifecycle != nil {
+		return id.repos.IntentLifecycle
+	}
+	return nil
+}
+
+// resumeRetriesLoop puts every retry an earlier run left unfinished back on the queue, rebuilding each intent from
+// its block exactly as discovery built it. A block that cannot be searched now is tried again on the unsearched
+// blocks' cadence until every kept retry is resumed.
+func (id *IntentDiscovery) resumeRetriesLoop() {
+	resumed := map[string]bool{}
+	for !id.resumeRetriesOnce(resumed) {
+		select {
+		case <-id.stopCh:
+			return
+		case <-time.After(unsearchedRetryInterval):
+		}
+	}
+}
+
+// resumeRetriesOnce resumes every kept retry not resumed yet; it reports whether none is left.
+func (id *IntentDiscovery) resumeRetriesOnce(resumed map[string]bool) bool {
+	if id.retries == nil {
+		return true
+	}
+	kept, err := id.retries.List()
+	if err != nil {
+		id.logger.Printf("🚨 [RETRY] the retry journal is unreadable: %v", err)
+		return false
+	}
+	done := true
+	for _, r := range kept {
+		if resumed[r.IntentID] {
+			continue
+		}
+		job := &intentRetryJob{intent: &CertenIntent{IntentID: r.IntentID}, blockHeight: r.BlockHeight, attempts: r.Attempts,
+			lastErr: errChainedProofUnavailable}
+		if r.LastError != "" {
+			job.lastErr = errors.New(r.LastError)
+		}
+		ci, err := id.intentInBlock(r.BlockHeight, r.IntentID)
+		switch {
+		case errors.Is(err, errIntentNotInBlock):
+			resumed[r.IntentID] = true
+			id.abandonRetry(job, err.Error())
+		case err != nil:
+			id.logger.Printf("⚠️ [RETRY] intent %s: block %d cannot be searched to resume its retry yet: %v", r.IntentID, r.BlockHeight, err)
+			done = false
+		default:
+			resumed[r.IntentID] = true
+			job.intent = ci
+			id.logger.Printf("🔁 [RETRY] resuming the retry of intent %s (block %d, %d attempt(s) so far)", r.IntentID, r.BlockHeight, r.Attempts)
+			id.enqueueRetry(job)
+		}
+	}
+	return done
+}
+
+// errIntentNotInBlock is a kept retry whose intent its block does not carry.
+var errIntentNotInBlock = errors.New("the intent is not in its block")
+
+// intentInBlock rebuilds one intent from its block as discovery builds it.
+func (id *IntentDiscovery) intentInBlock(height uint64, intentID string) (*CertenIntent, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	txs, err := id.client.SearchCertenTransactions(ctx, int64(height))
+	if err != nil {
+		return nil, fmt.Errorf("search block %d: %w", height, err)
+	}
+	for _, tx := range txs {
+		if tx.BlockHeight != int64(height) {
+			continue
+		}
+		ci, err := id.convertCertenTransactionToIntent(tx)
+		if err != nil || ci.IntentID != intentID {
+			continue
+		}
+		return ci, nil
+	}
+	return nil, fmt.Errorf("%w: block %d carries no intent %s", errIntentNotInBlock, height, intentID)
 }
 
 // retryWorker drains the decoupled on_demand retry queue, re-attempting consensus-bound proof
@@ -1528,19 +1692,27 @@ func (id *IntentDiscovery) handleRetryJob(job *intentRetryJob) {
 		return
 	}
 
-	// Idempotency: skip if the intent already completed via any path.
+	// Idempotency: skip if the intent already completed via any path. Its retry has ended either way: a path
+	// processing it now ends it itself (and queues a retry of its own if it needs one).
 	if id.getIntentStatus(job.intent.IntentID) == IntentStatusCompleted {
+		id.retryEnded(job.intent.IntentID)
 		return
 	}
 	if !id.markInProgress(job.intent.IntentID) {
 		// Already in progress or completed elsewhere — do not double-process.
+		id.retryEnded(job.intent.IntentID)
 		return
 	}
 
 	id.logger.Printf("🔁 [RETRY %d/%d] Re-processing on_demand intent %s", job.attempts, maxAttempts, job.intent.IntentID)
-	outcome, err := id.processIntent(job.intent, job.blockHeight)
+	run := id.retryProcess
+	if run == nil {
+		run = id.processIntent
+	}
+	outcome, err := run(job.intent, job.blockHeight)
 	if err == nil {
 		id.markCompleted(job.intent.IntentID)
+		id.retryEnded(job.intent.IntentID)
 		// STAGE 1: "succeeded on retry" means the retry got the intent through
 		// consensus. Whether its settlement has resolved is a separate fact and is
 		// reported as one — this node's dedup marker is not a claim about the
@@ -1551,6 +1723,7 @@ func (id *IntentDiscovery) handleRetryJob(job *intentRetryJob) {
 	}
 
 	id.markFailedClassified(job.intent.IntentID, err)
+	job.lastErr = err
 	if errors.Is(err, errChainedProofUnavailable) && job.attempts < maxAttempts {
 		id.logger.Printf("⏳ [RETRY] on_demand intent %s proof still unavailable (attempt %d/%d): %v",
 			job.intent.IntentID, job.attempts, maxAttempts, err)
@@ -1559,19 +1732,7 @@ func (id *IntentDiscovery) handleRetryJob(job *intentRetryJob) {
 	}
 
 	// Exhausted retries or terminal error — fail closed and record for alerting.
-	id.logger.Printf("❌ [RETRY] on_demand intent %s PERMANENTLY FAILED after %d attempt(s): %v",
-		job.intent.IntentID, job.attempts, err)
-	if id.repos != nil && id.repos.IntentLifecycle != nil {
-		lctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		if lcErr := id.repos.IntentLifecycle.UpdateStatus(lctx, job.intent.IntentID,
-			database.IntentLifecycleFailed,
-			database.WithErrorMessage(err.Error()),
-			database.WithFailureClass(failureClassOf(err)),
-		); lcErr != nil {
-			id.logger.Printf("⚠️ [LIFECYCLE] Failed to mark retry-exhausted intent %s failed: %v", job.intent.IntentID, lcErr)
-		}
-		cancel()
-	}
+	id.retryFailed(job, err)
 }
 
 // processIntent runs one intent all the way through consensus.
@@ -1644,10 +1805,12 @@ func (id *IntentDiscovery) processIntent(intent *CertenIntent, blockHeight uint6
 	// entitlement snapshot, which may lag. It only ever declines work this node
 	// would otherwise do; it can never admit anything.
 	if !id.entitlementPreScreen(intent) {
-		// Refused before anything was spent, so there is no settlement to report —
-		// not a failure, and emphatically not a success. Unset is the only honest
-		// value: nothing was submitted, so nothing is pending either.
-		return consensus.TargetChainOutcomeUnset, nil // refused; nothing spent, nothing to retry
+		// Refused before anything was spent - the same verdict the Phase 3 entitlement check would reach - and
+		// returned as that refusal, so the caller records the intent failed as not_entitled. It used to return no
+		// error and an unset outcome: the caller logged "declined before execution", wrote nothing, and the intent
+		// stayed `authorized` for good with nothing left to move it (RB6-F12).
+		return consensus.TargetChainFailed, fmt.Errorf("intent %s declined before any work: %w: principal %q holds no entitlement in this validator's current epoch",
+			intent.IntentID, consensus.ErrNotEntitled, intent.AccountURL)
 	}
 
 	// Detect if this is a multi-leg intent

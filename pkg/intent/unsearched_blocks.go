@@ -88,23 +88,7 @@ func (s *FileUnsearchedBlocks) save(m map[uint64]UnsearchedBlock) error {
 	if err != nil {
 		return err
 	}
-	tmp := s.path + ".tmp"
-	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
-	if err != nil {
-		return fmt.Errorf("unsearched blocks: %w", err)
-	}
-	if _, err := f.Write(raw); err != nil {
-		f.Close()
-		return fmt.Errorf("unsearched blocks: %w", err)
-	}
-	if err := f.Sync(); err != nil {
-		f.Close()
-		return fmt.Errorf("unsearched blocks: %w", err)
-	}
-	if err := f.Close(); err != nil {
-		return fmt.Errorf("unsearched blocks: %w", err)
-	}
-	if err := os.Rename(tmp, s.path); err != nil {
+	if err := writeFileAtomic(s.path, raw); err != nil {
 		return fmt.Errorf("unsearched blocks: %w", err)
 	}
 	return nil
