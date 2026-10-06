@@ -93,7 +93,7 @@ type ProofRequestInput struct {
 	AccountURL      string  `json:"account_url,omitempty"`
 	ProofClass      string  `json:"proof_class"`                // "on_cadence" or "on_demand"
 	GovernanceLevel string  `json:"governance_level,omitempty"` // "G0", "G1", "G2"
-	CallbackURL     *string `json:"callback_url,omitempty"`
+	CallbackURL     *string `json:"callback_url,omitempty"`     // refused by name: see HandleRequestProof
 	Priority        int     `json:"priority,omitempty"`
 }
 
@@ -139,6 +139,14 @@ func (h *BundleHandlers) HandleRequestProof(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	// A callback would be an unauthenticated outbound request from the validator network to a caller-chosen address.
+	// The field is refused by name, never ignored: the outcome is read from the request or the completed-requests feed.
+	if input.CallbackURL != nil && *input.CallbackURL != "" {
+		h.writeError(w, http.StatusBadRequest, "CALLBACK_NOT_SUPPORTED",
+			"callback_url is not supported; read the request, or page GET /api/v1/proofs/requests/completed")
+		return
+	}
+
 	// Validate input
 	if input.AccumTxHash == "" && input.AccountURL == "" {
 		h.writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "Either accum_tx_hash or account_url is required")
@@ -180,7 +188,6 @@ func (h *BundleHandlers) HandleRequestProof(w http.ResponseWriter, r *http.Reque
 		ProofClass:      input.ProofClass,
 		GovernanceLevel: nilIfEmpty(input.GovernanceLevel),
 		APIKeyID:        &apiKey.KeyID,
-		CallbackURL:     input.CallbackURL,
 		Status:          "pending",
 	}
 	_ = requestID // used for logging

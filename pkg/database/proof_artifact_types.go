@@ -755,7 +755,6 @@ type NewBundleProofRequest struct {
 	ProofClass      string     `json:"proof_class"`
 	GovernanceLevel *string    `json:"governance_level,omitempty"`
 	APIKeyID        *uuid.UUID `json:"api_key_id,omitempty"`
-	CallbackURL     *string    `json:"callback_url,omitempty"`
 	Status          string     `json:"status"`
 }
 
