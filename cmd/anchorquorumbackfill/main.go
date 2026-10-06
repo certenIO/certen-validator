@@ -45,7 +45,7 @@
 // Where the validator runs, with DATABASE_URL, the per-chain RPC configuration and the
 // CERTEN_ANCHOR_V8_<chainId> addresses the batch path uses.
 //
-//	anchorquorumbackfill -chains 84532                              # DRY RUN over the recent range
+//	anchorquorumbackfill -chains 84532 -lookback 50000              # DRY RUN over the last 50,000 blocks
 //	anchorquorumbackfill -chains 84532,11155111 -lookback 200000    # a wider window
 //	anchorquorumbackfill -chains 84532 -from-block N -to-block M    # an exact range
 //	anchorquorumbackfill -chains 84532 -write                       # write what it found
@@ -82,9 +82,9 @@ import (
 func main() {
 	candidatesPath := flag.String("candidates", "", "file of '<chainID>,<txHash>' verify transactions; omit to discover from the chain")
 	chainList := flag.String("chains", "", "comma-separated chain ids to scan for anchors with no canonical row")
-	fromBlock := flag.Uint64("from-block", 0, "first block to scan (0 = derive from -lookback)")
+	fromBlock := flag.Uint64("from-block", 0, "first block to scan (0 = derive from -lookback; one of the two is required)")
 	toBlock := flag.Uint64("to-block", 0, "last block to scan (0 = the chain head)")
-	lookback := flag.Uint64("lookback", 0, "blocks to scan back from the head when -from-block is unset (0 = 50,000)")
+	lookback := flag.Uint64("lookback", 0, "blocks to scan back from the head when -from-block is unset (required then: there is no default window)")
 	window := flag.Uint64("window", 0, "eth_getLogs block window (0 = 2,000)")
 	write := flag.Bool("write", false, "actually write rows; without it the run is a dry run")
 	limit := flag.Int("limit", 0, "stop after this many candidates (0 = all)")
