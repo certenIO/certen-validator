@@ -417,7 +417,6 @@ type NewProofRequest struct {
 	Priority        RequestPriority
 	RequesterID     string
 	APIKeyID        uuid.UUID
-	CallbackURL     string
 }
 
 // BatchPhase5Update is used to update Phase 5 consensus fields on anchor_batches

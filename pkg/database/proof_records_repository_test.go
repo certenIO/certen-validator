@@ -11,6 +11,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -578,7 +579,7 @@ func TestProofRequestLifecycle(t *testing.T) {
 		t.Helper()
 		request, err := requests.CreateRequest(ctx, &NewProofRequest{
 			AccumTxHash: artifact.AccumTxHash, AccountURL: artifact.AccountURL, RequestType: class,
-			GovernanceLevel: GovLevelG1, Priority: priority, RequesterID: requester, CallbackURL: "https://example.invalid/cb",
+			GovernanceLevel: GovLevelG1, Priority: priority, RequesterID: requester,
 		})
 		if err != nil {
 			t.Fatalf("CreateRequest: %v", err)
@@ -589,7 +590,7 @@ func TestProofRequestLifecycle(t *testing.T) {
 	low := newRequest(RequestTypeOnCadence, PriorityLow)
 	urgent := newRequest(RequestTypeOnDemand, PriorityUrgent)
 	defaulted := newRequest(RequestTypeOnDemand, "")
-	if defaulted.Priority != PriorityHigh || urgent.Status != RequestStatusPending || !urgent.CallbackURL.Valid || !urgent.GovernanceLevel.Valid {
+	if defaulted.Priority != PriorityHigh || urgent.Status != RequestStatusPending || !urgent.GovernanceLevel.Valid {
 		t.Fatalf("requests created as %+v / %+v", defaulted, urgent)
 	}
 
@@ -800,5 +801,22 @@ func TestBatchTransactionsWithoutProofsAreReadable(t *testing.T) {
 	byID, err := batches.GetTransaction(ctx, byHash.ID)
 	if err != nil || byID.AccumTxHash != accumTx {
 		t.Fatalf("GetTransaction = %+v, %v", byID, err)
+	}
+}
+
+// RB7 Task 5 (T5-4): no proof request may carry a callback address; the database refuses it, so no binary can reintroduce
+// the validators' outbound POST by writing the column.
+func TestNoProofRequestMayCarryACallbackURL(t *testing.T) {
+	ctx := context.Background()
+	var id uuid.UUID
+	err := testDB.QueryRowContext(ctx, `INSERT INTO proof_requests (accum_tx_hash, proof_class, status) VALUES ($1, 'on_demand', 'pending') RETURNING request_id`,
+		"nocb-"+uuid.NewString()).Scan(&id)
+	if err != nil {
+		t.Fatalf("a request with no callback_url must insert: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testDB.ExecContext(ctx, `DELETE FROM proof_requests WHERE request_id = $1`, id) })
+	_, err = testDB.ExecContext(ctx, `UPDATE proof_requests SET callback_url = 'https://example.invalid/cb' WHERE request_id = $1`, id)
+	if err == nil || !strings.Contains(err.Error(), "chk_no_callback_url") {
+		t.Fatalf("a callback_url must be refused by chk_no_callback_url, got %v", err)
 	}
 }

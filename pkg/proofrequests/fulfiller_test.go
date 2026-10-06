@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
-	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -36,40 +36,6 @@ func openDB(t *testing.T) (*sql.DB, *database.Repositories) {
 		t.Fatalf("migrate: %v", err)
 	}
 	return db, database.NewRepositories(database.NewClientFromDB(db))
-}
-
-// callbackRecorder is a callback endpoint that remembers what it was sent.
-type callbackRecorder struct {
-	mu       sync.Mutex
-	payloads []CallbackPayload
-	server   *httptest.Server
-}
-
-func newCallbackRecorder(t *testing.T) *callbackRecorder {
-	r := &callbackRecorder{}
-	r.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		var p CallbackPayload
-		if err := json.NewDecoder(req.Body).Decode(&p); err == nil {
-			r.mu.Lock()
-			r.payloads = append(r.payloads, p)
-			r.mu.Unlock()
-		}
-		w.WriteHeader(http.StatusNoContent)
-	}))
-	t.Cleanup(r.server.Close)
-	return r
-}
-
-func (r *callbackRecorder) forRequest(id uuid.UUID) []CallbackPayload {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	var out []CallbackPayload
-	for _, p := range r.payloads {
-		if p.RequestID == id {
-			out = append(out, p)
-		}
-	}
-	return out
 }
 
 func newRequest(t *testing.T, db *sql.DB, repos *database.Repositories, input *database.NewProofRequest) *database.ProofRequest {
@@ -117,13 +83,12 @@ func getRequest(t *testing.T, repos *database.Repositories, id uuid.UUID) *datab
 	return request
 }
 
-func TestARequestWhoseProofExistsIsCompletedAndItsCallbackCalled(t *testing.T) {
+func TestARequestWhoseProofExistsIsCompleted(t *testing.T) {
 	db, repos := openDB(t)
-	callbacks := newCallbackRecorder(t)
 	accumTx := "requests-tx-" + uuid.NewString()
 	artifact := newArtifact(t, db, repos, accumTx, "acc://requests.acme/tokens")
 	request := newRequest(t, db, repos, &database.NewProofRequest{
-		AccumTxHash: accumTx, RequestType: database.RequestTypeOnDemand, CallbackURL: callbacks.server.URL + "/done",
+		AccumTxHash: accumTx, RequestType: database.RequestTypeOnDemand,
 	})
 
 	fulfiller(t, repos, time.Now).RunOnce(context.Background())
@@ -131,10 +96,6 @@ func TestARequestWhoseProofExistsIsCompletedAndItsCallbackCalled(t *testing.T) {
 	got := getRequest(t, repos, request.RequestID)
 	if got.Status != database.RequestStatusCompleted || !got.ProofID.Valid || got.ProofID.UUID != artifact.ProofID {
 		t.Fatalf("request after one pass: %+v", got)
-	}
-	sent := callbacks.forRequest(request.RequestID)
-	if len(sent) != 1 || sent[0].Status != "completed" || sent[0].ProofID != artifact.ProofID.String() {
-		t.Fatalf("callbacks = %+v", sent)
 	}
 }
 
@@ -213,9 +174,8 @@ func TestARequestWhoseTransactionIsBatchedIsMarkedBatched(t *testing.T) {
 func TestARequestWithoutAProofFailsAtItsDeadlineAndIsRetriedUntilItsAttemptsRunOut(t *testing.T) {
 	db, repos := openDB(t)
 	ctx := context.Background()
-	callbacks := newCallbackRecorder(t)
 	request := newRequest(t, db, repos, &database.NewProofRequest{
-		AccumTxHash: "requests-never-" + uuid.NewString(), RequestType: database.RequestTypeOnDemand, CallbackURL: callbacks.server.URL,
+		AccumTxHash: "requests-never-" + uuid.NewString(), RequestType: database.RequestTypeOnDemand,
 	})
 	clock := time.Now()
 	now := func() time.Time { return clock }
@@ -242,10 +202,6 @@ func TestARequestWithoutAProofFailsAtItsDeadlineAndIsRetriedUntilItsAttemptsRunO
 			t.Fatalf("a request out of attempts was retried: %s", got.Status)
 		}
 	}
-	sent := callbacks.forRequest(request.RequestID)
-	if len(sent) != 2 || sent[0].Status != "failed" || sent[0].Error == "" {
-		t.Fatalf("failure callbacks = %+v", sent)
-	}
 }
 
 func TestAnAccountRequestIsAnsweredByAProofMadeAfterIt(t *testing.T) {
@@ -270,15 +226,9 @@ func TestAnAccountRequestIsAnsweredByAProofMadeAfterIt(t *testing.T) {
 
 func TestTwoValidatorsSettleARequestOnce(t *testing.T) {
 	db, repos := openDB(t)
-	var calls int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		atomic.AddInt32(&calls, 1)
-		w.WriteHeader(http.StatusOK)
-	}))
-	t.Cleanup(server.Close)
 	accumTx := "requests-race-" + uuid.NewString()
 	newArtifact(t, db, repos, accumTx, "acc://race.acme")
-	request := newRequest(t, db, repos, &database.NewProofRequest{AccumTxHash: accumTx, RequestType: database.RequestTypeOnDemand, CallbackURL: server.URL})
+	request := newRequest(t, db, repos, &database.NewProofRequest{AccumTxHash: accumTx, RequestType: database.RequestTypeOnDemand})
 
 	a, b := fulfiller(t, repos, time.Now), fulfiller(t, repos, time.Now)
 	var wg sync.WaitGroup
@@ -290,25 +240,16 @@ func TestTwoValidatorsSettleARequestOnce(t *testing.T) {
 	if got := getRequest(t, repos, request.RequestID); got.Status != database.RequestStatusCompleted {
 		t.Fatalf("request is %s", got.Status)
 	}
-	if n := atomic.LoadInt32(&calls); n != 1 {
-		t.Fatalf("callback called %d times, want once", n)
-	}
 }
 
-// A validator acting on a stale view of a request (another validator settled it after this one listed
-// it) must not call the callback: only the validator whose terminal update took effect does.
-func TestAValidatorThatLosesTheSettlementDoesNotCallTheCallback(t *testing.T) {
+// A validator acting on a stale view of a request (another validator settled it after this one listed it) does not
+// settle it again: only the validator whose terminal update took effect does.
+func TestAValidatorThatLosesTheSettlementDoesNotSettleAgain(t *testing.T) {
 	db, repos := openDB(t)
 	ctx := context.Background()
-	var calls int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		atomic.AddInt32(&calls, 1)
-		w.WriteHeader(http.StatusOK)
-	}))
-	t.Cleanup(server.Close)
 	accumTx := "requests-stale-" + uuid.NewString()
 	newArtifact(t, db, repos, accumTx, "acc://stale.acme")
-	request := newRequest(t, db, repos, &database.NewProofRequest{AccumTxHash: accumTx, RequestType: database.RequestTypeOnDemand, CallbackURL: server.URL})
+	request := newRequest(t, db, repos, &database.NewProofRequest{AccumTxHash: accumTx, RequestType: database.RequestTypeOnDemand})
 	if err := repos.Requests.MarkProcessing(ctx, request.RequestID); err != nil {
 		t.Fatal(err)
 	}
@@ -321,31 +262,56 @@ func TestAValidatorThatLosesTheSettlementDoesNotCallTheCallback(t *testing.T) {
 	if got := b.settle(ctx, stale); got != outcomeWaiting {
 		t.Fatalf("second settlement of a settled request = %v", got)
 	}
-	if n := atomic.LoadInt32(&calls); n != 1 {
-		t.Fatalf("callback called %d times, want once", n)
-	}
 }
 
-func TestACallbackThatIsNotHTTPIsNotCalled(t *testing.T) {
+// RB7 Task 5 (T5-4): the fulfiller used to POST each outcome, unsigned, to a caller-chosen URL from every validator. It makes
+// no outbound request at all now, whatever happens to a request.
+type countingTransport struct{ n int32 }
+
+func (c *countingTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	atomic.AddInt32(&c.n, 1)
+	return nil, http.ErrUseLastResponse
+}
+
+func TestTheFulfillerMakesNoOutboundRequest(t *testing.T) {
 	db, repos := openDB(t)
-	accumTx := "requests-file-" + uuid.NewString()
-	newArtifact(t, db, repos, accumTx, "acc://file.acme")
-	request := newRequest(t, db, repos, &database.NewProofRequest{AccumTxHash: accumTx, RequestType: database.RequestTypeOnDemand, CallbackURL: "ftp://example.com/proofs"})
-	var called int32
-	f := fulfiller(t, repos, time.Now)
-	f.cfg.HTTPClient = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
-		atomic.AddInt32(&called, 1)
-		return nil, http.ErrUseLastResponse
-	})}
-	f.RunOnce(context.Background())
-	if got := getRequest(t, repos, request.RequestID); got.Status != database.RequestStatusCompleted {
-		t.Fatalf("request is %s", got.Status)
+	ctx := context.Background()
+	counter := &countingTransport{}
+	previous := http.DefaultTransport
+	http.DefaultTransport = counter
+	t.Cleanup(func() { http.DefaultTransport = previous })
+
+	accumTx := "requests-quiet-" + uuid.NewString()
+	newArtifact(t, db, repos, accumTx, "acc://quiet.acme")
+	completed := newRequest(t, db, repos, &database.NewProofRequest{AccumTxHash: accumTx, RequestType: database.RequestTypeOnDemand})
+	failing := newRequest(t, db, repos, &database.NewProofRequest{AccumTxHash: "requests-never-" + uuid.NewString(), RequestType: database.RequestTypeOnDemand})
+
+	clock := time.Now()
+	f := fulfiller(t, repos, func() time.Time { return clock })
+	f.RunOnce(ctx)
+	clock = clock.Add(2 * time.Minute)
+	f.RunOnce(ctx)
+
+	if got := getRequest(t, repos, completed.RequestID); got.Status != database.RequestStatusCompleted {
+		t.Fatalf("request is %s, want completed", got.Status)
 	}
-	if atomic.LoadInt32(&called) != 0 {
-		t.Fatal("a non-http callback URL was called")
+	if got := getRequest(t, repos, failing.RequestID); got.Status != database.RequestStatusFailed {
+		t.Fatalf("request is %s, want failed", got.Status)
+	}
+	if n := atomic.LoadInt32(&counter.n); n != 0 {
+		t.Fatalf("the fulfiller made %d outbound requests", n)
 	}
 }
 
-type roundTripFunc func(*http.Request) (*http.Response, error)
-
-func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+// The tripwire against the callback returning: the worker's source does not even import net/http.
+func TestTheFulfillerSourceHasNoHTTPClient(t *testing.T) {
+	src, err := os.ReadFile("fulfiller.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, banned := range []string{`"net/http"`, "HTTPClient", "CallbackPayload"} {
+		if strings.Contains(string(src), banned) {
+			t.Fatalf("fulfiller.go mentions %s: proof request callbacks were removed", banned)
+		}
+	}
+}
