@@ -173,7 +173,6 @@ func (r *EVMChainResolverImpl) ManagerForChain(chainID int64) (*EthereumContract
 		PrivateKey:           os.Getenv("ETH_PRIVATE_KEY"),
 		CreationContract:     anchorAddr.Hex(),
 		VerificationContract: anchorAddr.Hex(),
-		AccountContract:      chainCfg.AccountFactory,
 		GasLimit:             uint64(chainCfg.GasLimitAnchor),
 		MaxGasPriceGwei:      chainCfg.MaxGasPriceGwei,
 	}

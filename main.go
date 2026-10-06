@@ -31,7 +31,6 @@ import (
 	"github.com/certen/independant-validator/pkg/database"
 	"github.com/certen/independant-validator/pkg/entitlement"
 	"github.com/certen/independant-validator/pkg/envvar"
-	"github.com/certen/independant-validator/pkg/ethereum"
 	"github.com/certen/independant-validator/pkg/ethrpc"
 	"github.com/certen/independant-validator/pkg/execution"
 	"github.com/certen/independant-validator/pkg/execution/contracts"
@@ -690,19 +689,9 @@ func main() {
 	healthStatus.SetAccumulate("connected")
 	log.Println("✅ Connected to Accumulate network")
 
-	// Initialize Ethereum client
-	log.Println("🔗 Connecting to Ethereum network...")
-	ethClient, err := ethereum.NewClient(cfg.EthereumURL, cfg.EthChainID)
-	if err != nil {
-		healthStatus.SetEthereum("disconnected")
-		log.Fatal("Failed to connect to Ethereum:", err)
-	}
-	healthStatus.SetEthereum("connected")
-	log.Println("✅ Connected to Ethereum network")
-
 	// Initialize BFT validator node and consensus
 	log.Printf("🔐 Initializing BFT Validator Node (%s) with full consensus capabilities...", cfg.ValidatorID)
-	validatorNode, batchComponents, err := startValidator(cfg, accClient, ethClient, dbClient, firestoreSyncService)
+	validatorNode, batchComponents, err := startValidator(cfg, accClient, dbClient, firestoreSyncService)
 	if err != nil {
 		log.Fatal("Failed to initialize BFT validator node:", err)
 	}
@@ -1262,7 +1251,6 @@ func loadOrGenerateEd25519Key(cfg *config.Config) (ed25519.PrivateKey, error) {
 func startValidator(
 	cfg *config.Config,
 	accClient accumulate.Client,
-	ethClient *ethereum.Client,
 	dbClient *database.Client,
 	firestoreSyncService *firestore.SyncService,
 ) (*consensus.BFTValidator, *BatchComponents, error) {
@@ -1505,8 +1493,11 @@ func startValidator(
 		anchorLogger := log.New(log.Writer(), "[AnchorManager] ", log.LstdFlags)
 		anchorManager, err = anchor.NewAnchorManager(liteClientAdapter, cfg, proofGenerator, ledgerProvider.GetLedgerStore(), anchorLogger)
 		if err != nil {
+			healthStatus.SetEthereum("disconnected")
 			return nil, nil, fmt.Errorf("failed to create anchor manager: %w", err)
 		}
+		// The anchor manager dials ETHEREUM_URL and reads its chain id, so a built manager means the node answered.
+		healthStatus.SetEthereum("connected")
 		// Now create the wrapper with the real anchor manager
 		anchorWrapper = execution.NewAnchorManagerWrapper(anchorManager)
 		log.Printf("✅ AnchorManager created with LedgerStore integration")

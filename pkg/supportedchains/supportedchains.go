@@ -67,8 +67,6 @@ type Chain struct {
 	LegacyRPCEnv string
 	// GasEnvPrefix prefixes its gas settings: <G>_MAX_GAS_PRICE_GWEI, <G>_MAX_PRIORITY_FEE_GWEI, <G>_GAS_LIMIT_ANCHOR.
 	GasEnvPrefix string
-	// FactoryEnvPrefix prefixes its account factory: <F>_ACCOUNTFACTORY_V6_ADDRESS, then <F>_ACCOUNTFACTORY_ADDRESS.
-	FactoryEnvPrefix string
 
 	// DefaultMaxGasPriceGwei is the gas price ceiling, in gwei of the native token, when <G>_MAX_GAS_PRICE_GWEI is unset.
 	// 0 means no default is compiled in: the ceiling must be configured before the chain can be enabled (a ceiling is a
@@ -110,21 +108,21 @@ var All = []Chain{
 	{
 		ID: 11155111, Name: "ethereum-sepolia", Network: "sepolia", Aliases: []string{"eth-sepolia"},
 		Family: "ethereum", DisplayName: "Ethereum Sepolia", Testnet: true,
-		RPCKey: "ethereum-sepolia", LegacyRPCEnv: "ETHEREUM_URL", GasEnvPrefix: "SEPOLIA", FactoryEnvPrefix: "SEPOLIA",
+		RPCKey: "ethereum-sepolia", LegacyRPCEnv: "ETHEREUM_URL", GasEnvPrefix: "SEPOLIA",
 		DefaultMaxGasPriceGwei: 100, DefaultMaxPriorityFeeGwei: 2, DefaultGasLimitAnchor: 500000,
 		ExplorerURL: "https://sepolia.etherscan.io", NativeSymbol: "ETH", NativeDecimals: 18,
 	},
 	{
 		ID: 84532, Name: "base-sepolia", Network: "base-sepolia",
 		Family: "base", DisplayName: "Base Sepolia", Testnet: true,
-		RPCKey: "base-sepolia", GasEnvPrefix: "BASE", FactoryEnvPrefix: "BASE_SEPOLIA",
+		RPCKey: "base-sepolia", GasEnvPrefix: "BASE",
 		DefaultMaxGasPriceGwei: 1, DefaultMaxPriorityFeeGwei: 0, DefaultGasLimitAnchor: 2000000,
 		ExplorerURL: "https://sepolia.basescan.org", NativeSymbol: "ETH", NativeDecimals: 18,
 	},
 	{
 		ID: 421614, Name: "arbitrum-sepolia", Network: "arbitrum-sepolia",
 		Family: "arbitrum", DisplayName: "Arbitrum Sepolia", Testnet: true,
-		RPCKey: "arbitrum-sepolia", GasEnvPrefix: "ARBITRUM", FactoryEnvPrefix: "ARBITRUM_SEPOLIA",
+		RPCKey: "arbitrum-sepolia", GasEnvPrefix: "ARBITRUM",
 		DefaultMaxGasPriceGwei: 1, DefaultMaxPriorityFeeGwei: 0, DefaultGasLimitAnchor: 2000000,
 		ExplorerURL: "https://sepolia.arbiscan.io", NativeSymbol: "ETH", NativeDecimals: 18,
 		ContractBlockIsParent: true,
@@ -138,7 +136,7 @@ var All = []Chain{
 	{
 		ID: 2017, Name: "telcoin-adiri", Network: "telcoin-adiri", Aliases: []string{"adiri", "tel-adiri"},
 		Family: "telcoin", DisplayName: "Telcoin Adiri", Testnet: true,
-		RPCKey: "telcoin-adiri", GasEnvPrefix: "TELCOIN_ADIRI", FactoryEnvPrefix: "TELCOIN_ADIRI",
+		RPCKey: "telcoin-adiri", GasEnvPrefix: "TELCOIN_ADIRI",
 		DefaultMaxGasPriceGwei: 0, DefaultMaxPriorityFeeGwei: 0, DefaultGasLimitAnchor: 0,
 		ExplorerURL: "https://scan.telcoin.network", NativeSymbol: "TEL", NativeDecimals: 18,
 		// An Adiri block exists only when a consensus commit carries transactions, or closes an epoch (every 21600 s):
