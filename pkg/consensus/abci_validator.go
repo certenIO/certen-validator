@@ -115,12 +115,14 @@ type ValidatorApp struct {
 	blockRulesV11Verdict bool
 	blockRulesV12Verdict bool
 	blockRulesV13Verdict bool
+	blockRulesV14Verdict bool
 	rulesV8FirstVerdict  int64
 	rulesV9FirstVerdict  int64
 	rulesV10FirstVerdict int64
 	rulesV11FirstVerdict int64
 	rulesV12FirstVerdict int64
 	rulesV13FirstVerdict int64
+	rulesV14FirstVerdict int64
 
 	// blockAdminSetChanged: this execution of the block has accepted an admin-set change (a re-seal or an admin
 	// rotation). At most one lands per block (rules v12, admin_rotate_apply.go). Reset by FinalizeBlock.
@@ -136,6 +138,8 @@ type ValidatorApp struct {
 	// blockSpine is the spine genesis and extensions THIS execution of the block accepted (rules v13,
 	// accumulate_spine_apply.go), under the same discipline. Reset by FinalizeBlock.
 	blockSpine spineAcceptances
+	// The anchor-set versions THIS execution of the block accepted (rules v14), judged like the registry's.
+	blockAnchorSetRecords []ledger.AnchorSetRecord
 }
 
 // EntitlementMode is the entitlement mode this chain enforces now: the sealed policy, as changed by every policy
@@ -157,14 +161,17 @@ func (app *ValidatorApp) EntitlementMode() EntitlementMode {
 //   - v8 from then on,
 //   - v9 once a block is decided in a way only v9 decides it: a refused second block for a committed
 //     operation, or a block naming no validator that v8 would have accepted under the chain's name.
-//   - v10, v11, v12 and v13 once a block decides a transaction of the kind each adds (registry, re-seal, admin
-//     rotation, spine genesis or extension), accepted or refused - each older version judged those bytes as a
-//     ValidatorBlock.
+//   - v10, v11, v12, v13 and v14 once a block decides a transaction of the kind each adds (registry, re-seal, admin
+//     rotation, spine genesis or extension, anchor set), accepted or refused - each older version judged those bytes as a
+//     ValidatorBlock. v14's ValidatorBlock rules (anchors, ENTITLEMENT_UNPRICED) apply only once an anchor set is in force, so
+//     they are reached only after a block decided an anchor set.
 //
 // Stamping it (rather than the binary's version) is truthful, and it leaves the older binary able to start
 // on this state until a block makes that genuinely impossible.
 func (app *ValidatorApp) committedRulesVersion() uint64 {
 	switch {
+	case app.rulesV14FirstVerdict > 0:
+		return executionRulesV14
 	case app.rulesV13FirstVerdict > 0:
 		return executionRulesV13
 	case app.rulesV12FirstVerdict > 0:
@@ -289,7 +296,7 @@ func NewValidatorApp(ledgerStore *ledger.LedgerStore, chainID string) *Validator
 			into    *int64
 		}{{executionRulesV8, &app.rulesV8FirstVerdict}, {executionRulesV9, &app.rulesV9FirstVerdict},
 			{executionRulesV10, &app.rulesV10FirstVerdict}, {executionRulesV11, &app.rulesV11FirstVerdict},
-			{executionRulesV12, &app.rulesV12FirstVerdict}, {executionRulesV13, &app.rulesV13FirstVerdict}} {
+			{executionRulesV12, &app.rulesV12FirstVerdict}, {executionRulesV13, &app.rulesV13FirstVerdict}, {executionRulesV14, &app.rulesV14FirstVerdict}} {
 			first, err := ledgerStore.RulesFirstVerdict(v.version)
 			if err != nil {
 				app.logger.Fatalf("❌ the first v%d verdict could not be read: %v - not starting on a ledger this node cannot read", v.version, err)
@@ -536,6 +543,14 @@ func (app *ValidatorApp) CheckTx(ctx context.Context, req *abcitypes.RequestChec
 		}
 		return &abcitypes.ResponseCheckTx{Code: 0, GasWanted: 1, GasUsed: 1}, nil
 	}
+	// The anchor set (rules v14): its shape filters the mempool; the chain, the version and the admin quorum are judged
+	// in FinalizeBlock.
+	if as, ok := DecodeAnchorSet(req.Tx); ok {
+		if err := as.CheckShape(); err != nil {
+			return &abcitypes.ResponseCheckTx{Code: codeAnchorSetRefused, Log: "anchor set refused: " + err.Error()}, nil
+		}
+		return &abcitypes.ResponseCheckTx{Code: 0, GasWanted: 1, GasUsed: 1}, nil
+	}
 	// The Accumulate spine (rules v13): the shape filters the mempool - hex well formed, every record a major header
 	// record, sizes bounded; the chain, the registry in force, the sequence and the records' verification are judged
 	// in FinalizeBlock.
@@ -613,7 +628,26 @@ func (app *ValidatorApp) CheckTx(ctx context.Context, req *abcitypes.RequestChec
 	// processValidatorTransaction, which judges against req.Time — the time of
 	// the block BEING finalized, which is current by construction.
 	approxNow := time.Now().UTC()
-	if reason, err := VerifyEntitlement(&vb, PrincipalOf(&vb), approxNow.Unix(), app.entitlement); err != nil {
+	// Rules v14, as FinalizeBlock will judge the next block: the anchor rule and the priced ceiling, once an anchor set is
+	// in force. A filter here; the authority is FinalizeBlock.
+	// An anchor-set log it cannot read admits the block for FinalizeBlock to judge, as the committed-operation filter
+	// above does: only FinalizeBlock may stop the node over it.
+	var nextSet *ledger.AnchorSetRecord
+	if app.ledgerStore != nil {
+		if log, err := app.ledgerStore.LoadAnchorSet(); err != nil {
+			app.logger.Printf("⚠️ [ANCHOR-SET] CheckTx could not read the anchor set for bundle %s: %v", vb.BundleID, err)
+		} else {
+			nextSet = AnchorSetAt(log, app.LatestHeight()+1)
+		}
+	}
+	if nextSet != nil {
+		if err := CheckChainTargetAnchors(&vb, nextSet); err != nil {
+			return &abcitypes.ResponseCheckTx{Code: codeAnchorNotCommitted, Log: "anchor refused: " + err.Error()}, nil
+		}
+	}
+	checkCfg := app.entitlement
+	checkCfg.RequireCostBasis = nextSet != nil
+	if reason, err := VerifyEntitlement(&vb, PrincipalOf(&vb), approxNow.Unix(), checkCfg); err != nil {
 		metrics.RecordEntitlementDecision("checktx", "refused", reason, PrincipalOf(&vb))
 		app.logger.Printf("🚫 [ENTITLEMENT] CheckTx rejecting bundle=%s principal=%q reason=%s",
 			vb.BundleID, PrincipalOf(&vb), reason)
@@ -687,6 +721,16 @@ func (app *ValidatorApp) processValidatorTransaction(tx []byte) abcitypes.ExecTx
 		return *refused
 	}
 
+	// Rules v14 (RB4-F35, RB4-F6): from the height after the chain's first anchor set, every chain target names its
+	// chain's committed anchor, and the cost ceiling binds - a chain the epoch does not price is refused, never skipped.
+	// Before it, both are exactly v12's verdict.
+	anchorSet := app.anchorSetInForce(int64(app.currentBlockHeight))
+	if refused := app.judgeAnchors(&vb, anchorSet); refused != nil {
+		return *refused
+	}
+	gate := app.entitlement
+	gate.RequireCostBasis = anchorSet != nil
+
 	// Entitlement gate — THE AUTHORITY.
 	//
 	// This is the consensus-enforced point: every validator runs it on every
@@ -697,7 +741,10 @@ func (app *ValidatorApp) processValidatorTransaction(tx []byte) abcitypes.ExecTx
 	// same block time, and freshness judged against wall time would make nodes
 	// disagree about expiry and halt the chain.
 	principal := PrincipalOf(&vb)
-	if reason, err := VerifyEntitlement(&vb, principal, app.currentBlockTime.UTC().Unix(), app.entitlement); err != nil {
+	if reason, err := VerifyEntitlement(&vb, principal, app.currentBlockTime.UTC().Unix(), gate); err != nil {
+		if gate.RequireCostBasis && isV14EntitlementReason(reason) {
+			app.blockRulesV14Verdict = true
+		}
 		metrics.RecordEntitlementDecision("finalizeblock", "refused", reason, principal)
 		app.logger.Printf("🚫 [ENTITLEMENT] REJECTED bundle=%s principal=%q reason=%s height=%d",
 			vb.BundleID, principal, reason, app.currentBlockHeight)
@@ -861,9 +908,11 @@ func (app *ValidatorApp) FinalizeBlock(ctx context.Context, req *abcitypes.Reque
 	app.blockRulesV11Verdict = false
 	app.blockRulesV12Verdict = false
 	app.blockRulesV13Verdict = false
+	app.blockRulesV14Verdict = false
 	app.blockAdminSetChanged = false
 	app.blockSpine = spineAcceptances{}
 	app.blockPolicyChanges, app.blockRotationRecords, app.blockRegistryRecords = nil, nil, nil
+	app.blockAnchorSetRecords = nil
 	// A fresh slice, never [:0]: the previous block's slice may already belong to the persister.
 	app.blockValidatorBlocks = nil
 
@@ -899,6 +948,13 @@ func (app *ValidatorApp) FinalizeBlock(ctx context.Context, req *abcitypes.Reque
 		if ar, ok := DecodeAdminRotate(tx); ok {
 			app.blockRulesV12Verdict = true
 			result := app.processAdminRotate(ar, req.Height)
+			txResults[i] = &result
+			continue
+		}
+		// Nor is the anchor set (rules v14). v13 judged it as a ValidatorBlock.
+		if as, ok := DecodeAnchorSet(tx); ok {
+			app.blockRulesV14Verdict = true
+			result := app.processAnchorSet(as, req.Height)
 			txResults[i] = &result
 			continue
 		}
@@ -1186,6 +1242,22 @@ func (app *ValidatorApp) Query(ctx context.Context, req *abcitypes.RequestQuery)
 		log, err := app.ledgerStore.LoadBLSRegistry()
 		if err != nil {
 			return &abcitypes.ResponseQuery{Code: 1, Log: "failed to read the BLS registry log: " + err.Error()}, nil
+		}
+		b, err := json.Marshal(log)
+		if err != nil {
+			return &abcitypes.ResponseQuery{Code: 1, Log: err.Error()}, nil
+		}
+		return &abcitypes.ResponseQuery{Code: 0, Value: b, Height: app.latestHeight}, nil
+
+	case "/certen/anchor_set":
+		// The committed anchor set log (rules v14): every version the chain accepted, where, and under which id - what a
+		// history check finds each accepted set's record in, and what the operator tool reads the set in force from.
+		if app.ledgerStore == nil {
+			return &abcitypes.ResponseQuery{Code: 1, Log: "ledger store not available"}, nil
+		}
+		log, err := app.ledgerStore.LoadAnchorSet()
+		if err != nil {
+			return &abcitypes.ResponseQuery{Code: 1, Log: "failed to read the anchor set log: " + err.Error()}, nil
 		}
 		b, err := json.Marshal(log)
 		if err != nil {

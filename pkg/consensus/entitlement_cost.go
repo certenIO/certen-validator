@@ -2,6 +2,7 @@ package consensus
 
 import (
 	"fmt"
+	"sort"
 
 	"github.com/certen/independant-validator/pkg/entitlement"
 )
@@ -62,15 +63,38 @@ func legsPerChain(vb *ValidatorBlock) map[int64]int64 {
 // maxInt64 guards the multiplications below.
 const maxInt64 = int64(^uint64(0) >> 1)
 
+// sortedChains is a block's chain ids in ascending order, so every walk over them - and every message naming one - is
+// the same on every node.
+func sortedChains(perChain map[int64]int64) []int64 {
+	ids := make([]int64, 0, len(perChain))
+	for id := range perChain {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	return ids
+}
+
+// UnpricedChains is the chains a block settles on for which the header publishes no cost basis, ascending.
+func UnpricedChains(vb *ValidatorBlock, h entitlement.Header) []int64 {
+	var out []int64
+	for _, id := range sortedChains(legsPerChain(vb)) {
+		if _, found := h.CostBasisFor(id); !found {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
 // WorstCaseCostMicroUSD bounds what executing this block can cost, in micro-USD.
 //
-// Returns ok=false when no basis was published for a chain the block touches. The
-// caller must then SKIP the cost ceiling rather than treat the intent as free:
-// an unpriced chain is one we cannot bound, and refusing on a missing bound would
-// turn a gateway configuration gap into a refusal of legitimate work, while
-// admitting it as zero would let an unpriced chain bypass the ceiling entirely.
-// Neither is acceptable, so the ceiling simply does not apply and the status gate
-// still does.
+// Returns ok=false when no basis was published for a chain the block touches,
+// and an error when a published basis is negative or the bound overflows int64.
+// Neither is a bound. From execution rules v14 the caller REFUSES the block on
+// either (ENTITLEMENT_UNPRICED, ENTITLEMENT_COST_BASIS_INVALID; RB4-F6): an
+// unpriced chain admitted would spend without a ceiling, and admitting it as
+// zero would let it bypass the ceiling entirely. Before v14 the caller skipped
+// the ceiling, and keeps doing so for blocks below the v14 activation, so
+// committed history replays exactly.
 func WorstCaseCostMicroUSD(vb *ValidatorBlock, h entitlement.Header) (total int64, ok bool, err error) {
 	perChain := legsPerChain(vb)
 	if len(perChain) == 0 {
@@ -79,7 +103,8 @@ func WorstCaseCostMicroUSD(vb *ValidatorBlock, h entitlement.Header) (total int6
 		return 0, true, nil
 	}
 
-	for chainID, legs := range perChain {
+	for _, chainID := range sortedChains(perChain) {
+		legs := perChain[chainID]
 		basis, found := h.CostBasisFor(chainID)
 		if !found {
 			return 0, false, nil

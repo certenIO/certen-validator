@@ -446,12 +446,12 @@ const spineRulesVersion = 13
 
 // historyCheckRules reads every committed block of the chain and its result codes and judges them as a node of this
 // binary judges its history before it starts (consensus.CommittedBlockViolations), reporting the verdict for rules
-// (12 or 13: the version whose deploy the check is run before). Against a v12 node it also reads the committed
-// records - the admin record and the BLS registry log, and from a v13 node the spine log - and an accepted registry,
-// re-seal, admin rotation or spine transaction without its record is FOUND. A node on older rules serves no records
+// (12, 13 or 14: the version whose deploy the check is run before). Against a v12 node it also reads the committed
+// records - the admin record and the BLS registry log, from a v13 node the spine log and from a v14 node the anchor set
+// log - and an accepted registry, re-seal, admin rotation, spine transaction or anchor set without its record is FOUND. A node on older rules serves no records
 // over RPC: every acceptance whose record could not be read is then listed as such - never reported as checked - and
-// every node of this binary checks it against its own ledger when it starts; an accepted admin rotation or spine
-// transaction, which no older node can have recorded, is FOUND.
+// every node of this binary checks it against its own ledger when it starts; an accepted admin rotation, spine
+// transaction or anchor set, which no older node can have recorded, is FOUND.
 func historyCheckRules(rpc string, c rpcDoer, rules uint64) error {
 	n, err := readNode(c, rpc)
 	if err != nil {
@@ -497,6 +497,13 @@ func historyCheckRules(rpc string, c rpcDoer, rules uint64) error {
 			if records.Spine, err = readAccumulateSpineLog(c, rpc); err != nil {
 				return err
 			}
+		}
+		if n.appVersion >= anchorSetRulesVersion {
+			anchors, aerr := readAnchorSetLog(c, rpc)
+			if aerr != nil {
+				return aerr
+			}
+			records.AnchorSets = anchors
 		}
 	}
 	kinds := map[string]int{}

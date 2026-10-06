@@ -78,6 +78,10 @@ var (
 	// key a ValidatorBlock's intent signature verifies against, by validator id, deterministically.
 	keyBLSRegistry = []byte("abci:bls_registry") // -> BLSRegistryLog
 
+	// CERTEN's anchor set as the chain recorded it (rules v14, RB4-F35): every accepted version, oldest first. It is the
+	// anchor each ValidatorBlock's chain target must name, per chain, deterministically.
+	keyAnchorSet = []byte("abci:anchor_set") // -> AnchorSetLog
+
 	// Per operation: committed intent signatures and their quorum certificates (RB5 D3).
 	keyIntentQuorumPrefix = []byte("abci:intent_quorum:") // + operation id -> IntentQuorumLog
 )
@@ -594,6 +598,32 @@ func (s *LedgerStore) LoadBLSRegistry() (*BLSRegistryLog, error) {
 	var l BLSRegistryLog
 	if err := json.Unmarshal(b, &l); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal BLSRegistryLog: %w", err)
+	}
+	return &l, nil
+}
+
+// SaveAnchorSet persists the anchor set log.
+func (s *LedgerStore) SaveAnchorSet(l *AnchorSetLog) error {
+	b, err := json.Marshal(l)
+	if err != nil {
+		return fmt.Errorf("failed to marshal AnchorSetLog: %w", err)
+	}
+	return s.kv.Set(keyAnchorSet, b)
+}
+
+// LoadAnchorSet returns the anchor set log: empty when the chain has recorded none, an error when it could not be read -
+// never empty for an unreadable log, which would read as "no anchor set" and decide every block the v13 way.
+func (s *LedgerStore) LoadAnchorSet() (*AnchorSetLog, error) {
+	b, err := s.read(keyAnchorSet, "anchor set")
+	if err != nil {
+		return nil, err
+	}
+	if b == nil {
+		return &AnchorSetLog{}, nil
+	}
+	var l AnchorSetLog
+	if err := json.Unmarshal(b, &l); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal AnchorSetLog: %w", err)
 	}
 	return &l, nil
 }

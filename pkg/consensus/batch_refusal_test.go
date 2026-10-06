@@ -152,7 +152,8 @@ func enqueue(bv *BFTValidator, ci *CertenIntent) error {
 }
 
 func refusalValidator(e BatchEnqueuer) *BFTValidator {
-	return &BFTValidator{validatorID: "validator-test", logger: quietLogger(), batchEnqueuer: e}
+	// The chain has committed the anchors the fake enqueuer settles on (rules v14, anchor_set.go).
+	return &BFTValidator{validatorID: "validator-test", logger: quietLogger(), batchEnqueuer: e, anchorSets: committedTestAnchors()}
 }
 
 func TestEnqueueForBatch_QueuesABatchableIntent(t *testing.T) {

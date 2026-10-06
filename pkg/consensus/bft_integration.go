@@ -438,6 +438,11 @@ type BFTValidator struct {
 	// and a block built without a certificate under one would be refused.
 	intentCertificates IntentCertificateSource
 
+	// anchorSets is where this node learns the anchor set the chain judges chain targets by (rules v14, RB4-F35): the
+	// ValidatorApp, wired in main. Required: without it the node cannot know whether one is in force, and admits nothing
+	// (CheckAnchorSetAdmission).
+	anchorSets AnchorSetSource
+
 	// Entitlement gate mode, so the proposer can decline to sign locally rather
 	// than build a block the fleet will reject anyway. Purely an optimisation:
 	// the authority is the consensus rule in abci_validator.go.
@@ -615,6 +620,13 @@ func (bv *BFTValidator) SetIntentCertificateSource(s IntentCertificateSource) {
 	bv.mu.Lock()
 	defer bv.mu.Unlock()
 	bv.intentCertificates = s
+}
+
+// SetAnchorSetSource installs the source of the committed anchor set intents are admitted against (rules v14).
+func (bv *BFTValidator) SetAnchorSetSource(s AnchorSetSource) {
+	bv.mu.Lock()
+	defer bv.mu.Unlock()
+	bv.anchorSets = s
 }
 
 // SetBatchEnqueuer installs the cross-ADI batch mempool.

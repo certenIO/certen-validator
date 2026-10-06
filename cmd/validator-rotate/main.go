@@ -48,6 +48,14 @@
 //
 //	validator-rotate admin-rotate keygen|status|request|possess|sign|preflight|submit
 //	    Rotate CERTEN's admin set with the admin quorum in force (rules v12; adminrotate.go).
+//
+//	validator-rotate anchor-set status|propose|sign|preflight|submit
+//	    Commit CERTEN's V8 anchor on every settlement chain as consensus state (rules v14; anchorset.go). The first
+//	    anchor set committed activates rules v14.
+//
+//	validator-rotate history-check --rules 14 --rpc http://v1:26657
+//	    As --rules 13, under v14, also no anchor set decided the older way, and every accepted one found in the node's
+//	    anchor set log (from a v14 node). Run against the live chain before deploying v14.
 package main
 
 import (
@@ -122,6 +130,8 @@ func main() {
 		err = adminRotate(os.Args[2:], http.DefaultClient)
 	case "spine-genesis":
 		err = spineGenesis(os.Args[2:], http.DefaultClient)
+	case "anchor-set":
+		err = anchorSet(os.Args[2:], http.DefaultClient)
 	case "-h", "--help", "help":
 		usage()
 		return
@@ -152,7 +162,7 @@ func usage() {
   submit     commit the rotation
   status     the chain's rotation log
   tick       make the chain produce blocks (empty blocks are disabled)
-  history-check  prove no committed transaction is of a kind rules v8 adds (--rules 12 / 13: judge history as v12 / v13 does)
+  history-check  prove no committed transaction is of a kind rules v8 adds (--rules 12 / 13 / 14: judge history as v12 / v13 / v14 does)
 
   bls-possession          on a validator: its BLS registry entry and the key's proof of possession
   bls-registry-propose    assemble the BLS registry (RB5 D3), verify every possession, first admin signature
@@ -174,6 +184,12 @@ func usage() {
   spine-genesis sign       add another admin signature
   spine-genesis preflight  every node on rules v13 agrees; the admin quorum signed it; it is the registry's incarnation
   spine-genesis submit     preflight, then commit it and confirm it is recorded
+
+  anchor-set status       the anchor set in force (none: rules v14 not yet activated), every version, the next one
+  anchor-set propose      every settlement chain's V8 anchor (rules v14), checked, with the first admin signature
+  anchor-set sign         another admin's approval, offline
+  anchor-set preflight    every node on rules v14 agrees, the chain's rule accepts it, every anchor is a contract on its chain
+  anchor-set submit       preflight, then commit it (--dry-run: preflight only); the first one activates rules v14
 
 Run any subcommand with --help for its flags. The runbook is RUNBOOK_F95_CONSENSUS_KEY_ROTATION.md.
 `)
@@ -801,7 +817,7 @@ func kindOf(tx []byte) string {
 func historyCheck(args []string, c rpcDoer) error {
 	fs := flag.NewFlagSet("history-check", flag.ContinueOnError)
 	rpc := fs.String("rpc", "", "one validator's CometBFT RPC (it must hold every block from 1)")
-	rules := fs.Int("rules", 8, "the rules whose continuation to check: 8 (the kinds v8 adds), 12 or 13 (history as v12 or v13 judges it)")
+	rules := fs.Int("rules", 8, "the rules whose continuation to check: 8 (the kinds v8 adds), 12, 13 or 14 (history as v12, v13 or v14 judges it)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -810,10 +826,10 @@ func historyCheck(args []string, c rpcDoer) error {
 	}
 	switch *rules {
 	case 8:
-	case 12, 13:
+	case 12, 13, 14:
 		return historyCheckRules(*rpc, c, uint64(*rules))
 	default:
-		return fmt.Errorf("--rules is 8, 12 or 13")
+		return fmt.Errorf("--rules is 8, 12, 13 or 14")
 	}
 	var st struct {
 		SyncInfo struct {

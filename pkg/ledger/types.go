@@ -305,6 +305,27 @@ type BLSRegistryRecord struct {
 	ID            string `json:"id"` // folded into the app hash of Height
 }
 
+// AnchorSetLog is every version of CERTEN's anchor set this chain has accepted, oldest first (rules v14, RB4-F35). The
+// anchor set in force at a height is the newest version accepted below it.
+type AnchorSetLog struct {
+	Versions []AnchorSetRecord `json:"versions"`
+}
+
+// AnchorSetRecord is one accepted anchor-set version: the anchor contract every ValidatorBlock's chain target must name,
+// per settlement chain.
+type AnchorSetRecord struct {
+	Version uint64           `json:"version"`
+	Height  int64            `json:"height"` // the block that accepted it
+	Anchors []AnchorSetEntry `json:"anchors"`
+	ID      string           `json:"id"` // folded into the app hash of Height
+}
+
+// AnchorSetEntry is one chain's committed anchor.
+type AnchorSetEntry struct {
+	ChainID int64  `json:"chain_id"`
+	Anchor  string `json:"anchor"` // EIP-55 checksummed 0x address
+}
+
 // BLSRegistryMember is one validator of the registry.
 type BLSRegistryMember struct {
 	ValidatorID string `json:"validator_id"`

@@ -1537,6 +1537,8 @@ func startValidator(
 		return nil, nil, fmt.Errorf("the CometBFT engine has no ValidatorApp, so intent certificates cannot be built against the chain's state")
 	}
 	validator.SetIntentCertificateSource(validatorApp)
+	// Rules v13: intents are admitted only against the anchor set the chain committed (RB4-F35).
+	validator.SetAnchorSetSource(validatorApp)
 
 	// The key page G1 is built against is the page that signed, read from the chain - never a
 	// guess. Without a resolver every governance proof fails rather than naming a page.
@@ -2154,11 +2156,10 @@ func startValidator(
 		if err != nil {
 			log.Fatalf("invalid entitlement configuration: %v", err)
 		}
-		entStore := entitlement.NewStore(
-			entStoreCfg,
-			entGateCfg.Keys,
-			log.New(log.Writer(), "[Entitlement] ", log.LstdFlags),
-		)
+		// The store verifies every epoch against the key set CONSENSUS applies - the sealed policy as changed by every
+		// key rotation since, read from committed state at each use - never CERTEN_ENTITLEMENT_KEYS, which is only the
+		// genesis seed a sealed chain ignores. One source: the store holds exactly the epochs the gate accepts.
+		entStore := validatorApp.NewEntitlementStore(entStoreCfg, log.New(log.Writer(), "[Entitlement] ", log.LstdFlags))
 		// Start is non-blocking and a failed first refresh is not fatal: a
 		// validator must boot while the gateway is down. Background context to
 		// match the other long-lived services started here (bftScheduler,
@@ -2218,8 +2219,9 @@ func startValidator(
 			}
 		}()
 
-		log.Printf("✅ [ENTITLEMENT] store wired: mode=%s enabled=%t keys=%d",
-			entGateCfg.Mode, entStore.Enabled(), len(entGateCfg.Keys))
+		consensusKeys, keysErr := validatorApp.EntitlementKeys()
+		log.Printf("✅ [ENTITLEMENT] store wired: mode=%s enabled=%t consensus keys in force=%d (read error: %v)",
+			entGateCfg.Mode, entStore.Enabled(), len(consensusKeys), keysErr)
 	}
 
 	{
