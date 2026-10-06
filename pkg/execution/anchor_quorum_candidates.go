@@ -81,10 +81,9 @@ type CandidateDiscovery struct {
 	ScannedTo map[int64]uint64
 }
 
-const (
-	defaultDiscoveryWindow   = uint64(2000)
-	defaultDiscoveryLookback = uint64(50000)
-)
+// There is deliberately no default look-back: a block count is a different span of time on every chain (50,000
+// blocks is about 3.5 hours on Arbitrum Sepolia and nearly a week on Ethereum Sepolia), so the caller names the range.
+const defaultDiscoveryWindow = uint64(2000)
 
 // DiscoverAnchorQuorumCandidates finds anchors the chain proved and this database never recorded.
 //
@@ -139,7 +138,7 @@ func DiscoverAnchorQuorumCandidates(
 		if from == 0 {
 			lookback := opts.LookbackBlocks
 			if lookback == 0 {
-				lookback = defaultDiscoveryLookback
+				return nil, fmt.Errorf("chain %d: give -from-block or -lookback; there is no default window", chainID)
 			}
 			if lookback >= to {
 				from = 0
