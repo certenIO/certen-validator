@@ -7,7 +7,7 @@ import "testing"
 // RB3-F44: an unconfigured chain has no configuration - never the Ethereum one - and only the chains
 // CERTEN settles on are loaded, with no contract address compiled in.
 func TestEVMChainConfigIsOnlyTheSupportedChainsAndNeverDefaulted(t *testing.T) {
-	for _, k := range []string{"ETHEREUM_URL", "SEPOLIA_ACCOUNTFACTORY_V6_ADDRESS", "SEPOLIA_ACCOUNTFACTORY_ADDRESS"} {
+	for _, k := range []string{"ETHEREUM_URL"} {
 		t.Setenv(k, "")
 	}
 	t.Setenv("ETHEREUM_SEPOLIA_RPC_URL", "http://sepolia.invalid")
@@ -18,7 +18,6 @@ func TestEVMChainConfigIsOnlyTheSupportedChainsAndNeverDefaulted(t *testing.T) {
 	t.Setenv("TELCOIN_ADIRI_RPC_URL", "")
 
 	c := &AnchorConfig{}
-	c.Network.Ethereum.ChainID = 11155111
 	c.Network.Ethereum.RPCURL = "http://sepolia.invalid"
 	c.Network.EVMChains = loadEVMChainsFromEnv()
 
@@ -30,9 +29,6 @@ func TestEVMChainConfigIsOnlyTheSupportedChainsAndNeverDefaulted(t *testing.T) {
 	}
 	if got := c.GetEVMChainConfig(84532); got.RPCURL != "http://base.invalid" || got.ChainID != 84532 {
 		t.Fatalf("Base: %+v", got)
-	}
-	if f := c.GetEVMChainConfig(11155111).AccountFactory; f != "" {
-		t.Fatalf("an unset account factory defaulted to %s", f)
 	}
 }
 

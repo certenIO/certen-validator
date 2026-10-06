@@ -149,8 +149,9 @@ RUN chown -R validator:validator /app
 # Switch to unprivileged user
 USER validator
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+# Health check. /health is served only after all initialisation: a normal boot measured 130-143 s (2026-10-05, BLS-ZK key
+# load about 80 s) and a boot after an execution-rules change also replays the committed history (about 270 s).
+HEALTHCHECK --interval=30s --timeout=10s --start-period=300s --retries=3 \
     CMD wget --no-verbose --tries=1 --spider http://localhost:8080/health || exit 1
 
 # Expose ports
@@ -187,9 +188,6 @@ ENV ENABLE_MERKLE_VERIFICATION=true \
     ENABLE_COMMITMENT_VERIFICATION=true \
     ENABLE_PARALLEL_VERIFICATION=true \
     VERIFICATION_TIMEOUT=30s
-
-# Ethereum defaults (Sepolia testnet)
-ENV ETH_CHAIN_ID=11155111
 
 # CometBFT defaults
 ENV COMETBFT_ENABLED=true \

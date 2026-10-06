@@ -246,6 +246,19 @@ func TestDiscoveryDerivesItsRangeFromTheHead(t *testing.T) {
 	}
 }
 
+// There is no default window: 50,000 blocks is hours on one chain and days on another, so a range-less call names the
+// problem instead of scanning a span nobody chose.
+func TestDiscoveryWithNoRangeRefusesByName(t *testing.T) {
+	s := &fakeScanner{head: 100000, byBlock: map[uint64][]ProofExecutedLog{}}
+	_, err := DiscoverAnchorQuorumCandidates(context.Background(), s, noneHeld, DiscoverOptions{Chains: []int64{84532}})
+	if err == nil || !strings.Contains(err.Error(), "no default window") {
+		t.Fatalf("a call with no range must refuse by name, got %v", err)
+	}
+	if len(s.windows) != 0 {
+		t.Fatalf("scanned %d windows without a range", len(s.windows))
+	}
+}
+
 // assertWindowsAreContiguous fails if the scan left a gap or repeated a block. A gap is an anchor that is
 // never discovered and therefore never backfilled.
 func assertWindowsAreContiguous(t *testing.T, windows [][2]uint64) {

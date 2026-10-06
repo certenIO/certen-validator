@@ -20,7 +20,6 @@ type Config struct {
 	AccumulateCometBVN2 string // CometBFT endpoint for BVN2
 	AccumulateCometBVN3 string // CometBFT endpoint for BVN3 (Kermit network)
 	EthereumURL         string
-	EthChainID          int64
 
 	// Server Configuration
 	ListenAddr  string
@@ -54,9 +53,8 @@ type Config struct {
 	DataDir        string // Base directory for data files
 
 	// Contract Addresses
-	AnchorContractAddress     string
-	AccountAbstractionAddress string
-	CertenContractAddress     string
+	AnchorContractAddress string
+	CertenContractAddress string
 
 	// Service Configuration
 	ValidatorID   string
@@ -111,7 +109,6 @@ type Config struct {
 // CRITICAL: This service only reads these specific variable names:
 //   - ACCUMULATE_URL (not ACCUMULATE_URL_DEVNET or ACCUMULATE_URL_TESTNET)
 //   - ETHEREUM_URL (not ETHEREUM_RPC_URL or ETHEREUM_SEPOLIA_URL)
-//   - ETH_CHAIN_ID (not ETHEREUM_CHAIN_ID)
 //   - ETH_PRIVATE_KEY, ANCHOR_CONTRACT_V2_ADDRESS, etc.
 //
 // All other *_URL variants in .env are ignored by this validator service.
@@ -138,7 +135,6 @@ func loadConfig() (*Config, error) {
 		AccumulateCometBVN2: getEnv("ACCUMULATE_COMET_BVN2", ""), // BVN2 CometBFT endpoint
 		AccumulateCometBVN3: getEnv("ACCUMULATE_COMET_BVN3", ""), // BVN3 CometBFT endpoint (Kermit)
 		EthereumURL:         getEnv("ETHEREUM_URL", ""),
-		EthChainID:          getEnvInt64("ETH_CHAIN_ID", 11155111),
 
 		// Server Configuration - safe defaults
 		ListenAddr:  getEnv("API_HOST", "0.0.0.0") + ":" + getEnv("API_PORT", "8080"),
@@ -172,9 +168,8 @@ func loadConfig() (*Config, error) {
 		DataDir:        getEnv("DATA_DIR", "./data"),   // Base directory for data files
 
 		// Contract Addresses
-		AnchorContractAddress:     getEnv("ANCHOR_CONTRACT_ADDRESS", ""),
-		AccountAbstractionAddress: getEnv("ACCOUNT_ABSTRACTION_ADDRESS", ""),
-		CertenContractAddress:     getEnv("CERTEN_CONTRACT_ADDRESS", ""),
+		AnchorContractAddress: getEnv("ANCHOR_CONTRACT_ADDRESS", ""),
+		CertenContractAddress: getEnv("CERTEN_CONTRACT_ADDRESS", ""),
 
 		// Service Configuration
 		ValidatorID:   getEnv("VALIDATOR_ID", ""), // required: see main.requireValidatorID (RB3-F89)

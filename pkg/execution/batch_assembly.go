@@ -173,7 +173,6 @@ func (r *EVMChainResolverImpl) ManagerForChain(chainID int64) (*EthereumContract
 		PrivateKey:           os.Getenv("ETH_PRIVATE_KEY"),
 		CreationContract:     anchorAddr.Hex(),
 		VerificationContract: anchorAddr.Hex(),
-		AccountContract:      chainCfg.AccountFactory,
 		GasLimit:             uint64(chainCfg.GasLimitAnchor),
 		MaxGasPriceGwei:      chainCfg.MaxGasPriceGwei,
 	}
@@ -337,6 +336,7 @@ func NewBatchStack(
 			return nil, fmt.Errorf("assembling chain %d: %w", chainID, err)
 		}
 		o := NewBatchOrchestrator(ecm, anchorAddr, prover, mempool, incarnation, logf)
+		o.startStateProofWindowProbe(chainID)
 		// The chain's one clock (RB7 D7), and - only for a chain whose blocks stop when idle - its heartbeat, sent by
 		// this chain's key. Such a chain without CERTEN_CHAIN_HEARTBEAT_<id>=on is refused by name.
 		primary := ""
@@ -1254,6 +1254,13 @@ func (s *BatchStack) CheckMember(
 			ErrOperationAlreadyQueued, intentID, operationID[:8], chainID, holder)
 	}
 	return nil
+}
+
+// StateProofServable satisfies consensus.BatchEnqueuer: nil when some provider of chainID serves a committed storage
+// slot's state proof at the chain's finalized depth, otherwise the named STATE_PROOF_WINDOW_UNAVAILABLE refusal
+// (state_proof_window.go).
+func (s *BatchStack) StateProofServable(chainID int64) error {
+	return StateProofServable(chainID)
 }
 
 // AnchorOf names the CertenAnchorV8 the batch path settles chainID's members on - the resolver's,

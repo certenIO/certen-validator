@@ -137,6 +137,12 @@ func (bv *BFTValidator) planBatch(ci *CertenIntent, commitHeight uint64) (*batch
 		return nil, refuse(fmt.Errorf("intent %s: %w", ci.IntentID, err))
 	}
 
+	// A leg committing a storage slot is proven with eth_getProof at the finalized block: a chain no provider of which
+	// serves that deep is refused by name (state_proof_window.go), retried until one does.
+	if err := bv.checkStateProofsServable(ci); err != nil {
+		return nil, refuse(fmt.Errorf("intent %s: %w", ci.IntentID, err))
+	}
+
 	// The ADI URL is keccak'd into the member's Merkle leaf, and the account contract recomputes
 	// that leaf from its OWN immutable adiURL; see memberADIURL.
 	adiURL, err := memberADIURL(ci)
@@ -225,4 +231,24 @@ func (bv *BFTValidator) refusalResult(ci *CertenIntent, err error) *ExecutionTas
 		Success: false,
 		Error:   fmt.Errorf("intent %s not settled yet: %w", intentID, err),
 	}
+}
+
+// checkStateProofsServable refuses a leg that commits a storage slot (expectedState) on a chain whose providers cannot
+// serve its state proof at the finalized depth.
+func (bv *BFTValidator) checkStateProofsServable(ci *CertenIntent) error {
+	env, err := ci.ParseCrossChain()
+	if err != nil {
+		return fmt.Errorf("parse cross-chain: %w", err)
+	}
+	checked := map[int64]bool{}
+	for _, leg := range env.Legs {
+		if leg.ExecutionPayload == nil || len(leg.ExecutionPayload.ExpectedState) == 0 || checked[leg.ChainID] {
+			continue
+		}
+		checked[leg.ChainID] = true
+		if err := bv.batchEnqueuer.StateProofServable(leg.ChainID); err != nil {
+			return fmt.Errorf("leg %q on chain %d commits storage slots: %w", leg.LegID, leg.ChainID, err)
+		}
+	}
+	return nil
 }

@@ -461,7 +461,7 @@ func NewAnchorManager(liteClient *accumulate.LiteClientAdapter, cfg *config.Conf
 	}
 
 	// Initialize the low-level Ethereum client
-	ethereumClient, err := ethereum.NewClient(cfg.EthereumURL, cfg.EthChainID)
+	ethereumClient, err := ethereum.NewClient(cfg.EthereumURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize ethereum client: %w", err)
 	}
@@ -803,7 +803,7 @@ func (am *AnchorManager) initializeChains() error {
 			// Use the already-initialized ethereum client instead of creating a new connection
 			ethChain, err := NewEthereumChain(&EthereumConfig{
 				URL:             am.config.EthereumURL,
-				ChainID:         am.config.EthChainID,
+				ChainID:         am.ethereumClient.GetChainID().Int64(),
 				PrivateKey:      am.config.EthPrivateKey,
 				ContractAddress: am.config.AnchorContractAddress,
 				GasLimit:        am.batchScheduler.batchConfig.GasLimit,

@@ -10,20 +10,15 @@
 //	failed     -> pending      retried, up to MaxRetries attempts
 //
 // Every validator runs the worker against the shared database. Claims and terminal transitions are
-// conditional updates, so exactly one validator completes or fails a request, and only that validator
-// calls the request's callback.
+// conditional updates, so exactly one validator completes or fails a request. The worker makes no outbound
+// call: a client learns the outcome by reading the request, or from the proofs_service completed-requests feed.
 package proofrequests
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
-	"net/http"
-	"net/url"
-	"strings"
 	"sync"
 	"time"
 
@@ -40,7 +35,6 @@ type Config struct {
 	MaxRetries       int           // attempts before a failed request stays failed (default 3)
 	BatchSize        int           // requests retried and claimed per pass, and read per page when settling (default 100)
 	ValidatorID      string
-	HTTPClient       *http.Client // for callbacks (default: 10s timeout)
 	Logger           *log.Logger
 	Now              func() time.Time // for tests
 }
@@ -77,9 +71,6 @@ func New(repos *database.Repositories, cfg Config) (*Fulfiller, error) {
 	}
 	if cfg.BatchSize <= 0 {
 		cfg.BatchSize = 100
-	}
-	if cfg.HTTPClient == nil {
-		cfg.HTTPClient = &http.Client{Timeout: 10 * time.Second}
 	}
 	if cfg.Logger == nil {
 		cfg.Logger = log.New(log.Writer(), "[ProofRequests] ", log.LstdFlags)
@@ -218,7 +209,6 @@ func (f *Fulfiller) settle(ctx context.Context, request *database.ProofRequest) 
 			// Another validator settled it first.
 			return outcomeWaiting
 		}
-		f.notify(ctx, request, database.RequestStatusCompleted, proofID, "")
 		return outcomeCompleted
 	}
 
@@ -233,7 +223,6 @@ func (f *Fulfiller) settle(ctx context.Context, request *database.ProofRequest) 
 		if err := f.requests.MarkFailed(ctx, request.RequestID, reason); err != nil {
 			return outcomeWaiting
 		}
-		f.notify(ctx, request, database.RequestStatusFailed, uuid.Nil, reason)
 		return outcomeFailed
 	}
 
@@ -277,55 +266,4 @@ func (f *Fulfiller) findProof(ctx context.Context, request *database.ProofReques
 		}
 	}
 	return uuid.Nil, nil
-}
-
-// CallbackPayload is POSTed to a request's callback URL when it completes or fails.
-type CallbackPayload struct {
-	RequestID   uuid.UUID `json:"request_id"`
-	Status      string    `json:"status"`
-	ProofID     string    `json:"proof_id,omitempty"`
-	Error       string    `json:"error,omitempty"`
-	AccumTxHash string    `json:"accum_tx_hash,omitempty"`
-	AccountURL  string    `json:"account_url,omitempty"`
-	SettledBy   string    `json:"settled_by,omitempty"`
-	SettledAt   time.Time `json:"settled_at"`
-}
-
-// notify POSTs the outcome to the request's callback URL. Only http(s) URLs are called; a failed
-// callback is logged and not retried, because the request's state is already recorded and queryable.
-func (f *Fulfiller) notify(ctx context.Context, request *database.ProofRequest, status database.RequestStatus, proofID uuid.UUID, reason string) {
-	if !request.CallbackURL.Valid || request.CallbackURL.String == "" {
-		return
-	}
-	target, err := url.Parse(request.CallbackURL.String)
-	if err != nil || (target.Scheme != "https" && target.Scheme != "http") || target.Host == "" {
-		f.cfg.Logger.Printf("request %s: callback URL %q is not an http(s) URL; not called", request.RequestID, request.CallbackURL.String)
-		return
-	}
-	payload := CallbackPayload{
-		RequestID: request.RequestID, Status: string(status), Error: reason,
-		AccumTxHash: request.AccumTxHash.String, AccountURL: request.AccountURL.String,
-		SettledBy: f.cfg.ValidatorID, SettledAt: f.cfg.Now().UTC(),
-	}
-	if proofID != uuid.Nil {
-		payload.ProofID = proofID.String()
-	}
-	body, _ := json.Marshal(payload)
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, target.String(), bytes.NewReader(body))
-	if err != nil {
-		f.cfg.Logger.Printf("request %s: build callback: %v", request.RequestID, err)
-		return
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	response, err := f.cfg.HTTPClient.Do(httpReq)
-	if err != nil {
-		f.cfg.Logger.Printf("request %s: callback to %s failed: %v", request.RequestID, target.Host, err)
-		return
-	}
-	response.Body.Close()
-	if response.StatusCode >= 300 {
-		f.cfg.Logger.Printf("request %s: callback to %s answered %d", request.RequestID, target.Host, response.StatusCode)
-		return
-	}
-	f.cfg.Logger.Printf("request %s: %s, callback delivered to %s", request.RequestID, strings.ToLower(string(status)), target.Host)
 }

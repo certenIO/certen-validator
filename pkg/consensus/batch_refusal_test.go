@@ -26,15 +26,16 @@ import (
 // queued all-or-nothing.
 
 type fakeEnqueuer struct {
-	checkErr   map[int64]error // CheckMember result per chain
-	addErr     map[int64]error // EnqueueForBatch/EnqueueOnDemand result per chain (after the first add)
-	queued     map[string]bool
-	removed    []string
-	adds       int
-	after      map[int64]SequencePredecessor // EnqueueAfter's predecessor per chain
-	order      []int64                       // chains in the order they were queued
-	anchorErr  map[int64]error               // AnchorOf failure per chain
-	governance map[int64][32]byte            // the governance commitment each chain's member was queued with
+	checkErr      map[int64]error // CheckMember result per chain
+	addErr        map[int64]error // EnqueueForBatch/EnqueueOnDemand result per chain (after the first add)
+	queued        map[string]bool
+	removed       []string
+	adds          int
+	after         map[int64]SequencePredecessor // EnqueueAfter's predecessor per chain
+	order         []int64                       // chains in the order they were queued
+	anchorErr     map[int64]error               // AnchorOf failure per chain
+	stateProofErr map[int64]error               // StateProofServable failure per chain
+	governance    map[int64][32]byte            // the governance commitment each chain's member was queued with
 }
 
 func newFakeEnqueuer() *fakeEnqueuer {
@@ -99,6 +100,11 @@ func (f *fakeEnqueuer) AnchorOf(chainID int64) (common.Address, error) {
 		return common.Address{}, err
 	}
 	return testAnchor(chainID), nil
+}
+
+// StateProofServable: the fake's chains serve state proofs unless stateProofErr names one.
+func (f *fakeEnqueuer) StateProofServable(chainID int64) error {
+	return f.stateProofErr[chainID]
 }
 
 func (f *fakeEnqueuer) RemoveMember(_ bool, intentID string, chainID int64, _ [32]byte) {

@@ -15,7 +15,7 @@ func TestTheLatestAdiriHeaderIsRead(t *testing.T) {
 	for _, name := range []string{"telcoin_adiri_498759", "telcoin_adiri_499961"} {
 		t.Run(name, func(t *testing.T) {
 			f := ethprooftest.Load(t, name)
-			c, err := NewClient(ethprooftest.URLs(t, &ethprooftest.Provider{F: f})[0], 2017)
+			c, err := NewClient(ethprooftest.URLs(t, &ethprooftest.Provider{F: f})[0])
 			if err != nil {
 				t.Fatal(err)
 			}

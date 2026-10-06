@@ -52,7 +52,6 @@ type AnchorSettings struct {
 type ContractSettings struct {
 	Address         string `yaml:"address"`
 	Network         string `yaml:"network"`
-	ChainID         int64  `yaml:"chain_id"`
 	DeploymentBlock int64  `yaml:"deployment_block"`
 	ABIVersion      string `yaml:"abi_version"`
 }
@@ -134,9 +133,6 @@ type EVMChainConfig struct {
 	RPCTimeout         Duration `yaml:"rpc_timeout"`
 	MaxConnections     int      `yaml:"max_connections"`
 	MaxIdleConnections int      `yaml:"max_idle_connections"`
-
-	// AccountFactory is the account factory on this chain, when configured. Never defaulted.
-	AccountFactory string `yaml:"account_factory_address"`
 
 	// Gas settings (optional, falls back to global)
 	MaxGasPriceGwei    int64 `yaml:"max_gas_price_gwei"`
@@ -590,9 +586,6 @@ func (c *AnchorConfig) ValidateAnchorConfig() error {
 	if c.Anchor.Contract.Address == "" || strings.HasPrefix(c.Anchor.Contract.Address, "${") {
 		errors = append(errors, "anchor.contract.address is required")
 	}
-	if c.Anchor.Contract.ChainID == 0 {
-		errors = append(errors, "anchor.contract.chain_id is required")
-	}
 
 	// Verification validation
 	if c.Anchor.Verification.RequireGovernanceProof &&
@@ -613,9 +606,6 @@ func (c *AnchorConfig) ValidateAnchorConfig() error {
 	// Network validation
 	if c.Network.Ethereum.RPCURL == "" || strings.HasPrefix(c.Network.Ethereum.RPCURL, "${") {
 		errors = append(errors, "network.ethereum.rpc_url is required")
-	}
-	if c.Network.Ethereum.ChainID != c.Anchor.Contract.ChainID {
-		errors = append(errors, "network.ethereum.chain_id must match anchor.contract.chain_id")
 	}
 	if c.Network.Accumulate.APIURL == "" || strings.HasPrefix(c.Network.Accumulate.APIURL, "${") {
 		errors = append(errors, "network.accumulate.api_url is required")
@@ -797,7 +787,6 @@ func loadAnchorConfigFromEnv() (*AnchorConfig, error) {
 			Contract: ContractSettings{
 				Address:    getEnv("CERTEN_CONTRACT_ADDRESS", getEnv("ANCHOR_CONTRACT_ADDRESS", "")),
 				Network:    getEnv("NETWORK_NAME", "devnet"),
-				ChainID:    getEnvInt64("ETH_CHAIN_ID", 11155111),
 				ABIVersion: "v3",
 			},
 			Verification: VerificationSettings{
@@ -853,7 +842,6 @@ func loadAnchorConfigFromEnv() (*AnchorConfig, error) {
 			Ethereum: EthereumNetworkSettings{
 				RPCURL:             getEnv("ETHEREUM_URL", ""),
 				WSURL:              getEnv("ETHEREUM_WS_URL", ""),
-				ChainID:            getEnvInt64("ETH_CHAIN_ID", 11155111),
 				Name:               getEnv("NETWORK_NAME", "devnet"),
 				RPCTimeout:         Duration(30 * time.Second),
 				MaxConnections:     10,
@@ -1001,7 +989,6 @@ func loadEVMChainsFromEnv() map[int64]*EVMChainConfig {
 			RPCTimeout:         Duration(30 * time.Second),
 			MaxConnections:     10,
 			MaxIdleConnections: 5,
-			AccountFactory:     getEnv(c.FactoryEnvPrefix+"_ACCOUNTFACTORY_V6_ADDRESS", getEnv(c.FactoryEnvPrefix+"_ACCOUNTFACTORY_ADDRESS", "")),
 			MaxGasPriceGwei:    getEnvInt64(c.MaxGasPriceEnv(), c.DefaultMaxGasPriceGwei),
 			MaxPriorityFeeGwei: getEnvInt64(c.MaxPriorityFeeEnv(), c.DefaultMaxPriorityFeeGwei),
 			GasLimitAnchor:     getEnvInt64(c.GasLimitAnchorEnv(), c.DefaultGasLimitAnchor),

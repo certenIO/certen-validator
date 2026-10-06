@@ -24,20 +24,17 @@ import (
 // whichever of its hashes mined.
 //
 // Both searches run FORWARD from a floor the event cannot precede - an anchor cannot be attested
-// before it was created, and a leaf cannot be spent before its member existed - so they are complete
-// however old the anchor, and they stop at the first match, which is normally a few blocks in.
+// before it was created, and a leaf cannot be spent before its member committed on Accumulate - so
+// they are complete however old the anchor, and they stop at the first match, which is normally a few
+// blocks in. There is no fixed block-count window anywhere: blocks per hour differ about fifty-fold
+// between the supported chains.
 
 // leafConsumedTopic is keccak256("LeafConsumed(bytes32,bytes32,bytes32)"), CertenAccountV7's record
 // of a leaf being spent: anchorId and leaf are indexed.
 var leafConsumedTopic = crypto.Keccak256Hash([]byte("LeafConsumed(bytes32,bytes32,bytes32)"))
 
-// attributionLookback bounds a backward search when no floor is known at all - only for a member
-// restored from a queue written before members recorded when they were first seen.
-const attributionLookback = 300000
-
-// leafSpendMargin is subtracted from a member's first-seen time to find the earliest block its leaf
-// could have been spent in: another validator may have enqueued, anchored and settled it before this
-// node saw it.
+// leafSpendMargin is subtracted from a member's first-seen time by the outcome records, to find where to
+// search for its leaf's consumption.
 const leafSpendMargin = time.Hour
 
 // anchorFloorMargin: see anchorFloor.
@@ -84,18 +81,23 @@ func (o *BatchOrchestrator) leafConsumedTx(ctx context.Context, p *PendingBatchI
 	topics := [][]common.Hash{{leafConsumedTopic}, nil, {common.Hash(leaf)}}
 
 	// The earliest block the leaf could have been spent in is the LOWEST of the floors known for it:
-	// the member's first sighting (less a margin - another validator may have seen it first), its
-	// anchor's creation when this node created it, and its bundle's anchor creation. Taking the
-	// lowest keeps the search complete when one of them is late (a member restored from a queue
-	// written before FirstSeen existed carries its restore time).
+	// the member's commit on Accumulate (less a margin - the clocks of the two networks differ), its
+	// anchor's creation when this node created it, and its bundle's anchor creation. A leaf cannot be
+	// spent before its member committed, so each is a sound floor; the lowest keeps the search complete
+	// when one of them is late. This node's first sighting is NOT a floor: another validator may have
+	// settled the member long before this one saw it.
 	floor, have := uint64(0), false
 	lower := func(b uint64) {
 		if !have || b < floor {
 			floor, have = b, true
 		}
 	}
-	if !p.FirstSeen.IsZero() {
-		b, ferr := o.cachedBlockAt(ctx, uint64(p.FirstSeen.Add(-leafSpendMargin).Unix()))
+	if !p.CommitTime.IsZero() {
+		ts := uint64(p.CommitTime.Unix())
+		if ts > anchorFloorMargin {
+			ts -= anchorFloorMargin
+		}
+		b, ferr := o.cachedBlockAt(ctx, ts)
 		if ferr != nil {
 			return "", common.Address{}, false, ferr
 		}
@@ -111,17 +113,10 @@ func (o *BatchOrchestrator) leafConsumedTx(ctx context.Context, p *PendingBatchI
 		}
 		lower(b)
 	}
-	var l *types.Log
-	if have {
-		l, err = o.scanForward(ctx, p.Account, topics, floor)
-		if err == nil && l == nil {
-			// Nothing from the floor: a floor that was still too late cannot hide a spend - search
-			// back from the head as well before concluding the spend is not in view.
-			l, err = o.scanBack(ctx, p.Account, topics)
-		}
-	} else {
-		l, err = o.scanBack(ctx, p.Account, topics)
+	if !have {
+		return "", common.Address{}, false, fmt.Errorf("member %s: no commit time, so no floor for its leaf's spend", p.IntentID)
 	}
+	l, err := o.scanForward(ctx, p.Account, topics, floor)
 	if err != nil || l == nil {
 		return "", common.Address{}, false, err
 	}
@@ -285,40 +280,6 @@ func (o *BatchOrchestrator) scanForward(ctx context.Context, address common.Addr
 		}
 	}
 	return nil, nil
-}
-
-// scanBack returns the most recent log matching topics on address within attributionLookback blocks
-// of the head. Used only when no floor is known.
-func (o *BatchOrchestrator) scanBack(ctx context.Context, address common.Address, topics [][]common.Hash) (*types.Log, error) {
-	head, err := o.ecm.client.BlockNumber(ctx)
-	if err != nil {
-		return nil, readErr(fmt.Errorf("reading the head: %w", err))
-	}
-	floor := uint64(0)
-	if head > attributionLookback {
-		floor = head - attributionLookback
-	}
-	for hi := head; ; {
-		lo := floor
-		if hi > proofExecutedChunk && hi-proofExecutedChunk+1 > floor {
-			lo = hi - proofExecutedChunk + 1
-		}
-		logs, err := filterLogsSplitting(ctx, o.ecm.client, ethereum.FilterQuery{
-			Addresses: []common.Address{address},
-			Topics:    topics,
-		}, lo, hi)
-		if err != nil {
-			return nil, readErr(fmt.Errorf("%w on %s", err, address.Hex()))
-		}
-		if n := len(logs); n > 0 {
-			l := logs[n-1]
-			return &l, nil
-		}
-		if lo <= floor {
-			return nil, nil
-		}
-		hi = lo - 1
-	}
 }
 
 // logSender is the address that sent the transaction which emitted l, read from the node's own record

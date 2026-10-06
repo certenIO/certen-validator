@@ -25,16 +25,24 @@ type Client struct {
 	url     string
 }
 
-// NewClient creates a new Ethereum client
-func NewClient(url string, chainID int64) (*Client, error) {
+// NewClient creates a new Ethereum client. Its chain id is what the RPC itself answers to eth_chainId, never a
+// configured or compiled-in value, so a transactor can only sign for the chain the endpoint is on.
+func NewClient(url string) (*Client, error) {
 	client, err := ethrpc.DialRetrying(context.Background(), url)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to Ethereum: %w", err)
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	chainID, err := client.ChainID(ctx)
+	if err != nil {
+		client.Close()
+		return nil, fmt.Errorf("ETHEREUM_URL: reading eth_chainId: %w", err)
+	}
 
 	return &Client{
 		client:  client,
-		chainID: big.NewInt(chainID),
+		chainID: chainID,
 		url:     url,
 	}, nil
 }

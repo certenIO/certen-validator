@@ -1874,9 +1874,9 @@ func (r *ProofArtifactRepository) CreateProofRequest(ctx context.Context, input 
 	query := `
 		INSERT INTO proof_requests (
 			accum_tx_hash, account_url, proof_class, governance_level,
-			api_key_id, callback_url, status, created_at
+			api_key_id, status, created_at
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, NOW()
+			$1, $2, $3, $4, $5, $6, NOW()
 		)
 		RETURNING request_id, created_at`
 
@@ -1886,12 +1886,11 @@ func (r *ProofArtifactRepository) CreateProofRequest(ctx context.Context, input 
 	req.ProofClass = input.ProofClass
 	req.GovernanceLevel = input.GovernanceLevel
 	req.APIKeyID = input.APIKeyID
-	req.CallbackURL = input.CallbackURL
 	req.Status = input.Status
 
 	err := r.db.QueryRowContext(ctx, query,
 		input.AccumTxHash, input.AccountURL, input.ProofClass, input.GovernanceLevel,
-		input.APIKeyID, input.CallbackURL, input.Status,
+		input.APIKeyID, input.Status,
 	).Scan(&req.RequestID, &req.CreatedAt)
 
 	if err != nil {

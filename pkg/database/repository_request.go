@@ -85,11 +85,11 @@ func (r *RequestRepository) CreateRequest(ctx context.Context, input *NewProofRe
 	row := r.client.QueryRowContext(ctx, `
 		INSERT INTO proof_requests (
 			accum_tx_hash, account_url, proof_class, governance_level,
-			priority, status, requester_id, api_key_id, callback_url
-		) VALUES ($1, $2, $3, $4, $5, 'pending', $6, $7, $8)
+			priority, status, requester_id, api_key_id
+		) VALUES ($1, $2, $3, $4, $5, 'pending', $6, $7)
 		RETURNING `+proofRequestColumns,
 		nullString(input.AccumTxHash), nullString(input.AccountURL), input.RequestType, nullString(string(input.GovernanceLevel)),
-		priority, nullString(input.RequesterID), uuid.NullUUID{UUID: input.APIKeyID, Valid: input.APIKeyID != uuid.Nil}, nullString(input.CallbackURL),
+		priority, nullString(input.RequesterID), uuid.NullUUID{UUID: input.APIKeyID, Valid: input.APIKeyID != uuid.Nil},
 	)
 	request, err := scanProofRequest(row.Scan)
 	if err != nil {

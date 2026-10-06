@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"math/rand/v2"
 	"strings"
 	"time"
 )
@@ -43,16 +42,6 @@ var (
 	reverifyBase            = ReverifyBase
 	reverifyMax             = ReverifyMax
 )
-
-// unverifiedProvider is a configured provider whose chain id is not verified. It is never asked for a fact.
-type unverifiedProvider struct {
-	host, url string
-	err       error // why it is not verified
-	nextTry   time.Time
-	backoff   time.Duration
-	trying    bool
-	refused   bool // it answered another chain id: it never joins
-}
 
 type verification struct {
 	i     int
@@ -110,9 +99,14 @@ func verifyOne(ctx context.Context, chainID int64, host, rawurl string, timeout,
 	return verification{p: agreeingProvider{host: host, client: c, hint: hint, health: healthOf(chainID, rawurl), genesis: guard}}
 }
 
-// verifyAll is the construction: see NewAgreeingReader.
+// verifyAll is the construction: see NewAgreeingReader. Each provider is verified once per process (registry.go): one
+// already verified is taken as it is, one being verified is waited for, and one that failed recently is not asked again
+// before its own backoff - unless fewer than MinAgreeingProviders are verified, when it is asked again now.
 func (r *AgreeingReader) verifyAll(ctx context.Context, urls []string) error {
-	type candidate struct{ host, url string }
+	type candidate struct {
+		host, url string
+		sp        *sharedProvider
+	}
 	var cands []candidate
 	seen := map[string]bool{}
 	for _, u := range urls {
@@ -121,33 +115,54 @@ func (r *AgreeingReader) verifyAll(ctx context.Context, urls []string) error {
 			continue
 		}
 		seen[h] = true
-		cands = append(cands, candidate{h, u})
+		cands = append(cands, candidate{h, u, sharedFor(r.chainID, h, u)})
+	}
+
+	verified := map[int]agreeingProvider{}
+	failed := map[int]error{}
+	known := 0
+	for _, c := range cands {
+		if v, _, _, _ := c.sp.state(); v != nil {
+			known++
+		}
+	}
+	var ask []int
+	for i, c := range cands {
+		v, refusal, perr, retryAt := c.sp.state()
+		switch {
+		case v != nil:
+			verified[i] = *v
+		case refusal != nil:
+			return c.sp.refused().refusal(r.chainID, c.host)
+		case perr != nil && known >= MinAgreeingProviders && time.Now().Before(retryAt):
+			failed[i] = perr // asked again by its backoff, in the background, not by this construction
+		default:
+			ask = append(ask, i)
+		}
 	}
 
 	caller := ctx
 	ctx, cancelAll := context.WithTimeout(ctx, constructionRetryBudget)
 	defer cancelAll()
 	results := make(chan verification, len(cands))
-	for i, c := range cands {
-		go func(i int, c candidate) {
-			v := verifyOne(ctx, r.chainID, c.host, c.url, r.timeout, constructionRetryBudget)
+	for _, i := range ask {
+		go func(i int) {
+			v := cands[i].sp.verify(ctx, r.timeout, constructionRetryBudget)
 			v.i = i
 			results <- v
-		}(i, c)
+		}(i)
 	}
 
-	verified := map[int]agreeingProvider{}
-	failed := map[int]error{}
 	var grace <-chan time.Time
+	if len(verified) >= MinAgreeingProviders {
+		grace = time.After(unverifiedProviderGrace)
+	}
 wait:
 	for len(verified)+len(failed) < len(cands) {
 		select {
 		case v := <-results:
 			switch {
 			case v.refusal(r.chainID, cands[v.i].host) != nil:
-				for _, p := range verified {
-					p.client.Close()
-				}
 				return v.refusal(r.chainID, cands[v.i].host)
 			case v.err != nil:
 				failed[v.i] = v.err
@@ -173,14 +188,12 @@ collect:
 		case v := <-results:
 			switch {
 			case v.refusal(r.chainID, cands[v.i].host) != nil:
-				for _, p := range verified {
-					p.client.Close()
-				}
 				return v.refusal(r.chainID, cands[v.i].host)
 			case v.err != nil:
 				failed[v.i] = v.err
 			default:
-				v.p.client.Close() // verified only after the wait ended: it joins through the background
+				// Verified only after the wait ended: it is recorded in the registry, so it joins this reader through
+				// its next use, like any provider that was verified in the background.
 				failed[v.i] = fmt.Errorf("its chain id was verified only after the construction's wait")
 			}
 		case <-drain:
@@ -197,9 +210,6 @@ collect:
 	}
 
 	if len(verified) < MinAgreeingProviders {
-		for _, p := range verified {
-			p.client.Close()
-		}
 		// Each unverified provider's own error is kept (errors.Is/As see it), by name, in configuration order.
 		format := "chain %d has %d verified independent provider(s) of %d configured %v; at least %d are required, so " +
 			"that no single provider's view is taken as the chain's (RB5-F53); unverified:"
@@ -217,60 +227,36 @@ collect:
 		return fmt.Errorf(strings.TrimSuffix(format, ";"), args...)
 	}
 
-	now := time.Now()
 	for i, c := range cands {
 		if p, ok := verified[i]; ok {
 			r.providers = append(r.providers, p)
 			continue
 		}
-		log.Printf("⚠️ [ethrpc] chain %d provider %s is not verified (%v): it is asked for nothing until its chain id is "+
-			"verified; re-verifying in the background", r.chainID, c.host, failed[i])
-		r.pending = append(r.pending, &unverifiedProvider{host: c.host, url: c.url, err: failed[i], backoff: reverifyBase,
-			nextTry: now.Add(reverifyBase)})
+		if c.sp.logUnverified() {
+			log.Printf("⚠️ [ethrpc] chain %d provider %s is not verified (%v): it is asked for nothing until its chain id is "+
+				"verified; re-verifying in the background", r.chainID, c.host, failed[i])
+		}
+		r.pending = append(r.pending, c.sp)
 	}
 	return nil
 }
 
 // verified is the set of providers asked for facts. Using the reader is also what re-verifies its unverified providers:
-// each one whose backoff has passed is asked its chain id again, in the background, one attempt at a time.
+// each one whose backoff has passed is asked its chain id again, in the background, one attempt at a time for the whole
+// process (registry.go). A provider verified meanwhile - by this reader's attempt or another reader's - joins it here.
 func (r *AgreeingReader) verified() []agreeingProvider {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	now := time.Now()
-	for _, p := range r.pending {
-		if !p.refused && !p.trying && !now.Before(p.nextTry) {
-			p.trying = true
-			go r.reverify(p)
+	still := r.pending[:0]
+	for _, sp := range r.pending {
+		if v, _, _, _ := sp.state(); v != nil {
+			r.providers = append(r.providers, *v)
+			log.Printf("✅ [ethrpc] chain %d provider %s verified; it is now asked", r.chainID, sp.host)
+			continue
 		}
+		sp.startReverify(r.timeout)
+		still = append(still, sp)
 	}
+	r.pending = still
 	return append([]agreeingProvider(nil), r.providers...)
-}
-
-func (r *AgreeingReader) reverify(p *unverifiedProvider) {
-	ctx, cancel := context.WithTimeout(context.Background(), r.timeout)
-	defer cancel()
-	v := verifyOne(ctx, r.chainID, p.host, p.url, r.timeout, 0)
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	p.trying = false
-	switch {
-	case v.refusal(r.chainID, p.host) != nil:
-		p.refused = true
-		log.Printf("❌ [ethrpc] %v: it never joins", v.refusal(r.chainID, p.host))
-	case v.err != nil:
-		p.err = v.err
-		if p.backoff *= 2; p.backoff > reverifyMax {
-			p.backoff = reverifyMax
-		}
-		p.nextTry = time.Now().Add(p.backoff/2 + rand.N(p.backoff/2+1))
-	default:
-		r.providers = append(r.providers, v.p)
-		for i, q := range r.pending {
-			if q == p {
-				r.pending = append(r.pending[:i], r.pending[i+1:]...)
-				break
-			}
-		}
-		log.Printf("✅ [ethrpc] chain %d provider %s verified; it is now asked", r.chainID, p.host)
-	}
 }
