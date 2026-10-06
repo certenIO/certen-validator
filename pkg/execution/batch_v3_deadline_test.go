@@ -8,17 +8,20 @@ import (
 	"time"
 )
 
-// A cadence member whose intent CERTEN's quorum never certified waits while it may still be certified, and once past
-// its settlement deadline leaves the batch path by name - decided by its own leader alone, so exactly one validator
-// records it; the others keep their copy until then.
+// A cadence member whose intent CERTEN's quorum never certified waits while it may still be certified, and once its
+// CHAIN is past its settlement deadline (by the chain's clock - RB7 D7) leaves the batch path by name - decided by its
+// own leader alone, so exactly one validator records it; the others keep their copy until then.
 func TestANeverCertifiedMemberIsRefusedByNameAtItsDeadline(t *testing.T) {
 	m := NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 10})
 	m.SetIntentCertificates(fakeCerts{})
-	s := &BatchStack{Mempool: m}
+	// The chain's finalized time is a day before now: the stale member is past its deadline by the wall clock only.
+	chain := newSimIdleChain(11155111, uint64(time.Now().Add(-48*time.Hour).Unix()))
+	chain.mine(uint64(time.Now().Add(-24 * time.Hour).Unix()))
+	s := &BatchStack{Mempool: m, Orchestrators: map[int64]*BatchOrchestrator{11155111: {logf: t.Logf, clock: newChainClock(11155111, chain)}}}
 	fresh := certifiedMember("fresh", 7, fill32(0xaa))
 	fresh.CommitTime = time.Now().Add(-time.Minute)
 	stale := certifiedMember("stale", 8, fill32(0xbb))
-	stale.CommitTime = time.Now().Add(-30 * 24 * time.Hour)
+	stale.CommitTime = time.Now().Add(-25 * time.Hour)
 	for _, p := range []*PendingBatchIntent{fresh, stale} {
 		if err := m.Add(p); err != nil {
 			t.Fatal(err)
@@ -31,6 +34,11 @@ func TestANeverCertifiedMemberIsRefusedByNameAtItsDeadline(t *testing.T) {
 		t.Fatal("a validator that does not lead the member recorded its outcome")
 	}
 	leader := func(*PendingBatchIntent) bool { return true }
+	s.settleNeverCertified(leader, drops.fn, t.Logf)
+	if len(drops.dropped) != 0 || !stale.pending() {
+		t.Fatalf("THE regression (RB7 D7): the wall clock recorded a refusal while the chain is not past the deadline: %v", drops.dropped)
+	}
+	chain.mine(uint64(time.Now().Unix())) // the chain passes the deadline and its margin
 	s.settleNeverCertified(leader, drops.fn, t.Logf)
 	if len(drops.dropped) != 1 || !strings.Contains(drops.dropped["stale"], "did not certify its intent") {
 		t.Fatalf("refusals: %v", drops.dropped)
@@ -56,7 +64,8 @@ func TestAMembersLeaderIsItsPeriodsRotatingLeader(t *testing.T) {
 	}
 }
 
-// The on-demand lane: an uncertified member defers while within its deadline and is refused by name past it.
+// The on-demand lane: an uncertified member defers while its chain is within its deadline and is refused by name once
+// the chain is past it - by the chain's clock, whatever this machine's clock says (RB7 D7).
 func TestAnOnDemandMemberWaitsForItsCertificateUntilItsDeadline(t *testing.T) {
 	m := NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 10})
 	m.SetIntentCertificates(fakeCerts{})
@@ -71,9 +80,14 @@ func TestAnOnDemandMemberWaitsForItsCertificateUntilItsDeadline(t *testing.T) {
 		t.Fatalf("within its deadline: (%+v, %v)", out, err)
 	}
 	p.CommitTime = time.Now().Add(-30 * 24 * time.Hour)
+	out, err = o.SettleOnDemandMember(context.Background(), p, nil)
+	if err != nil || out == nil || !out.Deferred {
+		t.Fatalf("THE regression (RB7 D7): past its deadline by the wall clock only, it was decided: (%+v, %v)", out, err)
+	}
+	f.chainPast = true
 	if _, err := o.SettleOnDemandMember(context.Background(), p, nil); err == nil ||
-		!strings.Contains(err.Error(), "did not certify its intent") {
-		t.Fatalf("past its deadline: %v", err)
+		!strings.Contains(err.Error(), "did not certify its intent") || !strings.Contains(err.Error(), "finalized block") {
+		t.Fatalf("past its deadline on chain: %v", err)
 	}
 	if err := (*BatchMempool)(nil).RequireCertified(p); err == nil {
 		t.Fatal("a certified member passed with no mempool to read its certificate from")

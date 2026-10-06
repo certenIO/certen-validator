@@ -89,7 +89,8 @@ type onDemandChain interface {
 	verifyLeavesAgainstAnchor(ctx context.Context, tree *BatchTree) error
 	settleMember(ctx context.Context, p *PendingBatchIntent, tree *BatchTree, branch [][32]byte, fence time.Time) (string, error)
 	settlementStatus(ctx context.Context, txHash string) (found, mined, reverted bool, err error)
-	memberPastDeadline(p *PendingBatchIntent) bool
+	// pastDeadlineOnChain reports whether the member's chain is past its deadline, by the chain's clock.
+	pastDeadlineOnChain(ctx context.Context, p *PendingBatchIntent) (past bool, evidence string, err error)
 	lastVerifyTx(bundleID [32]byte) string
 	reportOnDemandCosts(ctx context.Context, member *PendingBatchIntent, settleTx string)
 	// leafConsumedTx names the transaction that spent the member's leaf, from the account's own
@@ -196,10 +197,15 @@ func (o *BatchOrchestrator) SettleOnDemandMember(
 	// then it waits, as a member with no height yet does. Read FIRST: the screen and the leaf both use what the
 	// certificate fixes (RB5-F31).
 	if err := o.mempool.RequireCertified(member); err != nil {
-		if o.memberPastDeadline(member) {
-			// Never certified in time: refused by name (the submitter records it FAILED with this cause).
+		// Never certified before the CHAIN passed its deadline: refused by name (the submitter records it FAILED with
+		// this cause). The chain's time decides, never this machine's (RB7 D7).
+		past, evidence, perr := chain.pastDeadlineOnChain(ctx, member)
+		if perr == nil && past {
 			return nil, fmt.Errorf("CERTEN's quorum did not certify its intent (message 0x%x) before its settlement "+
-				"deadline on chain %d", member.IntentMessage[:8], chainID)
+				"deadline on chain %d: %s", member.IntentMessage[:8], chainID, evidence)
+		}
+		if perr != nil {
+			o.logf("[BATCH] on-demand member %s: whether its chain is past its deadline could not be read (%v)", member.IntentID, perr)
 		}
 		o.logf("[BATCH] on-demand member %s waits: %v", member.IntentID, err)
 		return &OnDemandOutcome{Deferred: true}, nil
@@ -589,10 +595,14 @@ func (o *BatchOrchestrator) settleAndClassify(
 	// was submitted, so the leaf is untouched and the member can settle later.
 	var gasCeil *ErrGasCeilingExceeded
 	if errors.As(serr, &gasCeil) {
-		if chain.memberPastDeadline(member) {
-			o.logf("[OD] intent=%s gas ceiling %v but the intent has expired — failing",
-				member.IntentID, serr)
-			return out, serr
+		// Failed only once the chain is past the member's deadline, by the chain's clock (RB7 D7).
+		past, evidence, perr := chain.pastDeadlineOnChain(ctx, member)
+		if perr == nil && past {
+			o.logf("[OD] intent=%s gas ceiling %v and %s — failing", member.IntentID, serr, evidence)
+			return out, fmt.Errorf("%w; %s", serr, evidence)
+		}
+		if perr != nil {
+			o.logf("[OD] intent=%s: whether its chain is past its deadline could not be read (%v)", member.IntentID, perr)
 		}
 		out.Deferred = true
 		o.logf("[OD] intent=%s deferred: %v (leaf untouched; will retry)", member.IntentID, serr)

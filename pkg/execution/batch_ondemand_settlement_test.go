@@ -89,6 +89,10 @@ type fakeODChain struct {
 	await   func(rule string, after time.Time)
 	// sim, when set, is the chain the head and finalized times are read from.
 	sim *simIdleChain
+	// chainPast answers pastDeadlineOnChain (chainPastErr: unreadable); deadlineReads counts the reads.
+	chainPast     bool
+	chainPastErr  error
+	deadlineReads int
 }
 
 func (f *fakeODChain) memberAccountUsable(context.Context, *PendingBatchIntent) error {
@@ -138,8 +142,13 @@ func (f *fakeODChain) settlementStatus(_ context.Context, tx string) (bool, bool
 	st := f.statuses[tx]
 	return st[0], st[1], st[2], f.statusErr
 }
-func (f *fakeODChain) memberPastDeadline(*PendingBatchIntent) bool { return false }
-func (f *fakeODChain) lastVerifyTx([32]byte) string                { return f.verifyTx }
+func (f *fakeODChain) pastDeadlineOnChain(context.Context, *PendingBatchIntent) (bool, string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.deadlineReads++
+	return f.chainPast, "the fake chain's finalized block is past the deadline", f.chainPastErr
+}
+func (f *fakeODChain) lastVerifyTx([32]byte) string { return f.verifyTx }
 func (f *fakeODChain) reportOnDemandCosts(_ context.Context, m *PendingBatchIntent, settleTx string) {
 	f.costs = append(f.costs, costCall{m.AnchorTx, m.VerifyTx, settleTx})
 }

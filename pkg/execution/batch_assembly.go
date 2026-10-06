@@ -596,9 +596,27 @@ func (s *BatchStack) memberLeader(cutoff, periodBlocks uint64,
 func (s *BatchStack) settleNeverCertified(leads func(*PendingBatchIntent) bool, onDropped BatchDropFn,
 	logf func(string, ...interface{})) {
 	for _, chainID := range s.chainsInPool() {
+		o := s.Orchestrators[chainID]
 		for _, m := range s.Mempool.UncertifiedPending(chainID) {
-			origin, _ := m.Origin()
-			if origin.IsZero() || time.Since(origin) <= m.settlementHorizon() || !leads(m) {
+			if !leads(m) {
+				continue
+			}
+			// Refused only once its CHAIN is past its deadline, by the chain's clock (RB7 D7): the wall clock never
+			// decides an outcome.
+			if o == nil {
+				logf("[BATCH-FLUSH] ⚠️ member %s on chain %d is uncertified and this node has no orchestrator to read the "+
+					"chain's time; it waits", m.IntentID, chainID)
+				continue
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), memberOutcomeTimeout)
+			past, evidence, err := o.pastDeadlineOnChain(ctx, m)
+			cancel()
+			if err != nil {
+				logf("[BATCH-FLUSH] member %s on chain %d: whether its chain is past its deadline could not be read (%v); it waits",
+					m.IntentID, chainID, err)
+				continue
+			}
+			if !past {
 				continue
 			}
 			if onDropped == nil {
@@ -607,7 +625,7 @@ func (s *BatchStack) settleNeverCertified(leads func(*PendingBatchIntent) bool, 
 				continue
 			}
 			cause := fmt.Sprintf("CERTEN's quorum did not certify its intent (message 0x%x) before its settlement "+
-				"deadline on chain %d", m.IntentMessage[:8], chainID)
+				"deadline on chain %d: %s", m.IntentMessage[:8], chainID, evidence)
 			logf("[BATCH-FLUSH] refusing member %s: %s", m.IntentID, cause)
 			onDropped(context.Background(), m, cause)
 			s.Mempool.MarkOutcome([]*PendingBatchIntent{m}, MemberDropped)

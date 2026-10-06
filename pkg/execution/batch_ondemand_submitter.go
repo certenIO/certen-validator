@@ -266,7 +266,10 @@ func (s *OnDemandSubmitter) consider(ctx context.Context, member *PendingBatchIn
 	sequenced := member.After != nil && !member.AnchorProved && !member.AttestedSeen
 	if sequenced {
 		if cerr := s.cfg.Stack.Mempool.RequireCertified(member); cerr != nil {
-			if !orch.memberPastDeadline(member) {
+			// It stops waiting - and goes on to be refused by name - only once its chain is past its deadline, by the
+			// chain's clock (RB7 D7).
+			past, _, perr := orch.pastDeadlineOnChain(ctx, member)
+			if perr != nil || !past {
 				logf("[OD] intent=%s on chain %d waits: %v", member.IntentID, member.ChainID, cerr)
 				return false
 			}
