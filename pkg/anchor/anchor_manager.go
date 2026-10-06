@@ -1009,15 +1009,13 @@ func (ec *EthereumChain) GetAnchor(ctx context.Context, anchorID string) (*Ancho
 		return nil, fmt.Errorf("anchor %s not found or invalid", anchorID)
 	}
 
-	// Get current block for confirmation count
-	currentBlock, err := ec.ethereumClient.GetLatestBlock(ctx)
-	var currentBlockNumber uint64
+	// The current block, for the confirmation count. A head that cannot be read refuses the read by name: block 0 is not
+	// "unknown".
+	currentHeader, err := ec.ethereumClient.GetLatestHeader(ctx)
 	if err != nil {
-		log.Printf("⚠️ Failed to get current block number: %v", err)
-		currentBlockNumber = 0
-	} else {
-		currentBlockNumber = currentBlock.Number().Uint64()
+		return nil, fmt.Errorf("anchor %s: reading the current block for its confirmations: %w", anchorID, err)
 	}
+	currentBlockNumber := currentHeader.Number.Uint64()
 
 	// Create anchor object
 	anchor := &Anchor{
@@ -1086,17 +1084,17 @@ func (ec *EthereumChain) EstimateGas(ctx context.Context, anchor *AnchorData) (*
 // GetLatestBlock gets the latest block from Ethereum
 func (ec *EthereumChain) GetLatestBlock(ctx context.Context) (*ChainBlock, error) {
 	// Use the low-level ethereum client to get the latest block
-	block, err := ec.ethereumClient.GetLatestBlock(ctx)
+	header, err := ec.ethereumClient.GetLatestHeader(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get latest block: %w", err)
 	}
 
 	// Convert block time from Unix timestamp
-	blockTime := time.Unix(int64(block.Time()), 0)
+	blockTime := time.Unix(int64(header.Time), 0)
 
 	chainBlock := &ChainBlock{
-		Number:    block.Number().Uint64(),
-		Hash:      block.Hash().Hex(),
+		Number:    header.Number.Uint64(),
+		Hash:      header.Hash().Hex(),
 		Timestamp: blockTime,
 		ChainName: "ethereum",
 	}

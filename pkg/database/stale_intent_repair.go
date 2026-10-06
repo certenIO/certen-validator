@@ -24,6 +24,17 @@ type StaleIntent struct {
 	Batches       int       `json:"batches"`
 	AnchoredBatch int       `json:"anchored_batches"`
 	Executions    int       `json:"chain_executions"`
+	// ProofCycles counts the proof artifacts recorded for the intent, joined to a chain execution or not. A legacy
+	// per-intent cycle stored its chain transactions inside the artifact with no chain_execution_results row: three
+	// of the 108 (2026-03, Tron Shasta) sent anchor, verify and execution transactions that the execution count
+	// alone did not see (RB7 Task 5). An intent with any is listed and never resolved here.
+	ProofCycles int `json:"proof_artifacts"`
+}
+
+// MayHaveExecuted reports whether the database shows anything of the intent reaching a chain: such an intent is
+// listed and never resolved by ResolveStaleIntent.
+func (s StaleIntent) MayHaveExecuted() bool {
+	return s.AnchoredBatch != 0 || s.Executions != 0 || s.ProofCycles != 0
 }
 
 // staleIntentsSQL selects every intent that may be resolved: the conditions are restated inside the update, so a row that
@@ -34,7 +45,8 @@ const staleIntentsSQL = `
 	       (SELECT count(DISTINCT b.batch_id) FROM batch_transactions b JOIN anchor_batches a ON a.id = b.batch_id
 	         WHERE b.intent_id = l.intent_id AND a.anchor_tx_hash IS NOT NULL),
 	       (SELECT count(*) FROM proof_artifacts p JOIN chain_execution_results c ON c.result_id = p.chain_execution_id
-	         WHERE p.intent_id = l.intent_id)
+	         WHERE p.intent_id = l.intent_id),
+	       (SELECT count(*) FROM proof_artifacts p WHERE p.intent_id = l.intent_id)
 	FROM intent_lifecycle l
 	WHERE l.status = 'authorized' AND COALESCE(l.authorized_at, l.created_at) < $1
 	  AND NOT EXISTS (SELECT 1 FROM intent_member_outcomes m WHERE m.intent_id = l.intent_id)
@@ -51,7 +63,7 @@ func (r *IntentLifecycleRepository) StaleIntents(ctx context.Context, horizon ti
 	var out []StaleIntent
 	for rows.Next() {
 		var s StaleIntent
-		if err := rows.Scan(&s.IntentID, &s.AuthorizedAt, &s.Batches, &s.AnchoredBatch, &s.Executions); err != nil {
+		if err := rows.Scan(&s.IntentID, &s.AuthorizedAt, &s.Batches, &s.AnchoredBatch, &s.Executions, &s.ProofCycles); err != nil {
 			return nil, err
 		}
 		out = append(out, s)
@@ -63,7 +75,7 @@ func (r *IntentLifecycleRepository) StaleIntents(ctx context.Context, horizon ti
 // and records the replaced state as a correction with the evidence. It reports whether the intent was resolved; one that
 // no longer qualifies (it moved on, executed, or was anchored) is left alone.
 func (r *IntentLifecycleRepository) ResolveStaleIntent(ctx context.Context, s StaleIntent, horizon time.Time, by string) (bool, error) {
-	if s.AnchoredBatch != 0 || s.Executions != 0 {
+	if s.MayHaveExecuted() {
 		return false, nil
 	}
 	tx, err := r.client.db.BeginTx(ctx, nil)
@@ -84,9 +96,9 @@ func (r *IntentLifecycleRepository) ResolveStaleIntent(ctx context.Context, s St
 		return false, fmt.Errorf("lock %s: %w", s.IntentID, err)
 	}
 	var still StaleIntent
-	err = tx.QueryRowContext(ctx, `SELECT intent_id, authorized_at, batches, anchored, executions FROM (`+staleIntentsSQL+`) q(intent_id, authorized_at, batches, anchored, executions)
-		WHERE intent_id = $2`, horizon, s.IntentID).Scan(&still.IntentID, &still.AuthorizedAt, &still.Batches, &still.AnchoredBatch, &still.Executions)
-	if err == sql.ErrNoRows || still.AnchoredBatch != 0 || still.Executions != 0 {
+	err = tx.QueryRowContext(ctx, `SELECT intent_id, authorized_at, batches, anchored, executions, proof_cycles FROM (`+staleIntentsSQL+`) q(intent_id, authorized_at, batches, anchored, executions, proof_cycles)
+		WHERE intent_id = $2`, horizon, s.IntentID).Scan(&still.IntentID, &still.AuthorizedAt, &still.Batches, &still.AnchoredBatch, &still.Executions, &still.ProofCycles)
+	if err == sql.ErrNoRows || (err == nil && still.MayHaveExecuted()) {
 		return false, nil
 	}
 	if err != nil {

@@ -137,6 +137,9 @@ type Header struct {
 	// makes it a fleet-wide liveness dependency, and a local feed is
 	// non-deterministic across validators. Riding on an artifact that is already
 	// signed, already fetched and already consensus-safe costs nothing extra.
+	//
+	// Superseded by NativeRates in a v3 header, which carries 0 here. No validator code priced with this field: in
+	// v1/v2 it is signed and otherwise unread.
 	NativeUSDMicro int64 `json:"native_usd_micro"`
 
 	// IssuedAtUnix / NotAfterUnix bound freshness. Compared against the ABCI
@@ -183,6 +186,16 @@ type Header struct {
 	// would fail signature checking.
 	CostBasis []ChainCostBasis `json:"cost_basis,omitempty"`
 
+	// NativeRates is the USD price of each enabled settlement chain's own native token (RB7 Task 4, owner decision
+	// D6): the rate a validator prices that chain's gas at. Present only in a v3 header.
+	//
+	// It replaces NativeUSDMicro, which carried ONE rate (always ETH's) for every chain - wrong for Telcoin Adiri,
+	// whose gas is TEL. A v3 header therefore carries NativeUSDMicro = 0, and a non-zero value there is refused when a
+	// rate is read (NativeRateFor), so a v3 document cannot state two answers.
+	//
+	// Signed like the cost basis, so every rate is one the pinned key published, with its source and observation time.
+	NativeRates []ChainNativeRate `json:"native_rates,omitempty"`
+
 	// Signature is ed25519 over SigningBytes().
 	Signature string `json:"signature"`
 }
@@ -211,6 +224,29 @@ type ChainCostBasis struct {
 	PerLegMicroUSD int64 `json:"per_leg_micro_usd"`
 }
 
+// ChainNativeRate is the USD price of one chain's native token, as the gateway observed it.
+type ChainNativeRate struct {
+	// ChainID is the EVM chain id, matching ChainTarget.ChainID in the block.
+	ChainID int64 `json:"chain_id"`
+
+	// USDPerNativeMicro is the price of ONE whole native token, in micro-USD.
+	USDPerNativeMicro int64 `json:"usd_per_native_micro"`
+
+	// Source names where the rate came from (for ETH and TEL, two feeds that had to agree).
+	Source string `json:"source"`
+
+	// ObservedAtUnix is when the rate was observed. A rate older than MaxNativeRateAge is refused.
+	ObservedAtUnix int64 `json:"observed_at_unix"`
+}
+
+// MaxNativeRateAge bounds how old a signed rate may be, in seconds, when a validator prices with it.
+//
+// The gateway signs only a rate its FX oracle still holds as fresh (BILLING_FX_MAX_AGE_SEC, 1500 s as staged 2026-10-06),
+// and a validator keeps a fetched epoch for CERTEN_ENTITLEMENT_MAX_AGE_SEC (900 s by default) after that, so a
+// legitimately served rate can be up to their sum old. One hour covers that sum with margin; a rate past it is refused
+// by name, never used.
+const MaxNativeRateAge = 3600
+
 // SigningBytes is the exact preimage signed and verified. Excludes Signature.
 //
 // VERSIONED BY CONTENT, not by a version field. A header carrying no cost basis
@@ -228,26 +264,120 @@ func (h Header) SigningBytes() []byte {
 		h.Epoch, h.Root, h.SetHash, h.PrevRoot,
 		h.NativeUSDMicro, h.IssuedAtUnix, h.NotAfterUnix, h.KeyID,
 	)
+	if len(h.NativeRates) > 0 {
+		return h.v3SigningBytes(v1)
+	}
 	if len(h.CostBasis) == 0 {
 		return []byte(v1)
 	}
 
 	// v2 = the v1 preimage, then the cost basis sorted by chain id.
-	//
-	// Sorted on a COPY: the header is shared, and reordering a caller's slice as
-	// a side effect of signing is the kind of thing that produces a signature
-	// which verifies once and never again.
-	basis := make([]ChainCostBasis, len(h.CostBasis))
-	copy(basis, h.CostBasis)
-	sort.Slice(basis, func(i, j int) bool { return basis[i].ChainID < basis[j].ChainID })
-
 	var b strings.Builder
 	b.WriteString("certen:entitlement:v2\x1f")
 	b.WriteString(v1)
-	for _, c := range basis {
+	for _, c := range sortedCostBasis(h.CostBasis) {
 		fmt.Fprintf(&b, "\x1f%d:%d:%d", c.ChainID, c.BaseMicroUSD, c.PerLegMicroUSD)
 	}
 	return []byte(b.String())
+}
+
+// v3SigningBytes is the preimage of a header carrying per-chain native rates (RB7 Task 4):
+//
+//	certen:entitlement:v3 US <v1 preimage> US cost_basis [US id:base:perLeg]... US native_rates [US id:usdMicro:observedAt:source]...
+//
+// Each list is sorted by chain id and introduced by its label, so an empty cost basis and the start of the rates can
+// never be confused. A source is the last field of its entry and carries no control character (NativeRateFor refuses
+// one, and the gateway refuses to sign one), so the entries are unambiguous. As with v2, a validator that predates v3
+// computes other bytes and refuses the signature: VALIDATORS MUST SHIP FIRST, and the gateway emits v3 only once
+// switched on (BILLING_ENTITLEMENT_PUBLISH_NATIVE_RATES).
+func (h Header) v3SigningBytes(v1 string) []byte {
+	var b strings.Builder
+	b.WriteString("certen:entitlement:v3\x1f")
+	b.WriteString(v1)
+	b.WriteString("\x1fcost_basis")
+	for _, c := range sortedCostBasis(h.CostBasis) {
+		fmt.Fprintf(&b, "\x1f%d:%d:%d", c.ChainID, c.BaseMicroUSD, c.PerLegMicroUSD)
+	}
+	b.WriteString("\x1fnative_rates")
+	rates := make([]ChainNativeRate, len(h.NativeRates))
+	copy(rates, h.NativeRates)
+	sort.SliceStable(rates, func(i, j int) bool { return rates[i].ChainID < rates[j].ChainID })
+	for _, r := range rates {
+		fmt.Fprintf(&b, "\x1f%d:%d:%d:%s", r.ChainID, r.USDPerNativeMicro, r.ObservedAtUnix, r.Source)
+	}
+	return []byte(b.String())
+}
+
+// sortedCostBasis sorts by chain id on a COPY: the header is shared, and reordering a caller's slice as a side effect
+// of signing is the kind of thing that produces a signature which verifies once and never again.
+func sortedCostBasis(in []ChainCostBasis) []ChainCostBasis {
+	basis := make([]ChainCostBasis, len(in))
+	copy(basis, in)
+	sort.Slice(basis, func(i, j int) bool { return basis[i].ChainID < basis[j].ChainID })
+	return basis
+}
+
+// Rate refusal reasons. Stable strings: they name why a chain's gas could not be priced.
+const (
+	// ReasonRateUnpriced: the header names no rate for the chain - a v1/v2 header (no per-chain rates at all) or a v3
+	// header that omits the chain. Never priced at another chain's rate, and never at a configured one.
+	ReasonRateUnpriced = "NATIVE_RATE_UNPRICED"
+	// ReasonRateStale: the chain's rate was observed more than MaxNativeRateAge ago.
+	ReasonRateStale = "NATIVE_RATE_STALE"
+	// ReasonRateInvalid: the rates are malformed (non-positive, duplicated, observed after the header was issued, a
+	// source that is empty or has a control character, or a v3 header that also states the superseded single rate).
+	ReasonRateInvalid = "NATIVE_RATE_INVALID"
+)
+
+// NativeRateFor returns the signed micro-USD price of chainID's native token, judged fresh at nowUnix.
+//
+// The header must already be verified (signature, not expired); this reads only its rates. It is used outside
+// consensus, at send time, so nowUnix is the caller's clock. A v1/v2 header has no per-chain rates: every chain is
+// refused by name, never priced at the single ETH rate those versions carry.
+func (h Header) NativeRateFor(chainID int64, nowUnix int64) (int64, error) {
+	if len(h.NativeRates) == 0 {
+		return 0, &VerifyError{Reason: ReasonRateUnpriced, Detail: fmt.Sprintf(
+			"entitlement epoch %d carries no per-chain native rates (a header before v3), so chain %d's gas has no signed price",
+			h.Epoch, chainID)}
+	}
+	if h.NativeUSDMicro != 0 {
+		return 0, &VerifyError{Reason: ReasonRateInvalid, Detail: fmt.Sprintf(
+			"entitlement epoch %d carries per-chain rates and also a single native_usd_micro %d", h.Epoch, h.NativeUSDMicro)}
+	}
+	var found *ChainNativeRate
+	for i := range h.NativeRates {
+		r := &h.NativeRates[i]
+		if r.ChainID != chainID {
+			continue
+		}
+		if found != nil {
+			return 0, &VerifyError{Reason: ReasonRateInvalid, Detail: fmt.Sprintf(
+				"entitlement epoch %d carries two rates for chain %d", h.Epoch, chainID)}
+		}
+		found = r
+	}
+	if found == nil {
+		return 0, &VerifyError{Reason: ReasonRateUnpriced, Detail: fmt.Sprintf(
+			"entitlement epoch %d carries no native rate for chain %d", h.Epoch, chainID)}
+	}
+	switch {
+	case found.USDPerNativeMicro <= 0:
+		return 0, &VerifyError{Reason: ReasonRateInvalid, Detail: fmt.Sprintf(
+			"chain %d's native rate is %d micro-USD", chainID, found.USDPerNativeMicro)}
+	case strings.TrimSpace(found.Source) == "" ||
+		strings.IndexFunc(found.Source, func(c rune) bool { return c < 0x20 || c == 0x7f }) >= 0:
+		return 0, &VerifyError{Reason: ReasonRateInvalid, Detail: fmt.Sprintf(
+			"chain %d's native rate names no usable source (%q)", chainID, found.Source)}
+	case found.ObservedAtUnix <= 0 || found.ObservedAtUnix > h.IssuedAtUnix:
+		return 0, &VerifyError{Reason: ReasonRateInvalid, Detail: fmt.Sprintf(
+			"chain %d's native rate was observed at %d, not at or before the epoch's issue time %d",
+			chainID, found.ObservedAtUnix, h.IssuedAtUnix)}
+	case nowUnix-found.ObservedAtUnix > MaxNativeRateAge:
+		return 0, &VerifyError{Reason: ReasonRateStale, Detail: fmt.Sprintf(
+			"chain %d's native rate was observed at %d, %d s before %d (the limit is %d s)",
+			chainID, found.ObservedAtUnix, nowUnix-found.ObservedAtUnix, nowUnix, MaxNativeRateAge)}
+	}
+	return found.USDPerNativeMicro, nil
 }
 
 // CostBasisFor returns the basis for a chain, and whether one was published.

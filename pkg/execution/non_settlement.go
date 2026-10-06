@@ -18,7 +18,6 @@ import (
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/rpc"
 
 	attestation "github.com/certen/independant-validator/pkg/attestation/strategy"
 	chain "github.com/certen/independant-validator/pkg/chain/strategy"
@@ -130,20 +129,33 @@ func (r resolverNonSettlementChain) client(chainID int64) (*EthereumContractMana
 	return ecm, nil
 }
 
-func (r resolverNonSettlementChain) FinalizedHeader(ctx context.Context, chainID int64) (*types.Header, error) {
+// clock is the chain's clock (chain_clock.go): a non-settlement's and a predecessor's time is read there (T-6..T-8).
+func (r resolverNonSettlementChain) clock(chainID int64) (*ChainClock, error) {
 	ecm, err := r.client(chainID)
 	if err != nil {
 		return nil, err
 	}
-	return ecm.client.HeaderByNumber(ctx, big.NewInt(int64(rpc.FinalizedBlockNumber)))
+	primary := ""
+	if ecm.config != nil {
+		primary = ecm.config.EthereumRPC
+	}
+	return chainClockFor(chainID, primary), nil
+}
+
+func (r resolverNonSettlementChain) FinalizedHeader(ctx context.Context, chainID int64) (*types.Header, error) {
+	c, err := r.clock(chainID)
+	if err != nil {
+		return nil, err
+	}
+	return c.Finalized(ctx)
 }
 
 func (r resolverNonSettlementChain) HeaderAt(ctx context.Context, chainID int64, number uint64) (*types.Header, error) {
-	ecm, err := r.client(chainID)
+	c, err := r.clock(chainID)
 	if err != nil {
 		return nil, err
 	}
-	return ecm.client.HeaderByNumber(ctx, new(big.Int).SetUint64(number))
+	return c.HeaderAt(ctx, number)
 }
 
 func (r resolverNonSettlementChain) LeafConsumedAt(ctx context.Context, chainID int64, account common.Address, leaf [32]byte, number uint64) (bool, error) {
@@ -239,6 +251,9 @@ func observeNonSettlementAt(ctx context.Context, rd NonSettlementChain, f NonSet
 		}
 	}
 	if int64(head.Time) <= deadline.Add(nonSettlementFinality).Unix() {
+		// Blocked only because no finalized block is past the horizon yet: on a chain whose blocks stop when idle, the
+		// clock's heartbeat makes one (RB7 T-6, rule 10). The block decides, by this same predicate.
+		awaitChainTime(f.ChainID, fmt.Sprintf("the non-settlement of %s", f.IntentID), uint64(deadline.Add(nonSettlementFinality).Unix()))
 		return nil, nil, fmt.Errorf("%w (finalized %s, deadline %s)", errNotYetAttestable,
 			time.Unix(int64(head.Time), 0).UTC().Format(time.RFC3339), deadline.Format(time.RFC3339))
 	}
@@ -265,18 +280,27 @@ func observeNonSettlementAt(ctx context.Context, rd NonSettlementChain, f NonSet
 // copy of the member and its own reads of the chain. It returns nil only when the peer reproduces
 // the claim's result hash exactly.
 func verifyNonSettlementClaim(ctx context.Context, rd NonSettlementChain, own *PendingBatchIntent, msg *attestation.AttestationMessage) error {
-	c := msg.NonSettlement
-	if c == nil {
+	if msg.NonSettlement == nil {
 		return fmt.Errorf("no non-settlement claim")
 	}
 	f, err := memberFacts(own)
 	if err != nil {
 		return err
 	}
+	return verifyNonSettlementFacts(ctx, rd, f, msg)
+}
+
+// verifyNonSettlementFacts is verifyNonSettlementClaim from this validator's own facts of the member: its queued copy,
+// or the tree it kept and signed (keptMemberFacts).
+func verifyNonSettlementFacts(ctx context.Context, rd NonSettlementChain, f NonSettlementFacts, msg *attestation.AttestationMessage) error {
+	c := msg.NonSettlement
+	if c == nil {
+		return fmt.Errorf("no non-settlement claim")
+	}
 	account, leaf, deadline := f.Account, f.Leaf, f.Deadline
 	if !strings.EqualFold(c.Account, account.Hex()) || !strings.EqualFold(c.Leaf, common.Hash(leaf).Hex()) ||
-		c.Deadline != deadline.Unix() || c.ChainID != own.ChainID ||
-		!strings.EqualFold(c.OperationID, common.Hash(own.OperationID).Hex()) {
+		c.Deadline != deadline.Unix() || c.ChainID != f.ChainID ||
+		!strings.EqualFold(c.OperationID, common.Hash(f.OperationID).Hex()) {
 		return fmt.Errorf("the claim's member (account %s, leaf %s, deadline %d) is not this validator's member (account %s, leaf %s, deadline %d)",
 			c.Account, c.Leaf, c.Deadline, account.Hex(), common.Hash(leaf).Hex(), deadline.Unix())
 	}

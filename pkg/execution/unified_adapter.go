@@ -15,8 +15,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-
-	"github.com/certen/independant-validator/pkg/ethrpc"
 )
 
 // =============================================================================
@@ -223,7 +221,10 @@ func (a *UnifiedOrchestratorAdapter) StartProofCycleWithAccumulateRef(
 		//
 		// Every path now says what happened.
 		go func() {
-			cycleCtx, cancel := context.WithTimeout(context.Background(), unifiedProofCycleTimeout)
+			// No wall-clock deadline on Phase 7: its observation ends only when the chain decides it (RB7 D7,
+			// phase7_chain_decision.go), and every attempt that the chain did not decide is logged, so it is never
+			// silent. The phases after it are bounded (unifiedPostObservationTimeout).
+			cycleCtx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 
 			started := time.Now()
@@ -241,8 +242,7 @@ func (a *UnifiedOrchestratorAdapter) StartProofCycleWithAccumulateRef(
 					intentID, elapsed, result.Success, result.Error)
 			}
 			if cycleCtx.Err() != nil {
-				fmt.Printf("[UnifiedAdapter] Unified proof cycle for %s hit its %s deadline — Phase 7 did not "+
-					"resolve every observation\n", intentID, unifiedProofCycleTimeout)
+				fmt.Printf("[UnifiedAdapter] Unified proof cycle for %s was stopped (%v)\n", intentID, cycleCtx.Err())
 			}
 		}()
 		return nil
@@ -307,15 +307,11 @@ func dropUnobservableHashes(in []string) []string {
 	return out
 }
 
-// unifiedProofCycleTimeout bounds one intent's Phase 7-9 run.
-//
-// Phase 7 waits on external-chain receipts, so it is legitimately slow — but never unbounded. An
-// unbounded wait is indistinguishable from a hang and leaves the intent settled on chain with no
-// record written back to acc://certen-protocol.acme/execution-results.
-//
-// Phase 7 waits for the chain's finalized block (RB5-F49), up to ethrpc.FinalityBound; Phase 8's peer rounds and Phase
-// 9's write-back follow it.
-var unifiedProofCycleTimeout = ethrpc.FinalityBound + 30*time.Minute
+// unifiedPostObservationTimeout bounds what follows Phase 7 in one cycle: the contract-call gate's reads are bounded by
+// the observation timeout, Phase 8's peer rounds by the attestation's age, and Phase 9's write-back by its own timeout;
+// this is the cycle's outer bound for them. Phase 7 itself has none on this machine's clock: it ends when the chain
+// decides (phase7_chain_decision.go), and says so on every attempt.
+var unifiedPostObservationTimeout = 30 * time.Minute
 
 // isHash32 reports whether s is a 0x-prefixed 32-byte hex string.
 //

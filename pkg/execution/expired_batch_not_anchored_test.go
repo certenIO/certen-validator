@@ -22,7 +22,8 @@ func memberDue(id string, deadline time.Time) *PendingBatchIntent {
 func TestATreeWhoseEveryMemberIsPastItsDeadlineIsNotAnchored(t *testing.T) {
 	const head = uint64(1000)
 	node := &prunedNode{head: head}
-	o := &BatchOrchestrator{ecm: &EthereumContractManager{client: node.serve(t)}, logf: func(string, ...interface{}) {}}
+	client := node.serve(t)
+	o := &BatchOrchestrator{ecm: &EthereumContractManager{client: client}, logf: func(string, ...interface{}) {}, clock: newChainClock(84532, client)}
 	chainNow := time.Unix(int64(1790680000+head), 0) // the stub's head timestamp
 	ctx := context.Background()
 
@@ -46,7 +47,8 @@ func TestATreeWhoseEveryMemberIsPastItsDeadlineIsNotAnchored(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	broken := &BatchOrchestrator{ecm: &EthereumContractManager{client: unreachable}, logf: func(string, ...interface{}) {}}
+	broken := &BatchOrchestrator{ecm: &EthereumContractManager{client: unreachable}, logf: func(string, ...interface{}) {},
+		clock: newChainClock(84532, unreachable)}
 	if _, err := broken.allPendingPastDeadline(ctx, past); err == nil {
 		t.Fatal("an unreadable chain head was judged")
 	}

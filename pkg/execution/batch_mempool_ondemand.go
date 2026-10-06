@@ -184,7 +184,6 @@ func (m *BatchMempool) RefuseOnDemand(chainID int64, opID [32]byte, at time.Time
 	}
 	m.mu.Lock()
 	m.keepRefusedLocked(p, at)
-	m.pruneRefusedLocked(at)
 	m.mu.Unlock()
 	m.persist()
 	return true
@@ -200,11 +199,35 @@ func (m *BatchMempool) keepRefusedLocked(p *PendingBatchIntent, at time.Time) {
 	m.refused[p.ChainID][p.OperationID] = &refusedMember{member: p, at: at}
 }
 
-// pruneRefusedLocked forgets refused members kept longer than RefusedKeep.
-func (m *BatchMempool) pruneRefusedLocked(now time.Time) {
+// RefusedPruneCandidates are the refused members kept longer than RefusedKeep (this machine's clock: a trigger only).
+func (m *BatchMempool) RefusedPruneCandidates(now time.Time) []*PendingBatchIntent {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []*PendingBatchIntent
+	for _, byOp := range m.refused {
+		for _, r := range byOp {
+			if now.Sub(r.at) > RefusedKeep {
+				out = append(out, r.member)
+			}
+		}
+	}
+	return out
+}
+
+// PruneRefusedExcept forgets the refused members kept longer than RefusedKeep, except those in keep - whose chain is
+// not past their attestation window yet (BatchStack.settleOnDemandAtTTL).
+func (m *BatchMempool) PruneRefusedExcept(now time.Time, keep map[*PendingBatchIntent]bool) {
+	m.mu.Lock()
+	m.pruneRefusedLocked(now, keep)
+	m.mu.Unlock()
+	m.persist()
+}
+
+// pruneRefusedLocked forgets refused members kept longer than RefusedKeep, except those in keep.
+func (m *BatchMempool) pruneRefusedLocked(now time.Time, keep map[*PendingBatchIntent]bool) {
 	for chainID, byOp := range m.refused {
 		for op, r := range byOp {
-			if now.Sub(r.at) > RefusedKeep {
+			if now.Sub(r.at) > RefusedKeep && !keep[r.member] {
 				delete(byOp, op)
 			}
 		}

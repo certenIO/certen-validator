@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/certen/independant-validator/pkg/consensus"
+	"github.com/certen/independant-validator/pkg/supportedchains"
 	"github.com/ethereum/go-ethereum/common"
 )
 
@@ -393,8 +394,12 @@ func (p *PendingBatchIntent) provenance() MemberProvenance {
 		} else {
 			prov.Amount = "0"
 		}
-		// The batch path settles native value; a contract-call leg moves none, and says so as "0".
-		prov.TokenSymbol = "ETH"
+		// The batch path settles native value - in the leg chain's own gas token (the catalogue's: ETH on the Sepolia
+		// chains, TEL on Telcoin Adiri); a contract-call leg moves none, and says so as "0". A chain the catalogue does not
+		// hold names no token.
+		if c, ok := supportedchains.Lookup(leg.ChainID); ok {
+			prov.TokenSymbol = c.NativeSymbol
+		}
 	}
 	return prov
 }
@@ -1060,12 +1065,27 @@ func (m *BatchMempool) PendingOlderThan(horizonStart uint64) []*PendingBatchInte
 	return out
 }
 
+// MembersOlderThan is every period-pool member committed below horizonStart, whatever its outcome: what a prune at
+// horizonStart would remove.
+func (m *BatchMempool) MembersOlderThan(horizonStart uint64) []*PendingBatchIntent {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []*PendingBatchIntent
+	for _, pool := range m.pool {
+		for _, p := range pool {
+			if p != nil && p.CommitHeight != 0 && p.CommitHeight < horizonStart {
+				out = append(out, p)
+			}
+		}
+	}
+	return out
+}
+
 // PruneOlderThanExcept is PruneOlderThan keeping the members in keep: those whose fate could not be read yet.
 func (m *BatchMempool) PruneOlderThanExcept(horizonStart uint64, keep map[*PendingBatchIntent]bool) int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.pruneRefusedLocked(time.Now())
 	pruned := 0
 	for chainID, pool := range m.pool {
 		var rest []*PendingBatchIntent

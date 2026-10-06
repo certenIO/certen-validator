@@ -1656,6 +1656,12 @@ func startValidator(
 	if sErr != nil {
 		return nil, nil, fmt.Errorf("batch path: stack assembly: %w", sErr)
 	}
+	// The heartbeat of every settlement chain whose blocks stop when idle (RB7 D7); none on the chains whose blocks never
+	// stop.
+	stack.RunChainHeartbeats(context.Background())
+	if hb := stack.HeartbeatChains(); len(hb) > 0 {
+		log.Printf("💓 [BATCH] chain heartbeat running on %v", hb)
+	}
 	// Members with a certified intent are placed by their quorum certificate's height (RB5 D3) - installed before
 	// the persisted queue is restored, so a restored certified member is placed rather than refused.
 	stack.Mempool.SetIntentCertificates(validatorApp)
@@ -2009,6 +2015,7 @@ func startValidator(
 		MemberLookup:             stack.Mempool.FindMember,
 		NonSettlementChain:       execution.NonSettlementChainFromResolver(resolver),
 		NonSettlements:           nonSettlements,
+		OutcomeTrees:             stack.OutcomeTrees,
 		MemberOutcomes:           memberOutcomes,
 		ProofCompletions:         proofCompletions,
 		// The Accumulate validator-set evidence every V8.2 proof carries (RB5-F4): the Directory's set and threshold
@@ -2097,6 +2104,14 @@ func startValidator(
 	}
 	intentDiscovery.SetUnsearchedBlocks(unsearchedBlocks)
 	log.Printf("✅ [DISCOVERY] unsearched blocks kept at %s; searched again every 30s", unsearchedBlocks.Path())
+	// Intents waiting for their consensus-bound proof are kept here until their retry ends, and resumed at start
+	// (RB6-F12): a retry held only in memory was lost with the process and left its intent `authorized` for good.
+	retryJournal, rjErr := intent.OpenFileRetryJournal(filepath.Join(nsDataDir, "intent_retries.json"))
+	if rjErr != nil {
+		return nil, nil, fmt.Errorf("intent discovery: %w", rjErr)
+	}
+	intentDiscovery.SetRetryJournal(retryJournal)
+	log.Printf("✅ [DISCOVERY] pending intent retries kept at %s; resumed at start", retryJournal.Path())
 
 	// This is the critical hook: IntentDiscovery calls the canonical BFT consensus method
 	// BFTValidator.ExecuteCanonicalIntentWithBFTConsensus(ctx, certenIntent, certenProof, blockHeight)
@@ -2149,6 +2164,18 @@ func startValidator(
 		// match the other long-lived services started here (bftScheduler,
 		// batchScheduler) — the refresher lives for the process lifetime.
 		entStore.Start(context.Background())
+
+		// The dollar ceiling prices each transaction's gas at its own chain's native rate as signed in this epoch
+		// (header v3, RB7 Task 4) and nowhere else. An active ceiling with no epoch to read would refuse every send, so
+		// that configuration stops the start, by name.
+		execution.SetNativeRateSource(entStore)
+		if active, err := execution.DollarCeilingActive(); err != nil {
+			log.Fatalf("invalid cost ceiling configuration: %v", err)
+		} else if active && !entStore.Enabled() {
+			log.Fatalf("CERTEN_MAX_TX_COST_USD sets a dollar ceiling, but CERTEN_ENTITLEMENT_URL is unset: the ceiling " +
+				"prices gas only at the native rates signed into the entitlement epoch. Set CERTEN_ENTITLEMENT_URL, or " +
+				"unset CERTEN_MAX_TX_COST_USD")
+		}
 
 		// The mode both producers act on is the one the chain enforces - the sealed policy and every update since,
 		// read from the ValidatorApp at each use - never entGateCfg.Mode, the environment's genesis seed (RB4-F37a).

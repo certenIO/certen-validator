@@ -178,8 +178,9 @@ func newScanFixture(t *testing.T) *scanFixture {
 	cl := c.serve(t)
 	return &scanFixture{chain: c, member: m, tree: tree, key: key, settler: settler,
 		roster: []common.Address{settler, odOtherAddr},
-		orch:   &BatchOrchestrator{incarnation: testIncarnation, ecm: &EthereumContractManager{client: cl}, logf: func(string, ...interface{}) {}},
-		att:    anchorAttestation{Block: 2, Time: time.Unix(int64(c.times[2]), 0), From: settler}}
+		orch: &BatchOrchestrator{incarnation: testIncarnation, ecm: &EthereumContractManager{client: cl}, logf: func(string, ...interface{}) {},
+			clock: newChainClock(odChain, cl)},
+		att: anchorAttestation{Block: 2, Time: time.Unix(int64(c.times[2]), 0), From: settler}}
 }
 
 // settle puts a settlement of the fixture's member, sent by the settler, into block n.

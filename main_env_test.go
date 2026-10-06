@@ -16,7 +16,7 @@ func TestBootRefusesEveryUnreadableKnobByName(t *testing.T) {
 		"CERTEN_BLOCK_RETENTION":             "all",
 		"CERTEN_ALLOW_CONTRACT_CALLS":        "ture",
 		"CERTEN_GAS_CEILING_ENFORCE":         "maybe",
-		"CERTEN_NATIVE_USD":                  "$3000",
+		"CERTEN_MAX_TX_COST_USD":             "$25",
 		"INTENT_REWIND_BLOCKS":               "-5",
 		"BLOCK_WORKERS":                      "many",
 		"CERTEN_DEFAULT_PROOF_CLASS":         "fast",

@@ -39,6 +39,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/certen/independant-validator/pkg/supportedchains"
 )
 
 // Probe fetches the measured cost of one confirmed transaction.
@@ -79,6 +81,16 @@ func NewProbe(cfg ProbeConfig) (Probe, error) {
 	}
 	if cfg.RPCURL == "" {
 		return nil, fmt.Errorf("billing: no RPC URL configured for chain %q", cfg.Chain)
+	}
+	// Every chain of the validator's chain catalogue is an EVM chain CERTEN settles on with the batch path, and is
+	// measured by the EVM fee model (the native token's 18 decimals and an OP-stack L1 fee only where the receipt carries
+	// one): the catalogue, not a second list here, says which chains those are - Telcoin Adiri included.
+	if c, ok := supportedchains.LookupName(cfg.Chain); ok {
+		if c.NativeDecimals != 18 {
+			return nil, fmt.Errorf("billing: chain %q pays gas in %s with %d decimals; the EVM fee model prices 18", cfg.Chain,
+				c.NativeSymbol, c.NativeDecimals)
+		}
+		return &evmProbe{cfg: cfg}, nil
 	}
 	switch normalizeChain(cfg.Chain) {
 	case "ethereum", "base", "arbitrum", "optimism", "bsc", "polygon", "moonbeam", "hedera":

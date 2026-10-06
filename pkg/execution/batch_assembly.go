@@ -19,6 +19,7 @@ import (
 	"github.com/certen/independant-validator/pkg/config"
 	"github.com/certen/independant-validator/pkg/consensus"
 	"github.com/certen/independant-validator/pkg/database"
+	"github.com/certen/independant-validator/pkg/supportedchains"
 )
 
 // =============================================================================
@@ -104,9 +105,31 @@ func NewEVMChainResolverFromEnv(anchorCfg *config.AnchorConfig, chainIDs []int64
 		if c := anchorCfg.GetEVMChainConfig(id); c == nil || strings.TrimSpace(c.RPCURL) == "" {
 			return nil, fmt.Errorf("chain %d has no RPC configured: chain %d is a chain CERTEN settles on", id, id)
 		}
+		if err := requireGasSettings(anchorCfg.GetEVMChainConfig(id)); err != nil {
+			return nil, err
+		}
 		out[id] = common.HexToAddress(v)
 	}
 	return NewEVMChainResolver(anchorCfg, out)
+}
+
+// requireGasSettings refuses a settlement chain with no gas price ceiling or anchor gas limit. A zero ceiling is no ceiling
+// at all (feeCeiling), and a chain whose catalogue entry compiles in no default (Telcoin Adiri: its ceiling is a fact of
+// its own fee market, in its own token) has zero until it is configured - so enabling such a chain without configuring
+// it is refused here, at boot, by the variable to set (RB7 §4.2).
+func requireGasSettings(c *config.EVMChainConfig) error {
+	maxGasEnv, limitEnv := "its gas price ceiling", "its anchor gas limit"
+	if cat, ok := supportedchains.Lookup(c.ChainID); ok {
+		maxGasEnv, limitEnv = cat.MaxGasPriceEnv(), cat.GasLimitAnchorEnv()
+	}
+	if c.MaxGasPriceGwei <= 0 {
+		return fmt.Errorf("chain %d has no gas price ceiling: set %s (gwei of its native token, from its measured fee market): "+
+			"chain %d is a chain CERTEN settles on", c.ChainID, maxGasEnv, c.ChainID)
+	}
+	if c.GasLimitAnchor <= 0 {
+		return fmt.Errorf("chain %d has no anchor gas limit: set %s: chain %d is a chain CERTEN settles on", c.ChainID, limitEnv, c.ChainID)
+	}
+	return nil
 }
 
 // Endpoint is a configured chain's RPC and its CertenAnchorV8 - what the batch path settles on, and
@@ -222,6 +245,9 @@ type BatchStack struct {
 	// co-signing peer before it rebuilds one, as the on-demand submitter does for its lane (RB5-F57). Nil reads nothing;
 	// a v4 member without a commit time then waits, by name.
 	CommitTime CommitTimeResolver
+
+	// heartbeats are the heartbeats of the chains whose blocks stop when idle (RunChainHeartbeats).
+	heartbeats []*chainHeartbeat
 }
 
 // commitTimeReadTimeout bounds one ensureCommitTimes pass.
@@ -299,6 +325,7 @@ func NewBatchStack(
 	mempool := NewBatchMempool(mempoolCfg)
 
 	orchestrators := make(map[int64]*BatchOrchestrator)
+	var heartbeats []*chainHeartbeat
 	for _, chainID := range resolver.Chains() {
 		ecm, anchorAddr, err := resolver.ManagerForChain(chainID)
 		if err != nil {
@@ -309,7 +336,23 @@ func NewBatchStack(
 		if err != nil {
 			return nil, fmt.Errorf("assembling chain %d: %w", chainID, err)
 		}
-		orchestrators[chainID] = NewBatchOrchestrator(ecm, anchorAddr, prover, mempool, incarnation, logf)
+		o := NewBatchOrchestrator(ecm, anchorAddr, prover, mempool, incarnation, logf)
+		// The chain's one clock (RB7 D7), and - only for a chain whose blocks stop when idle - its heartbeat, sent by
+		// this chain's key. Such a chain without CERTEN_CHAIN_HEARTBEAT_<id>=on is refused by name.
+		primary := ""
+		if ecm != nil && ecm.config != nil {
+			primary = ecm.config.EthereumRPC
+		}
+		o.clock = chainClockFor(chainID, primary)
+		beat, err := o.attachHeartbeat(o.clock)
+		if err != nil {
+			return nil, fmt.Errorf("assembling chain %d: %w", chainID, err)
+		}
+		if beat != nil {
+			heartbeats = append(heartbeats, beat)
+			logf("[BATCH-STACK] chain %d: its blocks stop when idle; its heartbeat is on (%s)", chainID, ChainHeartbeatEnv(chainID))
+		}
+		orchestrators[chainID] = o
 		logf("[BATCH-STACK] chain %d wired to CertenAnchorV8 %s, accounts %s (leaf %s)", chainID, anchorAddr.Hex(),
 			version.AccountContract(), version)
 	}
@@ -321,7 +364,25 @@ func NewBatchStack(
 		Orchestrators: orchestrators,
 		SequenceChain: NonSettlementChainFromResolver(resolver),
 		Incarnation:   incarnation,
+		heartbeats:    heartbeats,
 	}, nil
+}
+
+// RunChainHeartbeats runs the heartbeat of every chain whose blocks stop when idle (chain_heartbeat.go) until ctx ends.
+// The chains whose blocks never stop have none: for them it does nothing.
+func (s *BatchStack) RunChainHeartbeats(ctx context.Context) {
+	for _, b := range s.heartbeats {
+		go b.Run(ctx)
+	}
+}
+
+// HeartbeatChains are the chains this stack runs a heartbeat for.
+func (s *BatchStack) HeartbeatChains() []int64 {
+	out := make([]int64, 0, len(s.heartbeats))
+	for _, b := range s.heartbeats {
+		out = append(out, b.chainID)
+	}
+	return out
 }
 
 // OrchestratorFor returns the orchestrator for a chain.
@@ -530,9 +591,27 @@ func (s *BatchStack) memberLeader(cutoff, periodBlocks uint64,
 func (s *BatchStack) settleNeverCertified(leads func(*PendingBatchIntent) bool, onDropped BatchDropFn,
 	logf func(string, ...interface{})) {
 	for _, chainID := range s.chainsInPool() {
+		o := s.Orchestrators[chainID]
 		for _, m := range s.Mempool.UncertifiedPending(chainID) {
-			origin, _ := m.Origin()
-			if origin.IsZero() || time.Since(origin) <= m.settlementHorizon() || !leads(m) {
+			if !leads(m) {
+				continue
+			}
+			// Refused only once its CHAIN is past its deadline, by the chain's clock (RB7 D7): the wall clock never
+			// decides an outcome.
+			if o == nil {
+				logf("[BATCH-FLUSH] ⚠️ member %s on chain %d is uncertified and this node has no orchestrator to read the "+
+					"chain's time; it waits", m.IntentID, chainID)
+				continue
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), memberOutcomeTimeout)
+			past, evidence, err := o.pastDeadlineOnChain(ctx, m)
+			cancel()
+			if err != nil {
+				logf("[BATCH-FLUSH] member %s on chain %d: whether its chain is past its deadline could not be read (%v); it waits",
+					m.IntentID, chainID, err)
+				continue
+			}
+			if !past {
 				continue
 			}
 			if onDropped == nil {
@@ -541,7 +620,7 @@ func (s *BatchStack) settleNeverCertified(leads func(*PendingBatchIntent) bool, 
 				continue
 			}
 			cause := fmt.Sprintf("CERTEN's quorum did not certify its intent (message 0x%x) before its settlement "+
-				"deadline on chain %d", m.IntentMessage[:8], chainID)
+				"deadline on chain %d: %s", m.IntentMessage[:8], chainID, evidence)
 			logf("[BATCH-FLUSH] refusing member %s: %s", m.IntentID, cause)
 			onDropped(context.Background(), m, cause)
 			s.Mempool.MarkOutcome([]*PendingBatchIntent{m}, MemberDropped)
@@ -597,6 +676,25 @@ func (s *BatchStack) settleAtRetentionHorizon(retention, horizon uint64, leads f
 	return keep
 }
 
+// pruneAtRetentionHorizon decides every pending member at the retention horizon (settleAtRetentionHorizon) and prunes
+// the period pool below it - keeping every copy whose chain is not past the member's attestation window yet (RB7 D7):
+// a peer's non-settlement claim may still need it. Returns how many were pruned.
+func (s *BatchStack) pruneAtRetentionHorizon(retention, horizon uint64, leads func(*PendingBatchIntent) bool,
+	onDropped BatchDropFn, logf func(string, ...interface{})) int {
+	keep := s.settleAtRetentionHorizon(retention, horizon, leads, onDropped, logf)
+	for _, m := range s.Mempool.MembersOlderThan(horizon) {
+		if !keep[m] && !s.pastAttestationWindow(m, logf) {
+			keep[m] = true
+		}
+	}
+	n := s.Mempool.PruneOlderThanExcept(horizon, keep)
+	if n > 0 {
+		logf("[BATCH-FLUSH] pruned %d member(s) older than %d periods, each with an outcome recorded by "+
+			"this or another validator, or refused by name here, and past its attestation window on its chain", n, retention)
+	}
+	return n
+}
+
 // settleOnDemandAtTTL decides every on-demand member a TTL prune would remove before it is removed, as
 // settleAtRetentionHorizon does for the period pool: another validator's recorded outcome lets this node's copy go; no
 // outcome anywhere is a refusal by name; an unreadable outcome keeps the member for a later pass. Returns how many were
@@ -605,6 +703,13 @@ func (s *BatchStack) settleOnDemandAtTTL(ttl time.Duration, now time.Time, leads
 	onDropped BatchDropFn, logf func(string, ...interface{})) int {
 	keep := map[*PendingBatchIntent]bool{}
 	for _, m := range s.Mempool.OnDemandPruneCandidates(ttl, now) {
+		// The TTL (this machine's clock) only makes a member a candidate. It is refused - or let go - only once its
+		// CHAIN is past the end of its attestation window (RB7 D7): until then its non-settlement may still need this
+		// validator's copy, and its outcome is not this clock's to decide.
+		if !s.pastAttestationWindow(m, logf) {
+			keep[m] = true
+			continue
+		}
 		err := s.undecided(m.IntentID, m.ChainID)
 		switch {
 		case errors.Is(err, ErrMemberAlreadyDecided):
@@ -621,12 +726,41 @@ func (s *BatchStack) settleOnDemandAtTTL(ttl time.Duration, now time.Time, leads
 				m.IntentID, m.ChainID)
 		default:
 			cause := fmt.Sprintf("its on-demand settlement window closed on chain %d with no outcome recorded by any "+
-				"validator", m.ChainID)
+				"validator, and the chain is past its attestation window", m.ChainID)
 			logf("[OD] refusing member %s: %s", m.IntentID, cause)
 			onDropped(context.Background(), m, cause)
 		}
 	}
-	return s.Mempool.PruneOnDemandOlderThanExcept(ttl, now, keep)
+	pruned := s.Mempool.PruneOnDemandOlderThanExcept(ttl, now, keep)
+	// The refused set (RB6-F11): kept at least RefusedKeep, and until the member's chain is past its attestation window.
+	keepRefused := map[*PendingBatchIntent]bool{}
+	for _, m := range s.Mempool.RefusedPruneCandidates(now) {
+		if !s.pastAttestationWindow(m, logf) {
+			keepRefused[m] = true
+		}
+	}
+	s.Mempool.PruneRefusedExcept(now, keepRefused)
+	return pruned
+}
+
+// pastAttestationWindow reports whether m's chain is past the end of its attestation window, by the chain's clock
+// (BatchOrchestrator.pastAttestationWindowOnChain). A chain this node has no orchestrator for, or cannot read, is not
+// past: the copy is kept.
+func (s *BatchStack) pastAttestationWindow(m *PendingBatchIntent, logf func(string, ...interface{})) bool {
+	o := s.Orchestrators[m.ChainID]
+	if o == nil {
+		logf("[BATCH] member %s on chain %d: no orchestrator reads that chain's time; its copy is kept", m.IntentID, m.ChainID)
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), memberOutcomeTimeout)
+	defer cancel()
+	past, _, err := o.pastAttestationWindowOnChain(ctx, m)
+	if err != nil {
+		logf("[BATCH] member %s on chain %d: whether its chain is past its attestation window could not be read (%v); kept",
+			m.IntentID, m.ChainID, err)
+		return false
+	}
+	return past
 }
 
 // flushOneChain is the shared body: form the period's tree, settle it, then dispose of every
@@ -903,12 +1037,7 @@ func (s *BatchStack) RunFlushLoop(
 		// Memory backstop. Correctness does not depend on it — selection is bucket-scoped, so
 		// stale members cannot pollute a later period's tree.
 		if horizonPeriods := retention * periodBlocks; cutoff > horizonPeriods {
-			horizon := cutoff - horizonPeriods
-			keep := s.settleAtRetentionHorizon(retention, horizon, leads, cfg.OnDropped, logf)
-			if n := s.Mempool.PruneOlderThanExcept(horizon, keep); n > 0 {
-				logf("[BATCH-FLUSH] pruned %d member(s) older than %d periods, each with an outcome recorded by "+
-					"this or another validator, or refused by name here", n, retention)
-			}
+			s.pruneAtRetentionHorizon(retention, cutoff-horizonPeriods, leads, cfg.OnDropped, logf)
 		}
 	}
 

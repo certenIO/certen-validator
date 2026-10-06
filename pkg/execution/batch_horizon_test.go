@@ -95,6 +95,16 @@ func TestNoOnDemandMemberLeavesAtItsTTLWithoutAnOutcome(t *testing.T) {
 		m.onDemand[p.ChainID][p.OperationID].EnqueuedAt = old
 	}
 	drops := &dropLog{dropped: map[string]string{}}
+	// RB7 D7: past the TTL by this machine's clock, but the chain is not past the members' attestation window - nothing
+	// is refused and no copy is let go.
+	chain := newSimIdleChain(11155111, uint64(old.Add(-time.Hour).Unix()))
+	chain.mine(uint64(old.Add(time.Hour).Unix()))
+	s.Orchestrators = map[int64]*BatchOrchestrator{11155111: {logf: t.Logf, clock: newChainClock(11155111, chain)}}
+	if n := s.settleOnDemandAtTTL(time.Hour, time.Now(), func(*PendingBatchIntent) bool { return true }, drops.fn, t.Logf); n != 0 ||
+		len(drops.dropped) != 0 {
+		t.Fatalf("THE regression (RB7 D7): the wall clock refused or pruned: pruned %d, refused %v", n, drops.dropped)
+	}
+	chain.mine(uint64(time.Now().Unix())) // the chain passes the attestation window
 	if n := s.settleOnDemandAtTTL(time.Hour, time.Now(), func(*PendingBatchIntent) bool { return false }, drops.fn, t.Logf); n != 1 ||
 		len(drops.dropped) != 0 {
 		t.Fatalf("not this node's to decide: pruned %d, refused %v", n, drops.dropped)

@@ -15,6 +15,7 @@ func TestEVMChainConfigIsOnlyTheSupportedChainsAndNeverDefaulted(t *testing.T) {
 	t.Setenv("ARBITRUM_SEPOLIA_RPC_URL", "")
 	t.Setenv("OPTIMISM_SEPOLIA_RPC_URL", "http://optimism.invalid")
 	t.Setenv("HEDERA_TESTNET_RPC_URL", "http://hedera.invalid")
+	t.Setenv("TELCOIN_ADIRI_RPC_URL", "")
 
 	c := &AnchorConfig{}
 	c.Network.Ethereum.ChainID = 11155111

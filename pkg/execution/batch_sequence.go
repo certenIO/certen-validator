@@ -140,6 +140,16 @@ func sequenceReadiness(ctx context.Context, rd NonSettlementChain, m *PendingBat
 		return sequenceStopped, fmt.Sprintf("its deadline %s passed before its predecessor on chain %d settled",
 			d.Format(time.RFC3339), a.ChainID), nil
 	}
+	// Waiting only for a finalized block of the predecessor's chain past a horizon - the predecessor's deadline and margin,
+	// or this member's own deadline, whichever comes first. On a chain whose blocks stop when idle, the clock's heartbeat
+	// makes one (RB7 T-8); the block decides, by the rule above.
+	horizon := a.Deadline.Add(nonSettlementFinality)
+	if d, ok := m.Deadline(); ok && d.Before(horizon) {
+		horizon = d
+	}
+	if horizon.Unix() >= 0 {
+		awaitChainTime(a.ChainID, fmt.Sprintf("the predecessor of %s", m.IntentID), uint64(horizon.Unix()))
+	}
 	return sequenceWaiting, "", nil
 }
 

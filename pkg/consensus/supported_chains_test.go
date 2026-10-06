@@ -93,3 +93,72 @@ func TestSupportedChainCheckRunsBeforeAnythingIsQueuedOrSent(t *testing.T) {
 		t.Fatalf("chain check at %d, enqueue at %d: the chain check must run first", check, enqueue)
 	}
 }
+
+// RB7 §4.3 / RB8 §0: admission admits the ENABLED chains, not every chain the build knows. A chain the build catalogues
+// but CERTEN_SETTLEMENT_CHAINS does not name is refused here, on every validator, by name - before RB7 it passed
+// admission and was refused only later, when no anchor could be named for it.
+func TestCheckIntentTargetChains_RefusesACataloguedChainThatIsNotEnabled(t *testing.T) {
+	t.Setenv("CERTEN_SETTLEMENT_CHAINS", "84532")
+	err := CheckIntentTargetChains(pinIntent(t, chainLeg(11155111, 11155111)))
+	if !errors.Is(err, ErrUnsupportedTargetChain) {
+		t.Fatalf("a leg on Sepolia was admitted with only Base Sepolia enabled: %v", err)
+	}
+	if !strings.Contains(err.Error(), "ethereum-sepolia") || !strings.Contains(err.Error(), "not enabled") ||
+		!strings.Contains(err.Error(), "CERTEN executes only on base-sepolia (84532)") {
+		t.Fatalf("the refusal does not name the chain and the enabled set: %v", err)
+	}
+	if err := CheckIntentTargetChains(pinIntent(t, chainLeg(84532, 84532))); err != nil {
+		t.Fatalf("the enabled chain was refused: %v", err)
+	}
+}
+
+// Telcoin Adiri (2017) is disabled by default: with the live configuration a 2017 leg is refused by name.
+func TestCheckIntentTargetChains_RefusesTelcoinAdiriUnlessEnabled(t *testing.T) {
+	t.Setenv("CERTEN_SETTLEMENT_CHAINS", liveSettlementChains)
+	err := CheckIntentTargetChains(pinIntent(t, chainLeg(2017, 2017)))
+	if !errors.Is(err, ErrUnsupportedTargetChain) || !strings.Contains(err.Error(), "chain 2017 (telcoin-adiri), which is not enabled") {
+		t.Fatalf("a 2017 leg was not refused by name: %v", err)
+	}
+}
+
+// Enabled by configuration, a 2017 leg is admitted, alone and beside a live chain.
+func TestCheckIntentTargetChains_AdmitsTelcoinAdiriWhenEnabled(t *testing.T) {
+	t.Setenv("CERTEN_SETTLEMENT_CHAINS", liveSettlementChains+",2017")
+	if err := CheckIntentTargetChains(pinIntent(t, chainLeg(2017, 2017))); err != nil {
+		t.Fatalf("an enabled 2017 leg was refused: %v", err)
+	}
+	if err := CheckIntentTargetChains(pinIntent(t, chainLeg(84532, 84532), chainLeg(2017, 0))); err != nil {
+		t.Fatalf("an intent over Base Sepolia and an enabled 2017 was refused: %v", err)
+	}
+	if !IsSupportedTargetChain(2017) {
+		t.Fatal("2017 is not a target chain when enabled")
+	}
+}
+
+// With the live configuration, the refusal of a chain outside the catalogue is byte-for-byte what it was before the
+// catalogue gained an entry that is not enabled.
+func TestCheckIntentTargetChains_TheLiveRefusalIsUnchanged(t *testing.T) {
+	t.Setenv("CERTEN_SETTLEMENT_CHAINS", liveSettlementChains)
+	err := CheckIntentTargetChains(pinIntent(t, chainLeg(84532, 84532), chainLeg(11155420, 11155420)))
+	const want = "unsupported target chain: leg 1 targets chain 11155420; CERTEN executes only on " +
+		"ethereum-sepolia (11155111), base-sepolia (84532), arbitrum-sepolia (421614)"
+	if err == nil || err.Error() != want {
+		t.Fatalf("refusal changed:\n got %v\nwant %s", err, want)
+	}
+	for _, id := range []int64{11155111, 84532, 421614} {
+		if !IsSupportedTargetChain(id) {
+			t.Fatalf("live chain %d is not a target chain", id)
+		}
+	}
+}
+
+// An enabled set that cannot be read admits nothing.
+func TestCheckIntentTargetChains_AnUnreadableEnabledSetAdmitsNothing(t *testing.T) {
+	for _, v := range []string{"", "84532,nope"} {
+		t.Setenv("CERTEN_SETTLEMENT_CHAINS", v)
+		if err := CheckIntentTargetChains(pinIntent(t, chainLeg(84532, 84532))); !errors.Is(err, ErrUnsupportedTargetChain) ||
+			!strings.Contains(err.Error(), "CERTEN_SETTLEMENT_CHAINS") {
+			t.Fatalf("%q: %v", v, err)
+		}
+	}
+}

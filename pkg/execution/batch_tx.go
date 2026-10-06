@@ -8,9 +8,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/core/types"
+
+	"github.com/certen/independant-validator/pkg/ethrpc"
 )
 
 // =============================================================================
@@ -100,6 +103,31 @@ func (ecm *EthereumContractManager) feeCeiling(networkPrice, bid *big.Int, gas u
 	return out, nil
 }
 
+// requirePinnedGenesis refuses, by name, a client serving another genesis than the chain is pinned to, reading it again
+// whenever the last reading is older than ethrpc.GenesisRecheck. A chain that is not pinned is not read.
+func (ecm *EthereumContractManager) requirePinnedGenesis(ctx context.Context) error {
+	if ecm.config == nil {
+		return nil
+	}
+	if _, pinned, err := ethrpc.PinnedGenesis(ecm.config.ChainID); err != nil || !pinned {
+		return err
+	}
+	ecm.genesisMu.Lock()
+	defer ecm.genesisMu.Unlock()
+	if !ecm.genesisCheckedAt.IsZero() && time.Since(ecm.genesisCheckedAt) < ethrpc.GenesisRecheck {
+		return nil
+	}
+	host := ""
+	if hs := ethrpc.ProviderHosts([]string{ecm.config.EthereumRPC}); len(hs) == 1 {
+		host = hs[0]
+	}
+	if err := ethrpc.CheckGenesis(ctx, ecm.config.ChainID, host, ecm.client); err != nil {
+		return err
+	}
+	ecm.genesisCheckedAt = time.Now()
+	return nil
+}
+
 // takeNonce hands out the next nonce of the pinned sequence. False when no sequence is active: the
 // batch lane only ever sends inside one (beginNonceSequence).
 func (ecm *EthereumContractManager) takeNonce() (uint64, bool) {
@@ -131,6 +159,11 @@ func (ecm *EthereumContractManager) sendBatchTx(
 	sender, err := ecm.batchSender()
 	if err != nil {
 		return nil, "", err
+	}
+	// A pinned chain is sent to only while this client serves its pinned genesis (RB7 D8): a reset testnet is refused by
+	// name, and the members wait - nothing is sent to a chain that is not the one their contracts are on.
+	if err := ecm.requirePinnedGenesis(ctx); err != nil {
+		return nil, "", &SenderUnavailableError{Err: fmt.Errorf("%s: %w", label, err)}
 	}
 	nonce, ok := ecm.takeNonce()
 	if !ok {

@@ -62,13 +62,13 @@ func TestARefusedMemberIsKeptForItsNonSettlementButNeverAttemptedAgain(t *testin
 
 	// Kept for RefusedKeep, then forgotten.
 	restored.mu.Lock()
-	restored.pruneRefusedLocked(refusedAt.Add(RefusedKeep - time.Minute))
+	restored.pruneRefusedLocked(refusedAt.Add(RefusedKeep-time.Minute), nil)
 	restored.mu.Unlock()
 	if _, ok := restored.FindMember(odChain, member.OperationID); !ok {
 		t.Fatal("pruned before RefusedKeep")
 	}
 	restored.mu.Lock()
-	restored.pruneRefusedLocked(refusedAt.Add(RefusedKeep + time.Minute))
+	restored.pruneRefusedLocked(refusedAt.Add(RefusedKeep+time.Minute), nil)
 	restored.mu.Unlock()
 	if _, ok := restored.FindMember(odChain, member.OperationID); ok {
 		t.Fatal("kept past RefusedKeep")

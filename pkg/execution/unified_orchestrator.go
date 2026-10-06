@@ -44,6 +44,7 @@ import (
 	"github.com/certen/independant-validator/pkg/ethrpc"
 	"github.com/certen/independant-validator/pkg/proof"
 	"github.com/certen/independant-validator/pkg/strategy"
+	"github.com/certen/independant-validator/pkg/supportedchains"
 )
 
 // =============================================================================
@@ -121,6 +122,11 @@ type UnifiedOrchestratorConfig struct {
 	MemberOutcomes MemberOutcomeOutbox
 	// ProofCompletions keeps level-record completions the store failed until it takes them (RB3-F123).
 	ProofCompletions ProofCompletionOutbox
+
+	// OutcomeTrees are the batch trees this validator kept (RB5 D4): Phase 7 reads a member's deadline, leaf and account
+	// from them to let the chain decide an observation (phase7_chain_decision.go), and a peer verifies a non-settlement
+	// claim from them when the member has left its queues.
+	OutcomeTrees *OutcomeTreeStore
 }
 
 // ChainedProofGenerator interface for generating Accumulate chained proofs
@@ -312,6 +318,9 @@ type UnifiedProofCycleResult struct {
 // UnifiedOrchestrator manages proof cycles across all chains and attestation schemes
 type UnifiedOrchestrator struct {
 	mu sync.RWMutex
+
+	// phase7DecisionChain replaces the chain clock Phase 7's decision reads (tests). Nil in production.
+	phase7DecisionChain func(chainID int64) phase7DecisionChain
 
 	// Configuration
 	config *UnifiedOrchestratorConfig
@@ -578,6 +587,11 @@ func (o *UnifiedOrchestrator) StartProofCycle(ctx context.Context, req *UnifiedP
 		}
 		return result, err
 	}
+
+	// Phase 7 ended on the chain's decision, however long the chain took; what follows is bounded.
+	postCtx, postCancel := context.WithTimeout(cycleCtx, unifiedPostObservationTimeout)
+	defer postCancel()
+	cycleCtx = postCtx
 
 	if err := o.executePhase8(cycleCtx, cycle, attestStrategy); err != nil {
 		o.recordPhaseFailure(ctx, cycle, 8, err)
@@ -866,6 +880,12 @@ func (o *UnifiedOrchestrator) recordPhaseFailure(ctx context.Context, cycle *act
 	reason := fmt.Sprintf("phase %d failed: %v", phase, err)
 	cycle.Result.Error = reason
 	cycle.Result.FailPhase = phase
+	if phase7RecordsNothing(err) {
+		// The chain has not decided the observation (the cycle was stopped), or decided the settlement can never execute
+		// and handed the member to its non-settlement: no member outcome is this cycle's to record (RB7 D7).
+		fmt.Printf("⏸️ [LIFECYCLE] cycle %s: %s - no member outcome recorded by this cycle\n", cycle.CycleID, reason)
+		return
+	}
 	if duplicateWriteBack(err) {
 		// RB4-F59: the member's write-back is on Accumulate, or may be. Its outcome is not this cycle's to state.
 		fmt.Printf("🛑 [LIFECYCLE] cycle %s: %s - no member outcome recorded for this cycle\n", cycle.CycleID, reason)
@@ -952,18 +972,15 @@ func (o *UnifiedOrchestrator) executePhase7(ctx context.Context, cycle *activeCy
 		return err
 	}
 
-	// Create timeout context
-	observeCtx, cancel := context.WithTimeout(ctx, o.config.ObservationTimeout)
-	defer cancel()
-
 	// Observe all transactions
 	observationResults := make([]*chain.ObservationResult, 0, len(req.TxHashes))
 	chainExecutionIDs := make([]uuid.UUID, 0, len(req.TxHashes))
 
 	for i, txHash := range req.TxHashes {
-		obsResult, err := chainStrategy.ObserveTransaction(observeCtx, txHash)
+		// Ended only by the chain's decision (phase7_chain_decision.go): this machine's clock re-triggers it, never ends it.
+		obsResult, err := o.observeUntilTheChainDecides(ctx, cycle, chainStrategy, i, txHash)
 		if err != nil {
-			return fmt.Errorf("observe transaction %d (%s): %w", i, txHash, err)
+			return err
 		}
 
 		if !obsResult.IsFinalized {
@@ -996,6 +1013,9 @@ func (o *UnifiedOrchestrator) executePhase7(ctx context.Context, cycle *activeCy
 	// RB-2/RB-4/RB-5: cryptographic attestation gate for proof-gated contract calls.
 	// Refuses the cycle (⇒ no attestation / write-back) unless the executed call's
 	// inclusion proof verifies AND every committed event/state is proven on-chain.
+	// The gate's reads are bounded from here: the observation above took as long as the chain did.
+	observeCtx, cancel := context.WithTimeout(ctx, o.config.ObservationTimeout)
+	defer cancel()
 	verified, err := o.verifyContractCallGate(observeCtx, cycle, chainStrategy)
 	if err != nil {
 		return fmt.Errorf("RB contract-call verification gate failed: %w", err)
@@ -1397,20 +1417,25 @@ func (o *UnifiedOrchestrator) persistChainExecution(ctx context.Context, cycle *
 	return o.config.UnifiedRepo.CreateChainExecutionResult(ctx, input)
 }
 
-// getNetworkName returns human-readable network name from chain ID
+// getNetworkName returns the human-readable network name of a chain ID: a catalogued chain's canonical name
+// (supportedchains.Chain.Name - "ethereum-sepolia", "base-sepolia", "arbitrum-sepolia", "telcoin-adiri"), else the
+// name a retired chain was recorded under, else unknown-<id>.
 func getNetworkName(chainID string) string {
+	if id, err := strconv.ParseInt(strings.TrimSpace(chainID), 10, 64); err == nil {
+		if c, ok := supportedchains.Lookup(id); ok {
+			return c.Name
+		}
+	}
+	// Retired and non-EVM chains, never settled on now (RB8 restores each through the catalogue).
 	networkNames := map[string]string{
 		"1":           "ethereum-mainnet",
-		"11155111":    "ethereum-sepolia",
 		"137":         "polygon-mainnet",
 		"80001":       "polygon-mumbai",
 		"80002":       "polygon-amoy",
 		"42161":       "arbitrum-one",
-		"421614":      "arbitrum-sepolia",
 		"10":          "optimism-mainnet",
 		"11155420":    "optimism-sepolia",
 		"8453":        "base-mainnet",
-		"84532":       "base-sepolia",
 		"43114":       "avalanche-mainnet",
 		"43113":       "avalanche-fuji",
 		"56":          "bsc-mainnet",

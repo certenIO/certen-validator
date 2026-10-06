@@ -33,6 +33,8 @@ import (
 	"math/big"
 	"strings"
 	"time"
+
+	"github.com/certen/independant-validator/pkg/supportedchains"
 )
 
 // Leg identifies which of the per-intent transactions a cost belongs to.
@@ -225,7 +227,13 @@ var (
 // NativeSymbolFor maps a chain name to its fee token. Unknown chains return ""
 // so the caller refuses to report rather than guessing a symbol — a wrong
 // symbol silently prices against the wrong asset.
+//
+// A chain of the validator's chain catalogue answers with its catalogued gas token (supportedchains: "ETH" on the three
+// Sepolia chains, "TEL" on Telcoin Adiri); the table below covers chains the catalogue does not hold.
 func NativeSymbolFor(chain string) string {
+	if c, ok := supportedchains.LookupName(chain); ok {
+		return c.NativeSymbol
+	}
 	switch normalizeChain(chain) {
 	case "ethereum", "sepolia", "base", "arbitrum", "optimism":
 		return "ETH"
@@ -258,7 +266,13 @@ func NativeSymbolFor(chain string) string {
 
 // normalizeChain strips network suffixes so "ethereum-sepolia", "sepolia" and
 // "ethereum" all resolve to one fee model.
+//
+// A chain of the validator's chain catalogue, named any way the catalogue knows it, reduces to its catalogued fee-model
+// family (supportedchains.Chain.Family): "ethereum-sepolia" to "ethereum", "telcoin-adiri" to "telcoin".
 func normalizeChain(chain string) string {
+	if cat, ok := supportedchains.LookupName(chain); ok {
+		return cat.Family
+	}
 	c := strings.ToLower(strings.TrimSpace(chain))
 	// Canonicalize the separator BEFORE trimming network suffixes.
 	//

@@ -170,6 +170,47 @@ type BatchOrchestrator struct {
 	// through it, never from its own single client.
 	agreedMu sync.Mutex
 	agreed   *ethrpc.AgreeingReader
+
+	// clock is the chain's time (chain_clock.go): every rule of this orchestrator that reads the chain's time reads it
+	// here. Set by NewBatchStack to the chain's registered clock; resolved from the chain's configuration when unset.
+	clock *ChainClock
+}
+
+// chainClock is the chain's clock.
+func (o *BatchOrchestrator) chainClock() (*ChainClock, error) {
+	if o.clock != nil {
+		return o.clock, nil
+	}
+	if o.ecm == nil || o.ecm.config == nil {
+		return nil, readErr(fmt.Errorf("no chain configuration to read the chain's time from"))
+	}
+	o.clock = chainClockFor(o.ecm.config.ChainID, o.ecm.config.EthereumRPC)
+	return o.clock, nil
+}
+
+// chainHead is the chain's head, from its clock.
+func (o *BatchOrchestrator) chainHead(ctx context.Context) (*types.Header, error) {
+	c, err := o.chainClock()
+	if err != nil {
+		return nil, err
+	}
+	return c.Head(ctx)
+}
+
+// chainFinalized is the chain's finalized block, from its clock.
+func (o *BatchOrchestrator) chainFinalized(ctx context.Context) (*types.Header, error) {
+	c, err := o.chainClock()
+	if err != nil {
+		return nil, err
+	}
+	return c.Finalized(ctx)
+}
+
+// awaitChainTime says, on this chain's clock, that rule waits only for a finalized block after `after`.
+func (o *BatchOrchestrator) awaitChainTime(rule string, after time.Time) {
+	if c, err := o.chainClock(); err == nil && after.Unix() >= 0 {
+		c.AwaitTime(rule, uint64(after.Unix()))
+	}
 }
 
 // agreedReader is the chain's agreeing reader: the orchestrator's own endpoint and every fallback configured for the
@@ -413,7 +454,8 @@ func (o *BatchOrchestrator) FlushChain(
 		// A member still unsettled PAST ITS DEADLINE under another validator's attestation is that
 		// validator's outcome - most often its settlement reverted and it recorded the failure. It
 		// leaves this node's pool without being attested here (the attester owns the record),
-		// loudly, instead of being re-examined on every flush for ever.
+		// loudly, instead of being re-examined on every flush for ever. Local only: MarkOutcome(MemberReleased) records
+		// nothing, attests nothing and writes nothing back (see memberPastDeadline).
 		var expired []*PendingBatchIntent
 		kept := awaiting[:0:0]
 		for _, m := range awaiting {
@@ -627,10 +669,9 @@ func (o *BatchOrchestrator) settleFlushMembers(
 			// observed and permitted prices, and it arrives wrapped from evaluateGasPrice.
 			var gasCeil *ErrGasCeilingExceeded
 			if errors.As(serr, &gasCeil) {
-				if o.memberPastDeadline(p) {
-					o.logf("[BATCH] member %s: gas ceiling %v but the intent has expired — "+
-						"failing rather than retrying forever", p.IntentID, serr)
-					res.drop(fmt.Sprintf("the gas price on chain %d stayed above the ceiling until its settlement horizon: %v", p.ChainID, serr), p)
+				if cause, failed := o.gasCeilingFailure(ctx, p, serr); failed {
+					o.logf("[BATCH] member %s: %s — failing rather than retrying forever", p.IntentID, cause)
+					res.drop(cause, p)
 					continue
 				}
 				o.logf("[BATCH] member %s deferred: %v (leaf untouched; will retry in a later period)",
@@ -1005,14 +1046,18 @@ func (o *BatchOrchestrator) settleMember(
 			leaf[:8], p.IntentID, errLeafAlreadyConsumed)
 	}
 
-	head, err := o.ecm.client.HeaderByNumber(ctx, nil)
+	// The chain's time, from its clock (T-1, T-2).
+	head, err := o.chainHead(ctx)
 	if err != nil {
 		return "", readErr(fmt.Errorf("reading chain head for the settlement's timestamp: %w", err))
 	}
 	notBefore := int64(head.Time)
 	// A v4 leaf's window opens at the member's commit time: before it the account refuses the leaf (LeafNotYetValid).
-	// That is not the member's outcome - only too early - so nothing is sent and nothing is decided.
+	// That is not the member's outcome - only too early - so nothing is sent and nothing is decided. On a chain whose
+	// blocks stop when idle only a block at or after notBefore ends the wait, and only a transaction makes one: the
+	// clock's heartbeat is told (RB7 T-1).
 	if in.NotBefore != 0 && head.Time < in.NotBefore {
+		o.awaitChainTime(fmt.Sprintf("the settlement of %s (its leaf's notBefore)", p.IntentID), time.Unix(int64(in.NotBefore)-1, 0))
 		return "", readErr(fmt.Errorf("member %s: chain time %d is before its leaf's notBefore %d", p.IntentID, head.Time,
 			in.NotBefore))
 	}
@@ -1175,7 +1220,8 @@ func (o *BatchOrchestrator) allPendingPastDeadline(ctx context.Context, members 
 			return false, nil
 		}
 	}
-	head, err := o.ecm.client.HeaderByNumber(ctx, nil)
+	// The chain's time, from its clock (T-3).
+	head, err := o.chainHead(ctx)
 	if err != nil {
 		return false, fmt.Errorf("reading the chain head to judge the members' deadlines: %w", err)
 	}
@@ -1562,14 +1608,94 @@ func (o *BatchOrchestrator) memberAccountUsable(ctx context.Context, p *PendingB
 	return nil
 }
 
-// memberPastDeadline reports whether a member has been deferred for longer than we will keep
-// retrying it on gas.
+// memberChainDeadline is the time a member's settlement can no longer execute on its chain: its deadline (the earliest
+// leg deadline or its commit time plus its settlement horizon - a v4 leaf's notAfter, and every settlement's expiresAt
+// bound, settlementExpiry). A member without a commit time and without a leg deadline falls back to its Origin plus its
+// settlement horizon. False when there is nothing to measure from.
+func memberChainDeadline(p *PendingBatchIntent) (time.Time, bool) {
+	if p == nil {
+		return time.Time{}, false
+	}
+	if d, ok := p.Deadline(); ok {
+		return d, true
+	}
+	if origin, _ := p.Origin(); !origin.IsZero() {
+		return origin.Add(p.settlementHorizon()).UTC(), true
+	}
+	return time.Time{}, false
+}
+
+// pastDeadlineOnChain reports whether the member's chain is past its deadline: its FINALIZED time, read through the
+// chain's clock (chain_clock.go), is past the deadline plus nonSettlementFinality - the margin of every other rule
+// (non-settlement, sequential readiness, status 3). It is what decides that a member that could not be settled - never
+// certified, or held under the gas ceiling - is failed and recorded (RB7 D7: the wall clock never decides an outcome).
 //
-// Bounds the retry: without a bound, a member on a chain that stays expensive is requeued forever
-// and never resolves either way — the silent limbo the whole failure policy exists to prevent.
-// Measured from the member's Origin - its Accumulate block time, or its persisted first sighting
-// - never from EnqueuedAt, which a restart resets: measured from that, a validator restarting
-// within the hour would defer the member for ever.
+// The wall clock only TRIGGERS the read: before the deadline by this machine's clock the chain is not asked (no extra
+// read for a member that is plainly in time), and nothing is ever concluded from the wall clock. Not past on chain, the
+// chain's clock is told the horizon (a heartbeat on a chain whose blocks stop when idle). A failed read decides nothing.
+// evidence names the block that decided.
+func (o *BatchOrchestrator) pastDeadlineOnChain(ctx context.Context, p *PendingBatchIntent) (bool, string, error) {
+	return o.pastOnChain(ctx, p, 0)
+}
+
+// pastAttestationWindowOnChain reports whether the member's chain is past the end of its non-settlement's attestation
+// window (deadline + finality margin + nonSettlementGiveUp): until then every validator keeps its copy of the member.
+func (o *BatchOrchestrator) pastAttestationWindowOnChain(ctx context.Context, p *PendingBatchIntent) (bool, string, error) {
+	return o.pastOnChain(ctx, p, nonSettlementGiveUp)
+}
+
+// pastOnChain is pastDeadlineOnChain `beyond` further: the chain's finalized time past deadline + margin + beyond.
+func (o *BatchOrchestrator) pastOnChain(ctx context.Context, p *PendingBatchIntent, beyond time.Duration) (bool, string, error) {
+	d, ok := memberChainDeadline(p)
+	if !ok {
+		return false, "", nil
+	}
+	horizon := d.Add(nonSettlementFinality + beyond)
+	if time.Now().Before(horizon.Add(-nonSettlementFinality)) {
+		return false, "", nil
+	}
+	fin, err := o.chainFinalized(ctx)
+	if err != nil {
+		return false, "", readErr(fmt.Errorf("reading the finalized block of chain %d to judge member %s's deadline: %w",
+			p.ChainID, p.IntentID, err))
+	}
+	if int64(fin.Time) > horizon.Unix() {
+		what := "its deadline " + d.UTC().Format(time.RFC3339) + " and the finality margin"
+		if beyond > 0 {
+			what = "the end of its attestation window " + horizon.UTC().Format(time.RFC3339)
+		}
+		return true, fmt.Sprintf("chain %d's finalized block %d (time %s) is past %s",
+			p.ChainID, fin.Number.Uint64(), time.Unix(int64(fin.Time), 0).UTC().Format(time.RFC3339), what), nil
+	}
+	o.awaitChainTime(fmt.Sprintf("the deadline of %s", p.IntentID), horizon)
+	return false, "", nil
+}
+
+// gasCeilingFailure decides whether a member refused by the gas ceiling has failed: only once the CHAIN is past its
+// deadline and the finality margin (pastDeadlineOnChain) - its time, read through the chain's clock, decides, never this
+// machine's (RB7 D7). Until then it is retried. A chain that cannot be read decides nothing.
+func (o *BatchOrchestrator) gasCeilingFailure(ctx context.Context, p *PendingBatchIntent, serr error) (string, bool) {
+	past, evidence, err := o.pastDeadlineOnChain(ctx, p)
+	if err != nil {
+		o.logf("[BATCH] member %s: whether chain %d is past its deadline could not be read (%v); retried", p.IntentID, p.ChainID, err)
+		return "", false
+	}
+	if !past {
+		return "", false
+	}
+	return fmt.Sprintf("the gas price on chain %d stayed above the ceiling until %s: %v", p.ChainID, evidence, serr), true
+}
+
+// memberPastDeadline reports whether a member is older than its settlement horizon by THIS MACHINE'S CLOCK.
+//
+// LOCAL LIVENESS ONLY. Its one caller (FlushChain, a member unsettled under ANOTHER validator's attestation) only marks
+// this node's copy MemberReleased: nothing is recorded, attested or written back, and no gateway status changes - the
+// attester owns that member's record. Every decision that RECORDS an outcome - a member never certified, or held under
+// the gas ceiling - is taken on chain time instead (pastDeadlineOnChain); a test pins that no recorded outcome depends
+// on this function (TestTheWallClockReleaseRecordsNothing).
+//
+// Measured from the member's Origin - its Accumulate block time, or its persisted first sighting - never from
+// EnqueuedAt, which a restart resets.
 func (o *BatchOrchestrator) memberPastDeadline(p *PendingBatchIntent) bool {
 	if p == nil {
 		return false

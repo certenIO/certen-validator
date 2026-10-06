@@ -12,6 +12,7 @@ import (
 	"github.com/certen/independant-validator/pkg/database"
 	"github.com/certen/independant-validator/pkg/execution/contracts"
 	"github.com/certen/independant-validator/pkg/metrics"
+	"github.com/certen/independant-validator/pkg/supportedchains"
 )
 
 // AnchorQuorumStore is the database side of anchor evidence (database.BatchRepository).
@@ -343,18 +344,13 @@ func decodeHexOrNil(s string) []byte {
 }
 
 // chainName keeps target_chain readable for the rows an operator reads by hand. The canonical identity is
-// chain_id; this is a label.
+// chain_id; this is a label: the catalogue's network label (supportedchains.Chain.Network - "sepolia", "base-sepolia",
+// "arbitrum-sepolia", "telcoin-adiri"), or chain-<id> for a chain the catalogue does not hold.
 func chainName(chainID int64) string {
-	switch chainID {
-	case 11155111:
-		return "sepolia"
-	case 84532:
-		return "base-sepolia"
-	case 421614:
-		return "arbitrum-sepolia"
-	default:
-		return fmt.Sprintf("chain-%d", chainID)
+	if c, ok := supportedchains.Lookup(chainID); ok {
+		return c.Network
 	}
+	return fmt.Sprintf("chain-%d", chainID)
 }
 
 // certifiedMessageHex is a member's quorum-certified intent message as recorded: 0x-hex on a v3 batch, empty otherwise.

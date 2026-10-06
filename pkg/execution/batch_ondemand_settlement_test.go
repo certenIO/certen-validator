@@ -83,6 +83,16 @@ type fakeODChain struct {
 
 	// accountErr is the account screen's answer (nil: usable).
 	accountErr error
+
+	// awaited are the horizons the decisions told the chain's clock about; await, when set, receives them too.
+	awaited []time.Time
+	await   func(rule string, after time.Time)
+	// sim, when set, is the chain the head and finalized times are read from.
+	sim *simIdleChain
+	// chainPast answers pastDeadlineOnChain (chainPastErr: unreadable); deadlineReads counts the reads.
+	chainPast     bool
+	chainPastErr  error
+	deadlineReads int
 }
 
 func (f *fakeODChain) memberAccountUsable(context.Context, *PendingBatchIntent) error {
@@ -132,8 +142,13 @@ func (f *fakeODChain) settlementStatus(_ context.Context, tx string) (bool, bool
 	st := f.statuses[tx]
 	return st[0], st[1], st[2], f.statusErr
 }
-func (f *fakeODChain) memberPastDeadline(*PendingBatchIntent) bool { return false }
-func (f *fakeODChain) lastVerifyTx([32]byte) string                { return f.verifyTx }
+func (f *fakeODChain) pastDeadlineOnChain(context.Context, *PendingBatchIntent) (bool, string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.deadlineReads++
+	return f.chainPast, "the fake chain's finalized block is past the deadline", f.chainPastErr
+}
+func (f *fakeODChain) lastVerifyTx([32]byte) string { return f.verifyTx }
 func (f *fakeODChain) reportOnDemandCosts(_ context.Context, m *PendingBatchIntent, settleTx string) {
 	f.costs = append(f.costs, costCall{m.AnchorTx, m.VerifyTx, settleTx})
 }
@@ -179,6 +194,9 @@ func (f *fakeODChain) settlementRoster(context.Context) ([]common.Address, error
 	return []common.Address{odOwnAddr, odOtherAddr, odThirdAddr}, nil
 }
 func (f *fakeODChain) headTime(context.Context) (time.Time, error) {
+	if f.sim != nil {
+		return time.Unix(int64(f.sim.head().Time), 0), nil
+	}
 	if f.head.IsZero() {
 		return odT0.Add(time.Minute), nil
 	}
@@ -188,10 +206,21 @@ func (f *fakeODChain) finalizedTime(context.Context) (time.Time, error) {
 	if f.finalizedErr != nil {
 		return time.Time{}, f.finalizedErr
 	}
+	if f.sim != nil {
+		return time.Unix(int64(f.sim.head().Time), 0), nil // finalized == latest (Telcoin Adiri)
+	}
 	if f.finalized.IsZero() {
 		return odT0, nil
 	}
 	return f.finalized, nil
+}
+func (f *fakeODChain) awaitChainTime(rule string, after time.Time) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.awaited = append(f.awaited, after)
+	if f.await != nil {
+		f.await(rule, after)
+	}
 }
 func (f *fakeODChain) priorSettlementAttempt(_ context.Context, _ *PendingBatchIntent, _ *BatchTree, _ anchorAttestation, until time.Time, _ []common.Address) (priorAttempt, bool, error) {
 	f.priorUntil = until

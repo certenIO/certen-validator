@@ -195,7 +195,9 @@ func (o *BatchOrchestrator) anchorFloor(ctx context.Context, bundleID [32]byte) 
 
 // blockAtOrBefore is the highest block whose timestamp is <= ts (0 if none).
 func (o *BatchOrchestrator) blockAtOrBefore(ctx context.Context, ts uint64) (uint64, error) {
-	head, err := o.ecm.client.HeaderByNumber(ctx, nil)
+	// "Now" is the chain's head, from its clock (T-11). A time after the head is placed AT the head: no later block
+	// exists yet, and every later block will have a later time (block times never decrease).
+	head, err := o.chainHead(ctx)
 	if err != nil {
 		return 0, readErr(fmt.Errorf("reading the head: %w", err))
 	}

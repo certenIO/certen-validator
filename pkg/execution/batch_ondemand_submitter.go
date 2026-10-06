@@ -131,6 +131,8 @@ type OnDemandSubmitter struct {
 	inWork map[string]bool // chainID|opID currently being worked, so a signal cannot double-start
 	// commitTimeTried is when a member's block time was last asked for and could not be read.
 	commitTimeTried map[string]time.Time
+	// proveRoot replaces cfg.Prover.ProveBatchRootOnDemand in tests that have no peers. Nil in production.
+	proveRoot func(ctx context.Context, tree *BatchTree, member *PendingBatchIntent) error
 }
 
 // NewOnDemandSubmitter builds the submitter.
@@ -266,7 +268,10 @@ func (s *OnDemandSubmitter) consider(ctx context.Context, member *PendingBatchIn
 	sequenced := member.After != nil && !member.AnchorProved && !member.AttestedSeen
 	if sequenced {
 		if cerr := s.cfg.Stack.Mempool.RequireCertified(member); cerr != nil {
-			if !orch.memberPastDeadline(member) {
+			// It stops waiting - and goes on to be refused by name - only once its chain is past its deadline, by the
+			// chain's clock (RB7 D7).
+			past, _, perr := orch.pastDeadlineOnChain(ctx, member)
+			if perr != nil || !past {
 				logf("[OD] intent=%s on chain %d waits: %v", member.IntentID, member.ChainID, cerr)
 				return false
 			}
@@ -329,6 +334,9 @@ func (s *OnDemandSubmitter) settleWithReadinessRetry(
 	attempts := 0
 
 	prove := func(ctx context.Context, tree *BatchTree) error {
+		if s.proveRoot != nil {
+			return s.proveRoot(ctx, tree, member)
+		}
 		return s.cfg.Prover.ProveBatchRootOnDemand(ctx, tree, member)
 	}
 
@@ -348,8 +356,12 @@ func (s *OnDemandSubmitter) settleWithReadinessRetry(
 			return outcome, err
 		}
 		if time.Now().After(deadline) {
-			return outcome, fmt.Errorf("quorum still not ready after %s (%d attempt(s); last: %w)",
-				s.cfg.QuorumDeadline, attempts, err)
+			// The wall clock bounds how long THIS pass waits for the peers, and nothing more: peers that are behind
+			// decide nothing about the member (RB7 D7). It is deferred, and the next pass tries again; its outcome is
+			// decided on its chain - past its deadline it is refused, or never settled, by the chain's clock.
+			logf("[OD] intent=%s quorum still not ready after %s (%d attempt(s); last: %v) — deferred to the next pass",
+				member.IntentID, s.cfg.QuorumDeadline, attempts, err)
+			return &OnDemandOutcome{Deferred: true}, nil
 		}
 		logf("[OD] intent=%s attempt %d: %d agreed, %d not held yet — retrying in %s",
 			member.IntentID, attempts, notReady.Agreed, notReady.NotHeld, s.cfg.RetryBackoff)
