@@ -25,19 +25,21 @@ import (
 // deadline, its member never resolving (RB7 Task 5, T5-7).
 //
 // Each settlement chain's providers are therefore probed at boot, and again periodically: the finality lag is measured
-// (head minus finalized), and every verified provider is asked eth_getProof for the chain's anchor at that depth and at
-// that depth plus StateProofProbeMargin blocks (the room a retry or a repair hours later needs). The window each provider
-// serves is logged. A chain where NO provider serves finalized depth refuses an expectedState leg by name before anything
+// (head minus finalized), and every verified provider is asked eth_getProof for the chain's anchor that deep plus
+// StateProofProbeMargin blocks. The margin is what makes an instant-finality chain (Telcoin's Adiri, a lag of 0) honest:
+// its public endpoints answer only at the head, so asked at depth 0 alone they would all pass, the chain would admit an
+// expectedState leg, and the proof read would then fail and loop. The window each provider serves is logged. A chain where
+// NO provider serves the finalized depth plus the margin refuses an expectedState leg by name before anything
 // is signed - STATE_PROOF_WINDOW_UNAVAILABLE, a condition of CERTEN's deployment (ErrBatchUnavailable), retried and never
 // held against the intent, so it resolves the moment a provider that keeps the state is added.
 
 // ErrStateProofWindowUnavailable is the refusal's name.
 var ErrStateProofWindowUnavailable = errors.New("STATE_PROOF_WINDOW_UNAVAILABLE")
 
-// StateProofProbeMargin is how many blocks beyond the finality lag a provider is also asked, to log how long a retry or
-// a repair of a proof can wait. A provider serving the lag but not the margin still qualifies: it resolves a proof while
-// the settlement is fresh, and a later read gets the named read error.
-const StateProofProbeMargin = 10000
+// StateProofProbeMargin is how many blocks beyond the finality lag a provider must serve to qualify: room for a retry
+// of the proof read after the finalized block has moved on. It is small on purpose; a chain's own finality lag, not a
+// fixed depth, sets how far back a proof is needed. (Owner 2026-10-06: the earlier 10,000 was far too high.)
+const StateProofProbeMargin = 64
 
 // StateProofProbeEvery is how often a chain's providers are probed again.
 const StateProofProbeEvery = 30 * time.Minute
@@ -82,25 +84,17 @@ func probeStateProofWindow(ctx context.Context, chainID int64, reader *ethrpc.Ag
 	servable := false
 	var parts []string
 	for _, p := range reader.Locators() {
-		at := func(extra int64) error {
-			depth := new(big.Int).Add(lag, big.NewInt(extra))
-			if depth.Cmp(head.Number) > 0 {
-				depth = new(big.Int).Set(head.Number)
-			}
-			block := new(big.Int).Sub(head.Number, depth)
-			_, err := p.GetProof(ctx, account, []string{}, "0x"+block.Text(16))
-			return err
+		depth := new(big.Int).Add(lag, big.NewInt(StateProofProbeMargin))
+		if depth.Cmp(head.Number) > 0 {
+			depth = new(big.Int).Set(head.Number)
 		}
-		switch {
-		case at(0) != nil:
-			parts = append(parts, p.Host+": no state at the finalized depth")
-		case at(StateProofProbeMargin) != nil:
-			servable = true
-			parts = append(parts, fmt.Sprintf("%s: serves the finalized depth, not %d blocks beyond it", p.Host, StateProofProbeMargin))
-		default:
-			servable = true
-			parts = append(parts, fmt.Sprintf("%s: serves at least %d blocks beyond the finalized depth", p.Host, StateProofProbeMargin))
+		block := new(big.Int).Sub(head.Number, depth)
+		if _, err := p.GetProof(ctx, account, []string{}, "0x"+block.Text(16)); err != nil {
+			parts = append(parts, fmt.Sprintf("%s: no state %s blocks back (the finalized depth plus %d)", p.Host, depth, StateProofProbeMargin))
+			continue
 		}
+		servable = true
+		parts = append(parts, fmt.Sprintf("%s: serves %s blocks back (the finalized depth plus %d)", p.Host, depth, StateProofProbeMargin))
 	}
 	detail := fmt.Sprintf("finality lag %s blocks; %s", lag, strings.Join(parts, "; "))
 	stateProofWindows.Store(chainID, stateProofWindow{servable: servable, detail: detail})

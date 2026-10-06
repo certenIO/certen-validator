@@ -31,6 +31,8 @@ type proofProvider struct {
 	asked  int
 	answer func() (any, string) // result, or an error message
 	depth  int64                // when set, the blocks of state it keeps: eth_getProof deeper than this is refused
+	// instant makes the chain's finalized block its head (a lag of 0, as on Telcoin's Adiri), not 1000 blocks behind.
+	instant bool
 }
 
 func (p *proofProvider) serve(t *testing.T, host string) string {
@@ -53,7 +55,7 @@ func (p *proofProvider) serve(t *testing.T, host string) string {
 		case "eth_getBlockByNumber":
 			// The agreed head and finalized headers, for the probe: head 100000, finalized 99000 (a lag of 1000).
 			n := int64(100000)
-			if len(req.Params) > 0 && string(req.Params[0]) == `"finalized"` {
+			if len(req.Params) > 0 && string(req.Params[0]) == `"finalized"` && !p.instant {
 				n = 99000
 			}
 			b, _ := json.Marshal(&types.Header{Number: big.NewInt(n), Difficulty: big.NewInt(0), Time: uint64(n)})
@@ -167,16 +169,21 @@ func TestAStateProofThatDoesNotMatchTheStateRootIsRejected(t *testing.T) {
 	}
 }
 
-// The boot probe measures each provider's window at the finality lag and 10,000 blocks beyond it. A chain where no provider
+// The boot probe asks each provider for a proof at the finality lag plus StateProofProbeMargin blocks (room for a retry). A chain where no provider
 // serves the finalized depth cannot prove a committed slot, and says so by name; one that has a provider that does can.
 func probeWith(t *testing.T, chainID int64, depths ...int64) error {
+	t.Helper()
+	return probeWithFinality(t, chainID, false, depths...)
+}
+
+func probeWithFinality(t *testing.T, chainID int64, instant bool, depths ...int64) error {
 	t.Helper()
 	empty := func() (any, string) {
 		return map[string]any{"accountProof": []string{}, "storageHash": common.Hash{}, "storageProof": []any{}}, ""
 	}
 	var urls []string
 	for i, d := range depths {
-		p := &proofProvider{answer: empty, depth: d}
+		p := &proofProvider{answer: empty, depth: d, instant: instant}
 		urls = append(urls, p.serve(t, fmt.Sprintf("127.0.0.%d", i+1)))
 	}
 	r, err := ethrpc.NewAgreeingReader(context.Background(), stateProofTestChain, urls, 3*time.Second)
@@ -199,7 +206,7 @@ func TestAChainWithNoProviderThatKeepsStateThatDeepRefusesExpectedStateByName(t 
 }
 
 func TestAChainWithAProviderThatKeepsStateAtTheFinalizedDepthCanProve(t *testing.T) {
-	// One provider keeps 3 blocks, the other 1,500: it serves the finalized depth (1000) but not 10,000 beyond it.
+	// One provider keeps 3 blocks, the other 1,500: it serves the finalized depth (1000) plus the 64-block margin.
 	if err := probeWith(t, 910002, 3, 1500); err != nil {
 		t.Fatalf("a chain with a provider serving the finalized depth was refused: %v", err)
 	}
@@ -210,5 +217,35 @@ func TestAChainNotProbedYetIsRetriedNotRefusedForGood(t *testing.T) {
 	err := StateProofServable(910003)
 	if !errors.Is(err, ErrBatchUnavailable) || !errors.Is(err, ErrStateProofWindowUnavailable) {
 		t.Fatalf("an unprobed chain: %v", err)
+	}
+}
+
+// Telcoin's Adiri finalizes instantly (a lag of 0) and its public endpoints answer eth_getProof only at the head. Probed at
+// depth 0 alone they would pass, the chain would admit an expectedState leg, and the proof read would then fail and loop.
+// The probe asks lag + StateProofProbeMargin deep, so a head-only provider is refused and a node that keeps state is not.
+func TestAnInstantFinalityChainWithOnlyHeadOnlyProvidersRefusesExpectedStateByName(t *testing.T) {
+	err := probeWithFinality(t, 910004, true, 1, 1)
+	if err == nil || !errors.Is(err, ErrStateProofWindowUnavailable) || !errors.Is(err, ErrBatchUnavailable) {
+		t.Fatalf("head-only providers on an instant-finality chain must be refused by name, got %v", err)
+	}
+}
+
+func TestAnInstantFinalityChainWithANodeThatKeepsStateCanProve(t *testing.T) {
+	if err := probeWithFinality(t, 910005, true, 1, StateProofProbeMargin+1000); err != nil {
+		t.Fatalf("a chain with a node that keeps state past the margin was refused: %v", err)
+	}
+}
+
+// The threshold is exactly the finality lag plus the margin: no 10,000-block room is asked for, and none less than the margin.
+func TestTheProbeThresholdIsTheFinalityLagPlusTheMargin(t *testing.T) {
+	const lag = 1000
+	if StateProofProbeMargin != 64 {
+		t.Fatalf("the margin is 64 blocks, got %d", StateProofProbeMargin)
+	}
+	if err := probeWith(t, 910006, lag+StateProofProbeMargin-1, lag+StateProofProbeMargin-1); err == nil {
+		t.Fatal("a provider keeping one block less than lag + margin qualified")
+	}
+	if err := probeWith(t, 910007, lag+StateProofProbeMargin, lag+StateProofProbeMargin); err != nil {
+		t.Fatalf("a provider keeping exactly lag + margin was refused: %v", err)
 	}
 }
