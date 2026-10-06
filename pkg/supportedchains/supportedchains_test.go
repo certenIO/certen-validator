@@ -31,22 +31,22 @@ func TestTheCatalogueIsTheThreeLiveChainsAndTelcoinAdiri(t *testing.T) {
 // strategy network names, ethrpc keys, loadEVMChainsFromEnv's rows and the Arbitrum L1-block property.
 func TestTheLiveChainsEntriesAreUnchanged(t *testing.T) {
 	type row struct {
-		network, rpcKey, display, rpcEnv, wsEnv, legacy, gas, factory, explorer string
-		maxGas, prio, gasLimit                                                  int64
-		parent                                                                  bool
+		network, rpcKey, display, rpcEnv, wsEnv, legacy, gas, explorer string
+		maxGas, prio, gasLimit                                         int64
+		parent                                                         bool
 	}
 	want := map[int64]row{
 		11155111: {"sepolia", "ethereum-sepolia", "Ethereum Sepolia", "ETHEREUM_SEPOLIA_RPC_URL", "ETHEREUM_SEPOLIA_WS_URL",
-			"ETHEREUM_URL", "SEPOLIA", "SEPOLIA", "https://sepolia.etherscan.io", 100, 2, 500000, false},
+			"ETHEREUM_URL", "SEPOLIA", "https://sepolia.etherscan.io", 100, 2, 500000, false},
 		84532: {"base-sepolia", "base-sepolia", "Base Sepolia", "BASE_SEPOLIA_RPC_URL", "BASE_SEPOLIA_WS_URL",
-			"", "BASE", "BASE_SEPOLIA", "https://sepolia.basescan.org", 1, 0, 2000000, false},
+			"", "BASE", "https://sepolia.basescan.org", 1, 0, 2000000, false},
 		421614: {"arbitrum-sepolia", "arbitrum-sepolia", "Arbitrum Sepolia", "ARBITRUM_SEPOLIA_RPC_URL", "ARBITRUM_SEPOLIA_WS_URL",
-			"", "ARBITRUM", "ARBITRUM_SEPOLIA", "https://sepolia.arbiscan.io", 1, 0, 2000000, true},
+			"", "ARBITRUM", "https://sepolia.arbiscan.io", 1, 0, 2000000, true},
 	}
 	for id, w := range want {
 		c, _ := Lookup(id)
 		got := row{c.Network, c.RPCKey, c.DisplayName, c.RPCURLEnv(), c.WSURLEnv(), c.LegacyRPCEnv, c.GasEnvPrefix,
-			c.FactoryEnvPrefix, c.ExplorerURL, c.DefaultMaxGasPriceGwei, c.DefaultMaxPriorityFeeGwei, c.DefaultGasLimitAnchor,
+			c.ExplorerURL, c.DefaultMaxGasPriceGwei, c.DefaultMaxPriorityFeeGwei, c.DefaultGasLimitAnchor,
 			c.ContractBlockIsParent}
 		if got != w {
 			t.Fatalf("chain %d:\n got %+v\nwant %+v", id, got, w)

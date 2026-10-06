@@ -40,17 +40,17 @@ func TestTheLiveChainRowsAreUnchanged(t *testing.T) {
 	t.Setenv("ARBITRUM_SEPOLIA_RPC_URL", "http://arb.invalid")
 	t.Setenv("ARBITRUM_MAX_GAS_PRICE_GWEI", "3")
 
-	row := func(name string, id int64, rpc, ws, factory string, gas, prio, limit int64, explorer string) *EVMChainConfig {
+	row := func(name string, id int64, rpc, ws string, gas, prio, limit int64, explorer string) *EVMChainConfig {
 		return &EVMChainConfig{Name: name, ChainID: id, RPCURL: rpc, WSURL: ws, RPCTimeout: Duration(30 * time.Second),
-			MaxConnections: 10, MaxIdleConnections: 5, AccountFactory: factory, MaxGasPriceGwei: gas, MaxPriorityFeeGwei: prio,
+			MaxConnections: 10, MaxIdleConnections: 5, MaxGasPriceGwei: gas, MaxPriorityFeeGwei: prio,
 			GasLimitAnchor: limit, ExplorerURL: explorer}
 	}
 	want := map[int64]*EVMChainConfig{
 		11155111: row("Ethereum Sepolia", 11155111, "http://sepolia-legacy.invalid", "ws://sepolia.invalid",
-			"0x00000000000000000000000000000000000000f1", 100, 2, 500000, "https://sepolia.etherscan.io"),
-		84532: row("Base Sepolia", 84532, "http://base.invalid", "", "0x00000000000000000000000000000000000000f2", 1, 0, 2000000,
+			100, 2, 500000, "https://sepolia.etherscan.io"),
+		84532: row("Base Sepolia", 84532, "http://base.invalid", "", 1, 0, 2000000,
 			"https://sepolia.basescan.org"),
-		421614: row("Arbitrum Sepolia", 421614, "http://arb.invalid", "", "", 3, 0, 2000000, "https://sepolia.arbiscan.io"),
+		421614: row("Arbitrum Sepolia", 421614, "http://arb.invalid", "", 3, 0, 2000000, "https://sepolia.arbiscan.io"),
 	}
 	got := loadEVMChainsFromEnv()
 	if !reflect.DeepEqual(got, want) {
@@ -73,7 +73,7 @@ func TestTelcoinAdiriLoadsFromItsOwnVariables(t *testing.T) {
 	if c == nil || c.RPCURL != "http://adiri.invalid" || c.Name != "Telcoin Adiri" || c.ExplorerURL != "https://scan.telcoin.network" {
 		t.Fatalf("2017: %+v", c)
 	}
-	if c.MaxGasPriceGwei != 0 || c.GasLimitAnchor != 0 || c.AccountFactory != "" {
+	if c.MaxGasPriceGwei != 0 || c.GasLimitAnchor != 0 {
 		t.Fatalf("2017 carries a compiled default: %+v", c)
 	}
 	t.Setenv("TELCOIN_ADIRI_MAX_GAS_PRICE_GWEI", "250")

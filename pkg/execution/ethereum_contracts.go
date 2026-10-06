@@ -212,12 +212,10 @@ func fileExists(path string) bool {
 }
 
 // Aliases for contract struct types to avoid naming conflicts
-type AnchorProofStruct = contracts.AnchorProof   // From anchor contract binding
-type AccountProofStruct = contracts.AccountProof // From account contract binding
+type AnchorProofStruct = contracts.AnchorProof // From anchor contract binding
 
 // Type aliases for clarity
 type CertenAnchorV2Contract = contracts.CertenAnchorV2
-type CertenAccountV2Contract = contracts.CertenAccountV2
 
 // CertenContractConfig contains configuration for Ethereum contract interactions
 // CertenAnchorV3 is a UNIFIED contract with both createAnchor() and executeComprehensiveProof()
@@ -228,7 +226,6 @@ type CertenContractConfig struct {
 	PrivateKey           string `json:"private_key"`
 	CreationContract     string `json:"creation_contract"`     // CertenAnchorV3 - unified contract
 	VerificationContract string `json:"verification_contract"` // CertenAnchorV3 - same unified contract
-	AccountContract      string `json:"account_contract"`      // 0xC30E74e54a54a470139b75633CEDeC8404743020
 	GasLimit             uint64 `json:"gas_limit"`
 	MaxGasPriceGwei      int64  `json:"max_gas_price_gwei"`
 
@@ -271,7 +268,6 @@ type EthereumContractManager struct {
 	verificationContract    *CertenAnchorV2Contract           // Legacy V2 binding (deprecated)
 	verificationContractExt *contracts.CertenAnchorV2Extended // Legacy V2 extended (deprecated)
 	anchor                  *contracts.CertenAnchorWrapper    // CertenAnchorV3 - Primary contract for all operations
-	acctContract            *CertenAccountV2Contract
 }
 
 // CertenProofStruct matches the Solidity CertenProof structure
@@ -308,43 +304,6 @@ type BlsSignatureStruct struct {
 	ThresholdMet bool       `json:"thresholdMet"`
 }
 
-// ADIGovernanceProofStruct matches the Solidity ADI governance structure
-type ADIGovernanceProofStruct struct {
-	AdiURL         string                     `json:"adiURL"`
-	AnchorID       [32]byte                   `json:"anchorID"`
-	MerkleProof    [][32]byte                 `json:"merkleProof"`
-	KeyBookProof   KeyBookProofStruct         `json:"keyBookProof"`
-	RoleProof      RoleProofStruct            `json:"roleProof"`
-	ThresholdProof ThresholdProofStruct       `json:"thresholdProof"`
-	Timestamp      *big.Int                   `json:"timestamp"`
-	ValidatorSigs  []ValidatorSignatureStruct `json:"validatorSigs"`
-}
-
-// KeyBookProofStruct for ADI governance
-type KeyBookProofStruct struct {
-	KeyBookURL   string   `json:"keyBookURL"`
-	KeyBookRoot  [32]byte `json:"keyBookRoot"`
-	PageCount    *big.Int `json:"pageCount"`
-	ThresholdMet bool     `json:"thresholdMet"`
-}
-
-// RoleProofStruct for ADI governance
-type RoleProofStruct struct {
-	UserAddress common.Address `json:"userAddress"`
-	AuthLevel   uint8          `json:"authLevel"`
-	ValidFrom   *big.Int       `json:"validFrom"`
-	ValidUntil  *big.Int       `json:"validUntil"`
-	ProofHashes [][32]byte     `json:"proofHashes"`
-}
-
-// ThresholdProofStruct for ADI governance
-type ThresholdProofStruct struct {
-	RequiredSigs  *big.Int `json:"requiredSigs"`
-	ProvidedSigs  *big.Int `json:"providedSigs"`
-	ThresholdMet  bool     `json:"thresholdMet"`
-	SignatureData [][]byte `json:"signatureData"`
-}
-
 // ValidatorSignatureStruct for ADI governance
 type ValidatorSignatureStruct struct {
 	ValidatorID string   `json:"validatorID"`
@@ -354,57 +313,13 @@ type ValidatorSignatureStruct struct {
 	SignedAt    *big.Int `json:"signedAt"`
 }
 
-// loadContractConfigFromEnv loads contract configuration from environment variables
-// Supports both new dual-contract env vars and legacy single-contract fallback
-func loadContractConfigFromEnv() (*CertenContractConfig, error) {
-	config := &CertenContractConfig{
-		EthereumRPC:          os.Getenv("ETHEREUM_URL"),
-		PrivateKey:           os.Getenv("ETH_PRIVATE_KEY"),
-		CreationContract:     os.Getenv("ANCHOR_CREATION_CONTRACT"),     // 0x8398D7EB594bCc608a0210cf206b392d35Ed5339
-		VerificationContract: os.Getenv("ANCHOR_VERIFICATION_CONTRACT"), // 0x9B29771EFA2C6645071C589239590b81ae2C5825
-		AccountContract:      os.Getenv("ACCOUNT_ABSTRACTION_ADDRESS"),  // 0xC30E74e54a54a470139b75633CEDeC8404743020
-		ChainID:              11155111,                                  // Sepolia default
-		GasLimit:             800000,                                    // Default gas limit (high for Groth16 verification)
-		MaxGasPriceGwei:      50,                                        // Default max gas price
-	}
-
-	// Fallback to legacy env var if new vars not set
-	if config.CreationContract == "" {
-		config.CreationContract = os.Getenv("ANCHOR_CONTRACT_ADDRESS") // Legacy for creation
-	}
-	if config.VerificationContract == "" {
-		config.VerificationContract = os.Getenv("ANCHOR_CONTRACT_V2_ADDRESS") // Legacy for verification
-	}
-
-	// Also set deprecated AnchorContract for backward compatibility
-	config.AnchorContract = config.VerificationContract
-
-	// Chain ID, gas limit and gas ceiling from the environment. A set value that does not parse is
-	// refused; each used to keep its default silently (RB3-F71 sweep).
-	var err error
-	if config.ChainID, err = envvar.Int64("ETHEREUM_CHAIN_ID", config.ChainID, 1); err != nil {
-		return nil, err
-	}
-	if config.GasLimit, err = envvar.Uint64("ETH_GAS_LIMIT", config.GasLimit, 21000); err != nil {
-		return nil, err
-	}
-	if config.MaxGasPriceGwei, err = envvar.Int64("ETH_MAX_GAS_PRICE_GWEI", config.MaxGasPriceGwei, 1); err != nil {
-		return nil, err
-	}
-
-	return config, nil
-}
-
 // NewEthereumContractManager creates a new Ethereum contract manager
 // Initializes dual-contract architecture:
 //   - Creation contract (0x8398...) for createAnchor
 //   - Verification contract (0x9B29...) for executeComprehensiveProof
 func NewEthereumContractManager(config *CertenContractConfig) (*EthereumContractManager, error) {
 	if config == nil {
-		var err error
-		if config, err = loadContractConfigFromEnv(); err != nil {
-			return nil, err
-		}
+		return nil, fmt.Errorf("the contract configuration is missing; it is built from the per-chain settings, never read from the environment here")
 	}
 
 	// Connect to Ethereum
@@ -483,16 +398,9 @@ func NewEthereumContractManager(config *CertenContractConfig) (*EthereumContract
 		return nil, fmt.Errorf("failed to instantiate CertenAnchorV3 contract: %w", err)
 	}
 
-	acctContract, err := contracts.NewCertenAccountV2(
-		common.HexToAddress(config.AccountContract), client)
-	if err != nil {
-		return nil, fmt.Errorf("failed to instantiate account contract: %w", err)
-	}
-
 	fmt.Printf("🔗 [ETH-MANAGER] Dual-contract architecture initialized:\n")
 	fmt.Printf("   Creation Contract (createAnchor): %s\n", creationAddr.Hex())
 	fmt.Printf("   Verification Contract (executeComprehensiveProof): %s\n", verificationAddr)
-	fmt.Printf("   Account Contract (governance): %s\n", config.AccountContract)
 
 	return &EthereumContractManager{
 		client:                  client,
@@ -502,7 +410,6 @@ func NewEthereumContractManager(config *CertenContractConfig) (*EthereumContract
 		verificationContract:    verificationContract,
 		verificationContractExt: verificationContractExt,
 		anchor:                  anchor,
-		acctContract:            acctContract,
 	}, nil
 }
 
@@ -2016,51 +1923,6 @@ func (ecm *EthereumContractManager) extractVotingPower(certenProof *proof.Certen
 	return total, signed
 }
 
-// SubmitGovernanceProofToAccount submits governance proof to account contract
-func (ecm *EthereumContractManager) SubmitGovernanceProofToAccount(
-	ctx context.Context,
-	certenIntent *intent.CertenIntent,
-	certenProof *proof.CertenProof,
-	targetAddress common.Address,
-	callData []byte,
-	value *big.Int,
-) (string, error) {
-
-	// Convert to ADI governance proof
-	govProof := ecm.convertToADIGovernanceProof(certenIntent, certenProof)
-
-	// Convert to contract-compatible governance proof struct
-	accountProof := AccountProofStruct{
-		AdiURL:              govProof.AdiURL,
-		AnchorId:            govProof.AnchorID,
-		MerkleProof:         govProof.MerkleProof,
-		KeyBookProof:        []byte(fmt.Sprintf("keybook:%s", govProof.KeyBookProof.KeyBookURL)),
-		RoleProof:           []byte(fmt.Sprintf("role:%d", govProof.RoleProof.AuthLevel)),
-		ThresholdProof:      []byte(fmt.Sprintf("threshold:%d", govProof.ThresholdProof.RequiredSigs.Int64())),
-		Timestamp:           govProof.Timestamp,
-		ExpiresAt:           big.NewInt(time.Now().Add(24 * time.Hour).Unix()),
-		ValidatorSignatures: ecm.encodeValidatorSignatures(govProof.ValidatorSigs),
-		Nonce:               big.NewInt(time.Now().UnixNano()),
-		RequiredLevel:       govProof.RoleProof.AuthLevel,
-	}
-
-	// Call the direct governance proof execution (does not require EntryPoint)
-	// Security is enforced via BLS validator signatures in the governance proof
-	tx, err := ecm.acctContract.ExecuteGovernanceProofDirect(ecm.auth, targetAddress, value, callData, accountProof)
-	if err != nil {
-		return "", fmt.Errorf("failed to call executeGovernanceProofDirect: %w", err)
-	}
-
-	fmt.Printf("📡 ACCOUNT CONTRACT TRANSACTION SUBMITTED:\n")
-	fmt.Printf("   Contract: %s\n", ecm.config.AccountContract)
-	fmt.Printf("   Function: executeGovernanceProofDirect\n")
-	fmt.Printf("   Target: %s\n", targetAddress.Hex())
-	fmt.Printf("   Value: %s\n", value.String())
-	fmt.Printf("   Transaction Hash: %s\n", tx.Hash().Hex())
-
-	return tx.Hash().Hex(), nil
-}
-
 // perIntentSubmissionRetired retires the per-intent V6.1 submission path (RB3-F124): SubmitCertenProofToAnchor,
 // ExecuteUnifiedAnchorWorkflow(Full) and convertToContractProof. CERTEN settles through the batch path; nothing
 // calls these, and on reaching the chain they would send what they fabricate - an empty aggregate (48 zero
@@ -2164,67 +2026,6 @@ func (ecm *EthereumContractManager) convertToContractProof(
 	}
 
 	return contractProof
-}
-
-// convertToADIGovernanceProof converts CERTEN proof to ADI governance format
-func (ecm *EthereumContractManager) convertToADIGovernanceProof(
-	certenIntent *intent.CertenIntent,
-	certenProof *proof.CertenProof,
-) *ADIGovernanceProofStruct {
-
-	// Generate anchor ID
-	anchorID := ecm.generateAnchorID(certenIntent, certenProof)
-
-	orgADI := certenIntent.OrganizationADI
-
-	keyBookProof := KeyBookProofStruct{
-		KeyBookURL:   fmt.Sprintf("%s/book", orgADI),
-		PageCount:    big.NewInt(1),
-		ThresholdMet: true,
-	}
-
-	roleProof := RoleProofStruct{
-		UserAddress: common.HexToAddress(ecm.config.AccountContract),
-		AuthLevel:   2, // ADMIN level
-		ValidFrom:   big.NewInt(time.Now().Unix()),
-		ValidUntil:  big.NewInt(time.Now().Add(365 * 24 * time.Hour).Unix()),
-	}
-
-	thresholdProof := ThresholdProofStruct{
-		RequiredSigs: big.NewInt(2),
-		ProvidedSigs: big.NewInt(3),
-		ThresholdMet: true,
-	}
-
-	// Create validator signatures
-	validatorSigs := []ValidatorSignatureStruct{
-		{
-			ValidatorID: "validator-1",
-			PublicKey:   []byte("validator1_pubkey"),
-			Signature:   []byte("validator1_signature"),
-			VotingPower: big.NewInt(33),
-			SignedAt:    big.NewInt(time.Now().Unix()),
-		},
-		{
-			ValidatorID: "validator-2",
-			PublicKey:   []byte("validator2_pubkey"),
-			Signature:   []byte("validator2_signature"),
-			VotingPower: big.NewInt(33),
-			SignedAt:    big.NewInt(time.Now().Unix()),
-		},
-	}
-
-	adiProof := &ADIGovernanceProofStruct{
-		AdiURL:         orgADI,
-		AnchorID:       anchorID,
-		KeyBookProof:   keyBookProof,
-		RoleProof:      roleProof,
-		ThresholdProof: thresholdProof,
-		Timestamp:      big.NewInt(time.Now().Unix()),
-		ValidatorSigs:  validatorSigs,
-	}
-
-	return adiProof
 }
 
 // v6CommitmentBundle is the precomputed data both generateAnchorID and
@@ -2644,16 +2445,6 @@ func (ecm *EthereumContractManager) estimateContractGas(ctx context.Context, con
 	}
 
 	return baseGas, nil
-}
-
-// encodeValidatorSignatures encodes validator signatures into bytes
-func (ecm *EthereumContractManager) encodeValidatorSignatures(sigs []ValidatorSignatureStruct) []byte {
-	var encoded []byte
-	for _, sig := range sigs {
-		// Simple concatenation - in production, this would use proper ABI encoding
-		encoded = append(encoded, sig.Signature...)
-	}
-	return encoded
 }
 
 // REMOVED: sendRawTransaction, getPrivateKey, waitForTransactionReceipt

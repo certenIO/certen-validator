@@ -171,7 +171,7 @@ var wallClockReads = map[string]struct {
 	"tx_sender.go": {11, "sender liveness: stuck-replacement, waits, outbox retention; a wait that runs out is " +
 		"ChainWaitError (outcome unknown), never a failure"},
 	"nonce_tracker.go": {7, "nonce bookkeeping timestamps and cache"},
-	"ethereum_contracts.go": {15, "the retired per-intent proof builders (no batch-lane caller), the period lane's sequence wait, " +
+	"ethereum_contracts.go": {8, "the retired per-intent proof builders (no batch-lane caller), the period lane's sequence wait, " +
 		"and the signed native rate's freshness for the send-time dollar ceiling (a local refusal before sending; nothing recorded)"},
 	"credit_checker.go":        {2, "a balance cache"},
 	"layer5_validator_set.go":  {2, "a validator-set cache"},

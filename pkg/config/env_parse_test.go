@@ -13,10 +13,9 @@ import (
 func TestLoadRefusesEverySetValueThatDoesNotParse(t *testing.T) {
 	t.Setenv("VALIDATOR_ID", "validator-3")
 	bad := map[string]string{
-		"ETH_CHAIN_ID":         "sepolia", // int64
-		"DATABASE_MAX_CONNS":   "25x",     // int
-		"TLS_ENABLED":          "yes",     // bool
-		"DB_CONN_MAX_LIFETIME": "1 hour",  // duration
+		"DATABASE_MAX_CONNS":   "25x",    // int
+		"TLS_ENABLED":          "yes",    // bool
+		"DB_CONN_MAX_LIFETIME": "1 hour", // duration
 	}
 	for k, v := range bad {
 		t.Setenv(k, v)
@@ -33,14 +32,13 @@ func TestLoadRefusesEverySetValueThatDoesNotParse(t *testing.T) {
 }
 
 func TestLoadAcceptsWellFormedValues(t *testing.T) {
-	t.Setenv("ETH_CHAIN_ID", "84532")
 	t.Setenv("VALIDATOR_ID", "validator-3")
 	cfg, err := Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.EthChainID != 84532 {
-		t.Fatalf("ETH_CHAIN_ID read as %d", cfg.EthChainID)
+	if cfg.ValidatorID != "validator-3" {
+		t.Fatalf("VALIDATOR_ID read as %q", cfg.ValidatorID)
 	}
 }
 

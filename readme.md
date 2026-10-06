@@ -182,7 +182,6 @@ The included `docker-compose.yml` deploys a complete testnet:
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `ETHEREUM_URL` | Yes | - | Ethereum RPC endpoint |
-| `ETH_CHAIN_ID` | No | 11155111 | Chain ID (11155111 = Sepolia) |
 | `ETH_PRIVATE_KEY` | Yes | - | Validator Ethereum signing key |
 | `CERTEN_CONTRACT_ADDRESS` | Yes | - | Main anchor contract address |
 | `CERTEN_ANCHOR_V3_ADDRESS` | No | - | CertenAnchorV3 contract address |

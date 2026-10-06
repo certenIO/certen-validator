@@ -188,9 +188,6 @@ ENV ENABLE_MERKLE_VERIFICATION=true \
     ENABLE_PARALLEL_VERIFICATION=true \
     VERIFICATION_TIMEOUT=30s
 
-# Ethereum defaults (Sepolia testnet)
-ENV ETH_CHAIN_ID=11155111
-
 # CometBFT defaults
 ENV COMETBFT_ENABLED=true \
     COMETBFT_MODE=validator
