@@ -390,18 +390,24 @@ func (c *Client) SendContractTransactionWithRetry(ctx context.Context, contractA
 	return nil, fmt.Errorf("failed to send transaction after %d attempts", maxRetries)
 }
 
-// GetBlock gets a block by number
-func (c *Client) GetBlock(ctx context.Context, blockNumber *big.Int) (*types.Block, error) {
-	block, err := c.client.BlockByNumber(ctx, blockNumber)
+// GetHeader is the header of a block by number (nil: the latest). Only the header is read: a full block also decodes
+// the body, and go-ethereum refuses every Telcoin Adiri block there - Telcoin stores a batch digest in sha3Uncles, so
+// "empty uncle list but block header indicates uncles" (RB7 Phase A F-RPC-10) - as it refuses OP-stack and Arbitrum
+// blocks whose transaction types it does not know (see GetLatestBlockNumber). Every caller needs the number, hash or time.
+func (c *Client) GetHeader(ctx context.Context, blockNumber *big.Int) (*types.Header, error) {
+	header, err := c.client.HeaderByNumber(ctx, blockNumber)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get block: %w", err)
+		return nil, fmt.Errorf("failed to get block header: %w", err)
 	}
-	return block, nil
+	if header == nil || header.Number == nil {
+		return nil, fmt.Errorf("failed to get block header: none served")
+	}
+	return header, nil
 }
 
-// GetLatestBlock gets the latest block
-func (c *Client) GetLatestBlock(ctx context.Context) (*types.Block, error) {
-	return c.GetBlock(ctx, nil)
+// GetLatestHeader is the latest block's header.
+func (c *Client) GetLatestHeader(ctx context.Context) (*types.Header, error) {
+	return c.GetHeader(ctx, nil)
 }
 
 // GetLatestBlockNumber returns the latest block number

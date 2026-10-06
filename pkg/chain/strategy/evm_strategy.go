@@ -413,16 +413,23 @@ func (s *EVMStrategy) GetTransactionReceipt(ctx context.Context, txHash string) 
 		ChainIDNumeric: s.chainID.Int64(),
 	}
 
-	// Get block for timestamp
-	var block *types.Block
+	// The block's time, from its HEADER. A full-block read (BlockByHash) also decodes the body, and go-ethereum refuses
+	// every Telcoin Adiri block there: Telcoin stores a batch digest in sha3Uncles, so "empty uncle list but block
+	// header indicates uncles" (RB7 Phase A F-RPC-10) - and the timestamp silently stayed zero. A header that cannot be
+	// read, or is not the receipt's block, refuses the observation by name: an observation never carries a zero time.
+	var header *types.Header
 	err = s.read(ctx, func(c *ethclient.Client) error {
 		var e error
-		block, e = c.BlockByHash(ctx, receipt.BlockHash)
+		header, e = c.HeaderByHash(ctx, receipt.BlockHash)
 		return e
 	})
-	if err == nil {
-		result.BlockTimestamp = time.Unix(int64(block.Time()), 0)
+	if err != nil {
+		return nil, fmt.Errorf("get block %s header for the receipt's time: %w", receipt.BlockHash.Hex(), err)
 	}
+	if header == nil || header.Hash() != receipt.BlockHash {
+		return nil, fmt.Errorf("get block %s header for the receipt's time: the provider served another block", receipt.BlockHash.Hex())
+	}
+	result.BlockTimestamp = time.Unix(int64(header.Time), 0)
 
 	// Calculate confirmations
 	var currentBlock uint64

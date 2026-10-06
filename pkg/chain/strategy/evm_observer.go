@@ -392,20 +392,17 @@ func (o *EVMObserver) observeTron(ctx context.Context, txHash common.Hash, deadl
 		}
 	}
 
-	// The block's roots, from whichever read TRON's node answers.
-	if block, blockErr := o.client.BlockByHash(ctx, receipt.BlockHash); blockErr == nil {
-		copy(result.StateRoot[:], block.Root().Bytes())
-		copy(result.TransactionsRoot[:], block.TxHash().Bytes())
-		copy(result.ReceiptsRoot[:], block.ReceiptHash().Bytes())
-		result.ResultHash = computeResultHash(result)
-	} else if headerErr == nil {
+	// The block's roots, from whichever read TRON's node answers. They are the header's: a full-block read
+	// (BlockByHash) carried the same roots and also decoded the body, which go-ethereum refuses on a chain that stores
+	// something else in sha3Uncles (Telcoin Adiri, RB7 Phase A F-RPC-10). The header read above is used.
+	if headerErr == nil {
 		// Populate block roots from header directly (only if we have a valid header)
 		copy(result.StateRoot[:], header.Root.Bytes())
 		copy(result.TransactionsRoot[:], header.TxHash.Bytes())
 		copy(result.ReceiptsRoot[:], header.ReceiptHash.Bytes())
 		result.ResultHash = computeResultHash(result)
 	} else {
-		// Both HeaderByHash and BlockByHash failed — try raw JSON-RPC fallback for block roots
+		// HeaderByHash failed (TRON's non-standard fields) — the raw JSON-RPC block for its roots
 		type rpcBlockRoots struct {
 			StateRoot        string `json:"stateRoot"`
 			TransactionsRoot string `json:"transactionsRoot"`
