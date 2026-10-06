@@ -259,7 +259,6 @@ type simValidator struct {
 func newSimValidator(t *testing.T, chain *simIdleChain, ordinal int, wall *time.Time, register bool) *simValidator {
 	t.Helper()
 	t.Setenv("CERTEN_TX_OUTBOX_DIR", t.TempDir())
-	t.Setenv(fmt.Sprintf("CERTEN_NATIVE_USD_%d", chain.chainID), "0.002")
 	// The simulated chain is its own incarnation: pinned, as an operator re-pins a chain (RB7 D8).
 	t.Setenv(supportedchains.GenesisEnvFor(chain.chainID), chain.headers[0].Hash().Hex())
 	key, err := crypto.GenerateKey()

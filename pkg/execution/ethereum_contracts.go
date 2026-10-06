@@ -17,20 +17,19 @@ import (
 	"math/big"
 	"os"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/certen/independant-validator/pkg/anchor"
-	"github.com/certen/independant-validator/pkg/billing"
 	"github.com/certen/independant-validator/pkg/consensus"
 	"github.com/certen/independant-validator/pkg/crypto/bls_zkp"
 	"github.com/certen/independant-validator/pkg/ethrpc"
 	"github.com/certen/independant-validator/pkg/execution/contracts"
 	"github.com/certen/independant-validator/pkg/intent"
 	"github.com/certen/independant-validator/pkg/proof"
-	"github.com/certen/independant-validator/pkg/supportedchains"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
@@ -538,93 +537,101 @@ func gasCeilingEnforced() (bool, error) {
 
 // Cost ceiling configuration.
 //
-//	CERTEN_MAX_TX_COST_USD    worst-case dollar cost allowed for one transaction
-//	CERTEN_NATIVE_USD_<id>    price of chain <id>'s own native token (RB7 Task 4: TEL on Telcoin Adiri is not ETH)
-//	CERTEN_NATIVE_USD         price of ETH, for the chains whose native token is ETH and that name no price of their own
+//	CERTEN_MAX_TX_COST_USD    worst-case dollar cost allowed for one transaction; unset or 0 leaves the dollar ceiling
+//	                          inactive, and the gwei ceiling alone governs
 //
-// A chain's price is its CERTEN_NATIVE_USD_<id>; failing that, CERTEN_NATIVE_USD when the chain pays gas in ETH (exactly
-// as before for Sepolia, Base Sepolia and Arbitrum Sepolia). A chain that pays gas in anything else and names no price of
-// its own is REFUSED - at boot for a settlement chain (NewEVMChainResolverFromEnv), and at send - never priced at
-// ETH's rate.
+// The price a transaction's gas is valued at is the SIGNED native rate of its own chain, from the entitlement epoch
+// the gateway publishes (header v3, `native_rates`; RB7 Task 4, owner decision D6) - never a configured figure and
+// never another chain's rate. TEL on Telcoin Adiri is priced at TEL's rate and ETH on the live chains at ETH's. With the
+// ceiling active, a chain the current epoch gives no fresh rate (a header before v3 included) is REFUSED by name
+// (NATIVE_RATE_UNPRICED / NATIVE_RATE_STALE / NATIVE_RATE_INVALID).
 //
-// A cap and a price must both be set for the dollar ceiling to apply. Unset means INACTIVE, and
-// the gwei ceiling alone governs.
+// CERTEN_NATIVE_USD and CERTEN_NATIVE_USD_<chainId>, the operator-stated prices this replaces, are refused at boot
+// (CheckEnv): a price nobody signs cannot stand beside the one the gateway signs, and silently ignoring a set one would
+// switch off a ceiling its operator believed active.
 //
-// An earlier version defaulted the token price to a deliberately HIGH figure on
-// the theory that over-stating it refuses sooner, which is "the safe direction".
-// That reasoning was wrong. On a testnet fleet, where the native token is
-// worthless but gas PRICES are mainnet-like, a 500k-gas transaction at 20 gwei
-// priced against a notional $10,000/ETH computes to ~$120 and blows through any
-// sane cap — so the conservative default refused all legitimate work. A default
-// that causes an outage is not conservative; it is just broken in a direction
-// that feels responsible.
-//
-// Refusing to guess is the actual safe behaviour: an operator who wants a dollar
-// ceiling states what a token is worth, and one who has not said cannot be
-// silently held to a number nobody chose.
-const defaultMaxTxCostUSD = 25.0
+// Activation is the cap alone, and it is opt-in. Before, the ceiling applied only when a price was configured as well,
+// so a deployment without CERTEN_NATIVE_USD (the live fleet's documented configuration) ran with it inactive whatever
+// the cap said; unset now means inactive for the same reason: a ceiling an operator never chose must not start refusing
+// work on a deploy. The history of why a guessed price is wrong: an earlier version defaulted the token price to a
+// deliberately HIGH figure, and on a testnet fleet, where the native token is worthless but gas PRICES are mainnet-like,
+// a 500k-gas transaction at 20 gwei priced against a notional $10,000/ETH computed to ~$120 and refused all legitimate
+// work. Refusing to guess is the safe behaviour.
 
-// maxTxCostMicroUSD returns the per-transaction dollar cap, or 0 for no cap (0 explicitly disables).
-// A cap is only meaningful alongside a price: with no price configured the ceiling is inactive
-// regardless, so the default never stands alone. A value that is not a non-negative number is refused;
-// it used to become the $25 default.
+// maxTxCostMicroUSD returns the per-transaction dollar cap, or 0 for no cap (unset or 0). A value that is not a
+// non-negative number is refused by name.
 func maxTxCostMicroUSD() (int64, error) {
-	f, err := envvar.Float("CERTEN_MAX_TX_COST_USD", defaultMaxTxCostUSD, 0)
+	f, err := envvar.Float("CERTEN_MAX_TX_COST_USD", 0, 0)
 	return int64(f * 1e6), err
 }
 
-// nativeUSDMicro returns the native token price, or 0 when unconfigured — which leaves the dollar
-// ceiling inactive rather than enforcing an invented figure. A value that is not a non-negative number
-// is refused; it used to become 0, switching the dollar ceiling off without a word.
-func nativeUSDMicro() (int64, error) {
-	f, err := envvar.Float("CERTEN_NATIVE_USD", 0, 0)
-	return int64(f * 1e6), err
+// supersededNativePriceEnv is the prefix of the operator-stated native prices the signed epoch rates replace.
+const supersededNativePriceEnv = "CERTEN_NATIVE_USD"
+
+// checkNoConfiguredNativePrice refuses CERTEN_NATIVE_USD and every CERTEN_NATIVE_USD_<chainId> that is set, naming them.
+func checkNoConfiguredNativePrice() error {
+	var set []string
+	for _, kv := range os.Environ() {
+		name, value, _ := strings.Cut(kv, "=")
+		if (name == supersededNativePriceEnv || strings.HasPrefix(name, supersededNativePriceEnv+"_")) &&
+			strings.TrimSpace(value) != "" {
+			set = append(set, name)
+		}
+	}
+	if len(set) == 0 {
+		return nil
+	}
+	sort.Strings(set)
+	return fmt.Errorf("%s: a native-token price is no longer configured - each chain's gas is priced at the native rate "+
+		"the gateway signs into the entitlement epoch (header v3). Remove %s; to keep a dollar ceiling, set "+
+		"CERTEN_MAX_TX_COST_USD (and CERTEN_ENTITLEMENT_URL)", strings.Join(set, ", "), strings.Join(set, ", "))
 }
 
-// nativeUSDEnvFor is the variable holding chain chainID's own native-token price.
-func nativeUSDEnvFor(chainID int64) string { return fmt.Sprintf("CERTEN_NATIVE_USD_%d", chainID) }
-
-// nativeSymbolOfChain is the token chainID pays gas in: its catalogue entry's, else the fee table's for a retired chain,
-// else "" (not known).
-func nativeSymbolOfChain(chainID int64) string {
-	if c, ok := supportedchains.Lookup(chainID); ok {
-		return c.NativeSymbol
-	}
-	if slug, ok := evmCanonicalSlugForChainID(chainID); ok {
-		return billing.NativeSymbolFor(slug)
-	}
-	return ""
+// NativeRateSource prices a chain's native token: the entitlement store's signed epoch rates (main.go wires it).
+type NativeRateSource interface {
+	NativeUSDMicro(chainID int64, now time.Time) (int64, error)
 }
 
-// nativeUSDMicroFor returns chain chainID's native-token price, or 0 when the price that applies is unconfigured (the
-// dollar ceiling is then inactive, as before). CERTEN_NATIVE_USD_<id> is the chain's own; CERTEN_NATIVE_USD applies only
-// to a chain that pays gas in ETH. Any other chain with no price of its own is refused by name.
-func nativeUSDMicroFor(chainID int64) (int64, error) {
-	key := nativeUSDEnvFor(chainID)
-	if strings.TrimSpace(os.Getenv(key)) != "" {
-		f, err := envvar.Float(key, 0, 0)
-		return int64(f * 1e6), err
+var nativeRates atomic.Pointer[NativeRateSource]
+
+// SetNativeRateSource installs the one source of native-token prices for the dollar ceiling.
+func SetNativeRateSource(src NativeRateSource) {
+	if src == nil {
+		nativeRates.Store(nil)
+		return
 	}
-	switch sym := nativeSymbolOfChain(chainID); sym {
-	case "ETH":
-		return nativeUSDMicro()
-	case "":
-		return 0, fmt.Errorf("chain %d: the token it pays gas in is not known, so no price applies to it: set %s", chainID, key)
-	default:
-		return 0, fmt.Errorf("chain %d pays gas in %s, which CERTEN_NATIVE_USD (the price of ETH) does not price: set %s",
-			chainID, sym, key)
-	}
+	nativeRates.Store(&src)
 }
 
-// txCostCeiling checks a transaction's worst-case cost against the configured dollar ceiling.
+// nativeUSDMicroFor returns chain chainID's signed native-token price; with no source wired it is refused by name.
+func nativeUSDMicroFor(chainID int64, now time.Time) (int64, error) {
+	src := nativeRates.Load()
+	if src == nil || *src == nil {
+		return 0, fmt.Errorf("chain %d: NATIVE_RATE_UNPRICED: no signed native rate source is wired, so the dollar ceiling "+
+			"cannot price this transaction", chainID)
+	}
+	return (*src).NativeUSDMicro(chainID, now)
+}
+
+// DollarCeilingActive reports whether CERTEN_MAX_TX_COST_USD switches the dollar ceiling on.
+func DollarCeilingActive() (bool, error) {
+	max, err := maxTxCostMicroUSD()
+	return max > 0, err
+}
+
+// txCostCeiling checks a transaction's worst-case cost against the dollar ceiling, pricing its gas at its own chain's
+// signed native rate. Inactive (nothing read, nothing refused) when no cap is set.
 func txCostCeiling(gas uint64, bid *big.Int, chainID int64) error {
-	native, err := nativeUSDMicroFor(chainID)
-	if err != nil {
-		return err
-	}
 	max, err := maxTxCostMicroUSD()
 	if err != nil {
 		return err
+	}
+	if max <= 0 {
+		return nil
+	}
+	native, err := nativeUSDMicroFor(chainID, time.Now())
+	if err != nil {
+		return fmt.Errorf("dollar ceiling: %w", err)
 	}
 	return checkTxCostCeiling(gas, bid, native, max, chainID)
 }

@@ -2157,6 +2157,18 @@ func startValidator(
 		// batchScheduler) — the refresher lives for the process lifetime.
 		entStore.Start(context.Background())
 
+		// The dollar ceiling prices each transaction's gas at its own chain's native rate as signed in this epoch
+		// (header v3, RB7 Task 4) and nowhere else. An active ceiling with no epoch to read would refuse every send, so
+		// that configuration stops the start, by name.
+		execution.SetNativeRateSource(entStore)
+		if active, err := execution.DollarCeilingActive(); err != nil {
+			log.Fatalf("invalid cost ceiling configuration: %v", err)
+		} else if active && !entStore.Enabled() {
+			log.Fatalf("CERTEN_MAX_TX_COST_USD sets a dollar ceiling, but CERTEN_ENTITLEMENT_URL is unset: the ceiling " +
+				"prices gas only at the native rates signed into the entitlement epoch. Set CERTEN_ENTITLEMENT_URL, or " +
+				"unset CERTEN_MAX_TX_COST_USD")
+		}
+
 		// The mode both producers act on is the one the chain enforces - the sealed policy and every update since,
 		// read from the ValidatorApp at each use - never entGateCfg.Mode, the environment's genesis seed (RB4-F37a).
 		validator.SetEntitlementStore(entStore, validatorApp.EntitlementMode)

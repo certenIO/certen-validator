@@ -165,35 +165,32 @@ func TestUnknownNativePriceDoesNotSilentlyPass(t *testing.T) {
 	}
 }
 
-// An unconfigured price must leave the dollar ceiling INACTIVE, not enforce an
-// invented figure.
+// An unset cap leaves the dollar ceiling INACTIVE: nothing is priced and nothing refused, whatever the signed rates say.
 //
-// The first version defaulted the price to $10,000/ETH, reasoning that
-// over-stating it refuses sooner and is therefore the safe direction. On a
-// testnet fleet that is an outage: the native token is worthless but gas PRICES
-// are mainnet-like, so a 500k-gas transaction at 20 gwei prices at ~$120 against
-// a notional $10,000/ETH and blows through any sane cap. Every legitimate intent
-// would have been refused by a default nobody chose.
-func TestUnconfiguredPriceLeavesTheDollarCeilingInactive(t *testing.T) {
-	t.Setenv("CERTEN_NATIVE_USD", "")
+// The first version defaulted the price to $10,000/ETH, reasoning that over-stating it refuses sooner and is therefore
+// the safe direction. On a testnet fleet that is an outage: the native token is worthless but gas PRICES are
+// mainnet-like, so a 500k-gas transaction at 20 gwei prices at ~$120 and blows through any sane cap. The ceiling is
+// therefore opt-in: before RB7 it needed a configured price as well, which the live fleet never set.
+func TestAnUnsetCapLeavesTheDollarCeilingInactive(t *testing.T) {
 	t.Setenv("CERTEN_MAX_TX_COST_USD", "")
+	withRates(t, nil) // no source at all: an inactive ceiling must not even ask for one
 
-	if got := mustMicro(t, nativeUSDMicro); got != 0 {
-		t.Fatalf("an unconfigured token price must be 0 (inactive), got %d", got)
+	if got := mustMicro(t, maxTxCostMicroUSD); got != 0 {
+		t.Fatalf("an unset cap must be 0 (inactive), got %d", got)
 	}
-
-	// The realistic testnet case that the old default refused.
-	err := txCostCeiling(500_000, big.NewInt(24*gwei), 11155111)
-	if err != nil {
+	if active, err := DollarCeilingActive(); active || err != nil {
+		t.Fatalf("an unset cap must leave the ceiling inactive (%v, %v)", active, err)
+	}
+	if err := txCostCeiling(500_000, big.NewInt(24*gwei), 11155111); err != nil {
 		t.Fatalf("an unconfigured deployment must not refuse ordinary work: %v", err)
 	}
 }
 
-func TestConfiguringBothActivatesTheDollarCeiling(t *testing.T) {
-	t.Setenv("CERTEN_NATIVE_USD", "3000")
+func TestACapActivatesTheDollarCeilingAtTheSignedRate(t *testing.T) {
 	t.Setenv("CERTEN_MAX_TX_COST_USD", "25")
+	withRates(t, fixedRates{1: 3000 * usd})
 
-	if mustMicro(t, nativeUSDMicro) != 3000*usd || mustMicro(t, maxTxCostMicroUSD) != 25*usd {
+	if mustMicro(t, maxTxCostMicroUSD) != 25*usd {
 		t.Fatal("explicit configuration should be honoured")
 	}
 	// 2.5M gas at 50 gwei with ETH at $3,000 = $375. Refused.
@@ -203,8 +200,8 @@ func TestConfiguringBothActivatesTheDollarCeiling(t *testing.T) {
 }
 
 func TestExplicitZeroCapDisablesTheDollarCeiling(t *testing.T) {
-	t.Setenv("CERTEN_NATIVE_USD", "3000")
 	t.Setenv("CERTEN_MAX_TX_COST_USD", "0")
+	withRates(t, fixedRates{1: 3000 * usd})
 
 	// An operator on a testnet, where a dollar ceiling is meaningless, must be
 	// able to turn it off without also giving up the gwei ceiling.
@@ -217,10 +214,6 @@ func TestCostCeilingOverridable(t *testing.T) {
 	t.Setenv("CERTEN_MAX_TX_COST_USD", "0.50")
 	if got := mustMicro(t, maxTxCostMicroUSD); got != 500_000 {
 		t.Fatalf("expected 500000 micro-USD, got %d", got)
-	}
-	t.Setenv("CERTEN_NATIVE_USD", "3000")
-	if got := mustMicro(t, nativeUSDMicro); got != 3000*usd {
-		t.Fatalf("expected 3000000000 micro-USD, got %d", got)
 	}
 }
 
@@ -248,16 +241,12 @@ func TestGasCeilingEnforcedDefaultsOn(t *testing.T) {
 	}
 }
 
-// A dollar figure that is not a non-negative number is refused. The price used to become 0 - the dollar
-// ceiling switched off - and the cap the $25 default, each without a word.
+// A cap that is not a non-negative number is refused by name. It used to become the $25 default without a word.
 func TestAnUnreadableDollarFigureIsRefused(t *testing.T) {
-	for key, v := range map[string]string{"CERTEN_NATIVE_USD": "$3000", "CERTEN_MAX_TX_COST_USD": "-1"} {
-		t.Setenv("CERTEN_NATIVE_USD", "3000")
-		t.Setenv("CERTEN_MAX_TX_COST_USD", "25")
-		t.Setenv(key, v)
-		if err := txCostCeiling(21000, big.NewInt(1), 1); err == nil || !strings.Contains(err.Error(), key) {
-			t.Errorf("%s=%q was not refused by name: %v", key, v, err)
-		}
+	withRates(t, fixedRates{1: 3000 * usd})
+	t.Setenv("CERTEN_MAX_TX_COST_USD", "-1")
+	if err := txCostCeiling(21000, big.NewInt(1), 1); err == nil || !strings.Contains(err.Error(), "CERTEN_MAX_TX_COST_USD") {
+		t.Errorf("CERTEN_MAX_TX_COST_USD=-1 was not refused by name: %v", err)
 	}
 }
 

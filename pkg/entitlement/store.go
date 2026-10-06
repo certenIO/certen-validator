@@ -346,6 +346,36 @@ func (s *Store) BuildEvidence(adiURL string) *Evidence {
 	return &Evidence{Header: *header, Leaf: leaf, Proof: proof}
 }
 
+// NativeUSDMicro is the signed micro-USD price of chainID's native token from the cached epoch, for pricing that
+// chain's gas at send time (RB7 Task 4). It is the only source of that price: a disabled store, an epoch never fetched,
+// one older than MaxAge or past its own not_after, and a header with no fresh rate for the chain are each refused by
+// name. Nothing falls back to another chain's rate or to configuration.
+//
+// Not consensus: it judges freshness on the wall clock, like BuildEvidence.
+func (s *Store) NativeUSDMicro(chainID int64, now time.Time) (int64, error) {
+	if !s.Enabled() {
+		return 0, &VerifyError{Reason: ReasonRateUnpriced, Detail: fmt.Sprintf(
+			"chain %d: the entitlement store is disabled (CERTEN_ENTITLEMENT_URL unset), so no signed native rate exists", chainID)}
+	}
+	s.mu.RLock()
+	header, fetchedAt := s.header, s.fetchedAt
+	s.mu.RUnlock()
+	if header == nil {
+		return 0, &VerifyError{Reason: ReasonRateUnpriced, Detail: fmt.Sprintf(
+			"chain %d: no entitlement epoch has been fetched yet", chainID)}
+	}
+	if s.cfg.MaxAge > 0 && now.Sub(fetchedAt) > s.cfg.MaxAge {
+		return 0, &VerifyError{Reason: ReasonRateStale, Detail: fmt.Sprintf(
+			"chain %d: entitlement epoch %d was fetched %s ago, past CERTEN_ENTITLEMENT_MAX_AGE_SEC (%s)",
+			chainID, header.Epoch, now.Sub(fetchedAt).Round(time.Second), s.cfg.MaxAge)}
+	}
+	if header.NotAfterUnix <= 0 || now.Unix() > header.NotAfterUnix {
+		return 0, &VerifyError{Reason: ReasonRateStale, Detail: fmt.Sprintf(
+			"chain %d: entitlement epoch %d expired at %d", chainID, header.Epoch, header.NotAfterUnix)}
+	}
+	return header.NativeRateFor(chainID, now.Unix())
+}
+
 // Lookup reports an account's entitlement from the cached snapshot, for the
 // cheap pre-screen. The second return is false when the answer is unknown —
 // which callers must NOT treat as entitled.

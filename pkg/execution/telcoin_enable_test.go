@@ -61,12 +61,7 @@ func TestAnEnabledTelcoinAdiriRequiresItsConfiguration(t *testing.T) {
 		!strings.Contains(err.Error(), "TELCOIN_ADIRI_GAS_LIMIT_ANCHOR") {
 		t.Fatalf("no anchor gas limit: %v", err)
 	}
-	t.Setenv("CERTEN_NATIVE_USD_2017", "")
-	if _, err := NewEVMChainResolverFromEnv(adiriConfig(250, 3000000), []int64{2017}); err == nil ||
-		!strings.Contains(err.Error(), "CERTEN_NATIVE_USD_2017") {
-		t.Fatalf("no TEL price: %v", err)
-	}
-	t.Setenv("CERTEN_NATIVE_USD_2017", "0.002")
+	// No TEL price is configured: 2017's gas is priced at TEL's rate signed into the entitlement epoch, at send time.
 	r, err := NewEVMChainResolverFromEnv(adiriConfig(250, 3000000), []int64{2017})
 	if err != nil {
 		t.Fatalf("a fully configured 2017 was refused: %v", err)
