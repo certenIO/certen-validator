@@ -15,7 +15,6 @@ import (
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/rpc"
 
 	"github.com/certen/independant-validator/pkg/ethrpc"
 	"github.com/certen/independant-validator/pkg/execution/contracts"
@@ -87,6 +86,10 @@ type AgreedOutcomeChain struct {
 
 	mu       sync.Mutex
 	consumed map[string]*LeafConsumption // final consumptions, by account and leaf: they never change
+
+	// clock is the chain's clock (chain_clock.go), reading through reader: the finalized block and the headers that place
+	// an outcome in time (T-9, T-10).
+	clock *ChainClock
 }
 
 // NewAgreedOutcomeChain dials the chain's independent providers (its primary rpcURL and its configured fallbacks; at
@@ -105,18 +108,24 @@ func NewAgreedOutcomeChain(ctx context.Context, chainID int64, rpcURL string, an
 		return nil, fmt.Errorf("outcome reads of chain %d: %v", chainID, obs.finalityErr)
 	}
 	return &AgreedOutcomeChain{chainID: chainID, reader: reader, observer: obs, anchor: anchor, registry: registry,
-		consumed: map[string]*LeafConsumption{}}, nil
+		consumed: map[string]*LeafConsumption{}, clock: adoptChainClockSource(chainID, rpcURL, reader)}, nil
 }
 
 func (c *AgreedOutcomeChain) ChainID() int64 { return c.chainID }
 
+// FinalizedHeader is the chain's finalized block, from its clock.
 func (c *AgreedOutcomeChain) FinalizedHeader(ctx context.Context) (*types.Header, error) {
-	return c.reader.HeaderByNumber(ctx, big.NewInt(int64(rpc.FinalizedBlockNumber)))
+	return c.clock.Finalized(ctx)
 }
 
+// HeaderAt is the agreed header at a height, from the chain's clock.
 func (c *AgreedOutcomeChain) HeaderAt(ctx context.Context, number uint64) (*types.Header, error) {
-	return c.reader.HeaderByNumber(ctx, new(big.Int).SetUint64(number))
+	return c.clock.HeaderAt(ctx, number)
 }
+
+// AwaitTime and AwaitBlock pass a waiting derivation's horizon to the chain's clock (chainTimeAwaiter).
+func (c *AgreedOutcomeChain) AwaitTime(rule string, after uint64) { c.clock.AwaitTime(rule, after) }
+func (c *AgreedOutcomeChain) AwaitBlock(rule string, n uint64)    { c.clock.AwaitBlock(rule, n) }
 
 func (c *AgreedOutcomeChain) call(ctx context.Context, parsed abi.ABI, to common.Address, at common.Hash, method string, args ...interface{}) ([]interface{}, error) {
 	data, err := parsed.Pack(method, args...)

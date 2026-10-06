@@ -212,6 +212,12 @@ func (o *BatchOrchestrator) OnDemandMemberNeedsThisValidator(ctx context.Context
 		return false, err
 	}
 	j, me := win.index(head), chain.ownAddress()
+	if win.settler(j+1) == me {
+		// This validator takes over in window j+1: once a finalized block is past window j's fence and the reorg margin,
+		// which is also where window j+1 begins. On a chain whose blocks stop when idle that block may never come by
+		// itself, so the clock's heartbeat is told (RB7 T-4).
+		chain.awaitChainTime(fmt.Sprintf("the settlement window %d of %s", j+1, member.IntentID), win.fence(j).Add(settlementReorgMargin))
+	}
 	if win.settler(j+1) == me || (j > 0 && win.settler(j) == me) {
 		// This validator takes over next (or now): scan what has finalized of the earlier windows
 		// ahead of its turn. Best effort; the turn itself scans whatever is left.
@@ -288,6 +294,7 @@ func (o *BatchOrchestrator) decideSettlementWindow(
 		}
 		prevFence := win.fence(j - 1)
 		if !finalized.After(prevFence.Add(settlementReorgMargin)) {
+			chain.awaitChainTime(fmt.Sprintf("the settlement window %d of %s", j, member.IntentID), prevFence.Add(settlementReorgMargin))
 			return deferf("window %d is this validator's; waiting for a finalized block past window %d's fence %s "+
 				"(finalized %s)", j, j-1, prevFence.UTC().Format(time.RFC3339), finalized.UTC().Format(time.RFC3339))
 		}
@@ -351,18 +358,18 @@ func (o *BatchOrchestrator) anchorAttestation(ctx context.Context, bundleID [32]
 	return anchorAttestation{Tx: l.TxHash.Hex(), From: from, Block: l.BlockNumber, Time: time.Unix(int64(h.Time), 0)}, true, nil
 }
 
-// headTime is the chain head's timestamp.
+// headTime is the chain head's timestamp, from the chain's clock (T-4).
 func (o *BatchOrchestrator) headTime(ctx context.Context) (time.Time, error) {
-	h, err := o.ecm.client.HeaderByNumber(ctx, nil)
+	h, err := o.chainHead(ctx)
 	if err != nil {
 		return time.Time{}, readErr(fmt.Errorf("reading head: %w", err))
 	}
 	return time.Unix(int64(h.Time), 0), nil
 }
 
-// finalizedTime is the finalized block's timestamp.
+// finalizedTime is the finalized block's timestamp, from the chain's clock (T-4).
 func (o *BatchOrchestrator) finalizedTime(ctx context.Context) (time.Time, error) {
-	f, err := o.ecm.client.HeaderByNumber(ctx, big.NewInt(int64(rpc.FinalizedBlockNumber)))
+	f, err := o.chainFinalized(ctx)
 	if err != nil {
 		return time.Time{}, readErr(fmt.Errorf("reading finalized block: %w", err))
 	}
@@ -586,7 +593,7 @@ func (o *BatchOrchestrator) scanEarlierWindows(
 	// Never past the finalized block itself: several blocks can share a timestamp (Arbitrum), so the
 	// last block at a finalized TIME can be past the finalized NUMBER, and progress saved over a block
 	// that can still change would be a hole.
-	fin, err := o.ecm.client.HeaderByNumber(ctx, big.NewInt(int64(rpc.FinalizedBlockNumber)))
+	fin, err := o.chainFinalized(ctx) // the chain's clock (T-5)
 	if err != nil {
 		return priorAttempt{}, false, readErr(fmt.Errorf("reading finalized block: %w", err))
 	}

@@ -113,6 +113,8 @@ type onDemandChain interface {
 	// headTime and finalizedTime are the head's and the finalized block's timestamps.
 	headTime(ctx context.Context) (time.Time, error)
 	finalizedTime(ctx context.Context) (time.Time, error)
+	// awaitChainTime says a decision waits only for a finalized block after `after` (ChainClock.AwaitTime).
+	awaitChainTime(rule string, after time.Time)
 	// priorSettlementAttempt finds, in the finalized blocks from the attestation to until, a mined
 	// settlement of the member by a roster validator: a success or a revert the intent caused.
 	priorSettlementAttempt(ctx context.Context, member *PendingBatchIntent, tree *BatchTree, att anchorAttestation, until time.Time, roster []common.Address) (priorAttempt, bool, error)

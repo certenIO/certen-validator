@@ -250,6 +250,9 @@ type BatchStack struct {
 	// co-signing peer before it rebuilds one, as the on-demand submitter does for its lane (RB5-F57). Nil reads nothing;
 	// a v4 member without a commit time then waits, by name.
 	CommitTime CommitTimeResolver
+
+	// heartbeats are the heartbeats of the chains whose blocks stop when idle (RunChainHeartbeats).
+	heartbeats []*chainHeartbeat
 }
 
 // commitTimeReadTimeout bounds one ensureCommitTimes pass.
@@ -327,6 +330,7 @@ func NewBatchStack(
 	mempool := NewBatchMempool(mempoolCfg)
 
 	orchestrators := make(map[int64]*BatchOrchestrator)
+	var heartbeats []*chainHeartbeat
 	for _, chainID := range resolver.Chains() {
 		ecm, anchorAddr, err := resolver.ManagerForChain(chainID)
 		if err != nil {
@@ -337,7 +341,23 @@ func NewBatchStack(
 		if err != nil {
 			return nil, fmt.Errorf("assembling chain %d: %w", chainID, err)
 		}
-		orchestrators[chainID] = NewBatchOrchestrator(ecm, anchorAddr, prover, mempool, incarnation, logf)
+		o := NewBatchOrchestrator(ecm, anchorAddr, prover, mempool, incarnation, logf)
+		// The chain's one clock (RB7 D7), and - only for a chain whose blocks stop when idle - its heartbeat, sent by
+		// this chain's key. Such a chain without CERTEN_CHAIN_HEARTBEAT_<id>=on is refused by name.
+		primary := ""
+		if ecm != nil && ecm.config != nil {
+			primary = ecm.config.EthereumRPC
+		}
+		o.clock = chainClockFor(chainID, primary)
+		beat, err := o.attachHeartbeat(o.clock)
+		if err != nil {
+			return nil, fmt.Errorf("assembling chain %d: %w", chainID, err)
+		}
+		if beat != nil {
+			heartbeats = append(heartbeats, beat)
+			logf("[BATCH-STACK] chain %d: its blocks stop when idle; its heartbeat is on (%s)", chainID, ChainHeartbeatEnv(chainID))
+		}
+		orchestrators[chainID] = o
 		logf("[BATCH-STACK] chain %d wired to CertenAnchorV8 %s, accounts %s (leaf %s)", chainID, anchorAddr.Hex(),
 			version.AccountContract(), version)
 	}
@@ -349,7 +369,25 @@ func NewBatchStack(
 		Orchestrators: orchestrators,
 		SequenceChain: NonSettlementChainFromResolver(resolver),
 		Incarnation:   incarnation,
+		heartbeats:    heartbeats,
 	}, nil
+}
+
+// RunChainHeartbeats runs the heartbeat of every chain whose blocks stop when idle (chain_heartbeat.go) until ctx ends.
+// The chains whose blocks never stop have none: for them it does nothing.
+func (s *BatchStack) RunChainHeartbeats(ctx context.Context) {
+	for _, b := range s.heartbeats {
+		go b.Run(ctx)
+	}
+}
+
+// HeartbeatChains are the chains this stack runs a heartbeat for.
+func (s *BatchStack) HeartbeatChains() []int64 {
+	out := make([]int64, 0, len(s.heartbeats))
+	for _, b := range s.heartbeats {
+		out = append(out, b.chainID)
+	}
+	return out
 }
 
 // OrchestratorFor returns the orchestrator for a chain.

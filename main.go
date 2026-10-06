@@ -1656,6 +1656,12 @@ func startValidator(
 	if sErr != nil {
 		return nil, nil, fmt.Errorf("batch path: stack assembly: %w", sErr)
 	}
+	// The heartbeat of every settlement chain whose blocks stop when idle (RB7 D7); none on the chains whose blocks never
+	// stop.
+	stack.RunChainHeartbeats(context.Background())
+	if hb := stack.HeartbeatChains(); len(hb) > 0 {
+		log.Printf("💓 [BATCH] chain heartbeat running on %v", hb)
+	}
 	// Members with a certified intent are placed by their quorum certificate's height (RB5 D3) - installed before
 	// the persisted queue is restored, so a restored certified member is placed rather than refused.
 	stack.Mempool.SetIntentCertificates(validatorApp)

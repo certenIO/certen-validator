@@ -195,6 +195,7 @@ The included `docker-compose.yml` deploys a complete testnet:
 | `TELCOIN_ADIRI_MAX_GAS_PRICE_GWEI`, `TELCOIN_ADIRI_GAS_LIMIT_ANCHOR` | When 2017 is enabled | none compiled in | Gas ceiling (gwei of TEL) and anchor gas limit for Adiri |
 | `CERTEN_ANCHOR_V8_2017`, `CERTEN_OUTCOME_REGISTRY_2017` | When 2017 is enabled | - | Adiri anchor and outcome registry; plus `2017=v4` in `CERTEN_ACCOUNT_LEAF_VERSIONS` |
 | `CERTEN_NATIVE_USD_<chainId>` | For a chain not paying gas in ETH (2017) | - | That chain's native-token USD price for the dollar ceiling; `CERTEN_NATIVE_USD` prices only ETH-native chains |
+| `CERTEN_CHAIN_HEARTBEAT_2017` | When 2017 is enabled (`on`) | - | Adiri's blocks stop when it is idle: the chain clock's heartbeat (a zero-value self-transfer from the relayer key, staggered 30 s + 15 s*(i-1) past a rule's horizon) makes the block a waiting rule needs. Refused for chains whose blocks never stop |
 
 #### CometBFT Consensus
 

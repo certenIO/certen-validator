@@ -23,7 +23,7 @@ func TestOutcomeInclusionEvidenceForEverySignedSettlementBlock(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			c := &AgreedOutcomeChain{chainID: f.ChainID, reader: reader}
+			c := &AgreedOutcomeChain{chainID: f.ChainID, reader: reader, clock: newChainClock(f.ChainID, reader)}
 			ev, hdr, err := c.TransactionInclusion(context.Background(), f.SettlementTx)
 			if err != nil {
 				t.Fatal(err)

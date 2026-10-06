@@ -62,6 +62,12 @@ type OutcomeChain interface {
 	RevertedAttempt(ctx context.Context, tx common.Hash, legs []CommittedLeg, opID [32]byte, account common.Address) (*ExternalChainResult, error)
 }
 
+// chainTimeAwaiter is an OutcomeChain whose clock can be told that a derivation waits only for a later block.
+type chainTimeAwaiter interface {
+	AwaitTime(rule string, after uint64)
+	AwaitBlock(rule string, number uint64)
+}
+
 // ErrNotAnAttempt: a transaction offered as a member's reverted attempt is, by the chain, not one.
 var ErrNotAnAttempt = errors.New("not a reverted attempt of the member")
 
@@ -193,6 +199,11 @@ func deriveMember(ctx context.Context, c OutcomeChain, t *OutcomeTree, m Outcome
 	// then, and nonSettlementFinality after it lets a settlement broadcast before the deadline be mined or revert.
 	horizon := uint64(m.Deadline) + uint64(nonSettlementFinality/time.Second)
 	if fin.Time <= horizon {
+		// Waiting only for a finalized block past the horizon: on a chain whose blocks stop when idle the clock's
+		// heartbeat makes one (RB7 T-9). The FIRST block past it is the claim, whoever's transaction made it.
+		if a, ok := c.(chainTimeAwaiter); ok {
+			a.AwaitTime(fmt.Sprintf("the outcome of operation %x", m.OperationID[:8]), horizon)
+		}
 		return none, time.Time{}, nil, outcomeNotYet("its leaf is unconsumed and the finalized chain (time %d) is not past its "+
 			"deadline %d with the finality margin", fin.Time, m.Deadline)
 	}
@@ -217,6 +228,12 @@ func deriveMember(ctx context.Context, c OutcomeChain, t *OutcomeTree, m Outcome
 			ErrOutcome, before, claim.Time, horizon)
 	}
 	if asOf < claim.Number.Uint64() {
+		// The leaf is read unconsumed at an agreed block ethrpc.RecentStateDepth below the head: the claim block is
+		// covered once the head is that far past it. On a chain whose blocks stop when idle only transactions make
+		// those blocks: the clock's heartbeat is told (RB7 T-9).
+		if a, ok := c.(chainTimeAwaiter); ok {
+			a.AwaitBlock(fmt.Sprintf("the outcome of operation %x", m.OperationID[:8]), claim.Number.Uint64()+ethrpc.RecentStateDepth)
+		}
 		return none, time.Time{}, nil, outcomeNotYet("its leaf is known unconsumed only as of block %d, before the claim block %d",
 			asOf, claim.Number.Uint64())
 	}

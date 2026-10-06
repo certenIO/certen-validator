@@ -170,6 +170,47 @@ type BatchOrchestrator struct {
 	// through it, never from its own single client.
 	agreedMu sync.Mutex
 	agreed   *ethrpc.AgreeingReader
+
+	// clock is the chain's time (chain_clock.go): every rule of this orchestrator that reads the chain's time reads it
+	// here. Set by NewBatchStack to the chain's registered clock; resolved from the chain's configuration when unset.
+	clock *ChainClock
+}
+
+// chainClock is the chain's clock.
+func (o *BatchOrchestrator) chainClock() (*ChainClock, error) {
+	if o.clock != nil {
+		return o.clock, nil
+	}
+	if o.ecm == nil || o.ecm.config == nil {
+		return nil, readErr(fmt.Errorf("no chain configuration to read the chain's time from"))
+	}
+	o.clock = chainClockFor(o.ecm.config.ChainID, o.ecm.config.EthereumRPC)
+	return o.clock, nil
+}
+
+// chainHead is the chain's head, from its clock.
+func (o *BatchOrchestrator) chainHead(ctx context.Context) (*types.Header, error) {
+	c, err := o.chainClock()
+	if err != nil {
+		return nil, err
+	}
+	return c.Head(ctx)
+}
+
+// chainFinalized is the chain's finalized block, from its clock.
+func (o *BatchOrchestrator) chainFinalized(ctx context.Context) (*types.Header, error) {
+	c, err := o.chainClock()
+	if err != nil {
+		return nil, err
+	}
+	return c.Finalized(ctx)
+}
+
+// awaitChainTime says, on this chain's clock, that rule waits only for a finalized block after `after`.
+func (o *BatchOrchestrator) awaitChainTime(rule string, after time.Time) {
+	if c, err := o.chainClock(); err == nil && after.Unix() >= 0 {
+		c.AwaitTime(rule, uint64(after.Unix()))
+	}
 }
 
 // agreedReader is the chain's agreeing reader: the orchestrator's own endpoint and every fallback configured for the
@@ -1005,14 +1046,18 @@ func (o *BatchOrchestrator) settleMember(
 			leaf[:8], p.IntentID, errLeafAlreadyConsumed)
 	}
 
-	head, err := o.ecm.client.HeaderByNumber(ctx, nil)
+	// The chain's time, from its clock (T-1, T-2).
+	head, err := o.chainHead(ctx)
 	if err != nil {
 		return "", readErr(fmt.Errorf("reading chain head for the settlement's timestamp: %w", err))
 	}
 	notBefore := int64(head.Time)
 	// A v4 leaf's window opens at the member's commit time: before it the account refuses the leaf (LeafNotYetValid).
-	// That is not the member's outcome - only too early - so nothing is sent and nothing is decided.
+	// That is not the member's outcome - only too early - so nothing is sent and nothing is decided. On a chain whose
+	// blocks stop when idle only a block at or after notBefore ends the wait, and only a transaction makes one: the
+	// clock's heartbeat is told (RB7 T-1).
 	if in.NotBefore != 0 && head.Time < in.NotBefore {
+		o.awaitChainTime(fmt.Sprintf("the settlement of %s (its leaf's notBefore)", p.IntentID), time.Unix(int64(in.NotBefore)-1, 0))
 		return "", readErr(fmt.Errorf("member %s: chain time %d is before its leaf's notBefore %d", p.IntentID, head.Time,
 			in.NotBefore))
 	}
@@ -1175,7 +1220,8 @@ func (o *BatchOrchestrator) allPendingPastDeadline(ctx context.Context, members 
 			return false, nil
 		}
 	}
-	head, err := o.ecm.client.HeaderByNumber(ctx, nil)
+	// The chain's time, from its clock (T-3).
+	head, err := o.chainHead(ctx)
 	if err != nil {
 		return false, fmt.Errorf("reading the chain head to judge the members' deadlines: %w", err)
 	}

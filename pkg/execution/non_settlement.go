@@ -18,7 +18,6 @@ import (
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/rpc"
 
 	attestation "github.com/certen/independant-validator/pkg/attestation/strategy"
 	chain "github.com/certen/independant-validator/pkg/chain/strategy"
@@ -130,20 +129,33 @@ func (r resolverNonSettlementChain) client(chainID int64) (*EthereumContractMana
 	return ecm, nil
 }
 
-func (r resolverNonSettlementChain) FinalizedHeader(ctx context.Context, chainID int64) (*types.Header, error) {
+// clock is the chain's clock (chain_clock.go): a non-settlement's and a predecessor's time is read there (T-6..T-8).
+func (r resolverNonSettlementChain) clock(chainID int64) (*ChainClock, error) {
 	ecm, err := r.client(chainID)
 	if err != nil {
 		return nil, err
 	}
-	return ecm.client.HeaderByNumber(ctx, big.NewInt(int64(rpc.FinalizedBlockNumber)))
+	primary := ""
+	if ecm.config != nil {
+		primary = ecm.config.EthereumRPC
+	}
+	return chainClockFor(chainID, primary), nil
+}
+
+func (r resolverNonSettlementChain) FinalizedHeader(ctx context.Context, chainID int64) (*types.Header, error) {
+	c, err := r.clock(chainID)
+	if err != nil {
+		return nil, err
+	}
+	return c.Finalized(ctx)
 }
 
 func (r resolverNonSettlementChain) HeaderAt(ctx context.Context, chainID int64, number uint64) (*types.Header, error) {
-	ecm, err := r.client(chainID)
+	c, err := r.clock(chainID)
 	if err != nil {
 		return nil, err
 	}
-	return ecm.client.HeaderByNumber(ctx, new(big.Int).SetUint64(number))
+	return c.HeaderAt(ctx, number)
 }
 
 func (r resolverNonSettlementChain) LeafConsumedAt(ctx context.Context, chainID int64, account common.Address, leaf [32]byte, number uint64) (bool, error) {
@@ -239,6 +251,9 @@ func observeNonSettlementAt(ctx context.Context, rd NonSettlementChain, f NonSet
 		}
 	}
 	if int64(head.Time) <= deadline.Add(nonSettlementFinality).Unix() {
+		// Blocked only because no finalized block is past the horizon yet: on a chain whose blocks stop when idle, the
+		// clock's heartbeat makes one (RB7 T-6, rule 10). The block decides, by this same predicate.
+		awaitChainTime(f.ChainID, fmt.Sprintf("the non-settlement of %s", f.IntentID), uint64(deadline.Add(nonSettlementFinality).Unix()))
 		return nil, nil, fmt.Errorf("%w (finalized %s, deadline %s)", errNotYetAttestable,
 			time.Unix(int64(head.Time), 0).UTC().Format(time.RFC3339), deadline.Format(time.RFC3339))
 	}

@@ -28,6 +28,7 @@
 //	Chain.NativeSymbol, NativeDecimals  the gas token ("ETH"/18, "TEL"/18)
 //	Chain.ContractBlockIsParent         a contract's block.number is the parent chain's (Arbitrum: an L1 block number)
 //	Chain.DisplayName, ExplorerURL      for people
+//	Chain.BlocksOnlyWithTraffic         its time stops while it is idle: the per-chain clock may send a heartbeat (RB7 §1.1)
 //	Chain.EnvPrefix() and the *Env()    the environment variables the chain is configured under
 //	EnabledFromEnv(), Enabled()         the enabled set, read from CERTEN_SETTLEMENT_CHAINS
 //	IsEnabled(id), DescribeIDs(ids)     admission and its messages
@@ -85,6 +86,14 @@ type Chain struct {
 	// ContractBlockIsParent: a contract's block.number on this chain is its parent chain's block number, not the chain's
 	// own (Arbitrum Nitro, whose recordedInBlock is an L1 block number).
 	ContractBlockIsParent bool
+
+	// BlocksOnlyWithTraffic: the chain produces a block only when a transaction lands (or when its protocol closes a
+	// period), so its time - the time of its latest finalized block - stops while it is idle. Every rule that waits for
+	// a finalized block past a horizon (a deadline plus its margin, a settlement window's fence) would wait for traffic
+	// that may never come; on such a chain, and only on such a chain, the per-chain clock may send a heartbeat
+	// transaction to produce the block (pkg/execution chain_heartbeat.go). The block decides; the heartbeat only makes
+	// one exist. A chain whose blocks never stop (Ethereum, the OP stack, Arbitrum) never heartbeats.
+	BlocksOnlyWithTraffic bool
 }
 
 // All is the catalogue, in a fixed order: the order chains are listed in messages.
@@ -123,6 +132,10 @@ var All = []Chain{
 		RPCKey: "telcoin-adiri", GasEnvPrefix: "TELCOIN_ADIRI", FactoryEnvPrefix: "TELCOIN_ADIRI",
 		DefaultMaxGasPriceGwei: 0, DefaultMaxPriorityFeeGwei: 0, DefaultGasLimitAnchor: 0,
 		ExplorerURL: "https://scan.telcoin.network", NativeSymbol: "TEL", NativeDecimals: 18,
+		// An Adiri block exists only when a consensus commit carries transactions, or closes an epoch (every 21600 s):
+		// telcoin-network@5736cc30 crates/engine/src/payload_builder.rs:114-127 skips an empty output (RB7 Phase A
+		// F-BLK-1, F-BLK-2).
+		BlocksOnlyWithTraffic: true,
 	},
 }
 

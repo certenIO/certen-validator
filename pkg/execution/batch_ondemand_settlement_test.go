@@ -83,6 +83,12 @@ type fakeODChain struct {
 
 	// accountErr is the account screen's answer (nil: usable).
 	accountErr error
+
+	// awaited are the horizons the decisions told the chain's clock about; await, when set, receives them too.
+	awaited []time.Time
+	await   func(rule string, after time.Time)
+	// sim, when set, is the chain the head and finalized times are read from.
+	sim *simIdleChain
 }
 
 func (f *fakeODChain) memberAccountUsable(context.Context, *PendingBatchIntent) error {
@@ -179,6 +185,9 @@ func (f *fakeODChain) settlementRoster(context.Context) ([]common.Address, error
 	return []common.Address{odOwnAddr, odOtherAddr, odThirdAddr}, nil
 }
 func (f *fakeODChain) headTime(context.Context) (time.Time, error) {
+	if f.sim != nil {
+		return time.Unix(int64(f.sim.head().Time), 0), nil
+	}
 	if f.head.IsZero() {
 		return odT0.Add(time.Minute), nil
 	}
@@ -188,10 +197,21 @@ func (f *fakeODChain) finalizedTime(context.Context) (time.Time, error) {
 	if f.finalizedErr != nil {
 		return time.Time{}, f.finalizedErr
 	}
+	if f.sim != nil {
+		return time.Unix(int64(f.sim.head().Time), 0), nil // finalized == latest (Telcoin Adiri)
+	}
 	if f.finalized.IsZero() {
 		return odT0, nil
 	}
 	return f.finalized, nil
+}
+func (f *fakeODChain) awaitChainTime(rule string, after time.Time) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.awaited = append(f.awaited, after)
+	if f.await != nil {
+		f.await(rule, after)
+	}
 }
 func (f *fakeODChain) priorSettlementAttempt(_ context.Context, _ *PendingBatchIntent, _ *BatchTree, _ anchorAttestation, until time.Time, _ []common.Address) (priorAttempt, bool, error) {
 	f.priorUntil = until
