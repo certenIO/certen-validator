@@ -75,8 +75,8 @@ func runStaleLifecycleCommand(args []string) int {
 	resolved, kept := 0, 0
 	for _, s := range stale {
 		action := "would resolve: failed / processing_failed"
-		if s.AnchoredBatch != 0 || s.Executions != 0 {
-			action = "LEFT: a batch was anchored or a chain execution is recorded - it may have executed"
+		if s.MayHaveExecuted() {
+			action = "LEFT: a batch was anchored, a chain execution is recorded or a proof cycle ran - it may have executed"
 			kept++
 		} else if apply {
 			ok, err := repo.ResolveStaleIntent(ctx, s, horizon, by)
