@@ -6,6 +6,11 @@
 //
 // A request moves pending -> processing -> (batched ->) completed, or -> failed; a failed request can be
 // reset to pending for another attempt, up to a retry limit. RequestFulfiller drives these transitions.
+//
+// completed_at is when the request ENDED, whatever its end: completed, failed or cancelled. Every writer that ends a
+// request stamps it, and every writer that re-opens one clears it, so a row carries an end time exactly while it is in
+// an ending status. Readers order and page ended requests by it (the proofs_service completion feed); a failed request
+// used to keep it NULL, so failures could not be placed in time at all (RB7 Task 5 #1).
 
 package database
 
@@ -189,14 +194,25 @@ func (r *RequestRepository) execOne(ctx context.Context, what string, requestID 
 	return nil
 }
 
-// UpdateRequestStatus updates the status of a request
+// requestEnded is the SQL truth of "status $2 ends a request": completed, failed and cancelled.
+const requestEnded = `$2::varchar IN ('completed', 'failed', 'cancelled')`
+
+// requestEndTime is completed_at for a row moving to status $2: kept when it already ended in that same status (a
+// repeated write does not move the end), now when the move ends it, NULL when the move re-opens it.
+const requestEndTime = `CASE WHEN ` + requestEnded + ` THEN
+		CASE WHEN status = $2::varchar AND completed_at IS NOT NULL THEN completed_at ELSE NOW() END
+	ELSE NULL END`
+
+// UpdateRequestStatus updates the status of a request, with its end time: an ending status stamps completed_at, any
+// other clears it.
 func (r *RequestRepository) UpdateRequestStatus(ctx context.Context, requestID uuid.UUID, status RequestStatus, errorMsg string) error {
 	if errorMsg != "" {
 		return r.execOne(ctx, "update request status", requestID, `
-			UPDATE proof_requests SET status = $2, error_message = $3 WHERE request_id = $1`, status, errorMsg)
+			UPDATE proof_requests SET status = $2::varchar, error_message = $3, completed_at = `+requestEndTime+`
+			WHERE request_id = $1`, status, errorMsg)
 	}
 	return r.execOne(ctx, "update request status", requestID, `
-		UPDATE proof_requests SET status = $2 WHERE request_id = $1`, status)
+		UPDATE proof_requests SET status = $2::varchar, completed_at = `+requestEndTime+` WHERE request_id = $1`, status)
 }
 
 // MarkProcessing claims a pending request. It only succeeds from 'pending', so two workers cannot both
@@ -227,17 +243,18 @@ func (r *RequestRepository) MarkCompleted(ctx context.Context, requestID uuid.UU
 		WHERE request_id = $1 AND status IN ('pending', 'processing', 'batched')`, proofID)
 }
 
-// MarkFailed records why a request could not be fulfilled and counts the attempt
+// MarkFailed records why a request could not be fulfilled, counts the attempt, and stamps when it ended. A failed
+// request the fulfiller later re-queues (ResetToRetry) loses that end time again.
 func (r *RequestRepository) MarkFailed(ctx context.Context, requestID uuid.UUID, errorMsg string) error {
 	return r.execOne(ctx, "mark request failed", requestID, `
-		UPDATE proof_requests SET status = 'failed', error_message = $2, retry_count = retry_count + 1
+		UPDATE proof_requests SET status = 'failed', error_message = $2, retry_count = retry_count + 1, completed_at = NOW()
 		WHERE request_id = $1 AND status IN ('pending', 'processing', 'batched')`, errorMsg)
 }
 
-// ResetToRetry returns a failed request to the queue
+// ResetToRetry returns a failed request to the queue. It has not ended any more, so its end time is cleared.
 func (r *RequestRepository) ResetToRetry(ctx context.Context, requestID uuid.UUID) error {
 	return r.execOne(ctx, "reset request", requestID, `
-		UPDATE proof_requests SET status = 'pending', processed_at = NULL, error_message = NULL
+		UPDATE proof_requests SET status = 'pending', processed_at = NULL, error_message = NULL, completed_at = NULL
 		WHERE request_id = $1 AND status = 'failed'`)
 }
 

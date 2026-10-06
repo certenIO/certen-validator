@@ -89,28 +89,30 @@ func TestProofErrorClassification(t *testing.T) {
 func TestEnqueueRetry_NonBlockingAndNilSafe(t *testing.T) {
 	id := NewIntentDiscovery(nil, "", nil, nil, nil, "test")
 
-	// Nil channel (before Start): must not panic or block.
+	// Nil channel (before Start): must not panic or block. The intent is recorded failed rather than dropped
+	// (TestARetryThatCannotBeQueuedIsRecordedFailed); this test has no lifecycle store, so only the not-blocking
+	// half is pinned here.
 	id.retryCh = nil
 	id.enqueueRetry(&intentRetryJob{intent: &CertenIntent{IntentID: "nilq"}})
 
-	// Full channel: must drop (default branch), not block.
+	// Full channel: must not block, and must not queue the job past the queue's size.
 	id.retryCh = make(chan *intentRetryJob, 1)
 	id.retryCh <- &intentRetryJob{intent: &CertenIntent{IntentID: "occupies-slot"}}
 
 	done := make(chan struct{})
 	go func() {
-		id.enqueueRetry(&intentRetryJob{intent: &CertenIntent{IntentID: "should-be-dropped"}})
+		id.enqueueRetry(&intentRetryJob{intent: &CertenIntent{IntentID: "not-queued"}})
 		close(done)
 	}()
 	select {
 	case <-done:
 		// good: returned without blocking
 	case <-time.After(2 * time.Second):
-		t.Fatal("enqueueRetry blocked on a full queue (should drop non-blocking)")
+		t.Fatal("enqueueRetry blocked on a full queue")
 	}
 
 	if n := len(id.retryCh); n != 1 {
-		t.Errorf("queue should still hold exactly 1 item (the dropped one was not enqueued), got %d", n)
+		t.Errorf("queue should still hold exactly 1 item (the refused one was not enqueued), got %d", n)
 	}
 }
 

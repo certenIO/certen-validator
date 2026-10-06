@@ -1,0 +1,12 @@
+-- schema: no-transaction
+-- The proofs_service member-outcome feed (GET /api/v1/proofs/requests/completed, `members`) pages intent_member_outcomes
+-- in (recorded_at, intent_id COLLATE "C", chain_id) order from a cursor; this index serves that order and the cursor's
+-- row comparison, so a page is an index range instead of a sort of the whole table.
+--
+-- Non-transactional so the index is built CONCURRENTLY: writes to intent_member_outcomes are never blocked. The runner
+-- sends a no-transaction file as one simple query, which PostgreSQL runs as an implicit transaction when it holds more
+-- than one statement - so this file holds exactly one. No IF NOT EXISTS: a failed concurrent build leaves an INVALID
+-- index, and the next start must stop on it by name rather than skip it as present.
+--
+-- Expand-only: one new index.
+CREATE INDEX CONCURRENTLY idx_intent_member_outcomes_feed ON public.intent_member_outcomes USING btree (recorded_at, intent_id COLLATE "C", chain_id);

@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -55,6 +56,18 @@ func TestAStaleAuthorizedIntentIsResolvedOnlyWhenNothingExecuted(t *testing.T) {
 	batch(unanchored, false)
 	anchored := intent(old)
 	batch(anchored, true)
+	// A legacy per-intent proof cycle kept its chain transactions inside the artifact, with no chain execution row
+	// (three of the live 108 sent anchor, verify and execution transactions on Tron Shasta): never resolved here.
+	withProofCycle := intent(old)
+	artifact, err := NewProofArtifactRepository(testDB).CreateProofArtifact(ctx, &NewProofArtifact{
+		ProofType: ProofTypeCertenAnchor, AccumTxHash: "rb6-f12-" + uuid.NewString(), AccountURL: "acc://x.acme/data",
+		ProofClass: ProofClassOnDemand, ValidatorID: "validator-6", IntentID: &withProofCycle,
+		ArtifactJSON: json.RawMessage(`{"anchor_workflow":{"step3_governance":{"success":true}}}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { testDB.Exec(`DELETE FROM proof_artifacts WHERE proof_id = $1`, artifact.ProofID) })
 	recent := intent(time.Now())
 	withOutcome := intent(old)
 	if _, err := repo.RecordMemberOutcome(ctx, MemberOutcome{IntentID: withOutcome, ReportedBy: "validator-3", ChainID: 84532, MemberChains: []int64{84532},
@@ -84,7 +97,7 @@ func TestAStaleAuthorizedIntentIsResolvedOnlyWhenNothingExecuted(t *testing.T) {
 		}
 		return
 	}
-	for _, id := range []string{unbatched, unanchored, anchored} {
+	for _, id := range []string{unbatched, unanchored, anchored, withProofCycle} {
 		s, ok := found[id]
 		if !ok {
 			t.Fatalf("%s not listed", id)
@@ -98,6 +111,10 @@ func TestAStaleAuthorizedIntentIsResolvedOnlyWhenNothingExecuted(t *testing.T) {
 		case anchored:
 			if resolved || st != "authorized" {
 				t.Fatalf("THE regression: an intent with an anchored batch was resolved (%v, %s)", resolved, st)
+			}
+		case withProofCycle:
+			if resolved || st != "authorized" || !s.MayHaveExecuted() {
+				t.Fatalf("an intent whose proof cycle ran was resolved as if nothing executed (%v, %s, %+v)", resolved, st, s)
 			}
 		default:
 			if !resolved || st != "failed" || class != "processing_failed" {
