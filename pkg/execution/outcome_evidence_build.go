@@ -322,7 +322,7 @@ func (c *AgreedOutcomeChain) TransactionInclusion(ctx context.Context, tx common
 // StateProofsAt: see OutcomeEvidenceReader. Every slot needs a proof that verifies against the agreed header's state
 // root, whichever provider served it.
 func (c *AgreedOutcomeChain) StateProofsAt(ctx context.Context, header *types.Header, slots []ExpectedStateSlot) ([]*StateProof, error) {
-	proofs := c.observer.fetchStateProofs(ctx, header.Number, slots)
+	proofs := c.observer.fetchStateProofs(ctx, header.Number, header.Root, slots)
 	var out []*StateProof
 	for i, s := range slots {
 		var found *StateProof

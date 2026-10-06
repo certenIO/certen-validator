@@ -13,6 +13,7 @@ package execution
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math/big"
 	"strings"
@@ -281,11 +282,25 @@ func (o *ExternalChainObserver) settledInFinalizedChain(ctx context.Context, txH
 // RB-5: STORAGE-SLOT STATE PROOF FETCH (eth_getProof)
 // =============================================================================
 
-// fetchStateProofs fetches eth_getProof for each committed (account, slot) at the given
-// block and converts the results into independently verifiable StateProofs. Slots are
-// grouped per account to minimize RPC calls. Returns nil if no gethclient is available.
-func (o *ExternalChainObserver) fetchStateProofs(ctx context.Context, blockNumber *big.Int, slots []ExpectedStateSlot) []*StateProof {
-	if o.rpcClient == nil || len(slots) == 0 {
+// stateProofProviders are the providers a state proof may be read from: the verified providers of the chain's agreeing
+// reader, in configuration order (the primary first). It is nil when the observer has no such reader.
+type stateProofProviders interface {
+	Locators() []ethrpc.LocatorClient
+}
+
+// fetchStateProofs reads eth_getProof for each committed (account, slot) at the given block and converts the results into
+// independently verifiable StateProofs, every one VERIFIED against stateRoot - the state root of the block the observer
+// already agreed on. Slots are grouped per account to minimize RPC calls.
+//
+// It asks EVERY verified provider in turn, not only the primary: a public node keeps only a short window of state
+// (publicnode refuses eth_getProof from 2 blocks back on Base Sepolia; Arbitrum's finality lags 3,700-4,300 blocks), and
+// a proof is self-verifying against the root, so one provider that holds the state is enough and nothing is taken on
+// trust. A provider that does not hold it, or whose answer does not verify, is passed over by name in the log. An account
+// whose slots no provider proved is simply absent from the result: the caller names the slot that has no verifying proof
+// (readErr), so neither presence nor absence is ever assumed.
+func (o *ExternalChainObserver) fetchStateProofs(ctx context.Context, blockNumber *big.Int, stateRoot common.Hash, slots []ExpectedStateSlot) []*StateProof {
+	src, ok := o.finality.(stateProofProviders)
+	if !ok || len(slots) == 0 {
 		return nil
 	}
 	byAccount := make(map[common.Address][]common.Hash)
@@ -308,18 +323,36 @@ func (o *ExternalChainObserver) fetchStateProofs(ctx context.Context, blockNumbe
 		for _, slot := range byAccount[account] {
 			keys = append(keys, slot.Hex())
 		}
-		var res EthGetProofResult
-		if err := o.rpcClient.CallContext(ctx, &res, "eth_getProof", account, keys, blockArg); err != nil {
-			o.log("⚠️ [OBSERVER] eth_getProof failed for %s: %v", account.Hex(), err)
-			continue
-		}
-		for _, slot := range byAccount[account] {
-			sp, err := StateProofFromRPC(&res, account, slot)
+		served := false
+		for _, p := range src.Locators() {
+			raw, err := p.GetProof(ctx, account, keys, blockArg)
 			if err != nil {
-				o.log("⚠️ [OBSERVER] state proof build failed for %s[%s]: %v", account.Hex(), slot.Hex(), err)
+				o.log("⚠️ [OBSERVER] eth_getProof for %s at %s: provider %s has no proof: %v", account.Hex(), blockArg, p.Host, err)
 				continue
 			}
-			proofs = append(proofs, sp)
+			var res EthGetProofResult
+			if err := json.Unmarshal(raw, &res); err != nil {
+				o.log("⚠️ [OBSERVER] eth_getProof for %s: provider %s answered what cannot be read: %v", account.Hex(), p.Host, err)
+				continue
+			}
+			var got []*StateProof
+			for _, slot := range byAccount[account] {
+				sp, err := StateProofFromRPC(&res, account, slot)
+				if err != nil || !sp.Verify(stateRoot) {
+					o.log("⚠️ [OBSERVER] eth_getProof for %s[%s]: provider %s's proof does not verify against the agreed state root", account.Hex(), slot.Hex(), p.Host)
+					got = nil
+					break
+				}
+				got = append(got, sp)
+			}
+			if got != nil {
+				proofs = append(proofs, got...)
+				served = true
+				break
+			}
+		}
+		if !served {
+			o.log("⚠️ [OBSERVER] no verified provider could prove the committed slots of %s at %s", account.Hex(), blockArg)
 		}
 	}
 	return proofs

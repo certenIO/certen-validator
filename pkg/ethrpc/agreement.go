@@ -44,8 +44,8 @@ type AgreeingReader struct {
 	timeout time.Duration
 
 	mu        sync.Mutex
-	providers []agreeingProvider    // verified: the only providers asked for facts
-	pending   []*unverifiedProvider // configured, chain id not yet verified: never asked for a fact
+	providers []agreeingProvider // verified: the only providers asked for facts
+	pending   []*sharedProvider  // configured, chain id not yet verified: never asked for a fact
 }
 
 type agreeingProvider struct {
@@ -512,6 +512,18 @@ func (l LocatorClient) RawTransactionByHash(ctx context.Context, hash common.Has
 	return askProvider(ctx, l.health, l.Host, l.hint, l.budget(), 0, func(c context.Context) (json.RawMessage, error) {
 		var raw json.RawMessage
 		err := l.Client.Client().CallContext(c, &raw, "eth_getTransactionByHash", hash)
+		return raw, err
+	})
+}
+
+// GetProof is the provider's eth_getProof answer as JSON, asked again while the provider answers transiently. block is a
+// hex block number. The answer is the provider's claim; a caller takes it only after verifying every node of it against
+// a state root it already agreed on (a proof is self-verifying, so one provider that has it is enough), and asks the
+// next provider when this one has no state at that depth ("exceeds maximum proof window").
+func (l LocatorClient) GetProof(ctx context.Context, account common.Address, keys []string, block string) (json.RawMessage, error) {
+	return askProvider(ctx, l.health, l.Host, l.hint, l.budget(), 0, func(c context.Context) (json.RawMessage, error) {
+		var raw json.RawMessage
+		err := l.Client.Client().CallContext(c, &raw, "eth_getProof", account, keys, block)
 		return raw, err
 	})
 }
