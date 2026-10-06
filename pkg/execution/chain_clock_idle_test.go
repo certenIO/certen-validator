@@ -16,6 +16,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 
 	attestation "github.com/certen/independant-validator/pkg/attestation/strategy"
+	"github.com/certen/independant-validator/pkg/ethrpc"
 	"github.com/certen/independant-validator/pkg/supportedchains"
 )
 
@@ -213,7 +214,8 @@ func TestTheSettlementWindowHandsOverOnAnIdleChain(t *testing.T) {
 }
 
 // simOutcomeChain is the outcome reads of a simulated chain through its clock, as AgreedOutcomeChain reads them: the
-// leaf is read unconsumed at the agreed block ethrpc.RecentStateDepth below the head.
+// leaf is read unconsumed at the agreed block ethrpc.RecentStateDepthFor(chain) below the head: none on Adiri, whose finalized
+// block is its head (RB7-ADIRI-F1).
 type simOutcomeChain struct {
 	sim   *simIdleChain
 	clock *ChainClock
@@ -228,8 +230,8 @@ func (c simOutcomeChain) HeaderAt(ctx context.Context, n uint64) (*types.Header,
 }
 func (c simOutcomeChain) LeafConsumption(context.Context, common.Address, [32]byte, time.Time) (*LeafConsumption, uint64, error) {
 	n := c.sim.head().Number.Uint64()
-	if n > 3 {
-		n -= 3
+	if d := ethrpc.RecentStateDepthFor(c.sim.chainID); n > d {
+		n -= d
 	}
 	return nil, n, nil
 }
@@ -257,7 +259,8 @@ func adiriKeptTree(t *testing.T) *OutcomeTree {
 }
 
 // T-9: an unconsumed member's status-3 outcome on an idle chain is derived at the first block past its deadline and
-// margin - the heartbeat's - once the head is far enough past it to read the leaf there.
+// margin - the heartbeat's. Adiri's finalized block is its head, so the leaf is read at that very block: no further
+// heartbeat is needed (it needed three, one per block of the old head-minus-3 read, before RB7-ADIRI-F1).
 func TestAnIdleChainsStatusThreeOutcomeIsDerivedAtTheFirstHeartbeatBlock(t *testing.T) {
 	kept := adiriKeptTree(t)
 	deadline := time.Unix(kept.Members[0].Deadline, 0)
@@ -277,16 +280,7 @@ func TestAnIdleChainsStatusThreeOutcomeIsDerivedAtTheFirstHeartbeatBlock(t *test
 		t.Fatalf("the heartbeat: %s", o)
 	}
 	claimBlock := chain.head()
-	// The leaf is read at the agreed block three below the head: three more heartbeats, one per minimum gap.
-	for i := 0; i < 3; i++ {
-		if _, err := DeriveOutcome(ctx, oc, kept, nil); !errors.Is(err, ErrOutcomeNotYet) {
-			t.Fatalf("with the head %d blocks past the claim: %v", i, err)
-		}
-		wall = wall.Add(heartbeatMinGap + heartbeatDelay(1))
-		if o := v.tick(t); o != HeartbeatSent {
-			t.Fatalf("heartbeat %d for the block horizon: %s", i+2, o)
-		}
-	}
+	// The leaf is read at the agreed head itself, which is the claim block: derivable at once.
 	out, err := DeriveOutcome(ctx, oc, kept, nil)
 	if err != nil {
 		t.Fatalf("THE regression (T-9): the status-3 outcome is not derivable on an idle chain: %v", err)
