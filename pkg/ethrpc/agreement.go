@@ -53,6 +53,8 @@ type agreeingProvider struct {
 	client *ethclient.Client
 	hint   *retryAfterHint // its last Retry-After
 	health *providerHealth // whether it is resting (see health.go)
+	// genesis re-reads its block 0 before its answers count, on a pinned chain (genesis.go); nil when not pinned.
+	genesis *genesisGuard
 }
 
 // ProviderHosts reduces endpoint URLs to their hosts, without any path or query, so that two URLs of one operator are
@@ -125,7 +127,9 @@ type answer[T any] struct {
 	err   error
 }
 
-func askAll[T any](ctx context.Context, r *AgreeingReader, read func(context.Context, *ethclient.Client) (T, error)) []answer[T] {
+// askAll asks every verified provider. On a pinned chain each provider's genesis is checked first (genesis.go), and one
+// provider found on another genesis refuses the whole read: ErrGenesisMismatch, by name.
+func askAll[T any](ctx context.Context, r *AgreeingReader, read func(context.Context, *ethclient.Client) (T, error)) ([]answer[T], error) {
 	providers := r.verified()
 	out := make([]answer[T], len(providers))
 	var wg sync.WaitGroup
@@ -139,13 +143,20 @@ func askAll[T any](ctx context.Context, r *AgreeingReader, read func(context.Con
 			// unanswered: it is not replaced by another provider, and it is not counted. One that stayed unable to answer
 			// for a whole read rests (health.go), so that the reads after it do not each wait out its deadline.
 			v, err := askProvider(ctx, p.health, p.host, p.hint, r.timeout, r.timeout, func(c context.Context) (T, error) {
+				if gerr := p.genesis.ensure(c, p.client); gerr != nil {
+					var zero T
+					return zero, gerr
+				}
 				return read(c, p.client)
 			})
 			out[i] = answer[T]{host: p.host, value: v, err: err}
 		}(i, p)
 	}
 	wg.Wait()
-	return out
+	if err := genesisRefusal(out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func unanswered[T any](as []answer[T]) string {
@@ -177,9 +188,12 @@ func receiptFacts(r *types.Receipt) ([]byte, error) {
 // TransactionReceipt returns the receipt when every provider that answered returns the same one. A provider that has
 // not seen the transaction yet makes it not found here too: one that lags is waited for, never outvoted.
 func (r *AgreeingReader) TransactionReceipt(ctx context.Context, txHash common.Hash) (*types.Receipt, error) {
-	as := askAll(ctx, r, func(c context.Context, cl *ethclient.Client) (*types.Receipt, error) {
+	as, aerr := askAll(ctx, r, func(c context.Context, cl *ethclient.Client) (*types.Receipt, error) {
 		return cl.TransactionReceipt(c, txHash)
 	})
+	if aerr != nil {
+		return nil, aerr
+	}
 	var found *types.Receipt
 	var facts []byte
 	answered, notFound := 0, 0
@@ -217,9 +231,12 @@ func (r *AgreeingReader) TransactionReceipt(ctx context.Context, txHash common.H
 // it returns the LOWEST finalized header any answering provider reports: a block is final here only once it is final in
 // every view.
 func (r *AgreeingReader) HeaderByNumber(ctx context.Context, number *big.Int) (*types.Header, error) {
-	as := askAll(ctx, r, func(c context.Context, cl *ethclient.Client) (*types.Header, error) {
+	as, aerr := askAll(ctx, r, func(c context.Context, cl *ethclient.Client) (*types.Header, error) {
 		return cl.HeaderByNumber(c, number)
 	})
+	if aerr != nil {
+		return nil, aerr
+	}
 	var picked *types.Header
 	answered := 0
 	tag := number != nil && number.Sign() < 0
@@ -248,9 +265,12 @@ func (r *AgreeingReader) HeaderByNumber(ctx context.Context, number *big.Int) (*
 
 // BlockReceipts returns a block's receipts when every provider that answered returns the same list.
 func (r *AgreeingReader) BlockReceipts(ctx context.Context, blockNrOrHash rpc.BlockNumberOrHash) ([]*types.Receipt, error) {
-	as := askAll(ctx, r, func(c context.Context, cl *ethclient.Client) ([]*types.Receipt, error) {
+	as, aerr := askAll(ctx, r, func(c context.Context, cl *ethclient.Client) ([]*types.Receipt, error) {
 		return cl.BlockReceipts(c, blockNrOrHash)
 	})
+	if aerr != nil {
+		return nil, aerr
+	}
 	var picked []*types.Receipt
 	var facts [][]byte
 	answered := 0
@@ -288,7 +308,10 @@ func (r *AgreeingReader) BlockReceipts(ctx context.Context, blockNrOrHash rpc.Bl
 
 // HeaderByHash returns the header with this hash when every provider that answered returns it.
 func (r *AgreeingReader) HeaderByHash(ctx context.Context, hash common.Hash) (*types.Header, error) {
-	as := askAll(ctx, r, func(c context.Context, cl *ethclient.Client) (*types.Header, error) { return cl.HeaderByHash(c, hash) })
+	as, aerr := askAll(ctx, r, func(c context.Context, cl *ethclient.Client) (*types.Header, error) { return cl.HeaderByHash(c, hash) })
+	if aerr != nil {
+		return nil, aerr
+	}
 	var picked *types.Header
 	answered := 0
 	for _, a := range as {
@@ -318,9 +341,12 @@ func (r *AgreeingReader) HeaderByHash(ctx context.Context, hash common.Hash) (*t
 // nor an Arbitrum internal one (0x6a), and re-encodes a deposit receipt without its deposit fields, so a block's bodies
 // are compared here as the caller encodes them (pkg/ethproof).
 func (r *AgreeingReader) AgreedLists(ctx context.Context, what string, read func(context.Context, *rpc.Client) ([][]byte, error)) ([][]byte, error) {
-	as := askAll(ctx, r, func(c context.Context, cl *ethclient.Client) ([][]byte, error) {
+	as, aerr := askAll(ctx, r, func(c context.Context, cl *ethclient.Client) ([][]byte, error) {
 		return read(c, cl.Client())
 	})
+	if aerr != nil {
+		return nil, aerr
+	}
 	var picked [][]byte
 	answered := 0
 	for _, a := range as {
@@ -371,17 +397,23 @@ func (r *AgreeingReader) RecentAgreedHeader(ctx context.Context) (*types.Header,
 // the same bytes and at least MinAgreeingProviders answered. A provider that does not hold the block, or its state, does
 // not answer; one that answers differently is a disagreement.
 func (r *AgreeingReader) CallContractAtHash(ctx context.Context, msg ethereum.CallMsg, blockHash common.Hash) ([]byte, error) {
-	as := askAll(ctx, r, func(c context.Context, cl *ethclient.Client) ([]byte, error) {
+	as, aerr := askAll(ctx, r, func(c context.Context, cl *ethclient.Client) ([]byte, error) {
 		return cl.CallContractAtHash(c, msg, blockHash)
 	})
+	if aerr != nil {
+		return nil, aerr
+	}
 	return agreedBytes(r, as, fmt.Sprintf("call to %s at block %s", addrOf(msg.To), blockHash.Hex()))
 }
 
 // CodeAtHash returns an account's code at the block with this hash when every provider that answered returns the same.
 func (r *AgreeingReader) CodeAtHash(ctx context.Context, account common.Address, blockHash common.Hash) ([]byte, error) {
-	as := askAll(ctx, r, func(c context.Context, cl *ethclient.Client) ([]byte, error) {
+	as, aerr := askAll(ctx, r, func(c context.Context, cl *ethclient.Client) ([]byte, error) {
 		return cl.CodeAtHash(c, account, blockHash)
 	})
+	if aerr != nil {
+		return nil, aerr
+	}
 	return agreedBytes(r, as, fmt.Sprintf("code of %s at block %s", account.Hex(), blockHash.Hex()))
 }
 

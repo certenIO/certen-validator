@@ -17,6 +17,7 @@ import (
 
 	chain "github.com/certen/independant-validator/pkg/chain/strategy"
 	"github.com/certen/independant-validator/pkg/crypto/bls"
+	"github.com/certen/independant-validator/pkg/ethproof/ethprooftest"
 )
 
 // RB3-F44: the registry is exactly the chains CERTEN settles on, each observed at the anchor the batch
@@ -34,12 +35,18 @@ func blsKey(t *testing.T) []byte {
 // chainIDStub answers eth_chainId with the chain id in the request path (/<id>).
 var chainIDStub = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		ID     json.RawMessage `json:"id"`
-		Method string          `json:"method"`
+		ID     json.RawMessage   `json:"id"`
+		Method string            `json:"method"`
+		Params []json.RawMessage `json:"params"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&req)
 	id, _ := strconv.ParseInt(strings.TrimPrefix(r.URL.Path, "/"), 10, 64)
 	w.Header().Set("Content-Type", "application/json")
+	// Telcoin Adiri is pinned to its genesis (RB7 D8): its providers serve that block 0, as the real ones do.
+	if req.Method == "eth_getBlockByNumber" && id == 2017 && len(req.Params) > 0 && string(req.Params[0]) == `"0x0"` {
+		_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"result":%s}`, req.ID, ethprooftest.AdiriGenesisJSON)
+		return
+	}
 	if req.Method != "eth_chainId" {
 		_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"error":{"code":-32601,"message":"not stubbed"}}`, req.ID)
 		return

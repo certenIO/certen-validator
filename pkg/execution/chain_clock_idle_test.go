@@ -16,6 +16,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 
 	attestation "github.com/certen/independant-validator/pkg/attestation/strategy"
+	"github.com/certen/independant-validator/pkg/supportedchains"
 )
 
 // RB7 D7: Telcoin Adiri (2017) makes a block only when a transaction lands or its epoch closes, so its finalized time
@@ -447,6 +448,10 @@ func TestHeartbeatFailuresAreNamed(t *testing.T) {
 			t.Cleanup(v.orch.ecm.endNonceSequence)
 		}, HeartbeatKeyBusy},
 		"unfunded": {func(c *simIdleChain, v *simValidator) { c.balance = big.NewInt(1) }, HeartbeatUnfunded},
+		// RB7 D8: the chain the key would send to is not the pinned incarnation (a reset): refused by name, nothing sent.
+		"another genesis": {func(c *simIdleChain, v *simValidator) {
+			t.Setenv(supportedchains.GenesisEnvFor(adiriID), "0x"+strings.Repeat("ab", 32))
+		}, HeartbeatRefused},
 	} {
 		t.Run(name, func(t *testing.T) {
 			var wall time.Time

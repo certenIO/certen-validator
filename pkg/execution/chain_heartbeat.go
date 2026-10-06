@@ -18,6 +18,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/prometheus/client_golang/prometheus"
 
+	"github.com/certen/independant-validator/pkg/ethrpc"
 	"github.com/certen/independant-validator/pkg/supportedchains"
 )
 
@@ -345,6 +346,8 @@ func classifyHeartbeatFailure(err error) HeartbeatOutcome {
 	switch {
 	case errors.Is(err, ErrHeartbeatUnfunded) || strings.Contains(strings.ToLower(err.Error()), "insufficient funds"):
 		return HeartbeatUnfunded
+	case errors.Is(err, ethrpc.ErrGenesisMismatch):
+		return HeartbeatRefused
 	case errors.As(err, &gas) || errors.As(err, &cost):
 		return HeartbeatGasCeiling
 	case errors.Is(err, ErrSequenceBusy) || errors.As(err, &foreign) || errors.As(err, &wait) || errors.As(err, &unavailable):

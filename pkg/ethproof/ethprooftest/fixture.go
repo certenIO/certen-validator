@@ -181,6 +181,16 @@ func (f *Fixture) SettlementIndex() uint64 {
 	panic(fmt.Sprintf("fixture %s does not hold its settlement", f.Name))
 }
 
+// AdiriGenesisJSON is Telcoin Adiri's (2017) block 0 as https://rpc.telcoin.network served it on 2026-10-05
+// (eth_getBlockByNumber "0x0", identical on adiri.tel and node1-4.telcoin.network): the genesis the chain catalogue pins
+// (RB7 D8). A provider of a captured Adiri block serves it as its block 0, as the real providers do.
+const AdiriGenesisJSON = `{"hash":"0x3577ee7223cf0d9a1da1293fd12a47e0e45bb97afcd0427bccd4954cb704baef","parentHash":"0x0000000000000000000000000000000000000000000000000000000000000000","sha3Uncles":"0x1dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347","miner":"0x0000000000000000000000000000000000000000","stateRoot":"0x0eecd2892fe819ad315aa6adbfe965378cbc63659b091539a7e7ea9362aea224","transactionsRoot":"0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421","receiptsRoot":"0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421","logsBloom":"0x` +
+	`00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000` +
+	`","difficulty":"0x0","number":"0x0","gasLimit":"0x1c9c380","gasUsed":"0x0","timestamp":"0x69fceea7","extraData":"0x","mixHash":"0x0000000000000000000000000000000000000000000000000000000000000000","nonce":"0x0000000000000000","baseFeePerGas":"0x7","withdrawalsRoot":"0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421","blobGasUsed":"0x0","excessBlobGas":"0x0","parentBeaconBlockRoot":"0x0000000000000000000000000000000000000000000000000000000000000000","requestsHash":"0xe3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}`
+
+// genesisByChain is the block 0 a provider of a chain's captured block serves.
+var genesisByChain = map[int64]string{2017: AdiriGenesisJSON}
+
 // Provider serves a fixture over JSON-RPC.
 //
 //   - Mutate, when set, may replace the result of any method before it is served (a lying provider);
@@ -291,6 +301,11 @@ func (p *Provider) honest(req request) (json.RawMessage, *rpcError) {
 		switch tag := str(param(0)); tag {
 		case "latest", "finalized", "safe", strings.ToLower(b.Number):
 			return block(full()), nil
+		case "0x0":
+			if g, ok := genesisByChain[f.ChainID]; ok {
+				return json.RawMessage(g), nil
+			}
+			return json.RawMessage("null"), nil
 		default:
 			return json.RawMessage("null"), nil
 		}

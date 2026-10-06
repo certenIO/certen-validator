@@ -29,6 +29,7 @@
 //	Chain.ContractBlockIsParent         a contract's block.number is the parent chain's (Arbitrum: an L1 block number)
 //	Chain.DisplayName, ExplorerURL      for people
 //	Chain.BlocksOnlyWithTraffic         its time stops while it is idle: the per-chain clock may send a heartbeat (RB7 §1.1)
+//	Chain.GenesisHash, PinnedGenesis()  the incarnation of the chain this build settles on: its block 0 hash (RB7 D8)
 //	Chain.EnvPrefix() and the *Env()    the environment variables the chain is configured under
 //	EnabledFromEnv(), Enabled()         the enabled set, read from CERTEN_SETTLEMENT_CHAINS
 //	IsEnabled(id), DescribeIDs(ids)     admission and its messages
@@ -94,6 +95,14 @@ type Chain struct {
 	// transaction to produce the block (pkg/execution chain_heartbeat.go). The block decides; the heartbeat only makes
 	// one exist. A chain whose blocks never stop (Ethereum, the OP stack, Arbitrum) never heartbeats.
 	BlocksOnlyWithTraffic bool
+
+	// GenesisHash is the hash of the chain's block 0 this build settles on ("" for a chain not pinned). A testnet that
+	// is reset keeps its chain id and starts again from a new genesis, erasing every CERTEN contract and settlement on
+	// it; like an Accumulate incarnation, the genesis names WHICH chain of that id this is. A pinned chain whose
+	// providers serve another genesis is refused by name, at boot and on every read (pkg/ethrpc genesis.go), never
+	// treated as the same chain. GenesisEnv overrides it - the one way to re-enable a chain after a reset (see
+	// PinnedGenesis).
+	GenesisHash string
 }
 
 // All is the catalogue, in a fixed order: the order chains are listed in messages.
@@ -136,6 +145,12 @@ var All = []Chain{
 		// telcoin-network@5736cc30 crates/engine/src/payload_builder.rs:114-127 skips an empty output (RB7 Phase A
 		// F-BLK-1, F-BLK-2).
 		BlocksOnlyWithTraffic: true,
+		// Block 0 of the Adiri incarnation launched 2026-05-07 19:57:27 UTC (timestamp 0x69fceea7). Read 2026-10-05 from
+		// all six public endpoints (rpc.telcoin.network, adiri.tel, node1-4.telcoin.network: identical), and recomputed
+		// with go-ethereum v1.17.0 core.Genesis.ToBlock from the published telcoin-network@5736cc30
+		// chain-configs/testnet/genesis.yaml: the same hash, state root 0x0eecd289...a224. The chain id has had an
+		// earlier incarnation (Phase A F-FIN-5); a reset is refused by name until the pin is changed.
+		GenesisHash: "0x3577ee7223cf0d9a1da1293fd12a47e0e45bb97afcd0427bccd4954cb704baef",
 	},
 }
 
@@ -243,6 +258,76 @@ func (c Chain) MaxPriorityFeeEnv() string { return c.GasEnvPrefix + "_MAX_PRIORI
 
 // GasLimitAnchorEnv is the variable holding the chain's anchor gas limit.
 func (c Chain) GasLimitAnchorEnv() string { return c.GasEnvPrefix + "_GAS_LIMIT_ANCHOR" }
+
+// GenesisEnv is the variable that pins the chain's genesis, overriding the catalogue's GenesisHash:
+// CERTEN_CHAIN_GENESIS_<id>.
+func (c Chain) GenesisEnv() string { return GenesisEnvFor(c.ID) }
+
+// GenesisEnvFor is the genesis pin variable of chain id.
+func GenesisEnvFor(id int64) string { return "CERTEN_CHAIN_GENESIS_" + strconv.FormatInt(id, 10) }
+
+// PinnedGenesis is the genesis the chain is pinned to, as lower-case 0x-hex of 32 bytes, and whether it is pinned at
+// all: GenesisEnv when it is set, the catalogue's GenesisHash otherwise.
+//
+// Re-enabling a chain after a reset. A reset chain is refused by name until its pin names the new genesis: set
+// CERTEN_CHAIN_GENESIS_<id> to the new block 0 hash in the SHARED environment, so that all seven validators carry the
+// same value, and restart them together - exactly as CERTEN_SETTLEMENT_CHAINS is changed. The reset erased every
+// CERTEN contract on the chain, so the chain's anchor, outcome registry and account factory are redeployed and their
+// variables changed in the same window. A validator left on the old pin refuses the chain and attests nothing on it:
+// it fails closed, it never reads the new chain as the old one.
+//
+// A set but malformed value is refused by name: a pin that cannot be read pins nothing, and is not taken as "unpinned".
+func (c Chain) PinnedGenesis() (string, bool, error) {
+	if raw, set := os.LookupEnv(c.GenesisEnv()); set {
+		h, err := parseGenesisHash(raw)
+		if err != nil {
+			return "", false, fmt.Errorf("%s: %w", c.GenesisEnv(), err)
+		}
+		return h, true, nil
+	}
+	if c.GenesisHash == "" {
+		return "", false, nil
+	}
+	h, err := parseGenesisHash(c.GenesisHash)
+	if err != nil {
+		return "", false, fmt.Errorf("the catalogue's genesis of chain %d: %w", c.ID, err)
+	}
+	return h, true, nil
+}
+
+// PinnedGenesisOf is PinnedGenesis of a catalogued chain; a chain not in the catalogue is not pinned.
+func PinnedGenesisOf(id int64) (string, bool, error) {
+	c, ok := Lookup(id)
+	if !ok {
+		if raw, set := os.LookupEnv(GenesisEnvFor(id)); set {
+			return "", false, fmt.Errorf("%s=%q pins chain %d, which is not in the catalogue", GenesisEnvFor(id), raw, id)
+		}
+		return "", false, nil
+	}
+	return c.PinnedGenesis()
+}
+
+func parseGenesisHash(raw string) (string, error) {
+	s := strings.ToLower(strings.TrimSpace(raw))
+	if !strings.HasPrefix(s, "0x") || len(s) != 66 {
+		return "", fmt.Errorf("%q is not a 0x-prefixed 32-byte block hash", raw)
+	}
+	zero := true
+	for _, r := range s[2:] {
+		switch {
+		case r >= '0' && r <= '9', r >= 'a' && r <= 'f':
+		default:
+			return "", fmt.Errorf("%q is not a 0x-prefixed 32-byte block hash", raw)
+		}
+		if r != '0' {
+			zero = false
+		}
+	}
+	if zero {
+		return "", fmt.Errorf("%q is all zeroes, which is no block's hash", raw)
+	}
+	return s, nil
+}
 
 // =============================================================================
 // The enabled set

@@ -2,6 +2,7 @@ package ethrpc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"math/rand/v2"
@@ -57,7 +58,20 @@ type verification struct {
 	i     int
 	p     agreeingProvider
 	wrong string // the chain id it answered, when not ours
-	err   error
+	// wrongGenesis: it serves our chain id on another genesis than the chain is pinned to (ErrGenesisMismatch).
+	wrongGenesis error
+	err          error
+}
+
+// refusal is why a verification refuses the provider for good: another chain id, or another genesis.
+func (v verification) refusal(chainID int64, host string) error {
+	if v.wrongGenesis != nil {
+		return v.wrongGenesis
+	}
+	if v.wrong != "" {
+		return fmt.Errorf("chain %d provider %s serves chain %s", chainID, host, v.wrong)
+	}
+	return nil
 }
 
 // verifyOne dials one provider and reads its chain id, asking again while it answers transiently, for up to budget.
@@ -75,7 +89,25 @@ func verifyOne(ctx context.Context, chainID int64, host, rawurl string, timeout,
 		c.Close()
 		return verification{wrong: id.String()}
 	}
-	return verification{p: agreeingProvider{host: host, client: c, hint: hint, health: healthOf(chainID, rawurl)}}
+	// A pinned chain (RB7 D8): the provider's block 0 must be the pinned genesis. Read like the chain id - asked again
+	// while it answers transiently - and refused for good when it is another.
+	guard, err := newGenesisGuard(chainID, host)
+	if err != nil {
+		c.Close()
+		return verification{err: err}
+	}
+	if guard != nil {
+		if _, err := retryTransient(ctx, host, hint, budget, timeout, func(rc context.Context) (struct{}, error) {
+			return struct{}{}, guard.ensure(rc, c)
+		}); err != nil {
+			c.Close()
+			if errors.Is(err, ErrGenesisMismatch) {
+				return verification{wrongGenesis: err}
+			}
+			return verification{err: err}
+		}
+	}
+	return verification{p: agreeingProvider{host: host, client: c, hint: hint, health: healthOf(chainID, rawurl), genesis: guard}}
 }
 
 // verifyAll is the construction: see NewAgreeingReader.
@@ -112,11 +144,11 @@ wait:
 		select {
 		case v := <-results:
 			switch {
-			case v.wrong != "":
+			case v.refusal(r.chainID, cands[v.i].host) != nil:
 				for _, p := range verified {
 					p.client.Close()
 				}
-				return fmt.Errorf("chain %d provider %s serves chain %s", r.chainID, cands[v.i].host, v.wrong)
+				return v.refusal(r.chainID, cands[v.i].host)
 			case v.err != nil:
 				failed[v.i] = v.err
 			default:
@@ -140,11 +172,11 @@ collect:
 		select {
 		case v := <-results:
 			switch {
-			case v.wrong != "":
+			case v.refusal(r.chainID, cands[v.i].host) != nil:
 				for _, p := range verified {
 					p.client.Close()
 				}
-				return fmt.Errorf("chain %d provider %s serves chain %s", r.chainID, cands[v.i].host, v.wrong)
+				return v.refusal(r.chainID, cands[v.i].host)
 			case v.err != nil:
 				failed[v.i] = v.err
 			default:
@@ -222,9 +254,9 @@ func (r *AgreeingReader) reverify(p *unverifiedProvider) {
 	defer r.mu.Unlock()
 	p.trying = false
 	switch {
-	case v.wrong != "":
+	case v.refusal(r.chainID, p.host) != nil:
 		p.refused = true
-		log.Printf("❌ [ethrpc] chain %d provider %s serves chain %s: misconfigured, it never joins", r.chainID, p.host, v.wrong)
+		log.Printf("❌ [ethrpc] %v: it never joins", v.refusal(r.chainID, p.host))
 	case v.err != nil:
 		p.err = v.err
 		if p.backoff *= 2; p.backoff > reverifyMax {

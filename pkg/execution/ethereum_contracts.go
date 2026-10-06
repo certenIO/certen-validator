@@ -261,6 +261,10 @@ type EthereumContractManager struct {
 	sender     *txSender
 	senderErr  error
 
+	// genesisCheckedAt is when this manager's client last served the chain's pinned genesis (sendBatchTx, RB7 D8).
+	genesisMu        sync.Mutex
+	genesisCheckedAt time.Time
+
 	client                  *ethclient.Client
 	auth                    *bind.TransactOpts
 	config                  *CertenContractConfig

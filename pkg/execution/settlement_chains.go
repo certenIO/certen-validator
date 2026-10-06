@@ -13,6 +13,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 
 	"github.com/certen/independant-validator/pkg/consensus"
+	"github.com/certen/independant-validator/pkg/ethrpc"
 	"github.com/certen/independant-validator/pkg/execution/contracts"
 	"github.com/certen/independant-validator/pkg/supportedchains"
 )
@@ -50,6 +51,17 @@ func VerifySettlementAnchors(ctx context.Context, r *EVMChainResolverImpl, chain
 		}
 		if m == nil || m.client == nil {
 			return fmt.Errorf("chain %d: no client to read its anchor %s", id, anchor.Hex())
+		}
+		// A pinned chain is settled on only on its pinned genesis (RB7 D8): the client this validator sends through is
+		// checked here, at boot; every agreed read checks its providers on every read (ethrpc genesis.go).
+		host := ""
+		if m.config != nil {
+			if hs := ethrpc.ProviderHosts([]string{m.config.EthereumRPC}); len(hs) == 1 {
+				host = hs[0]
+			}
+		}
+		if err := ethrpc.CheckGenesis(ctx, id, host, m.client); err != nil {
+			return err
 		}
 		if err := verifyAnchorGeneration(ctx, m.client, id, anchor); err != nil {
 			return err
