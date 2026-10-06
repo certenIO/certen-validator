@@ -681,6 +681,25 @@ func (s *BatchStack) settleAtRetentionHorizon(retention, horizon uint64, leads f
 	return keep
 }
 
+// pruneAtRetentionHorizon decides every pending member at the retention horizon (settleAtRetentionHorizon) and prunes
+// the period pool below it - keeping every copy whose chain is not past the member's attestation window yet (RB7 D7):
+// a peer's non-settlement claim may still need it. Returns how many were pruned.
+func (s *BatchStack) pruneAtRetentionHorizon(retention, horizon uint64, leads func(*PendingBatchIntent) bool,
+	onDropped BatchDropFn, logf func(string, ...interface{})) int {
+	keep := s.settleAtRetentionHorizon(retention, horizon, leads, onDropped, logf)
+	for _, m := range s.Mempool.MembersOlderThan(horizon) {
+		if !keep[m] && !s.pastAttestationWindow(m, logf) {
+			keep[m] = true
+		}
+	}
+	n := s.Mempool.PruneOlderThanExcept(horizon, keep)
+	if n > 0 {
+		logf("[BATCH-FLUSH] pruned %d member(s) older than %d periods, each with an outcome recorded by "+
+			"this or another validator, or refused by name here, and past its attestation window on its chain", n, retention)
+	}
+	return n
+}
+
 // settleOnDemandAtTTL decides every on-demand member a TTL prune would remove before it is removed, as
 // settleAtRetentionHorizon does for the period pool: another validator's recorded outcome lets this node's copy go; no
 // outcome anywhere is a refusal by name; an unreadable outcome keeps the member for a later pass. Returns how many were
@@ -689,6 +708,13 @@ func (s *BatchStack) settleOnDemandAtTTL(ttl time.Duration, now time.Time, leads
 	onDropped BatchDropFn, logf func(string, ...interface{})) int {
 	keep := map[*PendingBatchIntent]bool{}
 	for _, m := range s.Mempool.OnDemandPruneCandidates(ttl, now) {
+		// The TTL (this machine's clock) only makes a member a candidate. It is refused - or let go - only once its
+		// CHAIN is past the end of its attestation window (RB7 D7): until then its non-settlement may still need this
+		// validator's copy, and its outcome is not this clock's to decide.
+		if !s.pastAttestationWindow(m, logf) {
+			keep[m] = true
+			continue
+		}
 		err := s.undecided(m.IntentID, m.ChainID)
 		switch {
 		case errors.Is(err, ErrMemberAlreadyDecided):
@@ -705,12 +731,41 @@ func (s *BatchStack) settleOnDemandAtTTL(ttl time.Duration, now time.Time, leads
 				m.IntentID, m.ChainID)
 		default:
 			cause := fmt.Sprintf("its on-demand settlement window closed on chain %d with no outcome recorded by any "+
-				"validator", m.ChainID)
+				"validator, and the chain is past its attestation window", m.ChainID)
 			logf("[OD] refusing member %s: %s", m.IntentID, cause)
 			onDropped(context.Background(), m, cause)
 		}
 	}
-	return s.Mempool.PruneOnDemandOlderThanExcept(ttl, now, keep)
+	pruned := s.Mempool.PruneOnDemandOlderThanExcept(ttl, now, keep)
+	// The refused set (RB6-F11): kept at least RefusedKeep, and until the member's chain is past its attestation window.
+	keepRefused := map[*PendingBatchIntent]bool{}
+	for _, m := range s.Mempool.RefusedPruneCandidates(now) {
+		if !s.pastAttestationWindow(m, logf) {
+			keepRefused[m] = true
+		}
+	}
+	s.Mempool.PruneRefusedExcept(now, keepRefused)
+	return pruned
+}
+
+// pastAttestationWindow reports whether m's chain is past the end of its attestation window, by the chain's clock
+// (BatchOrchestrator.pastAttestationWindowOnChain). A chain this node has no orchestrator for, or cannot read, is not
+// past: the copy is kept.
+func (s *BatchStack) pastAttestationWindow(m *PendingBatchIntent, logf func(string, ...interface{})) bool {
+	o := s.Orchestrators[m.ChainID]
+	if o == nil {
+		logf("[BATCH] member %s on chain %d: no orchestrator reads that chain's time; its copy is kept", m.IntentID, m.ChainID)
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), memberOutcomeTimeout)
+	defer cancel()
+	past, _, err := o.pastAttestationWindowOnChain(ctx, m)
+	if err != nil {
+		logf("[BATCH] member %s on chain %d: whether its chain is past its attestation window could not be read (%v); kept",
+			m.IntentID, m.ChainID, err)
+		return false
+	}
+	return past
 }
 
 // flushOneChain is the shared body: form the period's tree, settle it, then dispose of every
@@ -987,12 +1042,7 @@ func (s *BatchStack) RunFlushLoop(
 		// Memory backstop. Correctness does not depend on it — selection is bucket-scoped, so
 		// stale members cannot pollute a later period's tree.
 		if horizonPeriods := retention * periodBlocks; cutoff > horizonPeriods {
-			horizon := cutoff - horizonPeriods
-			keep := s.settleAtRetentionHorizon(retention, horizon, leads, cfg.OnDropped, logf)
-			if n := s.Mempool.PruneOlderThanExcept(horizon, keep); n > 0 {
-				logf("[BATCH-FLUSH] pruned %d member(s) older than %d periods, each with an outcome recorded by "+
-					"this or another validator, or refused by name here", n, retention)
-			}
+			s.pruneAtRetentionHorizon(retention, cutoff-horizonPeriods, leads, cfg.OnDropped, logf)
 		}
 	}
 

@@ -1065,12 +1065,27 @@ func (m *BatchMempool) PendingOlderThan(horizonStart uint64) []*PendingBatchInte
 	return out
 }
 
+// MembersOlderThan is every period-pool member committed below horizonStart, whatever its outcome: what a prune at
+// horizonStart would remove.
+func (m *BatchMempool) MembersOlderThan(horizonStart uint64) []*PendingBatchIntent {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []*PendingBatchIntent
+	for _, pool := range m.pool {
+		for _, p := range pool {
+			if p != nil && p.CommitHeight != 0 && p.CommitHeight < horizonStart {
+				out = append(out, p)
+			}
+		}
+	}
+	return out
+}
+
 // PruneOlderThanExcept is PruneOlderThan keeping the members in keep: those whose fate could not be read yet.
 func (m *BatchMempool) PruneOlderThanExcept(horizonStart uint64, keep map[*PendingBatchIntent]bool) int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.pruneRefusedLocked(time.Now())
 	pruned := 0
 	for chainID, pool := range m.pool {
 		var rest []*PendingBatchIntent

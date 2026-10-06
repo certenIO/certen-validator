@@ -1635,22 +1635,37 @@ func memberChainDeadline(p *PendingBatchIntent) (time.Time, bool) {
 // chain's clock is told the horizon (a heartbeat on a chain whose blocks stop when idle). A failed read decides nothing.
 // evidence names the block that decided.
 func (o *BatchOrchestrator) pastDeadlineOnChain(ctx context.Context, p *PendingBatchIntent) (bool, string, error) {
+	return o.pastOnChain(ctx, p, 0)
+}
+
+// pastAttestationWindowOnChain reports whether the member's chain is past the end of its non-settlement's attestation
+// window (deadline + finality margin + nonSettlementGiveUp): until then every validator keeps its copy of the member.
+func (o *BatchOrchestrator) pastAttestationWindowOnChain(ctx context.Context, p *PendingBatchIntent) (bool, string, error) {
+	return o.pastOnChain(ctx, p, nonSettlementGiveUp)
+}
+
+// pastOnChain is pastDeadlineOnChain `beyond` further: the chain's finalized time past deadline + margin + beyond.
+func (o *BatchOrchestrator) pastOnChain(ctx context.Context, p *PendingBatchIntent, beyond time.Duration) (bool, string, error) {
 	d, ok := memberChainDeadline(p)
 	if !ok {
 		return false, "", nil
 	}
-	if time.Now().Before(d) {
+	horizon := d.Add(nonSettlementFinality + beyond)
+	if time.Now().Before(horizon.Add(-nonSettlementFinality)) {
 		return false, "", nil
 	}
-	horizon := d.Add(nonSettlementFinality)
 	fin, err := o.chainFinalized(ctx)
 	if err != nil {
 		return false, "", readErr(fmt.Errorf("reading the finalized block of chain %d to judge member %s's deadline: %w",
 			p.ChainID, p.IntentID, err))
 	}
 	if int64(fin.Time) > horizon.Unix() {
-		return true, fmt.Sprintf("chain %d's finalized block %d (time %s) is past its deadline %s and the finality margin",
-			p.ChainID, fin.Number.Uint64(), time.Unix(int64(fin.Time), 0).UTC().Format(time.RFC3339), d.UTC().Format(time.RFC3339)), nil
+		what := "its deadline " + d.UTC().Format(time.RFC3339) + " and the finality margin"
+		if beyond > 0 {
+			what = "the end of its attestation window " + horizon.UTC().Format(time.RFC3339)
+		}
+		return true, fmt.Sprintf("chain %d's finalized block %d (time %s) is past %s",
+			p.ChainID, fin.Number.Uint64(), time.Unix(int64(fin.Time), 0).UTC().Format(time.RFC3339), what), nil
 	}
 	o.awaitChainTime(fmt.Sprintf("the deadline of %s", p.IntentID), horizon)
 	return false, "", nil

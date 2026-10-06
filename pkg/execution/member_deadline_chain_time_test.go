@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"math/big"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -146,6 +147,82 @@ func TestACadenceGasCeilingMemberFailsOnlyWhenItsChainIsPastItsDeadline(t *testi
 	}
 }
 
+// The final sweep (RB7 D7): every read of this machine's clock in pkg/execution, classified. None may decide a recorded
+// outcome - a drop, OnDropped, Attest, dispose, recordMemberOutcome, MemberDropped, a failed proof cycle, a write-back
+// or an outcome leaf. A new read fails this test until it is classified here.
+var wallClockReads = map[string]struct {
+	n       int
+	verdict string
+}{
+	"batch_orchestrator.go": {2, "trigger only: pastOnChain reads the chain only once the wall clock is past the bound; " +
+		"memberPastDeadline releases another validator's member locally (MemberReleased: nothing recorded)"},
+	"non_settlement_cycle.go": {3, "trigger only: nonSettlementWindowClosed reads the chain once the wall clock is past the " +
+		"window; QueuedAt and StartedAt are timestamps"},
+	"batch_ondemand_submitter.go": {9, "TTL is a trigger (settleOnDemandAtTTL decides on chain time); the quorum wait " +
+		"bounds one pass and defers; RefuseOnDemand's time starts RefusedKeep (a trigger); failoverElapsed rotates who acts; " +
+		"the commit-time retry is a local backoff"},
+	"batch_assembly.go":  {1, "the flush loop's first pass time: the settle grace (when a leader forms its batch)"},
+	"batch_mempool.go":   {1, "EnqueuedAt: a timestamp; the TTL it starts is a trigger"},
+	"batch_execution.go": {3, "the cadence accumulator's flush timing: when legs are grouped, no outcome"},
+	"batch_tx.go":        {2, "the genesis re-check cache (ethrpc.GenesisRecheck)"},
+	"batch_proof_submitter.go": {1, "the attestation's ExpirationTime: a validity window the chain enforces on its own " +
+		"block time; a late transaction reverts and is retried"},
+	"batch_quorum_attestor.go": {1, "AttestedAt: a timestamp"},
+	"tx_sender.go": {11, "sender liveness: stuck-replacement, waits, outbox retention; a wait that runs out is " +
+		"ChainWaitError (outcome unknown), never a failure"},
+	"nonce_tracker.go":         {7, "nonce bookkeeping timestamps and cache"},
+	"ethereum_contracts.go":    {14, "the retired per-intent proof builders (no batch-lane caller) and the period lane's sequence wait"},
+	"credit_checker.go":        {2, "a balance cache"},
+	"layer5_validator_set.go":  {2, "a validator-set cache"},
+	"accumulate_submitter.go":  {2, "Accumulate transaction timestamps"},
+	"synthetic_transaction.go": {4, "timestamps"},
+	"external_chain_observer.go": {2, "observation start time, and waitForReceipt (no caller; the observer waits through " +
+		"ethrpc.SettledInFinalizedChain)"},
+	"external_chain_result.go": {1, "FinalizedAt: a timestamp"},
+	"g2_outcome_binding.go":    {3, "verification timestamps and duration"},
+	"member_repair_runner.go": {5, "the operator repair's own report: how long it waits for the proof cycle; the member's " +
+		"outcome is untouched"},
+	"outcome_backfill.go":  {1, "RetainedAt: a timestamp"},
+	"outcome_recorder.go":  {1, "the recorder's failover rotation: who records, measured from ResolvedAt (chain time)"},
+	"outcome_retention.go": {1, "RetainedAt: a timestamp"},
+	"proof_recovery.go":    {1, "RequestedAt: a timestamp"},
+	"result_quorum.go":     {1, "CreatedAt: a timestamp"},
+	"unified_adapter.go":   {2, "a duration for the log"},
+	"unified_orchestrator.go": {18, "timestamps (CompletedAt, VerifiedAt, FinalizedAt, ConfirmedAt), Phase 8's peer rounds " +
+		"and the message-freshness replay guard (a failed Phase 8 records proof_pending, re-driven by ProofRecovery), and " +
+		"durations - see the RB7 Task 4 stream B report for the Phase 7 observation bound (escalated)"},
+}
+
+func TestEveryWallClockReadInTheExecutionPathIsClassified(t *testing.T) {
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]int{}
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		for _, line := range strings.Split(readSource(t, name), "\n") {
+			if strings.Contains(line, "time.Now()") || strings.Contains(line, "time.Since(") || strings.Contains(line, "time.Until(") {
+				got[name]++
+			}
+		}
+	}
+	for file, n := range got {
+		w, ok := wallClockReads[file]
+		if !ok || w.n != n {
+			t.Errorf("%s reads the wall clock %d time(s), classified %d: classify each read (it may never decide a recorded outcome)", file, n, w.n)
+		}
+	}
+	for file, w := range wallClockReads {
+		if got[file] != w.n {
+			t.Errorf("%s: classified %d wall-clock read(s), found %d", file, w.n, got[file])
+		}
+	}
+}
+
 // The one remaining wall-clock judgment, memberPastDeadline, is local liveness: its only caller releases this node's copy
 // of a member another validator attested (MemberReleased) and records nothing. Pinned at the source: no caller records,
 // drops, attests or refuses on it, and the decisions that do record read the chain's clock.
@@ -187,6 +264,7 @@ func TestTheWallClockReleaseRecordsNothing(t *testing.T) {
 	// The recording decisions read the chain's clock.
 	for file, want := range map[string]int{"batch_orchestrator.go": 1, "batch_orchestrator_ondemand.go": 2,
 		"batch_ondemand_submitter.go": 1, "batch_assembly.go": 1} {
+		// pastDeadlineOnChain (and, in batch_assembly.go, pastAttestationWindowOnChain through pastAttestationWindow).
 		if n := strings.Count(readSource(t, file), "astDeadlineOnChain(ctx, "); n != want {
 			t.Fatalf("%s reads the chain's deadline %d times, want %d", file, n, want)
 		}

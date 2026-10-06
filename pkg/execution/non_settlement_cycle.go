@@ -18,10 +18,41 @@ import (
 // MemberLookupFn finds this validator's own copy of a batch member, in either lane.
 type MemberLookupFn func(chainID int64, operationID [32]byte) (*PendingBatchIntent, bool)
 
-// nonSettlementGiveUp is how long past a member's deadline its non-settlement is retried. Peers verify
-// the claim from their own copy of the member and prune members about two hours after their commit;
-// a member's deadline is at most an hour after its commit, so past this no peer can verify it.
+// nonSettlementGiveUp is the ATTESTATION WINDOW of a member's non-settlement, in CHAIN time: from the moment the
+// member's chain has a finalized block past its deadline and the finality margin (when the non-settlement becomes
+// attestable), for this long more. A peer verifies a claim only from its own copy of the member (RB3-F49), and every
+// validator keeps that copy - in the on-demand queue, the refused set and the period pool - until its chain is past
+// the end of this window (BatchStack.pastAttestationWindow, RB7 D7). So inside the window a quorum can always verify
+// the claim, and the requester keeps trying; past it every validator is free to drop its copy, a quorum is no longer
+// assured, and the requester records that the non-settlement could not be attested. Both ends are judged on the
+// member's chain's finalized time through its clock - never on this machine's clock, which only triggers the re-check.
 const nonSettlementGiveUp = 50 * time.Minute
+
+// nonSettlementWindowEnd is the end of a member's attestation window: deadline + finality margin + nonSettlementGiveUp.
+func nonSettlementWindowEnd(deadline time.Time) time.Time {
+	return deadline.Add(nonSettlementFinality + nonSettlementGiveUp)
+}
+
+// nonSettlementWindowClosed reports whether the member's chain has a finalized block past the end of its attestation
+// window (nonSettlementGiveUp), naming that block. The wall clock only triggers the read; not past, the chain's clock is
+// told the horizon (a heartbeat on a chain whose blocks stop when idle). A failed read decides nothing.
+func (o *UnifiedOrchestrator) nonSettlementWindowClosed(ctx context.Context, rec *NonSettlementRecord) (bool, string, error) {
+	end := nonSettlementWindowEnd(rec.Facts.Deadline)
+	if time.Now().Before(end) {
+		return false, "", nil
+	}
+	fin, err := o.config.NonSettlementChain.FinalizedHeader(ctx, rec.Facts.ChainID)
+	if err != nil {
+		return false, "", readErr(fmt.Errorf("reading the finalized block of chain %d: %w", rec.Facts.ChainID, err))
+	}
+	if int64(fin.Time) > end.Unix() {
+		return true, fmt.Sprintf("chain %d's finalized block %d (time %s) is past the end of its attestation window %s",
+			rec.Facts.ChainID, fin.Number.Uint64(), time.Unix(int64(fin.Time), 0).UTC().Format(time.RFC3339),
+			end.UTC().Format(time.RFC3339)), nil
+	}
+	awaitChainTime(rec.Facts.ChainID, fmt.Sprintf("the attestation window of %s", rec.Facts.IntentID), uint64(end.Unix()))
+	return false, "", nil
+}
 
 // commitment keys a failure record carries (set by consensus's recordFailedProofCycle).
 const (
@@ -151,11 +182,18 @@ func (o *UnifiedOrchestrator) removeNonSettlement(rec *NonSettlementRecord) {
 func (o *UnifiedOrchestrator) retryNonSettlement(ctx context.Context, rec *NonSettlementRecord, cause error) {
 	rec.Attempts++
 	rec.LastError = cause.Error()
-	if time.Since(rec.Facts.Deadline) > nonSettlementGiveUp {
-		fmt.Printf("❌ [NON-SETTLEMENT] intent %s on chain %d: could not be attested in %d attempt(s) (%v); recorded unattested\n",
-			rec.Facts.IntentID, rec.Facts.ChainID, rec.Attempts, cause)
+	// Given up only once the member's CHAIN is past the end of its attestation window (nonSettlementGiveUp): before
+	// that every validator still holds its copy and the claim stays verifiable, so it is tried again.
+	closed, evidence, werr := o.nonSettlementWindowClosed(ctx, rec)
+	if werr != nil {
+		fmt.Printf("⚠️ [NON-SETTLEMENT] intent %s on chain %d: whether its attestation window is over could not be read (%v)\n",
+			rec.Facts.IntentID, rec.Facts.ChainID, werr)
+	}
+	if closed {
+		fmt.Printf("❌ [NON-SETTLEMENT] intent %s on chain %d: could not be attested in %d attempt(s) (%v) and %s; recorded unattested\n",
+			rec.Facts.IntentID, rec.Facts.ChainID, rec.Attempts, cause, evidence)
 		if err := o.recordMemberOutcome(ctx, nonSettlementCycle(rec, nil), database.MemberSettlementNone, database.MemberProofCycleFailed,
-			fmt.Sprintf("%s; its non-settlement could not be attested: %v", rec.Cause, cause)); err != nil {
+			fmt.Sprintf("%s; its non-settlement could not be attested (%v) before %s", rec.Cause, cause, evidence)); err != nil {
 			// Neither the store nor the outbox kept the failure: keep the record, so the next pass records it.
 			if pErr := o.config.NonSettlements.Put(rec); pErr != nil {
 				fmt.Printf("❌ [NON-SETTLEMENT] intent %s: its unattested failure could not be recorded (%v) nor kept (%v)\n",
