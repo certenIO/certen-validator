@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ethereum/go-ethereum/common"
 )
 
 // RB7 Task 5 T5-7: every provider is verified once per process. A validator builds a reader per component, per chain and
@@ -81,18 +83,69 @@ func TestAWarmRegistryMakesNoChainIDCallPerObserver(t *testing.T) {
 	}
 }
 
-// Sharing the verification is not weaker verification: a provider on another chain refuses every reader, however many
-// have been built before and whether or not the provider was already asked.
-func TestAWrongChainIDIsRefusedForEveryReaderThroughTheRegistry(t *testing.T) {
+// Sharing the verification is not weaker verification: a provider on another chain NEVER counts toward agreement, for
+// any reader, however many have been built before. It is left out of the reader (and asked for nothing) while the
+// providers that did answer still satisfy MinAgreeingProviders; it does not take every reader of the chain down with it.
+func TestAWrongChainIDIsExcludedForEveryReaderAndNeverCounted(t *testing.T) {
+	shortenVerification(t)
+	resetRegistryForTests()
+	reverifyBase, reverifyMax = time.Hour, time.Hour // no background retry during the test
+	final := header(testHeight, "final")
+	wrong := provider(84532, final)
+	urls := urlsOf(t, provider(11155111, final), provider(11155111, final), wrong)
+	for i := 0; i < 3; i++ {
+		r, err := NewAgreeingReader(context.Background(), 11155111, urls, time.Second)
+		if err != nil {
+			t.Fatalf("reader %d: one misrouted provider took the chain's reader down: %v", i, err)
+		}
+		if hosts := r.Hosts(); len(hosts) != 2 || strings.Contains(strings.Join(hosts, ","), "127.0.0.2") {
+			t.Fatalf("reader %d verified %v; want the two on the right chain, never the wrong one", i, hosts)
+		}
+		if _, err := r.TransactionReceipt(context.Background(), common.HexToHash("0x0b0b")); err != nil {
+			t.Fatalf("reader %d: the two right providers did not establish the receipt: %v", i, err)
+		}
+	}
+	if n := wrong.callsOf("eth_getTransactionReceipt"); n != 0 {
+		t.Fatalf("a provider on another chain was asked for a fact %d times", n)
+	}
+	if n := wrong.callsOf("eth_chainId"); n != 1 {
+		t.Fatalf("a wrong chain id is an answer shared by every reader; it was asked %d times", n)
+	}
+}
+
+// A provider that answered another chain id once (a load-balanced or misrouted backend) is asked again after a bounded
+// backoff and rejoins when it answers the right one: a transient misroute is not a permanent exile.
+func TestAProviderThatAnsweredAnotherChainOnceRejoinsAfterItsBackoff(t *testing.T) {
 	shortenVerification(t)
 	resetRegistryForTests()
 	final := header(testHeight, "final")
-	urls := urlsOf(t, provider(11155111, final), provider(11155111, final), provider(84532, final))
-	for i := 0; i < 3; i++ {
-		_, err := NewAgreeingReader(context.Background(), 11155111, urls, time.Second)
-		if err == nil || !strings.Contains(err.Error(), "serves chain 84532") {
-			t.Fatalf("reader %d: a provider on another chain did not refuse the reader: %v", i, err)
+	flaky := provider(84532, final)
+	urls := urlsOf(t, provider(11155111, final), provider(11155111, final), flaky)
+	r, err := NewAgreeingReader(context.Background(), 11155111, urls, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.Hosts()) != 2 {
+		t.Fatalf("verified %v; want the two right ones", r.Hosts())
+	}
+	flaky.mu.Lock()
+	flaky.chainID = 11155111 // the backend that answered 84532 now answers correctly
+	flaky.mu.Unlock()
+	deadline := time.Now().Add(3 * time.Second)
+	for len(r.Hosts()) < 3 {
+		if time.Now().After(deadline) {
+			t.Fatalf("the provider that misrouted once never rejoined: %v", r.Hosts())
 		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	// And a reader built after it recovered finds it verified, with no new chain id call.
+	before := flaky.callsOf("eth_chainId")
+	r2, err := NewAgreeingReader(context.Background(), 11155111, urls, time.Second)
+	if err != nil || len(r2.Hosts()) != 3 {
+		t.Fatalf("a reader built after the recovery: hosts=%v err=%v", r2.Hosts(), err)
+	}
+	if after := flaky.callsOf("eth_chainId"); after != before {
+		t.Fatalf("a verified provider was asked its chain id again (%d calls)", after-before)
 	}
 }
 

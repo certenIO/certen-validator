@@ -142,3 +142,32 @@ func TestMemberWithNoCommitTimeAndNoAnchorHasNoFloorByName(t *testing.T) {
 		t.Fatalf("a log search ran (down to block %d) for a member with no floor", node.lowest)
 	}
 }
+
+// An anchor block is THIS node's own anchor, possibly created long after another validator settled the member under an
+// earlier anchor, so on its own it is not a floor: with no commit time the leaf's spend is refused by name, not searched
+// for from a floor that can lie above it.
+func TestMemberWithAnAnchorBlockButNoCommitTimeIsRefusedByName(t *testing.T) {
+	o, node, m := floorFixture(t)
+	m.AnchorBlock = 1_950_000 // this node's own, late, anchor; the spend is at floorSpend, 350,000 blocks earlier
+	_, _, found, err := o.leafConsumedTx(t.Context(), m, [32]byte{})
+	if err == nil || found || !strings.Contains(err.Error(), "no commit time") {
+		t.Fatalf("a floor above the spend must not be guessed from the anchor block: found=%v err=%v", found, err)
+	}
+	if node.lowest != floorHead {
+		t.Fatalf("a log search ran (down to block %d) for a member with no commit time", node.lowest)
+	}
+}
+
+// An earlier anchor floor only LOWERS the commit-time floor, so the search stays complete.
+func TestAnEarlierAnchorBlockStillLowersTheCommitTimeFloor(t *testing.T) {
+	o, node, m := floorFixture(t)
+	m.CommitTime = blockTime(1_900_000)
+	m.AnchorBlock = 1_800_000
+	_, _, found, err := o.leafConsumedTx(t.Context(), m, [32]byte{})
+	if err != nil || found {
+		t.Fatalf("no spend expected: found=%v err=%v", found, err)
+	}
+	if node.lowest > 1_800_000 {
+		t.Fatalf("an anchor block below the commit floor must lower the search (lowest %d)", node.lowest)
+	}
+}

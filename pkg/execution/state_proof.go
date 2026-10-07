@@ -117,6 +117,25 @@ func (p *StateProof) Verify(stateRoot common.Hash) bool {
 	return bytes.Equal(got.Bytes(), p.Value.Bytes())
 }
 
+// verifyAccountProof is true when proof is a valid Merkle-Patricia proof, against stateRoot, that account exists in the
+// state: the part of Verify that needs no storage slot. The boot probe uses it, so that an eth_getProof answer that is
+// empty, null, of another account or of another state is not taken as a provider serving proofs.
+func verifyAccountProof(stateRoot common.Hash, account common.Address, proof [][]byte) bool {
+	if len(proof) == 0 {
+		return false
+	}
+	db, err := nodeDB(proof)
+	if err != nil {
+		return false
+	}
+	accRLP, err := trie.VerifyProof(stateRoot, crypto.Keccak256(account.Bytes()), db)
+	if err != nil || accRLP == nil {
+		return false
+	}
+	var acc ethAccount
+	return rlp.DecodeBytes(accRLP, &acc) == nil
+}
+
 // EthGetProofResult mirrors the subset of the eth_getProof JSON-RPC response we verify.
 // Fetched via the raw rpc.Client (no gethclient dependency).
 type EthGetProofResult struct {

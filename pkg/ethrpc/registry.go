@@ -24,9 +24,13 @@ import (
 //   - a verification already in flight is waited for, not repeated;
 //   - a provider that failed is not asked again before its own backoff has passed, whichever reader asks, and one
 //     background re-verification serves every reader that lists it;
-//   - a provider that answered ANOTHER chain id or genesis is refused for good, for every reader.
+//   - a provider that answered ANOTHER genesis than a pinned chain's is refused for good, for every reader;
+//   - a provider that answered ANOTHER chain id is EXCLUDED, for every reader, and named loudly: its answer never counts
+//     toward agreement and it is asked nothing, but it is asked its chain id again after a bounded backoff (a
+//     load-balanced or misrouted backend answers the right chain later) and joins when it names the right one. One
+//     misrouted answer does not take down every reader of the chain while MinAgreeingProviders others are verified.
 // The agreement rules are untouched: a reader still asks only verified providers, still needs MinAgreeingProviders of
-// them, and still refuses a provider on the wrong chain. The URL is a map key only and is never logged.
+// them, and never counts a provider on the wrong chain. The URL is a map key only and is never logged.
 
 type registryKey struct {
 	chainID int64
@@ -45,7 +49,7 @@ type sharedProvider struct {
 
 	mu       sync.Mutex
 	verified *agreeingProvider // set once its chain id (and genesis) is verified; never cleared
-	refusal  error             // another chain id or genesis: it never joins
+	refusal  error             // another genesis than the chain is pinned to: it never joins
 	err      error             // why it is not verified, while it is not
 	attempts int               // verifications finished (a test and a log fact)
 	nextTry  time.Time         // not asked again before this, after a failure
@@ -145,7 +149,10 @@ func (sp *sharedProvider) record(v verification, stopped bool) {
 	case v.wrongGenesis != nil:
 		sp.refusal = v.wrongGenesis
 	case v.wrong != "":
-		sp.refusal = v.refusal(sp.chainID, sp.host)
+		// Excluded, not exiled: never counted, asked again by the backoff, and named every time it answers wrong.
+		sp.err = v.wrongChainErr(sp.chainID, sp.host)
+		sp.nextTry = time.Now().Add(sp.backoff)
+		log.Printf("❌ [ethrpc] %v: EXCLUDED from agreement, never counted; asked its chain id again in %s", sp.err, sp.backoff)
 	case v.err != nil:
 		// Not verified in the time its caller gave it (or refused outright): not asked again before its backoff,
 		// whichever reader comes next; the background re-verification is what asks.
@@ -194,6 +201,13 @@ func (sp *sharedProvider) startReverify(timeout time.Duration) {
 		case v.refusal(sp.chainID, sp.host) != nil:
 			sp.refusal, sp.last = v.refusal(sp.chainID, sp.host), v
 			log.Printf("❌ [ethrpc] %v: it never joins", sp.refusal)
+		case v.wrong != "":
+			sp.err = v.wrongChainErr(sp.chainID, sp.host)
+			if sp.backoff *= 2; sp.backoff > reverifyMax {
+				sp.backoff = reverifyMax
+			}
+			sp.nextTry = time.Now().Add(sp.backoff/2 + rand.N(sp.backoff/2+1))
+			log.Printf("❌ [ethrpc] %v: still EXCLUDED from agreement; asked again by %s", sp.err, sp.nextTry.Format("15:04:05"))
 		case v.err != nil:
 			sp.err = v.err
 			if sp.backoff *= 2; sp.backoff > reverifyMax {
