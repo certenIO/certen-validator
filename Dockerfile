@@ -109,6 +109,11 @@ RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -trimpath -buildvcs=
 # v1's replay; run read-only against the validators' database.
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -trimpath -buildvcs=false -ldflags=-buildid= -o /build/proofv2report ./cmd/proofv2report
 
+# blockproofcheck (RB6 item 4): the block-proof monitor. Run as its own compose service, it proves every new finalized
+# block of each settlement chain as a settlement in it would be proven, and alerts when one cannot be (a transaction type
+# no encoder knows, after a chain upgrade) - before a settlement lands in such a block.
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -trimpath -buildvcs=false -ldflags=-buildid= -o /build/blockproofcheck ./cmd/blockproofcheck
+
 # ═══════════════════════════════════════════════════════════════
 # Production Stage
 # ═══════════════════════════════════════════════════════════════
@@ -129,6 +134,7 @@ COPY --from=builder /build/govproof .
 COPY --from=builder /build/txhash .
 COPY --from=builder /build/schemamigrate .
 COPY --from=builder /build/proofv2report .
+COPY --from=builder /build/blockproofcheck .
 
 # Create directories for persistent storage
 RUN mkdir -p /app/bft-keys \

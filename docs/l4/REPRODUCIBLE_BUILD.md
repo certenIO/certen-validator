@@ -1,7 +1,7 @@
 # Reproducible validator build
 
-A released validator commit comes with the SHA-256 of the five binaries its image ships: `validator`, `govproof`, `txhash`,
-`schemamigrate` and `proofv2report`. Anyone with the commit and the BLS ZK key files can rebuild them and get the same bytes. A running
+A released validator commit comes with the SHA-256 of the six binaries its image ships: `validator`, `govproof`, `txhash`,
+`schemamigrate`, `proofv2report` and `blockproofcheck`. Anyone with the commit and the BLS ZK key files can rebuild them and get the same bytes. A running
 validator can then be checked against the release.
 
 ## What is pinned (Dockerfile)
@@ -33,11 +33,11 @@ cp -r <key custody>/bls_zk_keys <key custody>/bls_zk_keys_bls12381 build/   # th
 cd build
 docker build --no-cache --target builder -t certen-validator-build .
 docker run --rm --entrypoint sh certen-validator-build -c \
-  'cd /build && sha256sum validator govproof txhash schemamigrate proofv2report'
+  'cd /build && sha256sum validator govproof txhash schemamigrate proofv2report blockproofcheck'
 ```
 
 Compare with the release's checksums. For a running node:
-`docker exec certen-validator-N sha256sum /app/validator /app/govproof /app/txhash /app/schemamigrate /app/proofv2report`.
+`docker exec certen-validator-N sha256sum /app/validator /app/govproof /app/txhash /app/schemamigrate /app/proofv2report /app/blockproofcheck`.
 
 ## Stated limits
 

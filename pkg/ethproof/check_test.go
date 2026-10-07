@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ethereum/go-ethereum/rpc"
+
 	"github.com/certen/independant-validator/pkg/ethproof"
 	"github.com/certen/independant-validator/pkg/ethproof/ethprooftest"
 )
@@ -107,5 +109,29 @@ func TestTxTypeOfAnEncoding(t *testing.T) {
 		if got := ethproof.TxType([]byte(enc)); got != want {
 			t.Fatalf("TxType(%x) = %d, want %d", enc, got, want)
 		}
+	}
+}
+
+// One provider's bodies: every captured block proves, and a block it serves with an unknown type is refused - not unread.
+func TestCheckBlockFromOneProvider(t *testing.T) {
+	for _, name := range ethprooftest.All {
+		f := ethprooftest.Load(t, name)
+		c, err := rpc.Dial(ethprooftest.URLs(t, honest(f))[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		chk, err := ethproof.CheckBlockFromOne(context.Background(), c, fixtureNumber(t, f))
+		if err != nil || chk.Hash != f.BlockHash() || chk.Entries != len(f.Transactions()) {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+	f := ethprooftest.Load(t, ethprooftest.ArbitrumRedeem)
+	c, err := rpc.Dial(ethprooftest.URLs(t, &ethprooftest.Provider{F: f, Mutate: retype("0x7d")})[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = ethproof.CheckBlockFromOne(context.Background(), c, fixtureNumber(t, f))
+	if err == nil || errors.Is(err, ethproof.ErrUnread) || !errors.Is(err, ethproof.ErrRefused) || !strings.Contains(err.Error(), "0x7d") {
+		t.Fatalf("an unencodable block from one provider: %v", err)
 	}
 }
