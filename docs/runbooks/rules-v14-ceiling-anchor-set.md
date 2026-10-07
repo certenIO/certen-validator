@@ -28,7 +28,7 @@ Three defects, one rules version:
 
 | Rule | Code | Why |
 |---|---|---|
-| `certen.anchorset.set/v1`: the V8 anchor of each settlement chain it lists (11155111, 84532, 421614 in set 1), each once, each a catalogued chain and a non-zero `0x` address; a chain left out is refused by name (code 17) when a block targets it | 16 when refused | A set that leaves a chain out would leave that chain's blocks with nothing to be judged against. |
+| `certen.anchorset.set/v1`: the V8 anchor of each settlement chain it lists (11155111, 84532, 421614 and 2017 in set 1), each once, each a catalogued chain and a non-zero `0x` address; a chain left out is refused by name (code 17) when a block targets it | 16 when refused | A set that leaves a chain out would leave that chain's blocks with nothing to be judged against. |
 | Authorised by at least the threshold of **distinct keys** of the admin set in force for the block (`AdminSetAt`) | 16 | The same authority as the BLS registry and admin rotation. |
 | Signatures cover the chain id, the version and every anchor, length-prefixed (below) | 16 | A set signed for one chain is nothing on another, and nothing in it can be changed after signing. |
 | `version` = 1 + the newest version recorded | 16 | A set cannot be replayed, skipped or reordered. |
@@ -45,7 +45,10 @@ The accepted set's id (`anchor-set:<hex SigningBytes>`) goes into the app hash.
 `certen.anchorset.set/v1`, chain id, version, number of anchors, then in chain-id order each chain id (decimal) and its
 anchor in lowercase hex. Pinned in `TestTheAnchorSetEncodingIsPinned` against an independent computation (Python hashlib and
 `printf | sha256sum`). For the live set below on `certen-testnet`, version 1, it is
-`51985f55976189ba9fa5536aaf85a9988467d07dbbbfe8747bd171e52b272578`.
+`52ef59eafedbb8e2b4bf575530733bff0a04f3035ff9a342c4185daebaed65d7` (four chains, Telcoin Adiri included;
+`TestTheFourChainAnchorSetEncodingIsPinned`). The three-chain set's `51985f55...` is pinned by `TestTheAnchorSetEncodingIsPinned`
+and is NOT what to sign: a set that leaves Adiri out refuses every Adiri block with code 17
+(`TestAThreeChainSetRefusesAdiriWithCode17AndTheFourChainSetAcceptsIt`).
 
 ## Until an anchor set is committed: the v14 activation
 
@@ -79,6 +82,7 @@ building blocks every peer refuses.
 | Ethereum Sepolia | 11155111 | `0x830cfB484b6e5606687e00f64C40aeb9c7c84E3c` |
 | Base Sepolia | 84532 | `0x830cfB484b6e5606687e00f64C40aeb9c7c84E3c` |
 | Arbitrum Sepolia | 421614 | `0x3F5B4d4371f06bdFff341d08Ca72A156233e3eA6` |
+| Telcoin Adiri | 2017 | `0xEE381d01Dab7ffeA0F0006943F8337bA88B4070C` |
 
 These must equal each validator's `CERTEN_ANCHOR_V8_<chainId>`. Check `.env.shared` before step 4: admission refuses a
 node whose configured anchor differs from the committed one.
@@ -92,13 +96,16 @@ Apply every env change **before** any rebuild (lesson of 2026-10-03: the NTFY_UR
      `=false`, because an epoch without a basis is exactly the omission F6 forbids. `true` is accepted and does nothing.
    - Deploy `feat/entitlement-every-chain-priced`.
    - Verify:
-     - `GET /v1/entitlement/current`: `header.cost_basis` has exactly three entries (11155111, 84532, 421614), each with
+     - `GET /v1/entitlement/current`: `header.cost_basis` has exactly four entries (11155111, 84532, 421614, 2017), each with
        positive `base_micro_usd` and `per_leg_micro_usd`;
-     - `certen_gateway_entitlement_chain_unpriced` is 0 for all three chains, and `EntitlementChainUnpriced` is not firing.
+     - `certen_gateway_entitlement_chain_unpriced` is 0 for all four chains, and `EntitlementChainUnpriced` is not firing.
    - If a chain cannot be priced from the last 30 days of measurements, the publisher refuses that epoch by name, the alert
      fires (ntfy, critical), and the previous epoch stays current until it expires (2 h). **Do not continue to step 3 while
      any chain is unpriced**: from the v14 activation, every intent with a ceiling on that chain would be refused
      `ENTITLEMENT_UNPRICED`. Price the chain with real measurements; never publish a guess.
+   - **Measured 2026-10-06: the live epoch prices only 84532, 421614 and 11155111, not 2017**, although the gateway enables 2017.
+     Until an epoch prices 2017 from real measurements, v14 would refuse every Adiri intent that carries a ceiling
+     (`ENTITLEMENT_UNPRICED`). This step is not optional for the four-chain set.
    - v13 validators already understand the v2 (cost-basis) preimage, so publishing the basis changes nothing for them.
 2. **History check before the validator deploy.** Build `validator-rotate` from the release commit and run it against one
    v13 validator that holds every block from 1:
@@ -130,16 +137,16 @@ Apply every env change **before** any rebuild (lesson of 2026-10-03: the NTFY_UR
 
    ```
    validator-rotate anchor-set propose --rpc http://v1:26657 \
-     --anchor 11155111=0x830cfB484b6e5606687e00f64C40aeb9c7c84E3c,84532=0x830cfB484b6e5606687e00f64C40aeb9c7c84E3c,421614=0x3F5B4d4371f06bdFff341d08Ca72A156233e3eA6 \
+     --anchor 2017=0xEE381d01Dab7ffeA0F0006943F8337bA88B4070C,84532=0x830cfB484b6e5606687e00f64C40aeb9c7c84E3c,421614=0x3F5B4d4371f06bdFff341d08Ca72A156233e3eA6,11155111=0x830cfB484b6e5606687e00f64C40aeb9c7c84E3c \
      --admin-key-id admin-a --admin-secret @<admin-a seed file> --out anchor-set-v1.json
    validator-rotate anchor-set sign --tx anchor-set-v1.json --admin-key-id admin-b --admin-secret @<admin-b seed file>
    validator-rotate anchor-set preflight --tx anchor-set-v1.json --rpc http://v1:26657,...,http://v7:26657 \
-     --eth-rpc 11155111=<sepolia rpc>,84532=<base-sepolia rpc>,421614=<arbitrum-sepolia rpc>
+     --eth-rpc 11155111=<sepolia rpc>,84532=<base-sepolia rpc>,421614=<arbitrum-sepolia rpc>,2017=https://rpc.telcoin.network
    validator-rotate anchor-set submit    --tx anchor-set-v1.json --rpc http://v1:26657,...,http://v7:26657 \
-     --eth-rpc 11155111=<sepolia rpc>,84532=<base-sepolia rpc>,421614=<arbitrum-sepolia rpc>
+     --eth-rpc 11155111=<sepolia rpc>,84532=<base-sepolia rpc>,421614=<arbitrum-sepolia rpc>,2017=https://rpc.telcoin.network
    ```
 
-   Preflight is GO only if:
+   Preflight is GO only if (and it is NO-GO unless `--eth-rpc` names every chain in the set):
    - every node runs rules v14, all on the same version and chain, and caught up;
    - every node reports the same admin set and the same anchor-set log;
    - the chain's own rule (`VerifyAnchorSet`) accepts the set for the next block;
@@ -147,7 +154,7 @@ Apply every env change **before** any rebuild (lesson of 2026-10-03: the NTFY_UR
 
    Submit preflights again, commits through the first RPC, and confirms the record at the commit height.
 5. **Verify.**
-   - `anchor-set status` on all 7 shows `anchor set v1 in force` with the three addresses.
+   - `anchor-set status` on all 7 shows `anchor set v1 in force` with the four chains' anchors.
    - `abci_info` still reports app version 14; the persisted stamp is v14 from the anchor-set block.
    - `history-check --rules 14` against one node exits 0, and lists `certen.anchorset.set/v1`.
    - The next natural intent settles (validator log: no `ANCHOR_SET_NOT_COMMITTED` and no `[ANCHOR-SET] REJECTED`).
