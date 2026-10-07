@@ -71,6 +71,12 @@ type SendRequest struct {
 	Data  []byte
 	Value *big.Int
 	Gas   uint64
+	// GasCeiling, when set, makes Gas an ESTIMATE-BASED limit (RB7-ADIRI-F2): the sender asks the chain what the call costs
+	// now and sends with that plus gasEstimateMarginPct, refusing by name when the estimate is above GasCeiling. Gas is
+	// then used only when the estimate REVERTS (the call would fail now - typically another validator's anchor landed
+	// first - so the chain adjudicates it exactly as before and a revert uses only the gas it reached). Zero keeps Gas
+	// as the limit, for the one payload that is a plain transfer.
+	GasCeiling uint64
 	// Label names the transaction in logs and in the outbox ("anchor", "verify", "settle").
 	Label string
 	// Owner identifies what the transaction is FOR (a member's settlement: its chain and operationID).
@@ -167,6 +173,11 @@ func (s *txSender) Send(ctx context.Context, req SendRequest) (*types.Receipt, s
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	gas, err := s.gasLimitFor(ctx, req)
+	if err != nil {
+		return nil, "", &NotBroadcastError{Err: err}
+	}
+	req.Gas = gas
 	tx, networkPrice, err := s.priceAndSign(ctx, req, nil)
 	if err != nil {
 		return nil, "", &NotBroadcastError{Err: err}
@@ -761,4 +772,76 @@ func saveOutbox(path string, byN map[uint64]*outboxEntry) error {
 		_ = d.Close()
 	}
 	return nil
+}
+
+// gasEstimateMarginPct is the headroom over the node's estimate. An estimate is the cost against the state it was read
+// at; the transaction runs against the state it is included in (another validator's transaction, a later block), and a
+// nested call spends up to 1/64 less than it is given (EIP-150). 25% covers both without sending a limit that could
+// pay for a runaway: the spend of a transaction is what it uses, not its limit.
+const gasEstimateMarginPct = 25
+
+// gasEstimator is what the sender needs of its backend to size a transaction. *ethclient.Client has it.
+type gasEstimator interface {
+	EstimateGas(ctx context.Context, msg ethereum.CallMsg) (uint64, error)
+}
+
+// GasEstimateExceedsCeilingError: what the call costs now is more than the most this chain may spend on one
+// transaction. Nothing is sent; the member waits (a refusal before broadcast), and the ceiling is the operator's.
+type GasEstimateExceedsCeilingError struct {
+	Label           string
+	Estimate, Limit uint64
+}
+
+func (e *GasEstimateExceedsCeilingError) Error() string {
+	return fmt.Sprintf("%s: the call costs %d gas now, above this chain's ceiling of %d gas for one transaction; nothing was sent",
+		e.Label, e.Estimate, e.Limit)
+}
+
+// gasLimitFor is the gas limit one request is sent with. A request without a GasCeiling keeps its Gas. Otherwise the
+// limit is the chain's own estimate plus the margin, never a number compiled in: a fixed limit ran every Sepolia
+// createBatchAnchor out of gas the day that chain repriced state creation (RB7-ADIRI-F2).
+//
+//   - estimate: the limit is the estimate plus the margin, and never below Gas (the floor);
+//   - estimate above GasCeiling: *GasEstimateExceedsCeilingError, nothing sent;
+//   - estimate reverts: the call would fail now, so its Gas is kept and the chain adjudicates it as before (a revert
+//     spends only the gas it reached; the usual cause is another validator's anchor landing first). Logged, not silent;
+//   - any other estimate error (the node unreachable, rate limited): a read error, nothing sent, retried.
+func (s *txSender) gasLimitFor(ctx context.Context, req SendRequest) (uint64, error) {
+	if req.GasCeiling == 0 {
+		return req.Gas, nil
+	}
+	est, ok := s.client.(gasEstimator)
+	if !ok {
+		return 0, fmt.Errorf("%s: this chain's client cannot estimate gas, and a fixed limit is not used for it", req.Label)
+	}
+	to := req.To
+	value := req.Value
+	if value == nil {
+		value = new(big.Int)
+	}
+	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	cost, err := est.EstimateGas(cctx, ethereum.CallMsg{From: s.from, To: &to, Value: value, Data: req.Data})
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "revert") {
+			s.logf("[TX-SENDER] %s nonce=%d: the gas estimate REVERTED (%v); sending at %d gas so the chain decides", req.Label,
+				req.Nonce, err, req.Gas)
+			return req.Gas, nil
+		}
+		return 0, readErr(fmt.Errorf("%s: estimating gas: %w", req.Label, err))
+	}
+	if cost > req.GasCeiling {
+		return 0, &GasEstimateExceedsCeilingError{Label: req.Label, Estimate: cost, Limit: req.GasCeiling}
+	}
+	// Never below Gas: the validators judge a reverted peer attempt honest only if it was sent with at least the
+	// honest limit (honestSettlementGas), so a cheap chain keeps exactly the limit it always had and only a chain
+	// whose cost has grown past it is sent more. A higher limit costs nothing: a transaction pays for what it uses.
+	limit := cost + cost*gasEstimateMarginPct/100
+	if limit < req.Gas {
+		limit = req.Gas
+	}
+	if limit > req.GasCeiling {
+		limit = req.GasCeiling
+	}
+	return limit, nil
 }

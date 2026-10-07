@@ -52,6 +52,12 @@ type modelChain struct {
 	acceptErr  error // returned by SendTransaction AFTER accepting the transaction
 	rejectErr  error // returned by SendTransaction INSTEAD of accepting it
 	receiptErr error // returned by every receipt read
+	// execCost is what executing a transaction costs on this chain: below it the transaction runs out of gas and its
+	// receipt is a failure that used its whole limit, as on a real node. nil = every transaction costs 21,000.
+	execCost func(tx *types.Transaction) uint64
+	// estimateErr is returned by EstimateGas INSTEAD of an estimate.
+	estimateErr error
+	lastGas     uint64 // the gas limit of the last transaction accepted
 }
 
 func newModelChain(from common.Address) *modelChain {
@@ -99,6 +105,7 @@ func (m *modelChain) SendTransaction(_ context.Context, tx *types.Transaction) e
 		}
 	}
 	m.pending[tx.Nonce()] = tx
+	m.lastGas = tx.Gas()
 	return m.acceptErr
 }
 func (m *modelChain) TransactionReceipt(_ context.Context, h common.Hash) (*types.Receipt, error) {
@@ -140,8 +147,29 @@ func (m *modelChain) mineBlock() {
 	}
 	delete(m.pending, m.mined)
 	m.mined++
-	m.receipts[tx.Hash()] = &types.Receipt{Status: types.ReceiptStatusSuccessful, TxHash: tx.Hash(),
+	r := &types.Receipt{Status: types.ReceiptStatusSuccessful, TxHash: tx.Hash(),
 		BlockNumber: new(big.Int).SetUint64(m.block), GasUsed: 21000}
+	if m.execCost != nil {
+		if cost := m.execCost(tx); tx.Gas() < cost {
+			r.Status, r.GasUsed = types.ReceiptStatusFailed, tx.Gas() // out of gas: the whole limit is spent
+		} else {
+			r.GasUsed = cost
+		}
+	}
+	m.receipts[tx.Hash()] = r
+}
+
+// EstimateGas is what a node answers: the cost of executing the call now.
+func (m *modelChain) EstimateGas(_ context.Context, msg ethereum.CallMsg) (uint64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.estimateErr != nil {
+		return 0, m.estimateErr
+	}
+	if m.execCost == nil {
+		return 21000, nil
+	}
+	return m.execCost(types.NewTx(&types.LegacyTx{To: msg.To, Data: msg.Data, Value: msg.Value})), nil
 }
 
 func (m *modelChain) set(fn func(m *modelChain)) {
@@ -599,5 +627,97 @@ func TestTxSenderDoesNotEscalateFeesWhenPriceIsNotTheCause(t *testing.T) {
 	defer mu.Unlock()
 	if broadcasts != 1 || len(cwe.Hashes) != 1 {
 		t.Fatalf("%d broadcasts (%d hashes) while waiting behind a gap; the fee must not be raised", broadcasts, len(cwe.Hashes))
+	}
+}
+
+// RB7-ADIRI-F2: Sepolia repriced state creation (a new storage slot costs about five times more), so the anchor that cost
+// 340,916 gas in the morning costs 1.4M by evening. A fixed 500,000 limit then ran every createBatchAnchor out of gas.
+const sepoliaAnchorCost = 1_406_477
+
+func TestAnAnchorThatCostsMoreThanTheFixedLimitStillMines(t *testing.T) {
+	r := newSenderRig(t)
+	r.chain.set(func(m *modelChain) { m.execCost = func(*types.Transaction) uint64 { return sepoliaAnchorCost } })
+	s := r.sender(nil)
+	req := payload(r.pendingNonce())
+	req.Label, req.Gas, req.GasCeiling = "anchor", 500000, maxBatchTxGas
+	rcpt, _, err := s.Send(context.Background(), req)
+	if err != nil || rcpt == nil {
+		t.Fatalf("send: rcpt=%v err=%v", rcpt, err)
+	}
+	if rcpt.Status != types.ReceiptStatusSuccessful {
+		t.Fatalf("the anchor ran out of gas at the fixed limit %d (it costs %d): status %d, gas used %d",
+			req.Gas, sepoliaAnchorCost, rcpt.Status, rcpt.GasUsed)
+	}
+}
+
+func sendWithCeiling(t *testing.T, r *senderRig, gas uint64) (*types.Receipt, error) {
+	t.Helper()
+	req := payload(r.pendingNonce())
+	req.Label, req.Gas, req.GasCeiling = "anchor", gas, maxBatchTxGas
+	rcpt, _, err := r.sender(nil).Send(context.Background(), req)
+	return rcpt, err
+}
+
+func TestTheGasLimitIsTheEstimatePlusTheMargin(t *testing.T) {
+	r := newSenderRig(t)
+	r.chain.set(func(m *modelChain) { m.execCost = func(*types.Transaction) uint64 { return sepoliaAnchorCost } })
+	if _, err := sendWithCeiling(t, r, 500000); err != nil {
+		t.Fatal(err)
+	}
+	if want := uint64(sepoliaAnchorCost + sepoliaAnchorCost*gasEstimateMarginPct/100); r.chain.lastGas != want {
+		t.Fatalf("sent with %d gas, want the estimate %d plus %d%% = %d", r.chain.lastGas, sepoliaAnchorCost, gasEstimateMarginPct, want)
+	}
+}
+
+// A chain whose cost has not grown keeps exactly the limit it always had: the peers judge a reverted attempt honest
+// only when it was sent with at least honestSettlementGas.
+func TestACheapCallKeepsItsFixedLimitAsTheFloor(t *testing.T) {
+	r := newSenderRig(t)
+	r.chain.set(func(m *modelChain) { m.execCost = func(*types.Transaction) uint64 { return 300_000 } })
+	if _, err := sendWithCeiling(t, r, 500000); err != nil {
+		t.Fatal(err)
+	}
+	if r.chain.lastGas != 500000 {
+		t.Fatalf("a call costing 300,000 was sent with %d gas; its limit must stay 500000", r.chain.lastGas)
+	}
+}
+
+func TestAnEstimateAboveTheCeilingSendsNothingAndIsNamed(t *testing.T) {
+	r := newSenderRig(t)
+	r.chain.set(func(m *modelChain) { m.execCost = func(*types.Transaction) uint64 { return maxBatchTxGas + 1 } })
+	_, err := sendWithCeiling(t, r, 500000)
+	var over *GasEstimateExceedsCeilingError
+	var nb *NotBroadcastError
+	if !errors.As(err, &over) || !errors.As(err, &nb) {
+		t.Fatalf("want a named refusal before broadcast, got %v", err)
+	}
+	if r.chain.sendCount != 0 {
+		t.Fatalf("%d transactions were sent past the ceiling", r.chain.sendCount)
+	}
+}
+
+// The call would revert now (another validator's anchor landed first): the chain adjudicates it as it always did.
+func TestAnEstimateThatRevertsIsSentAtItsFixedLimitForTheChainToDecide(t *testing.T) {
+	r := newSenderRig(t)
+	r.chain.set(func(m *modelChain) { m.estimateErr = errors.New("execution reverted: AnchorAlreadyExists") })
+	if _, err := sendWithCeiling(t, r, 500000); err != nil {
+		t.Fatal(err)
+	}
+	if r.chain.lastGas != 500000 {
+		t.Fatalf("a reverting estimate was sent with %d gas, want its fixed limit 500000", r.chain.lastGas)
+	}
+}
+
+// A node that cannot answer says nothing about the call: nothing is sent, and the member is retried, not failed.
+func TestAnEstimateReadErrorSendsNothingAndIsARetry(t *testing.T) {
+	r := newSenderRig(t)
+	r.chain.set(func(m *modelChain) { m.estimateErr = errors.New("429 Too Many Requests") })
+	_, err := sendWithCeiling(t, r, 500000)
+	var nb *NotBroadcastError
+	if !errors.As(err, &nb) || !IsChainReadError(err) {
+		t.Fatalf("want a not-broadcast chain read error, got %v", err)
+	}
+	if r.chain.sendCount != 0 || !isTransientSendError(err) && !IsChainReadError(err) {
+		t.Fatalf("sendCount=%d, err=%v", r.chain.sendCount, err)
 	}
 }

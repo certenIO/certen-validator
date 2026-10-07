@@ -198,6 +198,8 @@ func (c *simIdleChain) serve(t *testing.T) *ethclient.Client {
 			result = (*hexutil.Big)(c.head().BaseFee)
 		case "eth_call":
 			result = hexutil.Bytes(make([]byte, 32)) // isLeafConsumed: false
+		case "eth_estimateGas":
+			result = hexutil.EncodeUint64(300000) // below every fixed limit: the limit sent stays the fixed one
 		case "eth_getCode":
 			result = hexutil.Bytes{0x60}
 		case "eth_getLogs":
