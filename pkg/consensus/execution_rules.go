@@ -210,8 +210,34 @@ const (
 	// or refuses a spine transaction (committedRulesVersion).
 	executionRulesV13 uint64 = 13
 
+	// v14 - CERTEN's anchor set becomes consensus state, and the entitlement cost ceiling binds (RB4-F35, RB4-F6):
+	//
+	//   - a recognised transaction kind `certen.anchorset.set/v1` (anchor_set.go): the V8 anchor of every settlement
+	//     chain, authorised by the admin quorum in force (AdminSetAt) over the chain id and the version, sequential
+	//     versions, recorded like the BLS registry and served at /certen/anchor_set. Accepted, it contributes its id to
+	//     the app hash; refused, it returns code 16. v13 judged the same bytes as a ValidatorBlock.
+	//   - From the height after the chain's FIRST accepted anchor set - the v14 activation, a fact of committed state on
+	//     every node, never a date or a node's environment - every ValidatorBlock is judged by two more rules: each chain
+	//     target names its chain's committed anchor, or the block is refused with code 17 (ANCHOR_NOT_COMMITTED); and a
+	//     cost ceiling that touches a chain the epoch publishes no basis for is refused (code 4, ENTITLEMENT_UNPRICED),
+	//     as is a negative or overflowing basis (code 4, ENTITLEMENT_COST_BASIS_INVALID). v13 skipped the ceiling in both
+	//     cases and checked no anchor.
+	//
+	// Until the activation the v14 binary decides every block exactly as v13 did - the explicitly named behaviour for a
+	// chain with no anchor set is "v14 not yet activated" - and the v14 proposer admits no intent at all
+	// (ErrAnchorSetNotCommitted, retried), so the window between the deploy and the anchor set carries no new work. The
+	// runbook commits the anchor set immediately after the fleet runs v14 (docs/runbooks/rules-v14-ceiling-anchor-set.md).
+	//
+	// v14 CONTINUES v7..v13 state without a reset: the kind is new, so no committed history contains it, and that is
+	// checked, not assumed - IndexCommittedHistory refuses to start on any committed anchor-set-kind transaction that v14
+	// did not decide (a ValidatorBlock's code, or an acceptance with no anchor set recorded for it). No committed history
+	// holds an anchor set, so none reaches the activation, and every other block is decided exactly as v13 decided it.
+	// The state stays stamped with the older version until a block accepts or refuses an anchor set
+	// (committedRulesVersion).
+	executionRulesV14 uint64 = 14
+
 	// CurrentExecutionRulesVersion is what THIS binary implements.
-	CurrentExecutionRulesVersion = executionRulesV13
+	CurrentExecutionRulesVersion = executionRulesV14
 )
 
 // compatibleContinuations names the older rules whose committed state this binary may continue, and why
@@ -227,12 +253,15 @@ var compatibleContinuations = map[uint64]uint64{
 	// signatures by the set in force, which is the genesis seal until a re-seal is committed.
 	// v12 adds only the admin-rotation kind, which no committed history contains (checked at every start).
 	// v13 adds only the two spine kinds, which no committed history contains (checked at every start).
-	executionRulesV7:  executionRulesV13,
-	executionRulesV8:  executionRulesV13,
-	executionRulesV9:  executionRulesV13,
-	executionRulesV10: executionRulesV13,
-	executionRulesV11: executionRulesV13,
-	executionRulesV12: executionRulesV13,
+	// v14 adds only the anchor-set kind, which no committed history contains (checked at every start), and its
+	// ValidatorBlock rules apply only from the height after an accepted anchor set, which no committed history reaches.
+	executionRulesV7:  executionRulesV14,
+	executionRulesV8:  executionRulesV14,
+	executionRulesV9:  executionRulesV14,
+	executionRulesV10: executionRulesV14,
+	executionRulesV11: executionRulesV14,
+	executionRulesV12: executionRulesV14,
+	executionRulesV13: executionRulesV14,
 }
 
 // ExecutionRulesMismatchError explains a refusal to start in terms an operator

@@ -18,6 +18,7 @@ import (
 	"time"
 
 	dbm "github.com/cometbft/cometbft-db"
+	abcitypes "github.com/cometbft/cometbft/abci/types"
 	cmtcfg "github.com/cometbft/cometbft/config"
 	cmted25519 "github.com/cometbft/cometbft/crypto/ed25519"
 	cmtlog "github.com/cometbft/cometbft/libs/log"
@@ -58,6 +59,9 @@ type rehearsalNode struct {
 	client *local.Local
 	// rpcURL is the node's CometBFT RPC when the network serves one (startRehearsalNetworkWith), else "".
 	rpcURL string
+	// wrap, when set, is the ABCI application CometBFT runs around the node's ValidatorApp - a proposer that behaves
+	// otherwise than an honest one (anchor_set_network_test.go). The app's own verdicts are unchanged.
+	wrap func(*ValidatorApp) abcitypes.Application
 }
 
 // freePort returns a port a node can listen on, chosen BELOW every OS's ephemeral range (Windows 49152-65535, Linux
@@ -118,7 +122,11 @@ func (n *rehearsalNode) start(t *testing.T, genesis *cmttypes.GenesisDoc) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	node, err := nm.NewNode(n.cfg, pv, nodeKey, proxy.NewLocalClientCreator(app),
+	var abciApp abcitypes.Application = app
+	if n.wrap != nil {
+		abciApp = n.wrap(app)
+	}
+	node, err := nm.NewNode(n.cfg, pv, nodeKey, proxy.NewLocalClientCreator(abciApp),
 		nm.DefaultGenesisDocProviderFunc(n.cfg), n.dbProvider,
 		nm.DefaultMetricsProvider(n.cfg.Instrumentation), rehearsalLogger(n.name))
 	if err != nil {

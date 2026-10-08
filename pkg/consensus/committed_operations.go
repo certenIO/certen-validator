@@ -122,6 +122,10 @@ func (app *ValidatorApp) recordCommittedOperations(height int64) {
 		app.recordFirstVerdict(executionRulesV13, &app.rulesV13FirstVerdict, height)
 		app.blockRulesV13Verdict = false
 	}
+	if app.blockRulesV14Verdict {
+		app.recordFirstVerdict(executionRulesV14, &app.rulesV14FirstVerdict, height)
+		app.blockRulesV14Verdict = false
+	}
 	// This binary decided this block, so it holds nothing this version decides differently (checkCommittedKinds).
 	if err := app.ledgerStore.AdvanceKindsChecked(CurrentExecutionRulesVersion, CommittedHistoryCheckVersion, height); err != nil {
 		app.logger.Fatalf("❌ [HISTORY] could not record committed block %d as checked: %v", height, err)
@@ -302,6 +306,8 @@ func (app *ValidatorApp) indexCommittedOperations(h committedHistory) error {
 				app.recordFirstVerdict(executionRulesV12, &app.rulesV12FirstVerdict, height)
 			} else if isSpineTx(tx) {
 				app.recordFirstVerdict(executionRulesV13, &app.rulesV13FirstVerdict, height)
+			} else if _, ok := DecodeAnchorSet(tx); ok {
+				app.recordFirstVerdict(executionRulesV14, &app.rulesV14FirstVerdict, height)
 			}
 		}
 		violations = append(violations, found...)
@@ -412,6 +418,9 @@ func isValidatorBlockTx(tx []byte) bool {
 	if isSpineTx(tx) {
 		return false
 	}
+	if _, ok := DecodeAnchorSet(tx); ok {
+		return false
+	}
 	return true
 }
 
@@ -425,8 +434,8 @@ func isSpineTx(tx []byte) bool {
 }
 
 // kindViolation judges one committed transaction of a kind a rules version after v9 added - the BLS registry (v10),
-// the admin re-seal (v11), the admin rotation (v12), the spine genesis and extension (v13) - and a policy update, against
-// what this binary decides for it.
+// the admin re-seal (v11), the admin rotation (v12), the spine genesis and extension (v13), the anchor set (v14) - and a
+// policy update, against what this binary decides for it.
 // isKind says whether the transaction is one of those kinds; violation, when not empty, says how its recorded outcome
 // is one this binary does not reproduce: the version before judged those bytes as a ValidatorBlock, with a
 // ValidatorBlock's code - or it was accepted and the committed state holds no record of it.
@@ -436,13 +445,16 @@ func (app *ValidatorApp) kindViolation(height int64, i int, tx []byte, code uint
 }
 
 // CommittedRecords is the committed state a history check finds an accepted transaction's record in: the policy (the
-// re-seal's and every admin rotation's record, and the schedule), the BLS registry log and the Accumulate spine log.
+// re-seal's and every admin rotation's record, and the schedule), the BLS registry log, the Accumulate spine log and the anchor set log.
 type CommittedRecords struct {
 	Policy   *ledger.EntitlementPolicyState // nil: the chain sealed none
 	Registry *ledger.BLSRegistryLog         // nil: the registry log could not be read (every accepted registry is then unread)
 	// Spine nil: the node serves no spine log - it runs rules before v13, which never accepted a spine transaction, so an
 	// accepted one is a violation, never unread.
 	Spine *ledger.AccumulateSpineLog
+	// AnchorSets nil: the anchor set log could not be read - a node on rules before v14 serves none, and none can have
+	// accepted an anchor set, so an accepted one is then a violation.
+	AnchorSets *ledger.AnchorSetLog
 }
 
 // committedRecords reads this node's committed records.
@@ -459,7 +471,11 @@ func (app *ValidatorApp) committedRecords() (*CommittedRecords, error) {
 	if err != nil {
 		return nil, fmt.Errorf("the Accumulate spine log: %w", err)
 	}
-	return &CommittedRecords{Policy: policy, Registry: registry, Spine: spine}, nil
+	anchorSets, err := app.ledgerStore.LoadAnchorSet()
+	if err != nil {
+		return nil, fmt.Errorf("the anchor set log: %w", err)
+	}
+	return &CommittedRecords{Policy: policy, Registry: registry, Spine: spine, AnchorSets: anchorSets}, nil
 }
 
 // kindViolationWith is kindViolation with the committed records read through records, only when an acceptance has to
@@ -579,6 +595,34 @@ func kindViolationWith(height int64, i int, tx []byte, code uint32,
 				"v12 decides it as an admin rotation", height, i, code), true, "", nil
 		}
 	}
+	if as, ok := DecodeAnchorSet(tx); ok {
+		// v13 judged an anchor-set-kind transaction as a ValidatorBlock. v14 refuses one with code 16 - a code no earlier
+		// version returns for it - or accepts it and records it at its height under its version and id. Anything else is
+		// a ValidatorBlock's verdict, which v14 does not reproduce; an acceptance without its record is divergent or
+		// corrupt state. No node before v14 can have recorded one, so records it cannot serve are no excuse.
+		switch code {
+		case codeAnchorSetRefused:
+			return "", true, "", nil
+		case 0:
+			rec, err := records()
+			if err != nil {
+				return "", true, "", fmt.Errorf("the committed records, to check the anchor set at height %d: %w", height, err)
+			}
+			if rec != nil && rec.AnchorSets != nil {
+				for _, r := range rec.AnchorSets.Versions {
+					if r.Version == as.Version && r.Height == height && r.ID == as.AnchorSetID() {
+						return "", true, "", nil
+					}
+				}
+			}
+			return fmt.Sprintf("height %d tx %d is an anchor set (version %d) that was accepted, but no anchor set is "+
+				"recorded for it at that height: an acceptance without its record is divergent or corrupt state, or v13 "+
+				"accepted it as a ValidatorBlock; v14 decides it as an anchor set", height, i, as.Version), true, "", nil
+		default:
+			return fmt.Sprintf("height %d tx %d is an anchor set that v13 judged as a ValidatorBlock (code %d); "+
+				"v14 decides it as an anchor set", height, i, code), true, "", nil
+		}
+	}
 	if gt, ok := DecodeAccumulateSpineGenesis(tx); ok {
 		// v12 judged a spine-kind transaction as a ValidatorBlock. v13 refuses a genesis with code 13 - a code no earlier
 		// version returns - or accepts it and records it, at its height, in the spine log (or, once a later genesis
@@ -680,7 +724,10 @@ func spineExtensionRecorded(l *ledger.AccumulateSpineLog, et *AccumulateSpineExt
 //     watermark at their height and never ran the record checks against their own ledger; under this key they do.
 //   - 3: the spine kinds of rules v13 - a committed spine genesis or extension must be decided as v13 decides it, and an
 //     accepted one must have its record in the committed spine log (spineGenesisRecorded, spineExtensionRecorded).
-const CommittedHistoryCheckVersion uint64 = 3
+//   - 4: rules v14's anchor set (RB4-F35): a committed anchor-set-kind transaction must be decided as one - refused with
+//     code 16, or accepted (code 0) with its record in the committed anchor set log at its height under its version and
+//     id - and CommittedRecords carries that log.
+const CommittedHistoryCheckVersion uint64 = 4
 
 // checkCommittedKinds checks every committed block above the kinds watermark (ledger KindsCheckedThrough, for this rules
 // version and CommittedHistoryCheckVersion) with kindViolation and rotationBlockVerdicts, and advances the watermark to
@@ -781,7 +828,7 @@ func rotationBlockVerdicts(height int64, txs [][]byte, codes []uint32) (violatio
 }
 
 // CommittedBlockViolations judges one committed block - its transactions and the result codes it committed - the way
-// every node judges its history before it starts (IndexCommittedHistory): each transaction of a kind rules v10-v13
+// every node judges its history before it starts (IndexCommittedHistory): each transaction of a kind rules v10-v14
 // added and each policy update, and the block's validator rotations as a whole. records is the chain's committed
 // records, or nil when they cannot be read (a node on rules before v12 serves none over RPC): then every accepted
 // registry and re-seal is returned in unchecked - its record is checked by every v12 node against its own ledger when
