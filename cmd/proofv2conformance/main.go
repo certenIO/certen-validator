@@ -152,46 +152,64 @@ func run(src, incPath, evidence, out string) error {
 	}})
 
 	// Each attack edits a fresh copy of the JSON. The Go verifier must refuse it here, or the suite is not written.
-	for _, a := range attacks {
+	attackList, err := attackCases(base, attacks)
+	if err != nil {
+		return err
+	}
+	cases = append(cases, attackList...)
+
+	// A second, synthetic document whose spine contains a network update (synthetic.go): the live capture has none.
+	syn, err := syntheticDocuments(write)
+	if err != nil {
+		return fmt.Errorf("synthetic document: %w", err)
+	}
+
+	m, _ := json.MarshalIndent(map[string]any{"format": proofv2.PortableFormat, "base": "valid.json.gz", "cases": cases, "documents": syn}, "", "  ")
+	if err := os.WriteFile(filepath.Join(out, "manifest.json"), append(m, '\n'), 0o644); err != nil {
+		return err
+	}
+	fmt.Printf("wrote %d cases to %s\n", len(cases), out)
+	return nil
+}
+
+// attackCases applies each attack to a fresh copy of base, requires the Go verifier to refuse it, and returns the case that
+// reproduces it from base by patch.
+func attackCases(base []byte, list []attack) ([]Case, error) {
+	var cases []Case
+	for _, a := range list {
 		var doc map[string]any
 		if err := json.Unmarshal(base, &doc); err != nil {
-			return err
+			return nil, err
 		}
 		if err := a.edit(doc); err != nil {
-			return fmt.Errorf("%s: %w", a.name, err)
+			return nil, fmt.Errorf("%s: %w", a.name, err)
 		}
 		j, _ := json.Marshal(doc)
 		tp := new(proofv2.Portable)
 		if err := json.Unmarshal(j, tp); err == nil {
 			if _, err := proofv2.VerifyPortable(tp); err == nil {
-				return fmt.Errorf("%s: the Go verifier accepted it", a.name)
+				return nil, fmt.Errorf("%s: the Go verifier accepted it", a.name)
 			}
 		}
 		var orig map[string]any
 		_ = json.Unmarshal(base, &orig)
 		patch := diff(nil, orig, doc)
 		if len(patch) == 0 {
-			return fmt.Errorf("%s: changed nothing", a.name)
+			return nil, fmt.Errorf("%s: changed nothing", a.name)
 		}
 		// The patch must reproduce the attack exactly.
 		replay := map[string]any{}
 		_ = json.Unmarshal(base, &replay)
 		if err := proofv2.ApplyPatch(replay, patch); err != nil {
-			return fmt.Errorf("%s: %w", a.name, err)
+			return nil, fmt.Errorf("%s: %w", a.name, err)
 		}
 		r1, _ := json.Marshal(replay)
 		if string(r1) != string(j) {
-			return fmt.Errorf("%s: the patch does not reproduce the attack", a.name)
+			return nil, fmt.Errorf("%s: the patch does not reproduce the attack", a.name)
 		}
 		cases = append(cases, Case{Name: a.file, Expect: "refused", Attack: a.name, Patch: patch})
 	}
-
-	m, _ := json.MarshalIndent(map[string]any{"format": proofv2.PortableFormat, "base": "valid.json.gz", "cases": cases}, "", "  ")
-	if err := os.WriteFile(filepath.Join(out, "manifest.json"), append(m, '\n'), 0o644); err != nil {
-		return err
-	}
-	fmt.Printf("wrote %d cases to %s\n", len(cases), out)
-	return nil
+	return cases, nil
 }
 
 // diff returns the operations that turn a into b.

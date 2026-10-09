@@ -556,5 +556,335 @@
       ]
     }
   ],
+  "documents": [
+    {
+      "name": "network-update",
+      "file": "network-update.json.gz",
+      "expect": "verified",
+      "report": {
+        "incarnation": "c7ec1aafa765e49fab676f08e59cfcb6ae4067d2fae065dc76725130e84da574",
+        "majors": 2,
+        "certifiedBlock": 300,
+        "certifiedRoot": "47d273ec03a1c34ddb5a1ab9eec16411460926d55e433f5da5c00895aa40a30d",
+        "checkBlock": 300,
+        "setVerdict": "validator_set_asserted",
+        "validators": 4,
+        "threshold": 3,
+        "partition": "acc://bvn-BVN1.acme",
+        "anchorBlock": 50,
+        "pages": 0,
+        "govRootV3": ""
+      },
+      "cases": [
+        {
+          "name": "update-removed",
+          "expect": "refused",
+          "attack": "the network update dropped from major block 2 (the set it installed is still relied on)",
+          "patch": [
+            {
+              "path": [
+                "majors",
+                1,
+                "updates"
+              ],
+              "truncate": 0
+            }
+          ]
+        },
+        {
+          "name": "update-record-altered",
+          "expect": "refused",
+          "attack": "the update's record altered (a different validator set than the receipt proves)",
+          "patch": [
+            {
+              "path": [
+                "majors",
+                1,
+                "updates",
+                0,
+                "transaction",
+                "body",
+                "entry",
+                "data",
+                0
+              ],
+              "set": "010b436f6e666f726d616e63650202030d01094469726563746f727902010308010442564e310202045c012014f0f433bb6e5daab6255bb3d10a4df72fdcb4571caf58f4c6738faf7f6d9fdd02b6d79099a51fb787d91693ed7debb08d443819ce124c1b172191dabb4cf9030f040d01094469726563746f727902010408010442564e310201045c0120519354758f382c9e93778a5e2b7613da179fd5eea30c1b24a897dad6909404f3029a67dfbead8bbd64b3dd7874a376d9cda87604347ed27ac7ee397d56debf4fdb040d01094409726563746f727902010408010442564e310201045c012076b6c5849a47ce655b8cdfa2122dff9559d164122e74179f23ba22212380c901028889955a7ae6954cdca70fb84da8615546bbd6ffccc2f8456be1ee2fb8abbcdf040d01094469726563746f727902010408010442564e310201045c012026d5be9204c02f48a7d8fdaee22238ddcffe8e69fe575c3db5f850afabb6bc3a02fcd88b3740e1dc6fef78a47baa4624ebb7a243bdf14ff44ea7ffd664e1025142040d01094469726563746f727902010408010442564e310201"
+            }
+          ]
+        },
+        {
+          "name": "update-receipt-altered",
+          "expect": "refused",
+          "attack": "a step of the update's receipt changed",
+          "patch": [
+            {
+              "path": [
+                "majors",
+                1,
+                "updates",
+                0,
+                "receipt",
+                "entries",
+                0,
+                "hash"
+              ],
+              "set": "d9d7937401e211cc6bafcf7ec674fe0d0e8ed4a7827567d686a99d92d1acba20"
+            }
+          ]
+        },
+        {
+          "name": "update-principal-swapped",
+          "expect": "refused",
+          "attack": "the update presented as a write to another account",
+          "patch": [
+            {
+              "path": [
+                "majors",
+                1,
+                "updates",
+                0,
+                "transaction",
+                "header",
+                "principal"
+              ],
+              "set": "acc://dn.acme/other"
+            }
+          ]
+        },
+        {
+          "name": "post-update-signer-forged",
+          "expect": "refused",
+          "attack": "the new validator's signature on major block 2 forged",
+          "patch": [
+            {
+              "path": [
+                "majors",
+                1,
+                "signatures",
+                2,
+                "signature"
+              ],
+              "set": "90e02272a338c49f6ed28b4391cac10a1f9009b12f3b2177998ec74986f5a9471ae39d2aab36561f1d4db629a977af17b685fc44dc85393ac8791d26b5af3400"
+            }
+          ]
+        },
+        {
+          "name": "quorum-short",
+          "expect": "refused",
+          "attack": "major block 2 left with one signature",
+          "patch": [
+            {
+              "path": [
+                "majors",
+                1,
+                "signatures"
+              ],
+              "truncate": 1
+            }
+          ]
+        },
+        {
+          "name": "certify-quorum-short",
+          "expect": "refused",
+          "attack": "the certifying anchor left with one signature",
+          "patch": [
+            {
+              "path": [
+                "evidence",
+                "certify",
+                0,
+                "signatures"
+              ],
+              "truncate": 1
+            }
+          ]
+        },
+        {
+          "name": "main-height-understated",
+          "expect": "refused",
+          "attack": "the network account's main chain height understated (the update unaccounted)",
+          "patch": [
+            {
+              "path": [
+                "evidence",
+                "check",
+                "network",
+                "chains",
+                0,
+                "pending"
+              ],
+              "set": [
+                "2988c271c986c200c5acf9fe773e79ff556e543f44e2bdb19649dd98170168c9"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "main-height-overstated",
+          "expect": "refused",
+          "attack": "the network account's main chain height overstated (an update that never happened)",
+          "patch": [
+            {
+              "path": [
+                "evidence",
+                "check",
+                "network",
+                "chains",
+                0,
+                "pending"
+              ],
+              "set": [
+                null,
+                "2988c271c986c200c5acf9fe773e79ff556e543f44e2bdb19649dd98170168c9",
+                "abababababababababababababababababababababababababababababababab"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "network-entry-altered",
+          "expect": "refused",
+          "attack": "the proven network account's validator set altered",
+          "patch": [
+            {
+              "path": [
+                "evidence",
+                "check",
+                "network",
+                "account",
+                "entry",
+                "data",
+                0
+              ],
+              "set": "010b436f6e666f726d616e63650202030d01094469726563746f727902010308010442564e310202045c012014f0f433bb6e5daab6255bb3d10a4df72fdcb4571caf58f4c6738faf7f6d9fdd02b6d79099a51fb787d91693ed7debb08d443819ce124c1b172191dabb4cf9030f040d01094469726563746f727902010408010442564e310201045c0120519354758f382c9e93778a5e2b7613da179fd5eea30c1b24a897dad6909404f3029a67dfbead8bbd64b3dd7874a376d9cda87604347ed27ac7ee397d56debf4fdb040d01094409726563746f727902010408010442564e310201045c012076b6c5849a47ce655b8cdfa2122dff9559d164122e74179f23ba22212380c901028889955a7ae6954cdca70fb84da8615546bbd6ffccc2f8456be1ee2fb8abbcdf040d01094469726563746f727902010408010442564e310201045c012026d5be9204c02f48a7d8fdaee22238ddcffe8e69fe575c3db5f850afabb6bc3a02fcd88b3740e1dc6fef78a47baa4624ebb7a243bdf14ff44ea7ffd664e1025142040d01094469726563746f727902010408010442564e310201"
+            }
+          ]
+        },
+        {
+          "name": "network-record-genesis",
+          "expect": "refused",
+          "attack": "the decoded network record replaced by the genesis record (the update ignored)",
+          "patch": [
+            {
+              "path": [
+                "evidence",
+                "check",
+                "network",
+                "record",
+                "validators"
+              ],
+              "truncate": 3
+            },
+            {
+              "path": [
+                "evidence",
+                "check",
+                "network",
+                "record",
+                "version"
+              ],
+              "set": 1
+            }
+          ]
+        },
+        {
+          "name": "receipt-step",
+          "expect": "refused",
+          "attack": "a step of the transaction's receipt changed",
+          "patch": [
+            {
+              "path": [
+                "evidence",
+                "receipt",
+                "entries",
+                1,
+                "hash"
+              ],
+              "set": "52020e476c241ee3144ac61d961862f5abe85441adeba1c6eb3d5ceb7a88c740"
+            }
+          ]
+        },
+        {
+          "name": "anchor-block-altered",
+          "expect": "refused",
+          "attack": "the partition anchor names another block",
+          "patch": [
+            {
+              "path": [
+                "evidence",
+                "anchor",
+                "message",
+                "message",
+                "transaction",
+                "body",
+                "minorBlockIndex"
+              ],
+              "set": 51
+            }
+          ]
+        },
+        {
+          "name": "archive-short",
+          "expect": "refused",
+          "attack": "one major block fewer than the evidence builds on",
+          "patch": [
+            {
+              "path": [
+                "majors"
+              ],
+              "truncate": 1
+            }
+          ]
+        },
+        {
+          "name": "major-1-altered",
+          "expect": "refused",
+          "attack": "major block 1's anchor altered",
+          "patch": [
+            {
+              "path": [
+                "majors",
+                0,
+                "anchor",
+                "message",
+                "transaction",
+                "body",
+                "minorBlockIndex"
+              ],
+              "set": 101
+            }
+          ]
+        },
+        {
+          "name": "pin-other",
+          "expect": "refused",
+          "attack": "another incarnation pinned",
+          "patch": [
+            {
+              "path": [
+                "pin"
+              ],
+              "set": "c7ec1aafa765e49fab676f08e59cfcb6ae4067d2fae065dc76725130e84da570"
+            }
+          ]
+        },
+        {
+          "name": "genesis-record-altered",
+          "expect": "refused",
+          "attack": "the genesis network record altered",
+          "patch": [
+            {
+              "path": [
+                "genesis",
+                "networkRecord"
+              ],
+              "set": "010b436f6e666f726d616e63650201030d01094469726563746f727902010308010442564e310202045c012014f0f433bb6e5daab6255bb3d10a4df72fdcb4571caf58f4c6738faf7f6d9fdd02b6d79099a51fb787d91693ed7debb08d443819ce124c1b172191dabb4cf9030f040d01094469726563746f727902010408010442564e310201045c0120519354758f382c9e93778a5e2b7613da179fd5eea30c1b04a897dad6909404f3029a67dfbead8bbd64b3dd7874a376d9cda87604347ed27ac7ee397d56debf4fdb040d01094469726563746f727902010408010442564e310201045c012076b6c5849a47ce655b8cdfa2122dff9559d164122e74179f23ba22212380c901028889955a7ae6954cdca70fb84da8615546bbd6ffccc2f8456be1ee2fb8abbcdf040d01094469726563746f727902010408010442564e310201"
+            }
+          ]
+        }
+      ],
+      "govRootRefusal": "govRoot v3: the validator set check is validator_set_asserted, not verified"
+    }
+  ],
   "format": "certen-proof-v2-accumulate-portable/1"
 }
