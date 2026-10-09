@@ -145,6 +145,52 @@ func (r *ProofV2ShadowRepository) Spine(ctx context.Context) ([][]byte, error) {
 	return out, rows.Err()
 }
 
+// SavePortable stores an intent's portable document (without its major blocks) and how many major blocks from the first it
+// needs. A later build of the same intent replaces it; the govRoot v3 inputs, recorded separately, are kept.
+func (r *ProofV2ShadowRepository) SavePortable(ctx context.Context, intentID string, document []byte, majors uint64) error {
+	if majors == 0 {
+		return fmt.Errorf("a portable document needs at least one major block")
+	}
+	_, err := r.client.DB().ExecContext(ctx, `
+		INSERT INTO proof_v2_portable (intent_id, document, majors) VALUES ($1, $2, $3)
+		ON CONFLICT (intent_id) DO UPDATE SET document = EXCLUDED.document, majors = EXCLUDED.majors, updated_at = now()`,
+		intentID, string(document), int64(majors))
+	return err
+}
+
+// RecordGovRootInputs stores the govRoot v3 inputs of an intent whose certificate has been built. The row may not exist yet
+// (the certificate can be built before the shadow build is stored); the inputs then wait, and SavePortable keeps them.
+func (r *ProofV2ShadowRepository) RecordGovRootInputs(ctx context.Context, intentID string, inputs []byte) error {
+	_, err := r.client.DB().ExecContext(ctx, `
+		INSERT INTO proof_v2_portable (intent_id, document, majors, govroot_v3_inputs) VALUES ($1, '', 1, $2)
+		ON CONFLICT (intent_id) DO UPDATE SET govroot_v3_inputs = EXCLUDED.govroot_v3_inputs, updated_at = now()`,
+		intentID, string(inputs))
+	return err
+}
+
+// SaveSpineJSON stores major records in the portable form from first (1-based) on; a stored record must not change.
+func (r *ProofV2ShadowRepository) SaveSpineJSON(ctx context.Context, first uint64, records [][]byte) error {
+	for i, rec := range records {
+		idx := int64(first) + int64(i)
+		res, err := r.client.DB().ExecContext(ctx, `
+			INSERT INTO proof_v2_spine_json (major_index, record) VALUES ($1, $2)
+			ON CONFLICT (major_index) DO NOTHING`, idx, string(rec))
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			var stored string
+			if err := r.client.DB().QueryRowContext(ctx, `SELECT record FROM proof_v2_spine_json WHERE major_index = $1`, idx).Scan(&stored); err != nil {
+				return err
+			}
+			if stored != string(rec) {
+				return fmt.Errorf("major block %d: the stored portable record differs from the one just verified", idx)
+			}
+		}
+	}
+	return nil
+}
+
 func nullJSON(raw []byte) any {
 	if raw == nil {
 		return nil

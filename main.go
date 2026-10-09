@@ -2229,6 +2229,8 @@ func startValidator(
 			} else {
 				shadow := proofv2shadow.NewLazy(database.NewProofV2ShadowRepository(dbClient), log.Printf)
 				intentDiscovery.SetProofV2Shadow(shadow)
+				// The portable proof v2 document carries the govRoot v3 inputs of the intent's certificate (RB7b-F30).
+				validator.SetPortableInputsRecorder(shadow.RecordGovRootInputs)
 				go shadow.Start(strings.TrimSuffix(cfg.AccumulateURL, "/")+"/v3", pin)
 				// Keep the chain's Accumulate spine current (rules v13): the genesis, then each major block as
 				// Accumulate closes it. Every validator proposes the same transactions; the chain verifies them.
