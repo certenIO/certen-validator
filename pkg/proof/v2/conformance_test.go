@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/certen/independant-validator/pkg/intentcert"
@@ -130,6 +131,77 @@ func TestConformanceSuite(t *testing.T) {
 				}
 			default:
 				t.Fatalf("unknown expectation %q", c.Expect)
+			}
+		})
+	}
+}
+
+// The manifest's additional documents: whole documents built from fixed keys (cmd/proofv2conformance/synthetic.go), the first
+// with a network update in its spine. The TypeScript verifier runs the same files. The proof verifies, the validator set is
+// reported as asserted (it changed after genesis), and govRoot v3 refuses it by name, as production does.
+func TestConformanceSyntheticDocuments(t *testing.T) {
+	var m struct {
+		Documents []struct {
+			Name           string         `json:"name"`
+			File           string         `json:"file"`
+			Expect         string         `json:"expect"`
+			Report         map[string]any `json:"report"`
+			GovRootRefusal string         `json:"govRootRefusal"`
+			Cases          []struct {
+				Name   string       `json:"name"`
+				Expect string       `json:"expect"`
+				Patch  []proofv2.Op `json:"patch"`
+			} `json:"cases"`
+		} `json:"documents"`
+	}
+	raw, err := os.ReadFile("testdata/conformance/manifest.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Documents) == 0 {
+		t.Fatal("the manifest lists no additional documents")
+	}
+	for _, d := range m.Documents {
+		base := gunzipConformance(t, "testdata/conformance/"+d.File)
+		t.Run(d.Name, func(t *testing.T) {
+			p, ev, rep, err := verifyPortableJSON(base)
+			if err != nil {
+				t.Fatalf("refused: %v", err)
+			}
+			got := map[string]any{
+				"incarnation": fmt.Sprintf("%x", rep.Incarnation), "majors": float64(rep.Majors),
+				"certifiedBlock": float64(rep.CertifiedBlock), "certifiedRoot": fmt.Sprintf("%x", rep.CertifiedRoot),
+				"checkBlock": float64(rep.CheckBlock), "setVerdict": string(rep.SetVerdict),
+				"validators": float64(rep.Validators), "threshold": float64(rep.Threshold),
+				"partition": rep.Partition, "anchorBlock": float64(rep.AnchorBlock), "pages": float64(len(rep.Pages)),
+				"govRootV3": "",
+			}
+			for k, v := range got {
+				if d.Report[k] != v {
+					t.Fatalf("%s: got %v, manifest %v", k, v, d.Report[k])
+				}
+			}
+			if rep.SetVerdict != "validator_set_asserted" {
+				t.Fatalf("a set that changed after genesis is reported %s", rep.SetVerdict)
+			}
+			if _, _, err := intentcert.GovRootV3FromPortable(rep, ev, p.GovRootV3Inputs); err == nil || err.Error() != d.GovRootRefusal || !strings.Contains(d.GovRootRefusal, "validator_set_asserted, not verified") {
+				t.Fatalf("govRoot v3 gave %v, want a refusal naming validator_set_asserted", err)
+			}
+			for _, c := range d.Cases {
+				var doc map[string]any
+				if err := json.Unmarshal(base, &doc); err != nil {
+					t.Fatal(err)
+				}
+				if err := proofv2.ApplyPatch(doc, c.Patch); err != nil {
+					t.Fatal(err)
+				}
+				j, _ := json.Marshal(doc)
+				if _, _, _, err := verifyPortableJSON(j); err == nil {
+					t.Errorf("%s: verified a tampered document", c.Name)
+				}
 			}
 		})
 	}
