@@ -393,6 +393,9 @@ type BFTValidator struct {
 	// memberRepairs: members named for a re-driven proof cycle (RB4-F55 repair, member_repair.go).
 	memberRepairState
 
+	// portableInputs records an intent's govRoot v3 inputs for its portable proof v2 document (intent_certificate_proposer.go).
+	portableInputs PortableInputsRecorder
+
 	engine                BFTConsensusEngine
 	anchorManager         AnchorManager
 	proofGenerator        ProofGenerator
@@ -1261,6 +1264,7 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 		}
 		bv.logger.Printf("🔏 [INTENT-CERT] intent %s certified under BLS registry v%d: message %s",
 			certenIntent.IntentID, certRegistry.Version, vb.IntentCertificate.Message)
+		bv.recordPortableInputs(certenIntent.IntentID, vb, resolvedKeyPageURL, resolvedKeyBookURL)
 	}
 
 	bv.logger.Printf("✅ [CANONICAL-VB] Built ValidatorBlock with real artifacts: bundle=%s op=%s",

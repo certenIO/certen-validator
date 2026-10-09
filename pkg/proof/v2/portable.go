@@ -108,6 +108,35 @@ type PortableAccount struct {
 
 // Export writes the portable form of ev.
 func Export(ev *Evidence, ar *Archive, in proof.IncarnationInputs, pin [32]byte) (*Portable, error) {
+	p, err := ExportDocument(ev, in, pin)
+	if err != nil {
+		return nil, err
+	}
+	if need := max(ev.Majors, ev.Check.Majors); uint64(len(ar.Majors)) < need {
+		return nil, fmt.Errorf("the evidence builds on %d major blocks; the archive has %d", need, len(ar.Majors))
+	}
+	for _, m := range ar.Majors[:max(ev.Majors, ev.Check.Majors)] {
+		j, err := MajorJSON(m)
+		if err != nil {
+			return nil, err
+		}
+		p.Majors = append(p.Majors, j)
+	}
+	return p, nil
+}
+
+// MajorJSON is one major block record as the portable form carries it.
+func MajorJSON(m *api.MajorHeaderRecord) (json.RawMessage, error) {
+	return json.Marshal(m)
+}
+
+// MajorsNeeded is how many major blocks from the first the portable form of ev carries.
+func MajorsNeeded(ev *Evidence) uint64 { return max(ev.Majors, ev.Check.Majors) }
+
+// ExportDocument writes everything of the portable form except the major blocks: the part that belongs to one proof.
+// The spine is shared by every proof of an incarnation, so a store keeps it once and adds the first MajorsNeeded(ev) records
+// to a proof's document when it serves it (Export does exactly that from an Archive).
+func ExportDocument(ev *Evidence, in proof.IncarnationInputs, pin [32]byte) (*Portable, error) {
 	p := &Portable{Format: PortableFormat, Pin: hex.EncodeToString(pin[:])}
 	p.Genesis = PortableGenesis{
 		MinorBlockIndex: in.GenesisMinorBlockIndex,
@@ -127,13 +156,7 @@ func Export(ev *Evidence, ar *Archive, in proof.IncarnationInputs, pin [32]byte)
 	if p.Genesis.Globals, err = json.Marshal(g.Globals); err != nil {
 		return nil, err
 	}
-	for _, m := range ar.Majors[:max(ev.Majors, ev.Check.Majors)] {
-		j, err := json.Marshal(m)
-		if err != nil {
-			return nil, err
-		}
-		p.Majors = append(p.Majors, j)
-	}
+	p.Majors = []json.RawMessage{}
 
 	e := &p.Evidence
 	e.Version, e.Account, e.TxHash, e.Majors = ev.Version, ev.Account, ev.TxHash, ev.Majors
