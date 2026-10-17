@@ -130,10 +130,11 @@ func TestEvidence21PortableRoundTripAndTwoZeroRefusal(t *testing.T) {
 		t.Fatal(err)
 	}
 	ev.Pages[0].Partition, ev.Pages[0].Roles = "acc://bvn-BVN1.acme", roles
-	ev.Pages[1].Partition, ev.Pages[1].Roles = "acc://bvn-BVN2.acme", []proofv2.PageRole{proofv2.RoleDelegateBook}
+	ev.Pages[1].Partition, ev.Pages[1].Roles = "acc://bvn-BVN2.acme", []proofv2.PageRole{proofv2.RoleDelegateBook, proofv2.RoleCertifiedKeyPage}
 	ev.Votes = []proofv2.Vote{{
 		Authority: "acc://fdb-risk-tcl1.acme/book", Origin: "acc://fdb-risk-tcl1.acme/book/2", Vote: "accept",
-		Delegators: []string{"acc://b.acme/book/1"}, Cause: "acc://" + strings.Repeat("ab", 32) + "@fdb-risk-tcl1.acme/book/2",
+		Cause:     "acc://" + strings.Repeat("ab", 32) + "@fdb-risk-tcl1.acme/book/2",
+		Hops:      []proofv2.VoteHop{{Page: "acc://fdb-risk-tcl1.acme/book/2", Message: strings.Repeat("12", 32), Signature: "0a0b", Block: 14004595, Receipt: ev.Receipt}},
 		Transport: proofv2.VoteTransport{Kind: proofv2.TransportSequenced, Source: "acc://bvn-BVN2.acme", Destination: "acc://bvn-BVN1.acme", Number: 6280},
 		Message:   strings.Repeat("cd", 32), Receipt: ev.Receipt,
 	}, {

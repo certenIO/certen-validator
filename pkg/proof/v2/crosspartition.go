@@ -49,13 +49,16 @@ const (
 	// counted vote's origin or delegator path (D1(d), (f)).
 	RoleVoter PageRole = "voter"
 	// RoleInitiatorSigner: the page of the signature whose initiator hash is the transaction's, and the credit payer's page
-	// (D1(f)); it need not be an authority, but the certified key page is one of these.
+	// (D1(f)); it need not be an authority.
 	RoleInitiatorSigner PageRole = "initiator-signer"
+	// RoleCertifiedKeyPage: the page the intent certificate names as its key page, exactly as ResolveSigningKeyPage resolves it
+	// (D1(f)), whatever other role it has. BindProofV2 requires it among the proven pages.
+	RoleCertifiedKeyPage PageRole = "certified-key-page"
 )
 
 // KnownRoles are the roles evidence 2.1 may carry, in canonical order.
 var KnownRoles = []PageRole{RolePrincipalChain, RoleAuthorityBook, RoleAuthorityPage, RoleHeaderAuthority,
-	RoleDelegateBook, RoleDelegatePage, RoleVoter, RoleInitiatorSigner}
+	RoleDelegateBook, RoleDelegatePage, RoleVoter, RoleInitiatorSigner, RoleCertifiedKeyPage}
 
 // CanonicalRoles returns roles sorted by KnownRoles' order with duplicates removed, and an error naming an unknown
 // role. A page's roles are encoded in this order so two producers write one document for one set of facts.
@@ -95,17 +98,32 @@ const (
 )
 
 // Vote is one authority vote copied from the principal's PROVEN signature chain as of the anchor block (design D3). The
-// verifier re-evaluates every book's vote on the certified timeline with the executor's rule and requires Origin and Vote to
-// equal these, then requires readiness; it never trusts a vote it did not recompute.
+// verifier re-evaluates every book's vote on the certified timeline, per arrival event, with the executor's rule and requires
+// Origin and Vote to equal these, then requires readiness; it never trusts a vote it did not recompute. The principal's vote
+// carries no delegation path (the last hop's Delegator is empty): the path is rebuilt from Hops.
 type Vote struct {
-	Authority  string        `json:"authority"`            // the key book the vote is for
-	Origin     string        `json:"origin"`               // the page that decided it (a page URL; the authority itself for an abstain of a missing authority)
-	Vote       string        `json:"vote"`                 // accept, reject, abstain or suggest
-	Delegators []string      `json:"delegators,omitempty"` // the delegation path, nearest the signer first
-	Cause      string        `json:"cause,omitempty"`      // the transaction id of the signature that caused it (AuthoritySignature.Cause)
-	Transport  VoteTransport `json:"transport"`
-	Message    string        `json:"message"` // the vote's entry hash in the principal's signature chain, hex32
-	Receipt    string        `json:"receipt"` // from Message to the anchor of the principal's signature chain as bound at the anchor block (binary merkle.Receipt, hex)
+	Authority string        `json:"authority"`       // the key book the vote is for
+	Origin    string        `json:"origin"`          // the page that decided it (a page URL; the authority itself for an abstain of a missing authority)
+	Vote      string        `json:"vote"`            // accept, reject, abstain or suggest
+	Cause     string        `json:"cause,omitempty"` // the transaction id of the signature that caused it (AuthoritySignature.Cause)
+	Transport VoteTransport `json:"transport"`
+	Message   string        `json:"message"` // the vote's entry hash in the principal's signature chain, hex32
+	Receipt   string        `json:"receipt"` // from Message to the anchor of the principal's signature chain as bound at the anchor block (binary merkle.Receipt, hex)
+
+	// Hops follow Cause back, from the message the vote answers to the key signature: each is a signature message recorded in a
+	// page's own signature chain, on that page's partition. The key signature's own Delegator list is the delegation path
+	// (delegators[0] is nearest the key page).
+	Hops []VoteHop `json:"hops,omitempty"`
+}
+
+// VoteHop is one signature message of a vote's cause chain: an AuthoritySignature a delegating page produced, or the key
+// signature that started it. Page is the page whose signature chain records it.
+type VoteHop struct {
+	Page      string `json:"page"`
+	Message   string `json:"message"`   // the message's entry hash in Page's signature chain, hex32
+	Signature string `json:"signature"` // the signature's binary encoding, hex
+	Block     uint64 `json:"block"`     // the block of Page's partition it arrived in, as claimed; the verifier derives it from Receipt
+	Receipt   string `json:"receipt"`   // from Message to Page's signature chain root as bound at that partition's block (binary merkle.Receipt, hex)
 }
 
 // ProvenPage is one proven page in the report: where it was proven and why it is there.
@@ -166,6 +184,16 @@ const (
 	StateDelegateEntryAbsent = "g1_delegate_entry_absent"
 	// StateInitiatorPageUnproven: the initiator's (or payer's) page is not among the proven pages.
 	StateInitiatorPageUnproven = "g1_initiator_page_unproven"
+	// StateCertifiedPageUnproven: the certified key page cannot be resolved, or is not among the proven pages (D1(f)).
+	StateCertifiedPageUnproven = "g1_certified_page_unproven"
+	// StateExecutorOverrideUnsupported: the body type has an executor override the default authority rules do not describe (D6).
+	StateExecutorOverrideUnsupported = "g1_executor_override_unsupported"
+	// StateClosureExceedsBudget: the governing set is larger than the evidence budget (the consensus block size) allows (D6).
+	StateClosureExceedsBudget = "g1_closure_exceeds_budget"
+	// StateRoutingHistoryUnproven: the routing table has more than its genesis write, so its state at each B_Y is not proven (D5).
+	StateRoutingHistoryUnproven = "g1_routing_history_unproven"
+	// StateDirectoryPartitionUnsupported: a governing page is on the Directory; D2b/D2c capture is not built (a named state, not a read).
+	StateDirectoryPartitionUnsupported = "g1_directory_partition_unsupported"
 	// StateVoteHeld: the vote was produced by a HoldUntil release.
 	StateVoteHeld = "g1_vote_held"
 	// StateExecutorVersionUnsupported: the transaction executed under a version whose path or inheritance semantics differ.
@@ -188,3 +216,8 @@ const (
 	// state it was.
 	StateCrossIdentityPending = "g1_cross_identity_pending"
 )
+
+// StateEvidence21Required: pages on partitions other than the transaction's are captured, so the proof needs evidence 2.1
+// (this build captures them; building and verifying 2.1 is RB9 Phase C). A 2.0 document that omitted them would prove less
+// than the governing set, so the build is refused by name.
+const StateEvidence21Required = "g1_evidence_21_required"

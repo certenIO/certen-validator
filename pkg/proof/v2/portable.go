@@ -90,14 +90,23 @@ type PortableAnchor struct {
 
 // PortableVote is Vote with its receipt as Accumulate's JSON.
 type PortableVote struct {
-	Authority  string          `json:"authority"`
-	Origin     string          `json:"origin"`
-	Vote       string          `json:"vote"`
-	Delegators []string        `json:"delegators,omitempty"`
-	Cause      string          `json:"cause,omitempty"`
-	Transport  VoteTransport   `json:"transport"`
-	Message    string          `json:"message"`
-	Receipt    json.RawMessage `json:"receipt"` // merkle.Receipt
+	Authority string          `json:"authority"`
+	Origin    string          `json:"origin"`
+	Vote      string          `json:"vote"`
+	Cause     string          `json:"cause,omitempty"`
+	Transport VoteTransport   `json:"transport"`
+	Message   string          `json:"message"`
+	Receipt   json.RawMessage `json:"receipt"` // merkle.Receipt
+	Hops      []PortableHop   `json:"hops,omitempty"`
+}
+
+// PortableHop is VoteHop with its receipt as Accumulate's JSON.
+type PortableHop struct {
+	Page      string          `json:"page"`
+	Message   string          `json:"message"`
+	Signature string          `json:"signature"`
+	Block     uint64          `json:"block"`
+	Receipt   json.RawMessage `json:"receipt"` // merkle.Receipt
 }
 
 type PortablePage struct {
@@ -241,8 +250,15 @@ func ExportDocument(ev *Evidence, in proof.IncarnationInputs, pin [32]byte) (*Po
 		if err != nil {
 			return nil, fmt.Errorf("vote of %s: %w", v.Authority, err)
 		}
-		e.Votes = append(e.Votes, PortableVote{Authority: v.Authority, Origin: v.Origin, Vote: v.Vote, Delegators: v.Delegators, Cause: v.Cause,
-			Transport: v.Transport, Message: v.Message, Receipt: r})
+		pv := PortableVote{Authority: v.Authority, Origin: v.Origin, Vote: v.Vote, Cause: v.Cause, Transport: v.Transport, Message: v.Message, Receipt: r}
+		for _, h := range v.Hops {
+			hr, err := receiptJSON(h.Receipt)
+			if err != nil {
+				return nil, fmt.Errorf("vote of %s, hop %s: %w", v.Authority, h.Page, err)
+			}
+			pv.Hops = append(pv.Hops, PortableHop{Page: h.Page, Message: h.Message, Signature: h.Signature, Block: h.Block, Receipt: hr})
+		}
+		e.Votes = append(e.Votes, pv)
 	}
 
 	e.Check.Majors, e.Check.Incarnation = ev.Check.Majors, ev.Check.Set.Incarnation
@@ -400,8 +416,15 @@ func Import(p *Portable) (*Evidence, *Archive, proof.IncarnationInputs, [32]byte
 		if err != nil {
 			return fail(fmt.Errorf("vote of %s: %w", v.Authority, err))
 		}
-		ev.Votes = append(ev.Votes, Vote{Authority: v.Authority, Origin: v.Origin, Vote: v.Vote, Delegators: v.Delegators, Cause: v.Cause,
-			Transport: v.Transport, Message: v.Message, Receipt: r})
+		vote := Vote{Authority: v.Authority, Origin: v.Origin, Vote: v.Vote, Cause: v.Cause, Transport: v.Transport, Message: v.Message, Receipt: r}
+		for _, h := range v.Hops {
+			hr, err := receiptHex(h.Receipt)
+			if err != nil {
+				return fail(fmt.Errorf("vote of %s, hop %s: %w", v.Authority, h.Page, err))
+			}
+			vote.Hops = append(vote.Hops, VoteHop{Page: h.Page, Message: h.Message, Signature: h.Signature, Block: h.Block, Receipt: hr})
+		}
+		ev.Votes = append(ev.Votes, vote)
 	}
 
 	ev.Check.Majors, ev.Check.Set.Incarnation = e.Check.Majors, e.Check.Incarnation
