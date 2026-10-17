@@ -452,7 +452,7 @@ func buildPlans(cases map[string]caseSpec) ([]casePlan, error) {
 	// traces.json keeps the refusal expectation it was captured under (history, not edited); a re-capture records the
 	// authorised one. Every other accepted type is captured the same way: a signaturePlan with Type set.
 	plans = append(plans, casePlan{
-		Case: "K", Shape: k.Shape, Principal: k.ADI, Expect: "valid",
+		Case: "K", Shape: "a btc key signature - a type Accumulate accepts, verified from its bytes", Principal: k.ADI, Expect: "valid",
 		Why: "a btc signature - a key-signature type Accumulate's executor accepts - is verified from its bytes and " +
 			"counts as the key's vote (was: refused as unsupported, G-42)",
 		Signatures: []signaturePlan{{Seed: "k1", SignerPage: k.Page, Type: protocol.SignatureTypeBTC}},
