@@ -109,13 +109,18 @@ RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -trimpath -buildvcs=
 # v1's replay; run read-only against the validators' database.
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -trimpath -buildvcs=false -ldflags=-buildid= -o /build/proofv2report ./cmd/proofv2report
 
+# blockproofcheck (RB6 item 4): the block-proof monitor. Run as its own compose service, it proves every new finalized
+# block of each settlement chain as a settlement in it would be proven, and alerts when one cannot be (a transaction type
+# no encoder knows, after a chain upgrade) - before a settlement lands in such a block.
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -trimpath -buildvcs=false -ldflags=-buildid= -o /build/blockproofcheck ./cmd/blockproofcheck
+
 # ═══════════════════════════════════════════════════════════════
 # Production Stage
 # ═══════════════════════════════════════════════════════════════
 FROM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
 
 # Install runtime dependencies (versions pinned; see the builder stage)
-RUN apk add --no-cache ca-certificates=20260909-r0 tzdata=2026d-r0
+RUN apk add --no-cache ca-certificates=20260909-r0 tzdata=2026e-r0
 
 # Create unprivileged user for security
 RUN adduser -D -s /bin/sh validator
@@ -129,6 +134,7 @@ COPY --from=builder /build/govproof .
 COPY --from=builder /build/txhash .
 COPY --from=builder /build/schemamigrate .
 COPY --from=builder /build/proofv2report .
+COPY --from=builder /build/blockproofcheck .
 
 # Create directories for persistent storage
 RUN mkdir -p /app/bft-keys \

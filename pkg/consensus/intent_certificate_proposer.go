@@ -6,6 +6,7 @@ import (
 
 	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/govvote"
 	"github.com/certen/independant-validator/pkg/crypto/bls"
+	"github.com/certen/independant-validator/pkg/intentcert"
 	"github.com/certen/independant-validator/pkg/ledger"
 	govproof "github.com/certen/independant-validator/pkg/proof"
 	proofv2 "github.com/certen/independant-validator/pkg/proof/v2"
@@ -45,4 +46,38 @@ func (bv *BFTValidator) certifyIntent(vb *ValidatorBlock, chainID string, reg *l
 	}
 	return BuildIntentCertificate(vb, chainID, reg, key.PrivateKey(), keyPageURL, keyBookURL, authorization, ev,
 		certenProof.LiteClientProof.ChainedProof, spine, pv2)
+}
+
+// PortableInputsRecorder is told, for each intent whose v3 certificate this validator built, the govRoot v3 inputs that are not
+// proof facts (the sha256 of each governance level's canonical JSON, the key page, the key book, the operation id), so the
+// intent's portable proof v2 document can carry them (RB7b-F30). It is a record, never a gate.
+type PortableInputsRecorder func(intentID string, in *proofv2.PortableGovRootV3Inputs)
+
+// SetPortableInputsRecorder installs the recorder. Without one nothing is recorded and nothing else changes.
+func (bv *BFTValidator) SetPortableInputsRecorder(r PortableInputsRecorder) {
+	bv.mu.Lock()
+	defer bv.mu.Unlock()
+	bv.portableInputs = r
+}
+
+// recordPortableInputs hands the recorder an intent's govRoot v3 inputs after its certificate was built. Failing to derive them is
+// logged and changes nothing: the certificate is already built and verified, and the document simply carries no inputs.
+func (bv *BFTValidator) recordPortableInputs(intentID string, vb *ValidatorBlock, keyPageURL, keyBookURL string) {
+	bv.mu.RLock()
+	rec := bv.portableInputs
+	bv.mu.RUnlock()
+	if rec == nil || vb == nil || vb.IntentCertificate == nil || vb.IntentCertificate.ProofV2 == nil {
+		return
+	}
+	gp := &vb.GovernanceProof
+	op, err := hex32(vb.CrossChainProof.OperationID)
+	if err == nil {
+		var in *proofv2.PortableGovRootV3Inputs
+		if in, err = intentcert.PortableGovRootV3Inputs(intentcert.GovRootV3Inputs{G0: gp.G0Proof, G1: gp.G1Proof, G2: gp.G2Proof,
+			KeyPageURL: keyPageURL, KeyBookURL: keyBookURL, OperationID: op}); err == nil {
+			rec(intentID, in)
+			return
+		}
+	}
+	bv.logger.Printf("portable govRoot v3 inputs for intent %s were not recorded: %v", intentID, err)
 }

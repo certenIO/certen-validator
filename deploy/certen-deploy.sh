@@ -12,7 +12,7 @@ set -uo pipefail
 
 VALIDATORS=/root/certen-validators
 BRIDGE=/root/api-bridge
-GATEWAY=/root/api-gateway
+GATEWAY=${GATEWAY:-/root/api-gateway}
 
 targets=("$@")
 [ ${#targets[@]} -eq 0 ] && targets=(bridge gateway validators)
@@ -52,12 +52,16 @@ for t in "${targets[@]}"; do
     gateway)
         step "api-gateway"
         head=$(pull "$GATEWAY")
-        (cd "$GATEWAY" && docker compose build certen-gateway >/tmp/certen-deploy-gateway.log 2>&1) \
+        # The API AND the worker: one image, one env. The worker runs the FX feed, the entitlement publisher, the
+        # pollers and the hold sweeper, so a worker left on the old image keeps the old code AND the old environment
+        # (RB7: Adiri was enabled for hours with no TEL rate because only certen-gateway was recreated).
+        (cd "$GATEWAY" && docker compose build certen-gateway certen-gateway-worker >/tmp/certen-deploy-gateway.log 2>&1) \
             || { tail -30 /tmp/certen-deploy-gateway.log; red "gateway build failed; still running the old image"; }
         # gateway-migrate runs first as the service's dependency; a failed migration stops the gateway from starting.
-        (cd "$GATEWAY" && docker compose up -d certen-gateway >/tmp/certen-deploy-gateway-up.log 2>&1) \
+        (cd "$GATEWAY" && docker compose up -d certen-gateway certen-gateway-worker >/tmp/certen-deploy-gateway-up.log 2>&1) \
             || { tail -30 /tmp/certen-deploy-gateway-up.log; red "gateway up failed (check gateway-migrate)"; }
         wait_container certen-gateway || red "certen-gateway did not become healthy"
+        wait_container certen-gateway-worker || red "certen-gateway-worker did not become healthy"
         summary+=("  gateway     $head")
         ;;
     validators)

@@ -84,12 +84,24 @@ func TestFewerThanTwoVerifiedProvidersIsStillRefused(t *testing.T) {
 	}
 }
 
-func TestAWrongChainIDRefusesTheReaderEvenWithTwoVerified(t *testing.T) {
+// A provider on another chain is excluded loudly, never counted: with two others verified the reader is built from the
+// two; with fewer than MinAgreeingProviders left the reader is refused, by name, with the wrong chain in the reason.
+func TestAWrongChainIDIsExcludedAndTheReaderIsRefusedOnlyBelowTheMinimum(t *testing.T) {
 	shortenVerification(t)
+	resetRegistryForTests()
 	final := header(testHeight, "final")
-	_, err := NewAgreeingReader(context.Background(), 11155111,
+	r, err := NewAgreeingReader(context.Background(), 11155111,
 		urlsOf(t, provider(11155111, final), provider(11155111, final), provider(84532, final)), time.Second)
+	if err != nil {
+		t.Fatalf("a misrouted provider took down a reader that still has two right providers: %v", err)
+	}
+	if hosts := r.Hosts(); len(hosts) != 2 || strings.Contains(strings.Join(hosts, ","), "127.0.0.2") {
+		t.Fatalf("verified %v; the wrong-chain provider must not be among them", hosts)
+	}
+	resetRegistryForTests()
+	_, err = NewAgreeingReader(context.Background(), 11155111,
+		urlsOf(t, provider(11155111, final), provider(84532, final)), time.Second)
 	if err == nil || !strings.Contains(err.Error(), "serves chain 84532") {
-		t.Fatalf("a misconfigured provider was left out instead of refusing the reader: %v", err)
+		t.Fatalf("one right provider and one wrong must refuse the reader by name: %v", err)
 	}
 }

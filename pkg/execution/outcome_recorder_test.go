@@ -520,3 +520,27 @@ func TestAnArbitrumHeaderNamesItsL1Block(t *testing.T) {
 		t.Fatal("only Arbitrum's block.number is an L1 block number")
 	}
 }
+
+// RB7-ADIRI-F1: the registry refused with OutcomeAlreadyRecorded, but the agreed view read afterwards is older than the
+// record and shows a zero root. That is "not visible yet", never a contradiction: a false CONTRADICTION alarm every
+// minute teaches operators to ignore a real one.
+func TestAnAlreadyRecordedRefusalWithAStaleViewIsNotAContradiction(t *testing.T) {
+	f := newRecorderFixture(t, true)
+	var logged []string
+	f.rec.Logf = func(format string, a ...interface{}) { logged = append(logged, fmt.Sprintf(format, a...)) }
+	stale := f.chain.view // RecordedRoot is zero: the view predates the record
+	f.chain.views = []OutcomeAnchorView{f.chain.view, f.chain.view, stale, stale}
+	f.sub.sub, f.sub.err = &OutcomeSubmission{RevertName: "OutcomeAlreadyRecorded"}, errors.New("execution reverted")
+	steps := f.rec.Pass(context.Background())
+	for _, l := range logged {
+		if strings.Contains(l, "CONTRADICTION") {
+			t.Fatalf("a stale view raised a contradiction: %s", l)
+		}
+	}
+	if steps[f.kept.BundleID] == OutcomeStepContradiction {
+		t.Fatalf("step %s", steps[f.kept.BundleID])
+	}
+	if steps[f.kept.BundleID] != OutcomeStepNotFinal {
+		t.Fatalf("step %s, want %s: the record is not visible in the agreed view yet", steps[f.kept.BundleID], OutcomeStepNotFinal)
+	}
+}

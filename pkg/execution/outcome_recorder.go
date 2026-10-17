@@ -650,6 +650,12 @@ func (r *BatchOutcomeRecorder) reverted(ctx context.Context, c OutcomeRecorderCh
 	}
 	switch name {
 	case "OutcomeAlreadyRecorded":
+		// The registry is write-once and has just said it holds a record. A zero root in the agreed view means the view is
+		// older than the record - not visible yet, never a contradiction (RB7-ADIRI-F1).
+		if after.RecordedRoot == ([32]byte{}) {
+			return OutcomeStepNotFinal, fmt.Errorf("the registry refused with OutcomeAlreadyRecorded, but the agreed view %s "+
+				"does not show the record yet", viewBlock(after))
+		}
 		return r.recorded(ctx, c, t, after)
 	case "QuorumAttestationInvalid":
 		if after.CurrentSetRoot != view.CurrentSetRoot {
@@ -764,4 +770,12 @@ func (s ResolverOutcomeSubmitter) Submit(ctx context.Context, chainID int64, reg
 	}
 	sub.Tx, sub.Block, sub.Status = hash, rcpt.BlockNumber.Uint64(), rcpt.Status
 	return sub, nil
+}
+
+// viewBlock names the block an agreed view was read at.
+func viewBlock(v *OutcomeAnchorView) string {
+	if v == nil || v.At == nil || v.At.Number == nil {
+		return "(block unknown)"
+	}
+	return fmt.Sprintf("at block %d", v.At.Number.Uint64())
 }

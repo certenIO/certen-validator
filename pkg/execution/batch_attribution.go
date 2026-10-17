@@ -86,22 +86,26 @@ func (o *BatchOrchestrator) leafConsumedTx(ctx context.Context, p *PendingBatchI
 	// spent before its member committed, so each is a sound floor; the lowest keeps the search complete
 	// when one of them is late. This node's first sighting is NOT a floor: another validator may have
 	// settled the member long before this one saw it.
-	floor, have := uint64(0), false
-	lower := func(b uint64) {
-		if !have || b < floor {
-			floor, have = b, true
-		}
+	//
+	// The commit time is REQUIRED: an anchor's creation is only a sound floor when it is not above the spend, and the
+	// member's own anchor (this node's, or its bundle's) can be created long after another validator spent the leaf
+	// under an earlier one. So those two can only LOWER the commit floor; with no commit time there is no floor, and the
+	// member is refused by name (deferred, retried), never searched for from a guess.
+	if p.CommitTime.IsZero() {
+		return "", common.Address{}, false, fmt.Errorf("member %s: no commit time, so no floor for its leaf's spend", p.IntentID)
 	}
-	if !p.CommitTime.IsZero() {
-		ts := uint64(p.CommitTime.Unix())
-		if ts > anchorFloorMargin {
-			ts -= anchorFloorMargin
+	ts := uint64(p.CommitTime.Unix())
+	if ts > anchorFloorMargin {
+		ts -= anchorFloorMargin
+	}
+	floor, ferr := o.cachedBlockAt(ctx, ts)
+	if ferr != nil {
+		return "", common.Address{}, false, ferr
+	}
+	lower := func(b uint64) {
+		if b < floor {
+			floor = b
 		}
-		b, ferr := o.cachedBlockAt(ctx, ts)
-		if ferr != nil {
-			return "", common.Address{}, false, ferr
-		}
-		lower(b)
 	}
 	if p.AnchorBlock > 0 {
 		lower(p.AnchorBlock)
@@ -112,9 +116,6 @@ func (o *BatchOrchestrator) leafConsumedTx(ctx context.Context, p *PendingBatchI
 			return "", common.Address{}, false, ferr
 		}
 		lower(b)
-	}
-	if !have {
-		return "", common.Address{}, false, fmt.Errorf("member %s: no commit time, so no floor for its leaf's spend", p.IntentID)
 	}
 	l, err := o.scanForward(ctx, p.Account, topics, floor)
 	if err != nil || l == nil {

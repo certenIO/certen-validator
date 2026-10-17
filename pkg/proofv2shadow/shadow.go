@@ -42,7 +42,9 @@ type Shadow struct {
 	repo *database.ProofV2ShadowRepository
 	inc  *proof.IncarnationEvidence
 	pin  [32]byte
-	logf func(string, ...any)
+	// inputs are what the pinned incarnation's evidence verified to: the genesis records a portable document carries.
+	inputs proof.IncarnationInputs
+	logf   func(string, ...any)
 
 	builds chan job
 	stored int // major records already stored
@@ -58,7 +60,11 @@ func New(ctx context.Context, endpoint string, repo *database.ProofV2ShadowRepos
 	if err != nil {
 		return nil, err
 	}
-	s := &Shadow{b: b, c: c, repo: repo, inc: inc, pin: pin, logf: logf, builds: make(chan job, 256)}
+	rep, err := inc.Verify()
+	if err != nil {
+		return nil, fmt.Errorf("the incarnation evidence does not verify: %w", err)
+	}
+	s := &Shadow{b: b, c: c, repo: repo, inc: inc, pin: pin, inputs: rep.Inputs, logf: logf, builds: make(chan job, 256)}
 	if err := s.saveSpine(ctx); err != nil {
 		return nil, err
 	}
@@ -72,15 +78,25 @@ func (s *Shadow) saveSpine(ctx context.Context) error {
 		return nil
 	}
 	recs := make([][]byte, 0, len(majors)-s.stored)
+	portable := make([][]byte, 0, len(majors)-s.stored)
 	for _, m := range majors[s.stored:] {
 		b, err := m.MarshalBinary()
 		if err != nil {
 			return err
 		}
 		recs = append(recs, b)
+		j, err := proofv2.MajorJSON(m)
+		if err != nil {
+			return err
+		}
+		portable = append(portable, j)
 	}
 	if err := s.repo.SaveSpine(ctx, uint64(s.stored)+1, recs); err != nil {
 		return fmt.Errorf("store spine: %w", err)
+	}
+	// The same records in the portable form, which a proof service serves inside each proof's document (RB7b-F30).
+	if err := s.repo.SaveSpineJSON(ctx, uint64(s.stored)+1, portable); err != nil {
+		return fmt.Errorf("store portable spine: %w", err)
 	}
 	s.stored = len(majors)
 	return nil
@@ -242,6 +258,27 @@ func (s *Shadow) record(ctx context.Context, j job, ev *proofv2.Evidence, rep *p
 	if rerr := s.repo.RecordBuild(ctx, res); rerr != nil {
 		s.logf("[PROOF-V2-SHADOW] store build %s: %v", j.intentID, rerr)
 	}
+	if err == nil {
+		s.storePortable(ctx, j.intentID, ev)
+	}
+}
+
+// storePortable stores the intent's portable document (without the shared spine) beside its evidence, so a proof service can
+// serve it. It can never fail a build: the evidence and its verdict are already stored, and a failure here is logged by name.
+func (s *Shadow) storePortable(ctx context.Context, intentID string, ev *proofv2.Evidence) {
+	doc, err := proofv2.ExportDocument(ev, s.inputs, s.pin)
+	if err == nil {
+		var raw []byte
+		if raw, err = json.Marshal(doc); err == nil {
+			err = s.repo.SavePortable(ctx, intentID, raw, proofv2.MajorsNeeded(ev))
+		}
+	}
+	result := "ok"
+	if err != nil {
+		result = "failed"
+		s.logf("[PROOF-V2-SHADOW] store portable document %s: %v", intentID, err)
+	}
+	shadowResults.WithLabelValues("portable", result).Inc()
 }
 
 // Prove builds an intent's v2 evidence now, for its intent certificate (docs/proof/GOVROOT_V3.md): from the pages
@@ -378,6 +415,20 @@ func (l *Lazy) Prove(ctx context.Context, intentID, account, tx, bvn string, max
 		return s.Prove(ctx, intentID, account, tx, bvn, maxMajors)
 	}
 	return nil, fmt.Errorf("proof_v2_not_ready: the spine walk from the pinned incarnation's genesis has not finished")
+}
+
+// RecordGovRootInputs stores the govRoot v3 inputs of an intent whose certificate has been built, which a portable document carries
+// beside the evidence. It needs no spine walk, so it works before the shadow is ready; it can never fail the intent, and a failure is logged.
+func (l *Lazy) RecordGovRootInputs(intentID string, in *proofv2.PortableGovRootV3Inputs) {
+	raw, err := json.Marshal(in)
+	if err == nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		err = l.repo.RecordGovRootInputs(ctx, intentID, raw)
+	}
+	if err != nil {
+		l.logf("[PROOF-V2-SHADOW] store govRoot v3 inputs %s: %v", intentID, err)
+	}
 }
 
 func (l *Lazy) notReady(intentID, account, tx string) {

@@ -94,6 +94,12 @@ type Chain struct {
 	// one exist. A chain whose blocks never stop (Ethereum, the OP stack, Arbitrum) never heartbeats.
 	BlocksOnlyWithTraffic bool
 
+	// InstantFinality: a block of this chain is final the moment it exists (a BFT commit), so its finalized block IS its
+	// latest block. Contract state is then read at the head itself, not a few blocks below it: the few blocks exist to keep
+	// providers in step on a chain whose heads move, and on a chain that makes a block only when a transaction lands (Adiri
+	// after an anchor and a settlement) head minus 3 is a block from before the anchor existed (RB7-ADIRI-F1).
+	InstantFinality bool
+
 	// GenesisHash is the hash of the chain's block 0 this build settles on ("" for a chain not pinned). A testnet that
 	// is reset keeps its chain id and starts again from a new genesis, erasing every CERTEN contract and settlement on
 	// it; like an Accumulate incarnation, the genesis names WHICH chain of that id this is. A pinned chain whose
@@ -143,6 +149,8 @@ var All = []Chain{
 		// telcoin-network@5736cc30 crates/engine/src/payload_builder.rs:114-127 skips an empty output (RB7 Phase A
 		// F-BLK-1, F-BLK-2).
 		BlocksOnlyWithTraffic: true,
+		// Bullshark commits are final: finalized == latest (measured on all six public endpoints, RB7 Phase A F-FIN-*).
+		InstantFinality: true,
 		// Block 0 of the Adiri incarnation launched 2026-05-07 19:57:27 UTC (timestamp 0x69fceea7). Read 2026-10-05 from
 		// all six public endpoints (rpc.telcoin.network, adiri.tel, node1-4.telcoin.network: identical), and recomputed
 		// with go-ethereum v1.17.0 core.Genesis.ToBlock from the published telcoin-network@5736cc30

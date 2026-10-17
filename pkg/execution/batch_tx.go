@@ -183,8 +183,14 @@ func (ecm *EthereumContractManager) sendBatchTx(
 		ecm.rewindNonce(nonce)
 		return nil, "", fmt.Errorf("%s: a contract call has no destination", label)
 	}
+	// A call with no calldata is a plain value transfer (the idle-chain heartbeat): its cost is the intrinsic 21,000, fixed
+	// by the protocol, so it keeps its fixed limit. Every call to a contract is sized by the chain's own estimate.
+	ceiling := ecm.gasCeiling()
+	if len(call.Data()) == 0 {
+		ceiling = 0
+	}
 	rcpt, hash, err := sender.Send(ctx, SendRequest{
-		Nonce: nonce, To: *call.To(), Data: call.Data(), Value: call.Value(), Gas: gas,
+		Nonce: nonce, To: *call.To(), Data: call.Data(), Value: call.Value(), Gas: gas, GasCeiling: ceiling,
 		Label: label, Owner: owner, OnBroadcast: onBroadcast,
 	})
 	if err != nil {
@@ -197,6 +203,20 @@ func (ecm *EthereumContractManager) sendBatchTx(
 		return nil, "", err
 	}
 	return rcpt, hash, nil
+}
+
+// maxBatchTxGas is the most one batch-lane transaction may be sent with when the chain is not configured with more
+// (<G>_GAS_LIMIT_ANCHOR): a backstop against a pathological estimate, not the limit a transaction is sent with - that is
+// the chain's own estimate (txSender.gasLimitFor). The money a transaction can cost is bounded separately by the fee
+// ceilings (feeCeiling, txCostCeiling).
+const maxBatchTxGas = 8_000_000
+
+// gasCeiling is the most gas one batch-lane transaction may be sent with on this chain.
+func (ecm *EthereumContractManager) gasCeiling() uint64 {
+	if ecm.config != nil && ecm.config.GasLimit > maxBatchTxGas {
+		return ecm.config.GasLimit
+	}
+	return maxBatchTxGas
 }
 
 // isTransientSendError reports whether a batch-lane send ended without a result that says anything

@@ -2,6 +2,7 @@ package execution
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/certen/independant-validator/pkg/ethrpc"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/rpc"
 )
 
@@ -68,7 +70,15 @@ func StateProofServable(chainID int64) error {
 
 // probeStateProofWindow measures chainID's finality lag and which providers serve eth_getProof that deep, records the
 // result for admission and logs it. account is any account the chain holds (its anchor).
-func probeStateProofWindow(ctx context.Context, chainID int64, reader *ethrpc.AgreeingReader, account common.Address, logf func(string, ...interface{})) error {
+//
+// A probe that cannot complete clears the stored result: admission then answers "not probed yet" (retried), never the
+// earlier "servable", which the chain's providers may no longer deserve.
+func probeStateProofWindow(ctx context.Context, chainID int64, reader *ethrpc.AgreeingReader, account common.Address, logf func(string, ...interface{})) (err error) {
+	defer func() {
+		if err != nil {
+			stateProofWindows.Delete(chainID)
+		}
+	}()
 	head, err := reader.HeaderByNumber(ctx, big.NewInt(int64(rpc.LatestBlockNumber)))
 	if err != nil {
 		return fmt.Errorf("reading the agreed head: %w", err)
@@ -81,16 +91,26 @@ func probeStateProofWindow(ctx context.Context, chainID int64, reader *ethrpc.Ag
 		return fmt.Errorf("the agreed finalized block %s is past the head %s", fin.Number, head.Number)
 	}
 	lag := new(big.Int).Sub(head.Number, fin.Number)
+	depth := new(big.Int).Add(lag, big.NewInt(StateProofProbeMargin))
+	if depth.Cmp(head.Number) > 0 {
+		depth = new(big.Int).Set(head.Number)
+	}
+	block := new(big.Int).Sub(head.Number, depth)
+	// The state root an answer is checked against is the AGREED header's, the one a real proof read is checked against.
+	probed, err := reader.HeaderByNumber(ctx, block)
+	if err != nil {
+		return fmt.Errorf("reading the agreed block %s to check a proof against: %w", block, err)
+	}
 	servable := false
 	var parts []string
 	for _, p := range reader.Locators() {
-		depth := new(big.Int).Add(lag, big.NewInt(StateProofProbeMargin))
-		if depth.Cmp(head.Number) > 0 {
-			depth = new(big.Int).Set(head.Number)
-		}
-		block := new(big.Int).Sub(head.Number, depth)
-		if _, err := p.GetProof(ctx, account, []string{}, "0x"+block.Text(16)); err != nil {
+		raw, err := p.GetProof(ctx, account, []string{}, "0x"+block.Text(16))
+		if err != nil {
 			parts = append(parts, fmt.Sprintf("%s: no state %s blocks back (the finalized depth plus %d)", p.Host, depth, StateProofProbeMargin))
+			continue
+		}
+		if !accountProofVerifies(raw, probed.Root, account) {
+			parts = append(parts, fmt.Sprintf("%s: answered %s blocks back, but not with a proof that verifies against the agreed state root", p.Host, depth))
 			continue
 		}
 		servable = true
@@ -104,6 +124,23 @@ func probeStateProofWindow(ctx context.Context, chainID int64, reader *ethrpc.Ag
 		logf("⚠️ [STATE-PROOF] chain %d CANNOT prove committed storage slots (%v): %s", chainID, ErrStateProofWindowUnavailable, detail)
 	}
 	return nil
+}
+
+// accountProofVerifies is true when the eth_getProof answer holds a valid account proof of account against stateRoot.
+func accountProofVerifies(raw []byte, stateRoot common.Hash, account common.Address) bool {
+	var res EthGetProofResult
+	if err := json.Unmarshal(raw, &res); err != nil {
+		return false
+	}
+	nodes := make([][]byte, 0, len(res.AccountProof))
+	for _, h := range res.AccountProof {
+		n, err := hexutil.Decode(h)
+		if err != nil {
+			return false
+		}
+		nodes = append(nodes, n)
+	}
+	return verifyAccountProof(stateRoot, account, nodes)
 }
 
 // startStateProofWindowProbe probes this orchestrator's chain now and every StateProofProbeEvery. Until the first probe
@@ -122,6 +159,7 @@ func (o *BatchOrchestrator) startStateProofWindowProbe(chainID int64) {
 			cancel()
 			wait := StateProofProbeEvery
 			if err != nil {
+				stateProofWindows.Delete(chainID) // a probe that cannot run leaves no stale "servable" behind
 				o.logf("⚠️ [STATE-PROOF] chain %d's providers could not be probed for state proofs: %v", chainID, err)
 				wait = time.Minute
 			}

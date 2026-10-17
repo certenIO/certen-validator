@@ -52,15 +52,20 @@ type verification struct {
 	err          error
 }
 
-// refusal is why a verification refuses the provider for good: another chain id, or another genesis.
+// refusal is why a verification refuses the provider for good: another genesis than the chain is pinned to. It refuses
+// the reader outright, and the provider never joins.
 func (v verification) refusal(chainID int64, host string) error {
-	if v.wrongGenesis != nil {
-		return v.wrongGenesis
+	return v.wrongGenesis
+}
+
+// wrongChainErr is why a provider that answered ANOTHER chain id is left out. Its answer never counts toward agreement,
+// but it is not exiled for good: a load-balanced or misrouted backend answers the right chain later, so the provider is
+// asked again after a bounded backoff, like one that did not answer, and joins when it names the right chain.
+func (v verification) wrongChainErr(chainID int64, host string) error {
+	if v.wrong == "" {
+		return nil
 	}
-	if v.wrong != "" {
-		return fmt.Errorf("chain %d provider %s serves chain %s", chainID, host, v.wrong)
-	}
-	return nil
+	return fmt.Errorf("chain %d provider %s serves chain %s", chainID, host, v.wrong)
 }
 
 // verifyOne dials one provider and reads its chain id, asking again while it answers transiently, for up to budget.
@@ -164,6 +169,8 @@ wait:
 			switch {
 			case v.refusal(r.chainID, cands[v.i].host) != nil:
 				return v.refusal(r.chainID, cands[v.i].host)
+			case v.wrong != "":
+				failed[v.i] = v.wrongChainErr(r.chainID, cands[v.i].host)
 			case v.err != nil:
 				failed[v.i] = v.err
 			default:
@@ -189,6 +196,8 @@ collect:
 			switch {
 			case v.refusal(r.chainID, cands[v.i].host) != nil:
 				return v.refusal(r.chainID, cands[v.i].host)
+			case v.wrong != "":
+				failed[v.i] = v.wrongChainErr(r.chainID, cands[v.i].host)
 			case v.err != nil:
 				failed[v.i] = v.err
 			default:

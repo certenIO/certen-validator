@@ -33,6 +33,10 @@ type proofProvider struct {
 	depth  int64                // when set, the blocks of state it keeps: eth_getProof deeper than this is refused
 	// instant makes the chain's finalized block its head (a lag of 0, as on Telcoin's Adiri), not 1000 blocks behind.
 	instant bool
+	// stateRoot is the state root every header it serves carries (the probe verifies the account proof against it);
+	// noHeaders makes it refuse header reads, so that the chain's head cannot be agreed.
+	stateRoot common.Hash
+	noHeaders bool
 }
 
 func (p *proofProvider) serve(t *testing.T, host string) string {
@@ -58,7 +62,11 @@ func (p *proofProvider) serve(t *testing.T, host string) string {
 			if len(req.Params) > 0 && string(req.Params[0]) == `"finalized"` && !p.instant {
 				n = 99000
 			}
-			b, _ := json.Marshal(&types.Header{Number: big.NewInt(n), Difficulty: big.NewInt(0), Time: uint64(n)})
+			if p.noHeaders {
+				fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"error":{"code":-32000,"message":"headers unavailable"}}`, req.ID)
+				return
+			}
+			b, _ := json.Marshal(&types.Header{Number: big.NewInt(n), Difficulty: big.NewInt(0), Time: uint64(n), Root: p.stateRoot})
 			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"result":%s}`, req.ID, b)
 		case "eth_getProof":
 			if p.depth != 0 && len(req.Params) == 3 {
@@ -178,12 +186,19 @@ func probeWith(t *testing.T, chainID int64, depths ...int64) error {
 
 func probeWithFinality(t *testing.T, chainID int64, instant bool, depths ...int64) error {
 	t.Helper()
-	empty := func() (any, string) {
-		return map[string]any{"accountProof": []string{}, "storageHash": common.Hash{}, "storageProof": []any{}}, ""
-	}
+	// Each provider answers with the REAL account proof of the state its headers name: the probe verifies it.
+	sp, root := buildStateWithSlot(t, rb5Account, rb5Slot, big.NewInt(42))
+	real := func() (any, string) { return getProofJSON(sp), "" }
+	return probeWithAnswer(t, chainID, instant, root, real, depths...)
+}
+
+// probeWithAnswer probes a chain whose providers (keeping depths[i] blocks of state) name stateRoot in their headers and
+// answer eth_getProof with answer.
+func probeWithAnswer(t *testing.T, chainID int64, instant bool, stateRoot common.Hash, answer func() (any, string), depths ...int64) error {
+	t.Helper()
 	var urls []string
 	for i, d := range depths {
-		p := &proofProvider{answer: empty, depth: d, instant: instant}
+		p := &proofProvider{answer: answer, depth: d, instant: instant, stateRoot: stateRoot}
 		urls = append(urls, p.serve(t, fmt.Sprintf("127.0.0.%d", i+1)))
 	}
 	r, err := ethrpc.NewAgreeingReader(context.Background(), stateProofTestChain, urls, 3*time.Second)
@@ -195,6 +210,54 @@ func probeWithFinality(t *testing.T, chainID int64, instant bool, depths ...int6
 		t.Fatal(err)
 	}
 	return StateProofServable(chainID)
+}
+
+// A provider that answers eth_getProof with no error is not thereby serving a proof: an empty or null answer, or a proof
+// of another state, does not verify against the agreed header's state root, and a chain whose providers only answer
+// that way cannot prove a committed slot.
+func TestAProbeAnswerThatDoesNotVerifyAgainstTheStateRootDoesNotMakeAChainServable(t *testing.T) {
+	_, root := buildStateWithSlot(t, rb5Account, rb5Slot, big.NewInt(42))
+	forged, _ := buildStateWithSlot(t, rb5Account, rb5Slot, big.NewInt(43))
+	otherAccountState, _ := buildStateWithSlot(t, common.HexToAddress("0x00000000000000000000000000000000000000c9"), rb5Slot, big.NewInt(1))
+	cases := map[string]func() (any, string){
+		"an empty account proof": func() (any, string) {
+			return map[string]any{"accountProof": []string{}, "storageHash": common.Hash{}, "storageProof": []any{}}, ""
+		},
+		"a null answer":                 func() (any, string) { return nil, "" },
+		"a proof of another state root": func() (any, string) { return getProofJSON(forged), "" },
+		"a proof of another account":    func() (any, string) { return getProofJSON(otherAccountState), "" },
+	}
+	i := int64(920000)
+	for name, answer := range cases {
+		i++
+		err := probeWithAnswer(t, i, false, root, answer, 5000, 5000)
+		if err == nil || !errors.Is(err, ErrStateProofWindowUnavailable) {
+			t.Errorf("%s made the chain servable (or the probe did not name the refusal): %v", name, err)
+		}
+	}
+}
+
+// A probe that fails later must not leave the earlier "servable" in place: admission stops passing on a stale result
+// and is retried (the chain's providers have not been probed), never refused for good and never admitted blind.
+func TestAFailedProbeClearsTheStoredWindow(t *testing.T) {
+	chainID := int64(920100)
+	if err := probeWith(t, chainID, 5000, 5000); err != nil {
+		t.Fatalf("setup: a chain with two deep providers was refused: %v", err)
+	}
+	broken := &proofProvider{noHeaders: true, answer: func() (any, string) { return nil, "" }}
+	other := &proofProvider{noHeaders: true, answer: func() (any, string) { return nil, "" }}
+	urls := []string{broken.serve(t, "127.0.0.1"), other.serve(t, "127.0.0.2")}
+	r, err := ethrpc.NewAgreeingReader(context.Background(), stateProofTestChain, urls, 3*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := probeStateProofWindow(context.Background(), chainID, r, rb5Account, t.Logf); err == nil {
+		t.Fatal("a probe whose headers cannot be read succeeded")
+	}
+	err = StateProofServable(chainID)
+	if err == nil || !errors.Is(err, ErrBatchUnavailable) || !strings.Contains(err.Error(), "have not been probed") {
+		t.Fatalf("a failed probe left the earlier result in place: %v", err)
+	}
 }
 
 func TestAChainWithNoProviderThatKeepsStateThatDeepRefusesExpectedStateByName(t *testing.T) {

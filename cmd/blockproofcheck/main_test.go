@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
@@ -141,5 +142,46 @@ func TestFollowCountsProvenRefusedAndKeepsUnreadPending(t *testing.T) {
 	}
 	if len(fl.pending) != 0 || testutil.ToFloat64(mProvenThrough.WithLabelValues(chain)) != float64(number(t, f)) {
 		t.Fatalf("the pending block was not proven on the next cycle: %d pending", len(fl.pending))
+	}
+}
+
+// The monitor reads each block from ONE provider and confirms a refusal through the agreeing providers: one provider
+// serving an unprovable block is overruled (proven, and named); every provider serving it is a refusal.
+func TestFollowReadsOneProviderAndConfirmsARefusal(t *testing.T) {
+	registerOnce.Do(func() { registerMetrics(prometheus.NewRegistry()) })
+	f := ethprooftest.Load(t, ethprooftest.ArbitrumRedeem)
+	chain := "421614"
+	dial := func(p *ethprooftest.Provider) *rpc.Client {
+		c, err := rpc.Dial(ethprooftest.URLs(t, p)[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	var logged []string
+	logf := func(format string, args ...interface{}) { logged = append(logged, fmt.Sprintf(format, args...)) }
+
+	liar := &ethprooftest.Provider{F: f, Mutate: retype("0x7d")}
+	proven0 := testutil.ToFloat64(mBlocksProven.WithLabelValues(chain))
+	fl := &follower{chainID: f.ChainID, src: reader(t, &ethprooftest.Provider{F: f}, &ethprooftest.Provider{F: f}),
+		one: []*rpc.Client{dial(liar)}, workers: 1, attempts: 1, backoff: time.Millisecond, maxBatch: 10, logf: logf}
+	if _, err := fl.step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if testutil.ToFloat64(mBlocksProven.WithLabelValues(chain))-proven0 != 1 {
+		t.Fatal("THE regression: one provider's unprovable bodies were counted as an unprovable block")
+	}
+	if len(logged) == 0 || !strings.Contains(logged[len(logged)-1], "that provider is wrong") {
+		t.Fatalf("the wrong provider was not named: %v", logged)
+	}
+
+	refused0 := testutil.ToFloat64(mRefused.WithLabelValues(chain))
+	fl = &follower{chainID: f.ChainID, src: reader(t, &ethprooftest.Provider{F: f, Mutate: retype("0x7d")}, &ethprooftest.Provider{F: f, Mutate: retype("0x7d")}),
+		one: []*rpc.Client{dial(liar)}, workers: 1, attempts: 1, backoff: time.Millisecond, maxBatch: 10, logf: logf}
+	if _, err := fl.step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if testutil.ToFloat64(mRefused.WithLabelValues(chain))-refused0 != 1 {
+		t.Fatal("a block every provider serves unprovable was not counted refused")
 	}
 }
