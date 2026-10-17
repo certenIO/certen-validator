@@ -142,28 +142,33 @@ func (s *Shadow) capture(ctx context.Context, account, tx, keyBook, keyPage stri
 // collector wires a Collector to the live network: the routing table as the network publishes it, the Directory's anchor
 // chains, and each partition's retained range.
 func (s *Shadow) collector(ctx context.Context, keyBook, keyPage string) (*Collector, error) {
-	router, err := proof.LoadNetworkRouter(ctx, s.endpoint)
+	return NewCollector(ctx, s.endpoint, s.c, s.b, s.logf, keyBook, keyPage)
+}
+
+// NewCollector wires a Collector to a live network through the Builder that reads transaction positions.
+func NewCollector(ctx context.Context, endpoint string, c *jsonrpc.Client, b *proofv2.Builder, logf func(string, ...any), keyBook, keyPage string) (*Collector, error) {
+	router, err := proof.LoadNetworkRouter(ctx, endpoint)
 	if err != nil {
 		return nil, fmt.Errorf("routing: %w", err)
 	}
-	reader := &proofv2.PageReader{Net: s.c, Q: s.b.Q, Retention: &proofv2.ClientRetention{C: s.c}}
-	resolver, err := proof.NewChainKeyPageResolver(s.endpoint, s.logf)
+	reader := &proofv2.PageReader{Net: c, Q: b.Q, Retention: &proofv2.ClientRetention{C: c}}
+	resolver, err := proof.NewChainKeyPageResolver(endpoint, logf)
 	if err != nil {
 		return nil, err
 	}
 	return &Collector{
 		Route: func(_ context.Context, account string) (string, error) { return router.PartitionID(account) },
-		Block: func(ctx context.Context, account, tx string) (uint64, error) { return s.b.TxBlock(ctx, account, tx) },
+		Block: func(ctx context.Context, account, tx string) (uint64, error) { return b.TxBlock(ctx, account, tx) },
 		Position: func(ctx context.Context, account, tx, label string) (*proofv2.TxPosition, error) {
-			return s.b.Position(ctx, account, tx, label)
+			return b.Position(ctx, account, tx, label)
 		},
 		Facts: func(ctx context.Context, account, tx string) (*TxFacts, error) {
-			return ReadTxFacts(ctx, s.c, account, tx)
+			return ReadTxFacts(ctx, c, account, tx)
 		},
-		Log:  proofv2.NetLog{Net: s.c},
+		Log:  proofv2.NetLog{Net: c},
 		Page: reader.PageAt,
 		Anchor: func(ctx context.Context, pb *proofv2.PartitionBlock) ([32]byte, error) {
-			_, h, err := proofv2.AnchorAt(ctx, s.c, pb, 0)
+			_, h, err := proofv2.AnchorAt(ctx, c, pb, 0)
 			return h, err
 		},
 		Arrival: func(ctx context.Context, id *url.TxID) (string, uint64, error) {
@@ -172,11 +177,11 @@ func (s *Shadow) collector(ctx context.Context, keyBook, keyPage string) (*Colle
 			if err != nil {
 				return "", 0, err
 			}
-			blk, err := proofv2.ChainEntryBlock(ctx, s.c, acct, "signature", id.Hash())
+			blk, err := proofv2.ChainEntryBlock(ctx, c, acct, "signature", id.Hash())
 			return p, blk, err
 		},
 		Trace: func(ctx context.Context, cause *url.TxID) ([]Hop, []*url.URL, error) {
-			return TraceCause(ctx, s.c, cause)
+			return TraceCause(ctx, c, cause)
 		},
 		// The certified key page is resolved exactly as the intent certificate resolves it (pkg/proof ResolveSigningKeyPage), from
 		// the intent's declared key book and page and the transaction's signatures.

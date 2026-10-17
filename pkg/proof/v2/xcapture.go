@@ -49,13 +49,36 @@ type ClientRetention struct {
 
 // Retained implements Retention.
 func (r *ClientRetention) Retained(ctx context.Context, partition string) (uint64, uint64, error) {
+	st, err := r.status(ctx, partition)
+	if err != nil {
+		return 0, 0, err
+	}
+	if st.RetainedBlocks == nil {
+		return 0, 0, fmt.Errorf("%s advertises no retained blocks", partition)
+	}
+	return st.RetainedBlocks.Earliest, st.RetainedBlocks.Latest, nil
+}
+
+// Head is the partition's newest committed block as the node reports it.
+func (r *ClientRetention) Head(ctx context.Context, partition string) (uint64, error) {
+	st, err := r.status(ctx, partition)
+	if err != nil {
+		return 0, err
+	}
+	if st.LastBlock == nil {
+		return 0, fmt.Errorf("%s reports no last block", partition)
+	}
+	return uint64(st.LastBlock.Height), nil
+}
+
+func (r *ClientRetention) status(ctx context.Context, partition string) (*api.ConsensusStatus, error) {
 	r.mu.Lock()
 	node := r.node
 	r.mu.Unlock()
 	if node == "" {
 		ni, err := r.C.NodeInfo(ctx, api.NodeInfoOptions{})
 		if err != nil {
-			return 0, 0, fmt.Errorf("node info: %w", err)
+			return nil, fmt.Errorf("node info: %w", err)
 		}
 		node = ni.PeerID.String()
 		r.mu.Lock()
@@ -65,12 +88,9 @@ func (r *ClientRetention) Retained(ctx context.Context, partition string) (uint6
 	no := false
 	st, err := r.C.ConsensusStatus(ctx, api.ConsensusStatusOptions{NodeID: node, Partition: partition, IncludePeers: &no})
 	if err != nil {
-		return 0, 0, fmt.Errorf("consensus status of %s: %w", partition, err)
+		return nil, fmt.Errorf("consensus status of %s: %w", partition, err)
 	}
-	if st.RetainedBlocks == nil {
-		return 0, 0, fmt.Errorf("%s advertises no retained blocks", partition)
-	}
-	return st.RetainedBlocks.Earliest, st.RetainedBlocks.Latest, nil
+	return st, nil
 }
 
 type histKind int
@@ -589,4 +609,11 @@ func ChainEntryBlock(ctx context.Context, net api.Querier, account *url.URL, cha
 		return 0, fmt.Errorf("%v %s entry %x carries no receipt naming its block", account, chain, entry[:8])
 	}
 	return ce.Receipt.LocalBlock, nil
+}
+
+// VerifyPageAt checks one captured page against the state tree root of the block it was read at, as the verifier does for a
+// page of the transaction's own partition: the receipt starts at the hash of the state, ends at stateRoot and validates, the
+// state decodes to the page's URL, and its chain roots - when captured - bind to the receipt.
+func VerifyPageAt(p *PageState, stateRoot [32]byte) (protocol.Account, PageChain, error) {
+	return verifyPage(p, stateRoot[:])
 }
