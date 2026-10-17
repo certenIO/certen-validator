@@ -94,7 +94,7 @@ type PortableVote struct {
 	Origin     string          `json:"origin"`
 	Vote       string          `json:"vote"`
 	Delegators []string        `json:"delegators,omitempty"`
-	Cause      []string        `json:"cause,omitempty"`
+	Cause      string          `json:"cause,omitempty"`
 	Transport  VoteTransport   `json:"transport"`
 	Message    string          `json:"message"`
 	Receipt    json.RawMessage `json:"receipt"` // merkle.Receipt

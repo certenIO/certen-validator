@@ -133,7 +133,7 @@ func TestEvidence21PortableRoundTripAndTwoZeroRefusal(t *testing.T) {
 	ev.Pages[1].Partition, ev.Pages[1].Roles = "acc://bvn-BVN2.acme", []proofv2.PageRole{proofv2.RoleDelegateBook}
 	ev.Votes = []proofv2.Vote{{
 		Authority: "acc://fdb-risk-tcl1.acme/book", Origin: "acc://fdb-risk-tcl1.acme/book/2", Vote: "accept",
-		Delegators: []string{"acc://b.acme/book/1"}, Cause: []string{"acc://" + strings.Repeat("ab", 32) + "@fdb-risk-tcl1.acme/book/2"},
+		Delegators: []string{"acc://b.acme/book/1"}, Cause: "acc://" + strings.Repeat("ab", 32) + "@fdb-risk-tcl1.acme/book/2",
 		Transport: proofv2.VoteTransport{Kind: proofv2.TransportSequenced, Source: "acc://bvn-BVN2.acme", Destination: "acc://bvn-BVN1.acme", Number: 6280},
 		Message:   strings.Repeat("cd", 32), Receipt: ev.Receipt,
 	}, {

@@ -102,10 +102,10 @@ type Vote struct {
 	Origin     string        `json:"origin"`               // the page that decided it (a page URL; the authority itself for an abstain of a missing authority)
 	Vote       string        `json:"vote"`                 // accept, reject, abstain or suggest
 	Delegators []string      `json:"delegators,omitempty"` // the delegation path, nearest the signer first
-	Cause      []string      `json:"cause,omitempty"`      // the transaction ids of the messages that caused it
+	Cause      string        `json:"cause,omitempty"`      // the transaction id of the signature that caused it (AuthoritySignature.Cause)
 	Transport  VoteTransport `json:"transport"`
 	Message    string        `json:"message"` // the vote's entry hash in the principal's signature chain, hex32
-	Receipt    string        `json:"receipt"` // from Message into the principal's partition's state root (binary merkle.Receipt, hex)
+	Receipt    string        `json:"receipt"` // from Message to the anchor of the principal's signature chain as bound at the anchor block (binary merkle.Receipt, hex)
 }
 
 // ProvenPage is one proven page in the report: where it was proven and why it is there.
