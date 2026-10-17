@@ -1265,6 +1265,23 @@ func (app *ValidatorApp) Query(ctx context.Context, req *abcitypes.RequestQuery)
 		}
 		return &abcitypes.ResponseQuery{Code: 0, Value: b, Height: app.latestHeight}, nil
 
+	case "/certen/g1_activation":
+		// The committed cross-partition activation log (rules v15): the activation the chain accepted, where and under which
+		// id - what a history check finds an accepted activation's record in, and what the operator tool reads the
+		// activation height from.
+		if app.ledgerStore == nil {
+			return &abcitypes.ResponseQuery{Code: 1, Log: "ledger store not available"}, nil
+		}
+		log, err := app.ledgerStore.LoadG1Activation()
+		if err != nil {
+			return &abcitypes.ResponseQuery{Code: 1, Log: "failed to read the cross-partition activation log: " + err.Error()}, nil
+		}
+		b, err := json.Marshal(log)
+		if err != nil {
+			return &abcitypes.ResponseQuery{Code: 1, Log: err.Error()}, nil
+		}
+		return &abcitypes.ResponseQuery{Code: 0, Value: b, Height: app.latestHeight}, nil
+
 	case "/certen/accumulate_spine":
 		// The committed Accumulate spine log (rules v13): the genesis, every verified major block's checkpoint and the
 		// validator sets they reference - what a history check finds each accepted spine transaction's record in
