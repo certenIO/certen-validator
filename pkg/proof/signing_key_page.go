@@ -45,13 +45,15 @@ package proof
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/govsig"
+	"gitlab.com/accumulatenetwork/accumulate/protocol"
 )
 
 // signingKeyPageQuery is the subset of a transaction query the resolver reads.
@@ -293,33 +295,32 @@ func pageIndexInBook(page, book string) (uint64, bool) {
 // isVoteSignature reports whether a signature type is a vote by a key page: a key
 // signature of any algorithm, or a delegated one. Signature requests, credit
 // payments, authority, partition, receipt and internal records are not votes.
+//
+// The set is govsig's (Accumulate's own: the nine key-signature types and the delegation wrapper), the one rule the
+// online G1 proof, the offline vote evidence and this layer share.
 func isVoteSignature(sigType string) bool {
-	switch strings.ToLower(sigType) {
-	case "ed25519", "legacyed25519", "rcd1", "btc", "btclegacy", "eth", "rsasha256",
-		"ecdsasha256", "typeddata", "delegated":
-		return true
-	}
-	return false
+	_, class := govsig.Classify(sigType)
+	return class == govsig.ClassKey || class == govsig.ClassDelegated
 }
 
-// keyHashOfSignature returns the key-page entry hash of a signature's public key.
-//
-// Only ED25519 keys are hashed here, because only their entry hash is a plain
-// SHA-256 of the public key; guessing the hash of another key type would compare
-// against the wrong value and count or reject a signature on a coincidence. For
-// any other vote the caller defers key membership to G1.
+// keyHashOfSignature returns the key-page entry hash of a signature's public key by the TYPE'S OWN rule
+// (protocol.PublicKeyHash): sha256(key) for ed25519, legacyED25519, rsaSha256 and ecdsaSha256, and the other hash
+// for rcd1, btc, btclegacy, eth and typedData. A delegated signature carries no key of its own at this level, and a key
+// that does not parse has no hash: neither is guessed, and for either the caller defers key membership to G1.
 func keyHashOfSignature(sigType, publicKey string) (string, bool) {
-	switch strings.ToLower(sigType) {
-	case "ed25519", "legacyed25519":
-	default:
+	t, class := govsig.Classify(sigType)
+	if class != govsig.ClassKey {
 		return "", false
 	}
 	pk, err := hex.DecodeString(strings.TrimPrefix(strings.TrimSpace(publicKey), "0x"))
 	if err != nil || len(pk) == 0 {
 		return "", false
 	}
-	sum := sha256.Sum256(pk)
-	return hex.EncodeToString(sum[:]), true
+	h, err := protocol.PublicKeyHash(pk, t)
+	if err != nil || len(h) == 0 {
+		return "", false
+	}
+	return hex.EncodeToString(h), true
 }
 
 // normalizeAccountURL lower-cases an acc:// URL and strips a trailing slash, so

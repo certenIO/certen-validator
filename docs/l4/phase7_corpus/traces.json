@@ -1,7 +1,7 @@
 {
   "endpoint": "https://kermit.accumulatenetwork.io/v3",
   "protocolModule": "gitlab.com/accumulatenetwork/accumulate v1.4.2",
-  "capturedAt": "2026-08-26T11:44:44Z",
+  "capturedAt": "2026-10-17T23:16:11Z",
   "traces": [
     {
       "case": "B",
@@ -393,29 +393,6 @@
       "execStatus": "delivered"
     },
     {
-      "case": "K",
-      "shape": "non-ed25519 signature — MUST FAIL CLOSED",
-      "label": "K/k1@certen-p7k.acme/book/1",
-      "why": "a signature type CERTEN does not support must be refused with its own reason code; silently skipping it reads as a threshold shortfall, which reads as 'the institution did not authorize this'",
-      "expect": "refused",
-      "refusalKind": "unsupported-type",
-      "principal": "acc://certen-p7k.acme",
-      "transactionHash": "06195913c2ee872b15c39aa3e845ab29d03aa68b369f6ea6b6be0c2cfe4558f2",
-      "type": "btc",
-      "keyType": "btc",
-      "publicKey": "039d1c74200a8e95b73a699e22de2d7a2df50a07b2556825d8a903811b1e964b68",
-      "signature": "304402200db4b7d316e7664f97a6a32f4e220092e9a46a2627a7ef1dbb3b4cda0a55488d0220241f5a530d61f57f7042db890a20606ecfa58e911ef01d3b2a250e5bb6147153",
-      "signer": "acc://certen-p7k.acme/book/1",
-      "signerVersion": 2,
-      "timestamp": 1787690569949632,
-      "signerPartition": "BVN2",
-      "coreVerdict": true,
-      "digestForm": "none",
-      "submitted": true,
-      "txID": "acc://06195913c2ee872b15c39aa3e845ab29d03aa68b369f6ea6b6be0c2cfe4558f2@certen-p7k.acme/data",
-      "execStatus": "delivered"
-    },
-    {
       "case": "L",
       "shape": "two authorities, BOTH must sign",
       "label": "L/l1@certen-p8l.acme/book/1",
@@ -533,6 +510,29 @@
       "digest": "8b43cb5f9ccd20efdf1c66f161c600f6f62c16788065fcff8b8dff4c2bc28b80",
       "submitted": true,
       "txID": "acc://da420e2947f4f095880a6f10349317a85f2542293bba888b7baadbf32f935355@certen-p8n.acme/data",
+      "execStatus": "delivered"
+    },
+    {
+      "case": "K",
+      "shape": "a btc key signature - a type Accumulate accepts, verified from its bytes",
+      "label": "K/k1@certen-p7k.acme/book/1",
+      "why": "a btc signature - a key-signature type Accumulate's executor accepts - is verified from its bytes and counts as the key's vote (was: refused as unsupported, G-42)",
+      "expect": "valid",
+      "expectExec": "delivered",
+      "principal": "acc://certen-p7k.acme",
+      "transactionHash": "c0965725afb9f9fa8cb58be61d10eee483de6c3a362567f22baf28cc80795213",
+      "type": "btc",
+      "keyType": "btc",
+      "publicKey": "02ce23d1fdf96adf1da1e4624a3f003843b4a101e17217411e79476a011157b423",
+      "signature": "3046022100c7ed7337abaf7502689ba09141e826a1d344e2efc27f06fce612cbf2491801d8022100f89fae92970c80af9838a153136bb340a556e9e5986a6050d1a754491492cd5e",
+      "signer": "acc://certen-p7k.acme/book/1",
+      "signerVersion": 4,
+      "timestamp": 1792278975330143,
+      "signerPartition": "BVN2",
+      "coreVerdict": true,
+      "digestForm": "initiator-merkle",
+      "submitted": true,
+      "txID": "acc://c0965725afb9f9fa8cb58be61d10eee483de6c3a362567f22baf28cc80795213@certen-p7k.acme/data",
       "execStatus": "delivered"
     }
   ],
@@ -1020,10 +1020,16 @@
     },
     "acc://certen-p7k.acme/book/1": {
       "url": "acc://certen-p7k.acme/book/1",
-      "version": 2,
+      "version": 4,
       "threshold": 1,
       "partition": "BVN2",
       "entries": [
+        {
+          "keyHash": "1bbcdcd79c5142f2361d0581fa209a339ec6cfce"
+        },
+        {
+          "keyHash": "24da89c2940d46b00cbb0c2cfadcec96a86ec91e"
+        },
         {
           "keyHash": "994c154f7421eb10376251f86a3e883fa68c32d7"
         },

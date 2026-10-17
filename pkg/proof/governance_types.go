@@ -69,11 +69,19 @@ type GovReceiptData struct {
 // Signature and Authorization Types
 // =============================================================================
 
-// SignatureData represents Ed25519 signature information
+// SignatureData represents a key signature of any of the nine types Accumulate's executor accepts on a key page
+// (govsig.AcceptedKeyTypes), mirroring consolidated_governance-proof's SignatureData.
 type SignatureData struct {
-	Type            string    `json:"type"`            // Should be "ed25519"
-	PublicKey       string    `json:"publicKey"`       // 32-byte hex
-	Signature       string    `json:"signature"`       // 64-byte hex
+	Type string `json:"type"` // lower-case type name, or "delegated" when the key signature is wrapped in a delegation chain
+
+	// InnerType is the key signature's own type when Type is "delegated" and the key is not ed25519; Raw is the
+	// outermost signature in Accumulate's binary encoding (hex), carried when the other fields cannot rebuild it. Both
+	// are omitted when empty, so every record that existed before RB8-B keeps its bytes in the hashed shape.
+	InnerType string `json:"innerType,omitempty"`
+	Raw       string `json:"raw,omitempty"`
+
+	PublicKey       string    `json:"publicKey"`       // hex; 32 bytes for ed25519, legacyed25519, rcd1; the type's own encoding otherwise
+	Signature       string    `json:"signature"`       // hex; 64 bytes for ed25519, legacyed25519, rcd1; the type's own encoding otherwise
 	Signer          string    `json:"signer"`          // acc://...
 	SignerVersion   int64     `json:"signerVersion"`   // Key page version
 	Timestamp       *int64    `json:"timestamp"`       // Optional signature timestamp

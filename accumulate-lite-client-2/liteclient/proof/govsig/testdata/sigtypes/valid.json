@@ -1,0 +1,2512 @@
+{
+ "format": "certen:sigtypes-vectors:v1",
+ "description": "signatures Accumulate's executor accepts, every key type, direct and delegated",
+ "pinned": {
+  "accumulate": "gitlab.com/accumulatenetwork/accumulate v1.4.7-0.20260926030013-e1d1db9ebb7c",
+  "commit": "e1d1db9ebb7c75318b6652293d5c7008da76ecf4",
+  "network": "DevNet",
+  "chainId": "317849881"
+ },
+ "vectors": [
+  {
+   "id": "legacyED25519/valid/direct",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "legacyED25519",
+   "description": "a legacyED25519 signature over the metadata digest, 0 delegator(s); the key hash is the type's own",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f64617461022d0105022901030225736967747970657320766563746f72206c6567616379454432353531392076616c69642030",
+   "txHash": "f835cc602e5ba8c6a0c08022b61327adf674a06f148981d176c35f022f0a5387",
+   "signature": "01010280d095ffbc310320ca198beb0f3166560633236d51de7c5dbf5eac33e9c3d0e6c2766ee65f6f5b260440f9579b8cab0517467f41791381294e02641016a0e47255d882cab33fd3e842181a898b33d49d771593b18ebe6a62d2ea05cb3cdd3a2e444671e42fe5ab21b70b05176163633a2f2f70726f62652e61636d652f626f6f6b2f31060108f835cc602e5ba8c6a0c08022b61327adf674a06f148981d176c35f022f0a5387",
+   "signatureJson": {
+    "type": "legacyED25519",
+    "timestamp": 1700000000000,
+    "publicKey": "ca198beb0f3166560633236d51de7c5dbf5eac33e9c3d0e6c2766ee65f6f5b26",
+    "signature": "f9579b8cab0517467f41791381294e02641016a0e47255d882cab33fd3e842181a898b33d49d771593b18ebe6a62d2ea05cb3cdd3a2e444671e42fe5ab21b70b",
+    "signer": "acc://probe.acme/book/1",
+    "signerVersion": 1,
+    "transactionHash": "f835cc602e5ba8c6a0c08022b61327adf674a06f148981d176c35f022f0a5387"
+   },
+   "page": {
+    "entries": [
+     "ddb86110e4776de3ce59688867fdb1566ff0506df68e8ce1760b3858c3d39699"
+    ]
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "ddb86110e4776de3ce59688867fdb1566ff0506df68e8ce1760b3858c3d39699",
+    "form": "metadata"
+   }
+  },
+  {
+   "id": "legacyED25519/valid/delegated-1",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "legacyED25519",
+   "description": "a legacyED25519 signature over the metadata digest, 1 delegator(s); the key hash is the type's own",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f64617461022d0105022901030225736967747970657320766563746f72206c6567616379454432353531392076616c69642031",
+   "txHash": "5686ff2d6952157944bf4ac4d9b92834c2c54eeee4cedb5b63366acb79c69bd5",
+   "signature": "010b02a90101010280d095ffbc310320ca198beb0f3166560633236d51de7c5dbf5eac33e9c3d0e6c2766ee65f6f5b26044031ad75eb01dc43313f0d6e306ed974fd012035198d7eb5aa7eaa4b0ab40bb3b9a485007a43d174ebba5767264f9abb898c6b785162556f5a793121bea5c30d0105176163633a2f2f70726f62652e61636d652f626f6f6b2f310601085686ff2d6952157944bf4ac4d9b92834c2c54eeee4cedb5b63366acb79c69bd5031c6163633a2f2f64656c656761746f72312e61636d652f626f6f6b2f31",
+   "signatureJson": {
+    "type": "delegated",
+    "signature": {
+     "type": "legacyED25519",
+     "timestamp": 1700000000000,
+     "publicKey": "ca198beb0f3166560633236d51de7c5dbf5eac33e9c3d0e6c2766ee65f6f5b26",
+     "signature": "31ad75eb01dc43313f0d6e306ed974fd012035198d7eb5aa7eaa4b0ab40bb3b9a485007a43d174ebba5767264f9abb898c6b785162556f5a793121bea5c30d01",
+     "signer": "acc://probe.acme/book/1",
+     "signerVersion": 1,
+     "transactionHash": "5686ff2d6952157944bf4ac4d9b92834c2c54eeee4cedb5b63366acb79c69bd5"
+    },
+    "delegator": "acc://delegator1.acme/book/1"
+   },
+   "page": {
+    "entries": [
+     "ddb86110e4776de3ce59688867fdb1566ff0506df68e8ce1760b3858c3d39699"
+    ]
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "ddb86110e4776de3ce59688867fdb1566ff0506df68e8ce1760b3858c3d39699",
+    "form": "metadata",
+    "delegators": [
+     "acc://delegator1.acme/book/1"
+    ]
+   }
+  },
+  {
+   "id": "legacyED25519/valid/delegated-2",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "legacyED25519",
+   "description": "a legacyED25519 signature over the metadata digest, 2 delegator(s); the key hash is the type's own",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f64617461022d0105022901030225736967747970657320766563746f72206c6567616379454432353531392076616c69642032",
+   "txHash": "63caaf628ff0687f320dfb793484bbe6bf2ce8d249fde10222bfc8620e29e991",
+   "signature": "010b02cc01010b02a90101010280d095ffbc310320ca198beb0f3166560633236d51de7c5dbf5eac33e9c3d0e6c2766ee65f6f5b2604408ed5b74c06dc986c9e9f452f43f03fffb30f0a521b2088e02f476d9f6aedb0ea033f0cca9380bc469bc79b365c1acf32df03cd1ed01d09337fcf4f4b1dd3c40405176163633a2f2f70726f62652e61636d652f626f6f6b2f3106010863caaf628ff0687f320dfb793484bbe6bf2ce8d249fde10222bfc8620e29e991031c6163633a2f2f64656c656761746f72322e61636d652f626f6f6b2f31031c6163633a2f2f64656c656761746f72312e61636d652f626f6f6b2f31",
+   "signatureJson": {
+    "type": "delegated",
+    "signature": {
+     "type": "delegated",
+     "signature": {
+      "type": "legacyED25519",
+      "timestamp": 1700000000000,
+      "publicKey": "ca198beb0f3166560633236d51de7c5dbf5eac33e9c3d0e6c2766ee65f6f5b26",
+      "signature": "8ed5b74c06dc986c9e9f452f43f03fffb30f0a521b2088e02f476d9f6aedb0ea033f0cca9380bc469bc79b365c1acf32df03cd1ed01d09337fcf4f4b1dd3c404",
+      "signer": "acc://probe.acme/book/1",
+      "signerVersion": 1,
+      "transactionHash": "63caaf628ff0687f320dfb793484bbe6bf2ce8d249fde10222bfc8620e29e991"
+     },
+     "delegator": "acc://delegator2.acme/book/1"
+    },
+    "delegator": "acc://delegator1.acme/book/1"
+   },
+   "page": {
+    "entries": [
+     "ddb86110e4776de3ce59688867fdb1566ff0506df68e8ce1760b3858c3d39699"
+    ]
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "ddb86110e4776de3ce59688867fdb1566ff0506df68e8ce1760b3858c3d39699",
+    "form": "metadata",
+    "delegators": [
+     "acc://delegator1.acme/book/1",
+     "acc://delegator2.acme/book/1"
+    ]
+   }
+  },
+  {
+   "id": "legacyED25519/valid/direct-initiator-merkle",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "legacyED25519",
+   "description": "a legacyED25519 signature over the initiator-merkle digest, the form the official builder initiates with",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f64617461022c0105022801030224736967747970657320766563746f72206c656761637945443235353139206d65726b6c65",
+   "txHash": "4748231f2884fde601d505b3ba3fa14bfc6ea06e820f16d71b01812f5fecd890",
+   "signature": "01010280d095ffbc310320ca198beb0f3166560633236d51de7c5dbf5eac33e9c3d0e6c2766ee65f6f5b260440887031e96ab9ad0669693d648981aaa318f06ab0ce19ee258afcd3aa5e9e0cd3b8ca3c96d670bd612edc8cf7c8862a5e957f698aa525eeb2dc947d4f46029f0a05176163633a2f2f70726f62652e61636d652f626f6f6b2f310601084748231f2884fde601d505b3ba3fa14bfc6ea06e820f16d71b01812f5fecd890",
+   "signatureJson": {
+    "type": "legacyED25519",
+    "timestamp": 1700000000000,
+    "publicKey": "ca198beb0f3166560633236d51de7c5dbf5eac33e9c3d0e6c2766ee65f6f5b26",
+    "signature": "887031e96ab9ad0669693d648981aaa318f06ab0ce19ee258afcd3aa5e9e0cd3b8ca3c96d670bd612edc8cf7c8862a5e957f698aa525eeb2dc947d4f46029f0a",
+    "signer": "acc://probe.acme/book/1",
+    "signerVersion": 1,
+    "transactionHash": "4748231f2884fde601d505b3ba3fa14bfc6ea06e820f16d71b01812f5fecd890"
+   },
+   "page": {
+    "entries": [
+     "ddb86110e4776de3ce59688867fdb1566ff0506df68e8ce1760b3858c3d39699"
+    ]
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "ddb86110e4776de3ce59688867fdb1566ff0506df68e8ce1760b3858c3d39699",
+    "form": "initiator-merkle"
+   }
+  },
+  {
+   "id": "ed25519/valid/direct",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "ed25519",
+   "description": "a ed25519 signature over the metadata digest, 0 delegator(s); the key hash is the type's own",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f646174610227010502230103021f736967747970657320766563746f7220656432353531392076616c69642030",
+   "txHash": "bdd596ea231f2ab722ca8df554eb1c959348fa878d775ad2a7d3778332099d9a",
+   "signature": "0102022024b243d093b83b4a49df7b9903af4285d9e2aa385f5ba393adc0d3f76cb812ca034032599eecb54ad0935a053fa83d971f182879b2664337489f71c6caa2ae65a84e6bf147b3d07ad73f1f01444abfa5ffd1e105e5cd4b900b2066bfc04fa42bd30e04176163633a2f2f70726f62652e61636d652f626f6f6b2f3105010680d095ffbc3108bdd596ea231f2ab722ca8df554eb1c959348fa878d775ad2a7d3778332099d9a",
+   "signatureJson": {
+    "type": "ed25519",
+    "publicKey": "24b243d093b83b4a49df7b9903af4285d9e2aa385f5ba393adc0d3f76cb812ca",
+    "signature": "32599eecb54ad0935a053fa83d971f182879b2664337489f71c6caa2ae65a84e6bf147b3d07ad73f1f01444abfa5ffd1e105e5cd4b900b2066bfc04fa42bd30e",
+    "signer": "acc://probe.acme/book/1",
+    "signerVersion": 1,
+    "timestamp": 1700000000000,
+    "transactionHash": "bdd596ea231f2ab722ca8df554eb1c959348fa878d775ad2a7d3778332099d9a"
+   },
+   "page": {
+    "entries": [
+     "5b34cc796698bc19258e2993b3d835b78059e1208cbb8137f618abcca495895d"
+    ]
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "5b34cc796698bc19258e2993b3d835b78059e1208cbb8137f618abcca495895d",
+    "form": "metadata"
+   }
+  },
+  {
+   "id": "ed25519/valid/delegated-1",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "ed25519",
+   "description": "a ed25519 signature over the metadata digest, 1 delegator(s); the key hash is the type's own",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f646174610227010502230103021f736967747970657320766563746f7220656432353531392076616c69642031",
+   "txHash": "d3135782e3b32bb0b597c0b216c47af8b6fda9d254a8409bd668e9dc2ddadc7b",
+   "signature": "010b02a9010102022024b243d093b83b4a49df7b9903af4285d9e2aa385f5ba393adc0d3f76cb812ca0340d5030a5b71b91371b0ed78718937f941a5712dc9cdd2b9e5bbb148026f8acc8258b792be0a38070d54e1452c9c3551a157273daa56a93af98c94594d7c08be0904176163633a2f2f70726f62652e61636d652f626f6f6b2f3105010680d095ffbc3108d3135782e3b32bb0b597c0b216c47af8b6fda9d254a8409bd668e9dc2ddadc7b031c6163633a2f2f64656c656761746f72312e61636d652f626f6f6b2f31",
+   "signatureJson": {
+    "type": "delegated",
+    "signature": {
+     "type": "ed25519",
+     "publicKey": "24b243d093b83b4a49df7b9903af4285d9e2aa385f5ba393adc0d3f76cb812ca",
+     "signature": "d5030a5b71b91371b0ed78718937f941a5712dc9cdd2b9e5bbb148026f8acc8258b792be0a38070d54e1452c9c3551a157273daa56a93af98c94594d7c08be09",
+     "signer": "acc://probe.acme/book/1",
+     "signerVersion": 1,
+     "timestamp": 1700000000000,
+     "transactionHash": "d3135782e3b32bb0b597c0b216c47af8b6fda9d254a8409bd668e9dc2ddadc7b"
+    },
+    "delegator": "acc://delegator1.acme/book/1"
+   },
+   "page": {
+    "entries": [
+     "5b34cc796698bc19258e2993b3d835b78059e1208cbb8137f618abcca495895d"
+    ]
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "5b34cc796698bc19258e2993b3d835b78059e1208cbb8137f618abcca495895d",
+    "form": "metadata",
+    "delegators": [
+     "acc://delegator1.acme/book/1"
+    ]
+   }
+  },
+  {
+   "id": "ed25519/valid/delegated-2",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "ed25519",
+   "description": "a ed25519 signature over the metadata digest, 2 delegator(s); the key hash is the type's own",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f646174610227010502230103021f736967747970657320766563746f7220656432353531392076616c69642032",
+   "txHash": "948a420adb25d1906803264b0b94eac0f0415f10c3ed602bbaa5d4f9de61d602",
+   "signature": "010b02cc01010b02a9010102022024b243d093b83b4a49df7b9903af4285d9e2aa385f5ba393adc0d3f76cb812ca03406bff3797e835c6df85d3afc7d60867eee57b5cdca99f35449ea1cc0aa6d27444ea03b892640f1c9bfeade776e975372ff4c9352e52908525cca9a8674866070404176163633a2f2f70726f62652e61636d652f626f6f6b2f3105010680d095ffbc3108948a420adb25d1906803264b0b94eac0f0415f10c3ed602bbaa5d4f9de61d602031c6163633a2f2f64656c656761746f72322e61636d652f626f6f6b2f31031c6163633a2f2f64656c656761746f72312e61636d652f626f6f6b2f31",
+   "signatureJson": {
+    "type": "delegated",
+    "signature": {
+     "type": "delegated",
+     "signature": {
+      "type": "ed25519",
+      "publicKey": "24b243d093b83b4a49df7b9903af4285d9e2aa385f5ba393adc0d3f76cb812ca",
+      "signature": "6bff3797e835c6df85d3afc7d60867eee57b5cdca99f35449ea1cc0aa6d27444ea03b892640f1c9bfeade776e975372ff4c9352e52908525cca9a86748660704",
+      "signer": "acc://probe.acme/book/1",
+      "signerVersion": 1,
+      "timestamp": 1700000000000,
+      "transactionHash": "948a420adb25d1906803264b0b94eac0f0415f10c3ed602bbaa5d4f9de61d602"
+     },
+     "delegator": "acc://delegator2.acme/book/1"
+    },
+    "delegator": "acc://delegator1.acme/book/1"
+   },
+   "page": {
+    "entries": [
+     "5b34cc796698bc19258e2993b3d835b78059e1208cbb8137f618abcca495895d"
+    ]
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "5b34cc796698bc19258e2993b3d835b78059e1208cbb8137f618abcca495895d",
+    "form": "metadata",
+    "delegators": [
+     "acc://delegator1.acme/book/1",
+     "acc://delegator2.acme/book/1"
+    ]
+   }
+  },
+  {
+   "id": "ed25519/valid/direct-initiator-merkle",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "ed25519",
+   "description": "a ed25519 signature over the initiator-merkle digest, the form the official builder initiates with",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f646174610226010502220103021e736967747970657320766563746f722065643235353139206d65726b6c65",
+   "txHash": "cdef3699fc0c6d32bb41c504f9955e5487908f17d6f41c8d74191dcb5149a36e",
+   "signature": "0102022024b243d093b83b4a49df7b9903af4285d9e2aa385f5ba393adc0d3f76cb812ca03407db737bee917753348a30e2e717b829001c176fd74a6906d77e09da779f546e0d6940754641fc930a607a7051e33511dbaaadf7fc9baeb35419d73c616f9a10d04176163633a2f2f70726f62652e61636d652f626f6f6b2f3105010680d095ffbc3108cdef3699fc0c6d32bb41c504f9955e5487908f17d6f41c8d74191dcb5149a36e",
+   "signatureJson": {
+    "type": "ed25519",
+    "publicKey": "24b243d093b83b4a49df7b9903af4285d9e2aa385f5ba393adc0d3f76cb812ca",
+    "signature": "7db737bee917753348a30e2e717b829001c176fd74a6906d77e09da779f546e0d6940754641fc930a607a7051e33511dbaaadf7fc9baeb35419d73c616f9a10d",
+    "signer": "acc://probe.acme/book/1",
+    "signerVersion": 1,
+    "timestamp": 1700000000000,
+    "transactionHash": "cdef3699fc0c6d32bb41c504f9955e5487908f17d6f41c8d74191dcb5149a36e"
+   },
+   "page": {
+    "entries": [
+     "5b34cc796698bc19258e2993b3d835b78059e1208cbb8137f618abcca495895d"
+    ]
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "5b34cc796698bc19258e2993b3d835b78059e1208cbb8137f618abcca495895d",
+    "form": "initiator-merkle"
+   }
+  },
+  {
+   "id": "rcd1/valid/direct",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "rcd1",
+   "description": "a rcd1 signature over the metadata digest, 0 delegator(s); the key hash is the type's own",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f646174610224010502200103021c736967747970657320766563746f7220726364312076616c69642030",
+   "txHash": "754d4099361c4ab2d4ee2b93065ab4d80f1d1f9118f0bc76d4ea1b4c04bf2b9a",
+   "signature": "010302204aadb97e946c2886566d41092892c87c0421caf10d0847b03dc32196ef15bc530340e9525ee2d2597dc28863b2bab9125ebf93c4944f8dbd9b9e464778ecc2674a511f652728ec0a8a6af875207390647d33216ddcfd1d7c5c3c36d6a9d74b30e20e04176163633a2f2f70726f62652e61636d652f626f6f6b2f3105010680d095ffbc3108754d4099361c4ab2d4ee2b93065ab4d80f1d1f9118f0bc76d4ea1b4c04bf2b9a",
+   "signatureJson": {
+    "type": "rcd1",
+    "publicKey": "4aadb97e946c2886566d41092892c87c0421caf10d0847b03dc32196ef15bc53",
+    "signature": "e9525ee2d2597dc28863b2bab9125ebf93c4944f8dbd9b9e464778ecc2674a511f652728ec0a8a6af875207390647d33216ddcfd1d7c5c3c36d6a9d74b30e20e",
+    "signer": "acc://probe.acme/book/1",
+    "signerVersion": 1,
+    "timestamp": 1700000000000,
+    "transactionHash": "754d4099361c4ab2d4ee2b93065ab4d80f1d1f9118f0bc76d4ea1b4c04bf2b9a"
+   },
+   "page": {
+    "entries": [
+     "d641942361ac2e45a34a48da32999047351662b11a525714ae84f5f96253aa86"
+    ]
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "d641942361ac2e45a34a48da32999047351662b11a525714ae84f5f96253aa86",
+    "form": "metadata"
+   }
+  },
+  {
+   "id": "rcd1/valid/delegated-1",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "rcd1",
+   "description": "a rcd1 signature over the metadata digest, 1 delegator(s); the key hash is the type's own",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f646174610224010502200103021c736967747970657320766563746f7220726364312076616c69642031",
+   "txHash": "5821285690e2be61b6f0e8572e1bf9e472e9ea4f5ae132d8335f1ff698e71484",
+   "signature": "010b02a901010302204aadb97e946c2886566d41092892c87c0421caf10d0847b03dc32196ef15bc5303408eea534e73a4c74a90390606325a459ca07ac1a60015472ff5a047cfb0adbf245cc315115ed1c95d29c112af409706b6da1e393243f529710b629171001bdd0804176163633a2f2f70726f62652e61636d652f626f6f6b2f3105010680d095ffbc31085821285690e2be61b6f0e8572e1bf9e472e9ea4f5ae132d8335f1ff698e71484031c6163633a2f2f64656c656761746f72312e61636d652f626f6f6b2f31",
+   "signatureJson": {
+    "type": "delegated",
+    "signature": {
+     "type": "rcd1",
+     "publicKey": "4aadb97e946c2886566d41092892c87c0421caf10d0847b03dc32196ef15bc53",
+     "signature": "8eea534e73a4c74a90390606325a459ca07ac1a60015472ff5a047cfb0adbf245cc315115ed1c95d29c112af409706b6da1e393243f529710b629171001bdd08",
+     "signer": "acc://probe.acme/book/1",
+     "signerVersion": 1,
+     "timestamp": 1700000000000,
+     "transactionHash": "5821285690e2be61b6f0e8572e1bf9e472e9ea4f5ae132d8335f1ff698e71484"
+    },
+    "delegator": "acc://delegator1.acme/book/1"
+   },
+   "page": {
+    "entries": [
+     "d641942361ac2e45a34a48da32999047351662b11a525714ae84f5f96253aa86"
+    ]
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "d641942361ac2e45a34a48da32999047351662b11a525714ae84f5f96253aa86",
+    "form": "metadata",
+    "delegators": [
+     "acc://delegator1.acme/book/1"
+    ]
+   }
+  },
+  {
+   "id": "rcd1/valid/delegated-2",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "rcd1",
+   "description": "a rcd1 signature over the metadata digest, 2 delegator(s); the key hash is the type's own",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f646174610224010502200103021c736967747970657320766563746f7220726364312076616c69642032",
+   "txHash": "bfb7ccbca9d9777fdc32b53ed39655221d63ec601b080a93682df663990cf7a6",
+   "signature": "010b02cc01010b02a901010302204aadb97e946c2886566d41092892c87c0421caf10d0847b03dc32196ef15bc530340c07a4f6687a021e8602718527679d2c2cd761a5a7c6c762a3082f16006b014e7efea684c9bf2e0e815b4c7d9f0b349eab287c214e47c81ec267cae8ce65cff0a04176163633a2f2f70726f62652e61636d652f626f6f6b2f3105010680d095ffbc3108bfb7ccbca9d9777fdc32b53ed39655221d63ec601b080a93682df663990cf7a6031c6163633a2f2f64656c656761746f72322e61636d652f626f6f6b2f31031c6163633a2f2f64656c656761746f72312e61636d652f626f6f6b2f31",
+   "signatureJson": {
+    "type": "delegated",
+    "signature": {
+     "type": "delegated",
+     "signature": {
+      "type": "rcd1",
+      "publicKey": "4aadb97e946c2886566d41092892c87c0421caf10d0847b03dc32196ef15bc53",
+      "signature": "c07a4f6687a021e8602718527679d2c2cd761a5a7c6c762a3082f16006b014e7efea684c9bf2e0e815b4c7d9f0b349eab287c214e47c81ec267cae8ce65cff0a",
+      "signer": "acc://probe.acme/book/1",
+      "signerVersion": 1,
+      "timestamp": 1700000000000,
+      "transactionHash": "bfb7ccbca9d9777fdc32b53ed39655221d63ec601b080a93682df663990cf7a6"
+     },
+     "delegator": "acc://delegator2.acme/book/1"
+    },
+    "delegator": "acc://delegator1.acme/book/1"
+   },
+   "page": {
+    "entries": [
+     "d641942361ac2e45a34a48da32999047351662b11a525714ae84f5f96253aa86"
+    ]
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "d641942361ac2e45a34a48da32999047351662b11a525714ae84f5f96253aa86",
+    "form": "metadata",
+    "delegators": [
+     "acc://delegator1.acme/book/1",
+     "acc://delegator2.acme/book/1"
+    ]
+   }
+  },
+  {
+   "id": "rcd1/valid/direct-initiator-merkle",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "rcd1",
+   "description": "a rcd1 signature over the initiator-merkle digest, the form the official builder initiates with",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f6461746102230105021f0103021b736967747970657320766563746f722072636431206d65726b6c65",
+   "txHash": "d569c2a38aa5f6fff4203663cba8e1e9424bcffe97f7d429adaaeee1aa60062c",
+   "signature": "010302204aadb97e946c2886566d41092892c87c0421caf10d0847b03dc32196ef15bc5303403080655714b6187c816fdf44b9978c3f66e0c5885219b9bcc14a95c8368365e53a007db9a3620eba18b343273ea2c235129facc5d30a85bb5523e53e6b1bc60404176163633a2f2f70726f62652e61636d652f626f6f6b2f3105010680d095ffbc3108d569c2a38aa5f6fff4203663cba8e1e9424bcffe97f7d429adaaeee1aa60062c",
+   "signatureJson": {
+    "type": "rcd1",
+    "publicKey": "4aadb97e946c2886566d41092892c87c0421caf10d0847b03dc32196ef15bc53",
+    "signature": "3080655714b6187c816fdf44b9978c3f66e0c5885219b9bcc14a95c8368365e53a007db9a3620eba18b343273ea2c235129facc5d30a85bb5523e53e6b1bc604",
+    "signer": "acc://probe.acme/book/1",
+    "signerVersion": 1,
+    "timestamp": 1700000000000,
+    "transactionHash": "d569c2a38aa5f6fff4203663cba8e1e9424bcffe97f7d429adaaeee1aa60062c"
+   },
+   "page": {
+    "entries": [
+     "d641942361ac2e45a34a48da32999047351662b11a525714ae84f5f96253aa86"
+    ]
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "d641942361ac2e45a34a48da32999047351662b11a525714ae84f5f96253aa86",
+    "form": "initiator-merkle"
+   }
+  },
+  {
+   "id": "btc/valid/direct",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "btc",
+   "description": "a btc signature over the metadata digest, 0 delegator(s); the key hash is the type's own",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f6461746102230105021f0103021b736967747970657320766563746f72206274632076616c69642030",
+   "txHash": "b4a1b266e18abbc71f5c4784506cad17a27dc8609a1b81a14a02b166a2930b8a",
+   "signature": "0108022102fc6950ff3ac901fa91454d4c98b94149b0e9234fb31ca9e07270f99cbd0bf1ec03453043021f445af9886235d1bc7a4308f7ff63b27379a7e85fe5a25ba64c1e84bd53679802201cc97bed315e3da921804cb837401c736f900316416443bd2a8e01eb149b309d04176163633a2f2f70726f62652e61636d652f626f6f6b2f3105010680d095ffbc3108b4a1b266e18abbc71f5c4784506cad17a27dc8609a1b81a14a02b166a2930b8a",
+   "signatureJson": {
+    "type": "btc",
+    "publicKey": "02fc6950ff3ac901fa91454d4c98b94149b0e9234fb31ca9e07270f99cbd0bf1ec",
+    "signature": "3043021f445af9886235d1bc7a4308f7ff63b27379a7e85fe5a25ba64c1e84bd53679802201cc97bed315e3da921804cb837401c736f900316416443bd2a8e01eb149b309d",
+    "signer": "acc://probe.acme/book/1",
+    "signerVersion": 1,
+    "timestamp": 1700000000000,
+    "transactionHash": "b4a1b266e18abbc71f5c4784506cad17a27dc8609a1b81a14a02b166a2930b8a"
+   },
+   "page": {
+    "entries": [
+     "99e8ff24ca26005b707aa8e24420704e8f9462bb"
+    ]
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "99e8ff24ca26005b707aa8e24420704e8f9462bb",
+    "form": "metadata"
+   }
+  },
+  {
+   "id": "btc/valid/delegated-1",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "btc",
+   "description": "a btc signature over the metadata digest, 1 delegator(s); the key hash is the type's own",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f6461746102230105021f0103021b736967747970657320766563746f72206274632076616c69642031",
+   "txHash": "375a51227d20199a2f5b3e63865b7a67a35eb26ce6ba7506302d46eb9bd95363",
+   "signature": "010b02b2010108022102fc6950ff3ac901fa91454d4c98b94149b0e9234fb31ca9e07270f99cbd0bf1ec03483046022100c725a82e83164ea4aaa97fc1c699f1ac721583541a81af1bd194026308db55e4022100de28575602ed58dbad32c4657910ea02b5031858b408164512725abf3e2bd26b04176163633a2f2f70726f62652e61636d652f626f6f6b2f3105010680d095ffbc3108375a51227d20199a2f5b3e63865b7a67a35eb26ce6ba7506302d46eb9bd95363031c6163633a2f2f64656c656761746f72312e61636d652f626f6f6b2f31",
+   "signatureJson": {
+    "type": "delegated",
+    "signature": {
+     "type": "btc",
+     "publicKey": "02fc6950ff3ac901fa91454d4c98b94149b0e9234fb31ca9e07270f99cbd0bf1ec",
+     "signature": "3046022100c725a82e83164ea4aaa97fc1c699f1ac721583541a81af1bd194026308db55e4022100de28575602ed58dbad32c4657910ea02b5031858b408164512725abf3e2bd26b",
+     "signer": "acc://probe.acme/book/1",
+     "signerVersion": 1,
+     "timestamp": 1700000000000,
+     "transactionHash": "375a51227d20199a2f5b3e63865b7a67a35eb26ce6ba7506302d46eb9bd95363"
+    },
+    "delegator": "acc://delegator1.acme/book/1"
+   },
+   "page": {
+    "entries": [
+     "99e8ff24ca26005b707aa8e24420704e8f9462bb"
+    ]
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "99e8ff24ca26005b707aa8e24420704e8f9462bb",
+    "form": "metadata",
+    "delegators": [
+     "acc://delegator1.acme/book/1"
+    ]
+   }
+  },
+  {
+   "id": "btc/valid/delegated-2",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "btc",
+   "description": "a btc signature over the metadata digest, 2 delegator(s); the key hash is the type's own",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f6461746102230105021f0103021b736967747970657320766563746f72206274632076616c69642032",
+   "txHash": "efc4e4bff51146c5f01cb9371fc52ca8215b23dc6b7b64e77a2268160bc7811d",
+   "signature": "010b02d501010b02b2010108022102fc6950ff3ac901fa91454d4c98b94149b0e9234fb31ca9e07270f99cbd0bf1ec0348304602210082661644705d0ba0c9e21d2dcad0c7975fb554d8b5afb1cf1c8c7194e66bab28022100e8f57746c4527543fbdd9eb58ba94c853a63584fb0e3bb91efae1045428c79d104176163633a2f2f70726f62652e61636d652f626f6f6b2f3105010680d095ffbc3108efc4e4bff51146c5f01cb9371fc52ca8215b23dc6b7b64e77a2268160bc7811d031c6163633a2f2f64656c656761746f72322e61636d652f626f6f6b2f31031c6163633a2f2f64656c656761746f72312e61636d652f626f6f6b2f31",
+   "signatureJson": {
+    "type": "delegated",
+    "signature": {
+     "type": "delegated",
+     "signature": {
+      "type": "btc",
+      "publicKey": "02fc6950ff3ac901fa91454d4c98b94149b0e9234fb31ca9e07270f99cbd0bf1ec",
+      "signature": "304602210082661644705d0ba0c9e21d2dcad0c7975fb554d8b5afb1cf1c8c7194e66bab28022100e8f57746c4527543fbdd9eb58ba94c853a63584fb0e3bb91efae1045428c79d1",
+      "signer": "acc://probe.acme/book/1",
+      "signerVersion": 1,
+      "timestamp": 1700000000000,
+      "transactionHash": "efc4e4bff51146c5f01cb9371fc52ca8215b23dc6b7b64e77a2268160bc7811d"
+     },
+     "delegator": "acc://delegator2.acme/book/1"
+    },
+    "delegator": "acc://delegator1.acme/book/1"
+   },
+   "page": {
+    "entries": [
+     "99e8ff24ca26005b707aa8e24420704e8f9462bb"
+    ]
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "99e8ff24ca26005b707aa8e24420704e8f9462bb",
+    "form": "metadata",
+    "delegators": [
+     "acc://delegator1.acme/book/1",
+     "acc://delegator2.acme/book/1"
+    ]
+   }
+  },
+  {
+   "id": "btc/valid/direct-initiator-merkle",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "btc",
+   "description": "a btc signature over the initiator-merkle digest, the form the official builder initiates with",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f6461746102220105021e0103021a736967747970657320766563746f7220627463206d65726b6c65",
+   "txHash": "c211d26fb810cd2cc9d43a136b93fcc1ca0de826b22fa76b5c2e35ea91372eb5",
+   "signature": "0108022102fc6950ff3ac901fa91454d4c98b94149b0e9234fb31ca9e07270f99cbd0bf1ec03483046022100f75179cce1a102fb5f93312bdbf1a9d2aca2d66dfa31f16eb163028ccf4e6bff022100f34cae5c1f71f1428e736ddaad0678f773810761c5c1185ebbc804586a128fba04176163633a2f2f70726f62652e61636d652f626f6f6b2f3105010680d095ffbc3108c211d26fb810cd2cc9d43a136b93fcc1ca0de826b22fa76b5c2e35ea91372eb5",
+   "signatureJson": {
+    "type": "btc",
+    "publicKey": "02fc6950ff3ac901fa91454d4c98b94149b0e9234fb31ca9e07270f99cbd0bf1ec",
+    "signature": "3046022100f75179cce1a102fb5f93312bdbf1a9d2aca2d66dfa31f16eb163028ccf4e6bff022100f34cae5c1f71f1428e736ddaad0678f773810761c5c1185ebbc804586a128fba",
+    "signer": "acc://probe.acme/book/1",
+    "signerVersion": 1,
+    "timestamp": 1700000000000,
+    "transactionHash": "c211d26fb810cd2cc9d43a136b93fcc1ca0de826b22fa76b5c2e35ea91372eb5"
+   },
+   "page": {
+    "entries": [
+     "99e8ff24ca26005b707aa8e24420704e8f9462bb"
+    ]
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "99e8ff24ca26005b707aa8e24420704e8f9462bb",
+    "form": "initiator-merkle"
+   }
+  },
+  {
+   "id": "btclegacy/valid/direct",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "btclegacy",
+   "description": "a btclegacy signature over the metadata digest, 0 delegator(s); the key hash is the type's own",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f6461746102290105022501030221736967747970657320766563746f72206274636c65676163792076616c69642030",
+   "txHash": "18a91f6bf1d3557db9aa98e3656a992f575f155c51be2ac82c594f4069246a12",
+   "signature": "010902410470e358a1890689847b586b10f313e5b0105e95a359c859ac22e19735d5da24fe042e09b7d8b024aeefe3a96f95cf28ce69d1b9d4668d00ac3c5810431b0ed6cf0346304402204f2cf28ceec429787286fe854c8e82c72c21495ab64a4d0c8471989873f6b16802205a3de6cfdfcffa342b5fcdfd9c372595600efee0d492849bcc4acf5c21c85c6e04176163633a2f2f70726f62652e61636d652f626f6f6b2f3105010680d095ffbc310818a91f6bf1d3557db9aa98e3656a992f575f155c51be2ac82c594f4069246a12",
+   "signatureJson": {
+    "type": "btclegacy",
+    "publicKey": "0470e358a1890689847b586b10f313e5b0105e95a359c859ac22e19735d5da24fe042e09b7d8b024aeefe3a96f95cf28ce69d1b9d4668d00ac3c5810431b0ed6cf",
+    "signature": "304402204f2cf28ceec429787286fe854c8e82c72c21495ab64a4d0c8471989873f6b16802205a3de6cfdfcffa342b5fcdfd9c372595600efee0d492849bcc4acf5c21c85c6e",
+    "signer": "acc://probe.acme/book/1",
+    "signerVersion": 1,
+    "timestamp": 1700000000000,
+    "transactionHash": "18a91f6bf1d3557db9aa98e3656a992f575f155c51be2ac82c594f4069246a12"
+   },
+   "page": {
+    "entries": [
+     "0676a75c6a1d44761404e84e9b1258fa662e0947"
+    ]
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "0676a75c6a1d44761404e84e9b1258fa662e0947",
+    "form": "metadata"
+   }
+  },
+  {
+   "id": "btclegacy/valid/delegated-1",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "btclegacy",
+   "description": "a btclegacy signature over the metadata digest, 1 delegator(s); the key hash is the type's own",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f6461746102290105022501030221736967747970657320766563746f72206274636c65676163792076616c69642031",
+   "txHash": "c271d2c2e08c3642d20b98797782bb81163bc659b807c5aa7bb8f1d25d183f59",
+   "signature": "010b02d101010902410470e358a1890689847b586b10f313e5b0105e95a359c859ac22e19735d5da24fe042e09b7d8b024aeefe3a96f95cf28ce69d1b9d4668d00ac3c5810431b0ed6cf03473045022014dae742194b96e8b1df19c1673a6ee538c6d30efc7f97c7302b6067a87bf17e022100e1b13e96cbf576105c81e8c4b79633278c5e7d8e660eccc1a8ea728883b2ab5d04176163633a2f2f70726f62652e61636d652f626f6f6b2f3105010680d095ffbc3108c271d2c2e08c3642d20b98797782bb81163bc659b807c5aa7bb8f1d25d183f59031c6163633a2f2f64656c656761746f72312e61636d652f626f6f6b2f31",
+   "signatureJson": {
+    "type": "delegated",
+    "signature": {
+     "type": "btclegacy",
+     "publicKey": "0470e358a1890689847b586b10f313e5b0105e95a359c859ac22e19735d5da24fe042e09b7d8b024aeefe3a96f95cf28ce69d1b9d4668d00ac3c5810431b0ed6cf",
+     "signature": "3045022014dae742194b96e8b1df19c1673a6ee538c6d30efc7f97c7302b6067a87bf17e022100e1b13e96cbf576105c81e8c4b79633278c5e7d8e660eccc1a8ea728883b2ab5d",
+     "signer": "acc://probe.acme/book/1",
+     "signerVersion": 1,
+     "timestamp": 1700000000000,
+     "transactionHash": "c271d2c2e08c3642d20b98797782bb81163bc659b807c5aa7bb8f1d25d183f59"
+    },
+    "delegator": "acc://delegator1.acme/book/1"
+   },
+   "page": {
+    "entries": [
+     "0676a75c6a1d44761404e84e9b1258fa662e0947"
+    ]
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "0676a75c6a1d44761404e84e9b1258fa662e0947",
+    "form": "metadata",
+    "delegators": [
+     "acc://delegator1.acme/book/1"
+    ]
+   }
+  },
+  {
+   "id": "btclegacy/valid/delegated-2",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "btclegacy",
+   "description": "a btclegacy signature over the metadata digest, 2 delegator(s); the key hash is the type's own",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f6461746102290105022501030221736967747970657320766563746f72206274636c65676163792076616c69642032",
+   "txHash": "36e490c958bd7549b574edb03daf6fe1f0042a1cc392c5adbf27c5a659d39965",
+   "signature": "010b02f501010b02d201010902410470e358a1890689847b586b10f313e5b0105e95a359c859ac22e19735d5da24fe042e09b7d8b024aeefe3a96f95cf28ce69d1b9d4668d00ac3c5810431b0ed6cf03483046022100a89287f904e96fe7e03b877df2de8418ff61bb37d6c68bbf8a8962eb976f2f42022100c39677d7a393672ee872737f432b06320ce72cbe3cec85df53af5e112d2e97aa04176163633a2f2f70726f62652e61636d652f626f6f6b2f3105010680d095ffbc310836e490c958bd7549b574edb03daf6fe1f0042a1cc392c5adbf27c5a659d39965031c6163633a2f2f64656c656761746f72322e61636d652f626f6f6b2f31031c6163633a2f2f64656c656761746f72312e61636d652f626f6f6b2f31",
+   "signatureJson": {
+    "type": "delegated",
+    "signature": {
+     "type": "delegated",
+     "signature": {
+      "type": "btclegacy",
+      "publicKey": "0470e358a1890689847b586b10f313e5b0105e95a359c859ac22e19735d5da24fe042e09b7d8b024aeefe3a96f95cf28ce69d1b9d4668d00ac3c5810431b0ed6cf",
+      "signature": "3046022100a89287f904e96fe7e03b877df2de8418ff61bb37d6c68bbf8a8962eb976f2f42022100c39677d7a393672ee872737f432b06320ce72cbe3cec85df53af5e112d2e97aa",
+      "signer": "acc://probe.acme/book/1",
+      "signerVersion": 1,
+      "timestamp": 1700000000000,
+      "transactionHash": "36e490c958bd7549b574edb03daf6fe1f0042a1cc392c5adbf27c5a659d39965"
+     },
+     "delegator": "acc://delegator2.acme/book/1"
+    },
+    "delegator": "acc://delegator1.acme/book/1"
+   },
+   "page": {
+    "entries": [
+     "0676a75c6a1d44761404e84e9b1258fa662e0947"
+    ]
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "0676a75c6a1d44761404e84e9b1258fa662e0947",
+    "form": "metadata",
+    "delegators": [
+     "acc://delegator1.acme/book/1",
+     "acc://delegator2.acme/book/1"
+    ]
+   }
+  },
+  {
+   "id": "btclegacy/valid/direct-initiator-merkle",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "btclegacy",
+   "description": "a btclegacy signature over the initiator-merkle digest, the form the official builder initiates with",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f6461746102280105022401030220736967747970657320766563746f72206274636c6567616379206d65726b6c65",
+   "txHash": "52be79c7a3ac33660e10ea6a7995fb2c4d3bc57c0a4f3b341e5be60fe844ea4c",
+   "signature": "010902410470e358a1890689847b586b10f313e5b0105e95a359c859ac22e19735d5da24fe042e09b7d8b024aeefe3a96f95cf28ce69d1b9d4668d00ac3c5810431b0ed6cf03483046022100a7e2caae0418c6c809dc8f88c25ddd20759bbce4ae12a128dd4ea7fda07b1125022100a78e3456ed888bdec5e6aecde8988173823678092163719f37759ee8c98556fb04176163633a2f2f70726f62652e61636d652f626f6f6b2f3105010680d095ffbc310852be79c7a3ac33660e10ea6a7995fb2c4d3bc57c0a4f3b341e5be60fe844ea4c",
+   "signatureJson": {
+    "type": "btclegacy",
+    "publicKey": "0470e358a1890689847b586b10f313e5b0105e95a359c859ac22e19735d5da24fe042e09b7d8b024aeefe3a96f95cf28ce69d1b9d4668d00ac3c5810431b0ed6cf",
+    "signature": "3046022100a7e2caae0418c6c809dc8f88c25ddd20759bbce4ae12a128dd4ea7fda07b1125022100a78e3456ed888bdec5e6aecde8988173823678092163719f37759ee8c98556fb",
+    "signer": "acc://probe.acme/book/1",
+    "signerVersion": 1,
+    "timestamp": 1700000000000,
+    "transactionHash": "52be79c7a3ac33660e10ea6a7995fb2c4d3bc57c0a4f3b341e5be60fe844ea4c"
+   },
+   "page": {
+    "entries": [
+     "0676a75c6a1d44761404e84e9b1258fa662e0947"
+    ]
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "0676a75c6a1d44761404e84e9b1258fa662e0947",
+    "form": "initiator-merkle"
+   }
+  },
+  {
+   "id": "eth/valid/direct",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "eth",
+   "description": "a eth signature over the metadata digest, 0 delegator(s); the key hash is the type's own",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f6461746102230105021f0103021b736967747970657320766563746f72206574682076616c69642030",
+   "txHash": "0e24019543f0d98ba5769789f934e3c5a80762d51a2e7029d4108a6e6164ae2d",
+   "signature": "010a024104811a5e2acc08b90705f24f4fd23602af4eedf9891dce7914709653e9e794ecec46488d12bb845fe8ba703f01e3cea10bd9e332170910a69b67ed581a4bacd7ac03407046ff189b6981bc8585c72cab0cac0d633a41d13384bc89589ba25f38ceeaed322b65c46a61f2af730df20e971cb4f3e5a7a97b1fba0ce5b8988a9644ef7dc004176163633a2f2f70726f62652e61636d652f626f6f6b2f3105010680d095ffbc31080e24019543f0d98ba5769789f934e3c5a80762d51a2e7029d4108a6e6164ae2d",
+   "signatureJson": {
+    "type": "eth",
+    "publicKey": "04811a5e2acc08b90705f24f4fd23602af4eedf9891dce7914709653e9e794ecec46488d12bb845fe8ba703f01e3cea10bd9e332170910a69b67ed581a4bacd7ac",
+    "signature": "7046ff189b6981bc8585c72cab0cac0d633a41d13384bc89589ba25f38ceeaed322b65c46a61f2af730df20e971cb4f3e5a7a97b1fba0ce5b8988a9644ef7dc0",
+    "signer": "acc://probe.acme/book/1",
+    "signerVersion": 1,
+    "timestamp": 1700000000000,
+    "transactionHash": "0e24019543f0d98ba5769789f934e3c5a80762d51a2e7029d4108a6e6164ae2d"
+   },
+   "where": {
+    "partition": "bvn1",
+    "block": 12492272
+   },
+   "page": {
+    "entries": [
+     "67d512dd4e1d5aacaf55ba22ddaf072f1a352544"
+    ]
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "67d512dd4e1d5aacaf55ba22ddaf072f1a352544",
+    "form": "metadata",
+    "ethRule": "v2-rsv"
+   }
+  },
+  {
+   "id": "eth/valid/delegated-1",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "eth",
+   "description": "a eth signature over the metadata digest, 1 delegator(s); the key hash is the type's own",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f6461746102230105021f0103021b736967747970657320766563746f72206574682076616c69642031",
+   "txHash": "98e25ac22a567e71e0c6c233f600cc14a0363e01e99da6a0cfd30b486a6af782",
+   "signature": "010b02ca01010a024104811a5e2acc08b90705f24f4fd23602af4eedf9891dce7914709653e9e794ecec46488d12bb845fe8ba703f01e3cea10bd9e332170910a69b67ed581a4bacd7ac0340a57c8db9027ed6ed714b3bfcf3580dee875cd1791faa0f3801b2175799d3a55082be9a84c2ffe0727a5f674267fa864ebb61daaf82a22718e2b634c6e984c2b904176163633a2f2f70726f62652e61636d652f626f6f6b2f3105010680d095ffbc310898e25ac22a567e71e0c6c233f600cc14a0363e01e99da6a0cfd30b486a6af782031c6163633a2f2f64656c656761746f72312e61636d652f626f6f6b2f31",
+   "signatureJson": {
+    "type": "delegated",
+    "signature": {
+     "type": "eth",
+     "publicKey": "04811a5e2acc08b90705f24f4fd23602af4eedf9891dce7914709653e9e794ecec46488d12bb845fe8ba703f01e3cea10bd9e332170910a69b67ed581a4bacd7ac",
+     "signature": "a57c8db9027ed6ed714b3bfcf3580dee875cd1791faa0f3801b2175799d3a55082be9a84c2ffe0727a5f674267fa864ebb61daaf82a22718e2b634c6e984c2b9",
+     "signer": "acc://probe.acme/book/1",
+     "signerVersion": 1,
+     "timestamp": 1700000000000,
+     "transactionHash": "98e25ac22a567e71e0c6c233f600cc14a0363e01e99da6a0cfd30b486a6af782"
+    },
+    "delegator": "acc://delegator1.acme/book/1"
+   },
+   "where": {
+    "partition": "bvn1",
+    "block": 12492272
+   },
+   "page": {
+    "entries": [
+     "67d512dd4e1d5aacaf55ba22ddaf072f1a352544"
+    ]
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "67d512dd4e1d5aacaf55ba22ddaf072f1a352544",
+    "form": "metadata",
+    "ethRule": "v2-rsv",
+    "delegators": [
+     "acc://delegator1.acme/book/1"
+    ]
+   }
+  },
+  {
+   "id": "eth/valid/delegated-2",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "eth",
+   "description": "a eth signature over the metadata digest, 2 delegator(s); the key hash is the type's own",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f6461746102230105021f0103021b736967747970657320766563746f72206574682076616c69642032",
+   "txHash": "af9456fa6099be691c327a07ebb0bffbc98cef3c261c9351bee0092c6f37e61c",
+   "signature": "010b02ed01010b02ca01010a024104811a5e2acc08b90705f24f4fd23602af4eedf9891dce7914709653e9e794ecec46488d12bb845fe8ba703f01e3cea10bd9e332170910a69b67ed581a4bacd7ac0340e2a24683b94d743017646853bf527eb49dff10cc70e50ca2b396bb24db0638d58bfc28f8514cc9cffb63771c9a49d010f8870ca6834c8af245ed280f9cc23d1804176163633a2f2f70726f62652e61636d652f626f6f6b2f3105010680d095ffbc3108af9456fa6099be691c327a07ebb0bffbc98cef3c261c9351bee0092c6f37e61c031c6163633a2f2f64656c656761746f72322e61636d652f626f6f6b2f31031c6163633a2f2f64656c656761746f72312e61636d652f626f6f6b2f31",
+   "signatureJson": {
+    "type": "delegated",
+    "signature": {
+     "type": "delegated",
+     "signature": {
+      "type": "eth",
+      "publicKey": "04811a5e2acc08b90705f24f4fd23602af4eedf9891dce7914709653e9e794ecec46488d12bb845fe8ba703f01e3cea10bd9e332170910a69b67ed581a4bacd7ac",
+      "signature": "e2a24683b94d743017646853bf527eb49dff10cc70e50ca2b396bb24db0638d58bfc28f8514cc9cffb63771c9a49d010f8870ca6834c8af245ed280f9cc23d18",
+      "signer": "acc://probe.acme/book/1",
+      "signerVersion": 1,
+      "timestamp": 1700000000000,
+      "transactionHash": "af9456fa6099be691c327a07ebb0bffbc98cef3c261c9351bee0092c6f37e61c"
+     },
+     "delegator": "acc://delegator2.acme/book/1"
+    },
+    "delegator": "acc://delegator1.acme/book/1"
+   },
+   "where": {
+    "partition": "bvn1",
+    "block": 12492272
+   },
+   "page": {
+    "entries": [
+     "67d512dd4e1d5aacaf55ba22ddaf072f1a352544"
+    ]
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "67d512dd4e1d5aacaf55ba22ddaf072f1a352544",
+    "form": "metadata",
+    "ethRule": "v2-rsv",
+    "delegators": [
+     "acc://delegator1.acme/book/1",
+     "acc://delegator2.acme/book/1"
+    ]
+   }
+  },
+  {
+   "id": "eth/valid/direct-initiator-merkle",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "eth",
+   "description": "a eth signature over the initiator-merkle digest, the form the official builder initiates with",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f6461746102220105021e0103021a736967747970657320766563746f7220657468206d65726b6c65",
+   "txHash": "387aff953a90b843d8cbfcddc98eb60e35525d598375f7eebfe15b211518d7fd",
+   "signature": "010a024104811a5e2acc08b90705f24f4fd23602af4eedf9891dce7914709653e9e794ecec46488d12bb845fe8ba703f01e3cea10bd9e332170910a69b67ed581a4bacd7ac034030baccdfa0ffd06d243fbe2dcbce04d4fad7377d2ba04e124e893c5e8cad0466b539b5a7743e411415ea52dad185efcfcf61685e68a1d3440020c08e7593e19a04176163633a2f2f70726f62652e61636d652f626f6f6b2f3105010680d095ffbc3108387aff953a90b843d8cbfcddc98eb60e35525d598375f7eebfe15b211518d7fd",
+   "signatureJson": {
+    "type": "eth",
+    "publicKey": "04811a5e2acc08b90705f24f4fd23602af4eedf9891dce7914709653e9e794ecec46488d12bb845fe8ba703f01e3cea10bd9e332170910a69b67ed581a4bacd7ac",
+    "signature": "30baccdfa0ffd06d243fbe2dcbce04d4fad7377d2ba04e124e893c5e8cad0466b539b5a7743e411415ea52dad185efcfcf61685e68a1d3440020c08e7593e19a",
+    "signer": "acc://probe.acme/book/1",
+    "signerVersion": 1,
+    "timestamp": 1700000000000,
+    "transactionHash": "387aff953a90b843d8cbfcddc98eb60e35525d598375f7eebfe15b211518d7fd"
+   },
+   "where": {
+    "partition": "bvn1",
+    "block": 12492272
+   },
+   "page": {
+    "entries": [
+     "67d512dd4e1d5aacaf55ba22ddaf072f1a352544"
+    ]
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "67d512dd4e1d5aacaf55ba22ddaf072f1a352544",
+    "form": "initiator-merkle",
+    "ethRule": "v2-rsv"
+   }
+  },
+  {
+   "id": "rsaSha256/valid/direct",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "rsaSha256",
+   "description": "a rsaSha256 signature over the metadata digest, 0 delegator(s); the key hash is the type's own",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f6461746102290105022501030221736967747970657320766563746f72207273615368613235362076616c69642030",
+   "txHash": "fd7e29088010c1f8c4033ed288bfab88447676487f56ab605d26151b15f7b50c",
+   "signature": "010e028e023082010a0282010100b54d13950d6402db30cb665a0e83e9b655736946ed4c7357eaedf7707c652e48dc2b3c8cc691bb7610a38d16ce6e4f7119ccd7b1ee4b575b7580636f9813a40e3f8144df13a51a12782a5c7d482501564e4b951b743120a25bf9cb645ee6d6812eee7388cbb6911fdf12ea5b2eead74a90e76b0a2ad31496c9a715b5e719513f88f328bba08e3a7ffa768cafa1336e7c7e6e7f4d162b56fe5fff49ffca65930097e90354bb11800c3d38b2a20d02cce3f837f89445d38066fd869a6d9e640aa9384a64bdfa55cd79759c8ce02137fc3709a5e0fc3dc3ba1bd575f3950c4e2c57249d560b18f440b4c76df2aed66b185a5aaaa9cd5519e3e217907cf7f3eff7f1020301000103800275dad6ce3650b7302487abf8cc25fc59e79ef95e680047af9eb5688ad4140ff8b8cdea502be4749f16b6de95ac9952c499abebbcc972982bdfe2f7cfa4003720ad0b9bf89f2a9cea9b9b87611f5eae4ac015640074059d5e903a97795524a75f51ef400702005fb03999d03b24c1a99433fb734abb4af0aa63c01d6071feab2113130d11f46b105c8f17b1670c1c43e7f9aa81496f43f6cbaad56d276a45adf068a4c5e3ee84cc8083b2e8dc2b6e398b176413bd519048912f2ae6e628d16c58162d0511f7ae5679eae4ef3071d1a5773f41de75ce1a8b8d762827840f6aba18d5189f2e0bf36ed8b47adf14ec16dde92857487e2baea48341966460110856f704176163633a2f2f70726f62652e61636d652f626f6f6b2f3105010680d095ffbc3108fd7e29088010c1f8c4033ed288bfab88447676487f56ab605d26151b15f7b50c",
+   "signatureJson": {
+    "type": "rsaSha256",
+    "publicKey": "3082010a0282010100b54d13950d6402db30cb665a0e83e9b655736946ed4c7357eaedf7707c652e48dc2b3c8cc691bb7610a38d16ce6e4f7119ccd7b1ee4b575b7580636f9813a40e3f8144df13a51a12782a5c7d482501564e4b951b743120a25bf9cb645ee6d6812eee7388cbb6911fdf12ea5b2eead74a90e76b0a2ad31496c9a715b5e719513f88f328bba08e3a7ffa768cafa1336e7c7e6e7f4d162b56fe5fff49ffca65930097e90354bb11800c3d38b2a20d02cce3f837f89445d38066fd869a6d9e640aa9384a64bdfa55cd79759c8ce02137fc3709a5e0fc3dc3ba1bd575f3950c4e2c57249d560b18f440b4c76df2aed66b185a5aaaa9cd5519e3e217907cf7f3eff7f10203010001",
+    "signature": "75dad6ce3650b7302487abf8cc25fc59e79ef95e680047af9eb5688ad4140ff8b8cdea502be4749f16b6de95ac9952c499abebbcc972982bdfe2f7cfa4003720ad0b9bf89f2a9cea9b9b87611f5eae4ac015640074059d5e903a97795524a75f51ef400702005fb03999d03b24c1a99433fb734abb4af0aa63c01d6071feab2113130d11f46b105c8f17b1670c1c43e7f9aa81496f43f6cbaad56d276a45adf068a4c5e3ee84cc8083b2e8dc2b6e398b176413bd519048912f2ae6e628d16c58162d0511f7ae5679eae4ef3071d1a5773f41de75ce1a8b8d762827840f6aba18d5189f2e0bf36ed8b47adf14ec16dde92857487e2baea48341966460110856f7",
+    "signer": "acc://probe.acme/book/1",
+    "signerVersion": 1,
+    "timestamp": 1700000000000,
+    "transactionHash": "fd7e29088010c1f8c4033ed288bfab88447676487f56ab605d26151b15f7b50c"
+   },
+   "where": {
+    "partition": "bvn1",
+    "block": 12492272
+   },
+   "page": {
+    "entries": [
+     "d7c9632b36f5ee7119da838f37ff36ef30f62a6e5425598634815ff4625ca366"
+    ]
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "d7c9632b36f5ee7119da838f37ff36ef30f62a6e5425598634815ff4625ca366",
+    "form": "metadata"
+   }
+  },
+  {
+   "id": "rsaSha256/valid/delegated-1",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "rsaSha256",
+   "description": "a rsaSha256 signature over the metadata digest, 1 delegator(s); the key hash is the type's own",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f6461746102290105022501030221736967747970657320766563746f72207273615368613235362076616c69642031",
+   "txHash": "228f587a49b0dcd1ee3581fe95d5a1d1510cdcd7c4cabfb3e05df56faee001e4",
+   "signature": "010b02d904010e028e023082010a0282010100b54d13950d6402db30cb665a0e83e9b655736946ed4c7357eaedf7707c652e48dc2b3c8cc691bb7610a38d16ce6e4f7119ccd7b1ee4b575b7580636f9813a40e3f8144df13a51a12782a5c7d482501564e4b951b743120a25bf9cb645ee6d6812eee7388cbb6911fdf12ea5b2eead74a90e76b0a2ad31496c9a715b5e719513f88f328bba08e3a7ffa768cafa1336e7c7e6e7f4d162b56fe5fff49ffca65930097e90354bb11800c3d38b2a20d02cce3f837f89445d38066fd869a6d9e640aa9384a64bdfa55cd79759c8ce02137fc3709a5e0fc3dc3ba1bd575f3950c4e2c57249d560b18f440b4c76df2aed66b185a5aaaa9cd5519e3e217907cf7f3eff7f1020301000103800236a6a8eb22ad0356da3bcebb88255068e3892c2753e23df144da7d3ec512c103ffb328b53bdaefdb73232b32e13383b026cf19877dfa2921efdd1ba184a0e7a95e8c6929e483d5d234b3178d9073e4f904a37b76a9c62487d7dac45519523b2dd52ed5a66c7a819b6c93e9df59b0b90bb22795abdb1f330cfa435986de7ee2feb2305463fe94c9c7e0385767845f7d4ec7a8c4bbdb2059fd3d1fdda83902e497b601c170babf5cb0444d91676b6d9cc0a4362c8298c0938285b6a89ddfdc6b12ccf9e996f3ce2ea0bd28f98940d6f8170a436c3902e524c80a50601183cda8f8f52da868ad2f804d9bd45bbbbf4d16d7a9a3b66d6e9468574f780a71cf25deba04176163633a2f2f70726f62652e61636d652f626f6f6b2f3105010680d095ffbc3108228f587a49b0dcd1ee3581fe95d5a1d1510cdcd7c4cabfb3e05df56faee001e4031c6163633a2f2f64656c656761746f72312e61636d652f626f6f6b2f31",
+   "signatureJson": {
+    "type": "delegated",
+    "signature": {
+     "type": "rsaSha256",
+     "publicKey": "3082010a0282010100b54d13950d6402db30cb665a0e83e9b655736946ed4c7357eaedf7707c652e48dc2b3c8cc691bb7610a38d16ce6e4f7119ccd7b1ee4b575b7580636f9813a40e3f8144df13a51a12782a5c7d482501564e4b951b743120a25bf9cb645ee6d6812eee7388cbb6911fdf12ea5b2eead74a90e76b0a2ad31496c9a715b5e719513f88f328bba08e3a7ffa768cafa1336e7c7e6e7f4d162b56fe5fff49ffca65930097e90354bb11800c3d38b2a20d02cce3f837f89445d38066fd869a6d9e640aa9384a64bdfa55cd79759c8ce02137fc3709a5e0fc3dc3ba1bd575f3950c4e2c57249d560b18f440b4c76df2aed66b185a5aaaa9cd5519e3e217907cf7f3eff7f10203010001",
+     "signature": "36a6a8eb22ad0356da3bcebb88255068e3892c2753e23df144da7d3ec512c103ffb328b53bdaefdb73232b32e13383b026cf19877dfa2921efdd1ba184a0e7a95e8c6929e483d5d234b3178d9073e4f904a37b76a9c62487d7dac45519523b2dd52ed5a66c7a819b6c93e9df59b0b90bb22795abdb1f330cfa435986de7ee2feb2305463fe94c9c7e0385767845f7d4ec7a8c4bbdb2059fd3d1fdda83902e497b601c170babf5cb0444d91676b6d9cc0a4362c8298c0938285b6a89ddfdc6b12ccf9e996f3ce2ea0bd28f98940d6f8170a436c3902e524c80a50601183cda8f8f52da868ad2f804d9bd45bbbbf4d16d7a9a3b66d6e9468574f780a71cf25deba",
+     "signer": "acc://probe.acme/book/1",
+     "signerVersion": 1,
+     "timestamp": 1700000000000,
+     "transactionHash": "228f587a49b0dcd1ee3581fe95d5a1d1510cdcd7c4cabfb3e05df56faee001e4"
+    },
+    "delegator": "acc://delegator1.acme/book/1"
+   },
+   "where": {
+    "partition": "bvn1",
+    "block": 12492272
+   },
+   "page": {
+    "entries": [
+     "d7c9632b36f5ee7119da838f37ff36ef30f62a6e5425598634815ff4625ca366"
+    ]
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "d7c9632b36f5ee7119da838f37ff36ef30f62a6e5425598634815ff4625ca366",
+    "form": "metadata",
+    "delegators": [
+     "acc://delegator1.acme/book/1"
+    ]
+   }
+  },
+  {
+   "id": "rsaSha256/valid/delegated-2",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "rsaSha256",
+   "description": "a rsaSha256 signature over the metadata digest, 2 delegator(s); the key hash is the type's own",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f6461746102290105022501030221736967747970657320766563746f72207273615368613235362076616c69642032",
+   "txHash": "fd7081f1264543ccc88bd5c879dcbb56264b0090a2465641d2827e1748f4dd53",
+   "signature": "010b02fc04010b02d904010e028e023082010a0282010100b54d13950d6402db30cb665a0e83e9b655736946ed4c7357eaedf7707c652e48dc2b3c8cc691bb7610a38d16ce6e4f7119ccd7b1ee4b575b7580636f9813a40e3f8144df13a51a12782a5c7d482501564e4b951b743120a25bf9cb645ee6d6812eee7388cbb6911fdf12ea5b2eead74a90e76b0a2ad31496c9a715b5e719513f88f328bba08e3a7ffa768cafa1336e7c7e6e7f4d162b56fe5fff49ffca65930097e90354bb11800c3d38b2a20d02cce3f837f89445d38066fd869a6d9e640aa9384a64bdfa55cd79759c8ce02137fc3709a5e0fc3dc3ba1bd575f3950c4e2c57249d560b18f440b4c76df2aed66b185a5aaaa9cd5519e3e217907cf7f3eff7f1020301000103800234d1d7b7b882032c0c7695a06f8d9cee8377a1c89c5da5e541232681c750bfeb837caf8596c0fe51453e76a72725027eff762c18dfc7acbd972a474336cae11732331e7887a1249fdb3548e59c838ece61c094f1b3910bfbcb0344e9961723b9a17a1dbaee4f527af7366a37a1ff1f4db1edff03233a6557ee05f52b0d52520eecb68d8935181d42665bcf361f4ea22fba97e52479613a15be749ff7541b4708b10aef72888d7df9b3da188e67611b6356a6804b8e6dbe510dada5f371548b9e8f16e52dba5dcc294b8d44f2dda67257bdfcf55d06e97b7c4270d852ba78ffe35168d2ce89ffa437dba16650059812e2742306d34debb0f41047921d8a19895404176163633a2f2f70726f62652e61636d652f626f6f6b2f3105010680d095ffbc3108fd7081f1264543ccc88bd5c879dcbb56264b0090a2465641d2827e1748f4dd53031c6163633a2f2f64656c656761746f72322e61636d652f626f6f6b2f31031c6163633a2f2f64656c656761746f72312e61636d652f626f6f6b2f31",
+   "signatureJson": {
+    "type": "delegated",
+    "signature": {
+     "type": "delegated",
+     "signature": {
+      "type": "rsaSha256",
+      "publicKey": "3082010a0282010100b54d13950d6402db30cb665a0e83e9b655736946ed4c7357eaedf7707c652e48dc2b3c8cc691bb7610a38d16ce6e4f7119ccd7b1ee4b575b7580636f9813a40e3f8144df13a51a12782a5c7d482501564e4b951b743120a25bf9cb645ee6d6812eee7388cbb6911fdf12ea5b2eead74a90e76b0a2ad31496c9a715b5e719513f88f328bba08e3a7ffa768cafa1336e7c7e6e7f4d162b56fe5fff49ffca65930097e90354bb11800c3d38b2a20d02cce3f837f89445d38066fd869a6d9e640aa9384a64bdfa55cd79759c8ce02137fc3709a5e0fc3dc3ba1bd575f3950c4e2c57249d560b18f440b4c76df2aed66b185a5aaaa9cd5519e3e217907cf7f3eff7f10203010001",
+      "signature": "34d1d7b7b882032c0c7695a06f8d9cee8377a1c89c5da5e541232681c750bfeb837caf8596c0fe51453e76a72725027eff762c18dfc7acbd972a474336cae11732331e7887a1249fdb3548e59c838ece61c094f1b3910bfbcb0344e9961723b9a17a1dbaee4f527af7366a37a1ff1f4db1edff03233a6557ee05f52b0d52520eecb68d8935181d42665bcf361f4ea22fba97e52479613a15be749ff7541b4708b10aef72888d7df9b3da188e67611b6356a6804b8e6dbe510dada5f371548b9e8f16e52dba5dcc294b8d44f2dda67257bdfcf55d06e97b7c4270d852ba78ffe35168d2ce89ffa437dba16650059812e2742306d34debb0f41047921d8a198954",
+      "signer": "acc://probe.acme/book/1",
+      "signerVersion": 1,
+      "timestamp": 1700000000000,
+      "transactionHash": "fd7081f1264543ccc88bd5c879dcbb56264b0090a2465641d2827e1748f4dd53"
+     },
+     "delegator": "acc://delegator2.acme/book/1"
+    },
+    "delegator": "acc://delegator1.acme/book/1"
+   },
+   "where": {
+    "partition": "bvn1",
+    "block": 12492272
+   },
+   "page": {
+    "entries": [
+     "d7c9632b36f5ee7119da838f37ff36ef30f62a6e5425598634815ff4625ca366"
+    ]
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "d7c9632b36f5ee7119da838f37ff36ef30f62a6e5425598634815ff4625ca366",
+    "form": "metadata",
+    "delegators": [
+     "acc://delegator1.acme/book/1",
+     "acc://delegator2.acme/book/1"
+    ]
+   }
+  },
+  {
+   "id": "ecdsaSha256/valid/direct",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "ecdsaSha256",
+   "description": "a ecdsaSha256 signature over the metadata digest, 0 delegator(s); the key hash is the type's own",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f64617461022b0105022701030223736967747970657320766563746f722065636473615368613235362076616c69642030",
+   "txHash": "7322ea47856000df043cc979b0860045403caadc2afda55f0fcb938695b9c7c5",
+   "signature": "010f025b3059301306072a8648ce3d020106082a8648ce3d030107034200041cdf21c74f5180dae20ca6b538d355b2533d7983edf84744557841679cf62537ff61e04ff56956f926a9d081e5345af77bf1f62636f7f6ec9553ed15c65c86c003483046022100ff40fe0a609185f4b61a93880a0f54ad84980ad60c460af8530fb9c4b63494e7022100d36be88108677cc475d1b557b945a1ef9cb33213a831e1cbc79ffadfafeadda604176163633a2f2f70726f62652e61636d652f626f6f6b2f3105010680d095ffbc31087322ea47856000df043cc979b0860045403caadc2afda55f0fcb938695b9c7c5",
+   "signatureJson": {
+    "type": "ecdsaSha256",
+    "publicKey": "3059301306072a8648ce3d020106082a8648ce3d030107034200041cdf21c74f5180dae20ca6b538d355b2533d7983edf84744557841679cf62537ff61e04ff56956f926a9d081e5345af77bf1f62636f7f6ec9553ed15c65c86c0",
+    "signature": "3046022100ff40fe0a609185f4b61a93880a0f54ad84980ad60c460af8530fb9c4b63494e7022100d36be88108677cc475d1b557b945a1ef9cb33213a831e1cbc79ffadfafeadda6",
+    "signer": "acc://probe.acme/book/1",
+    "signerVersion": 1,
+    "timestamp": 1700000000000,
+    "transactionHash": "7322ea47856000df043cc979b0860045403caadc2afda55f0fcb938695b9c7c5"
+   },
+   "where": {
+    "partition": "bvn1",
+    "block": 12492272
+   },
+   "page": {
+    "entries": [
+     "83324a93cd3bd59c0fe73999f303b26f35d66907ff0d434418537c8c23f94da3"
+    ]
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "83324a93cd3bd59c0fe73999f303b26f35d66907ff0d434418537c8c23f94da3",
+    "form": "metadata"
+   }
+  },
+  {
+   "id": "ecdsaSha256/valid/delegated-1",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "ecdsaSha256",
+   "description": "a ecdsaSha256 signature over the metadata digest, 1 delegator(s); the key hash is the type's own",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f64617461022b0105022701030223736967747970657320766563746f722065636473615368613235362076616c69642031",
+   "txHash": "89ffe6ebd36aef011a90c5d2debe243f140c35d8566e7846569461e0c4880c93",
+   "signature": "010b02ec01010f025b3059301306072a8648ce3d020106082a8648ce3d030107034200041cdf21c74f5180dae20ca6b538d355b2533d7983edf84744557841679cf62537ff61e04ff56956f926a9d081e5345af77bf1f62636f7f6ec9553ed15c65c86c003483046022100c44772970e1aecd43070739b122794937aba8d772ceded1bb011295b84449d9a0221008dd0817c957e2b2dbedddf2eb1610813b0e5cf73e830dec72d92722d9a69b9c204176163633a2f2f70726f62652e61636d652f626f6f6b2f3105010680d095ffbc310889ffe6ebd36aef011a90c5d2debe243f140c35d8566e7846569461e0c4880c93031c6163633a2f2f64656c656761746f72312e61636d652f626f6f6b2f31",
+   "signatureJson": {
+    "type": "delegated",
+    "signature": {
+     "type": "ecdsaSha256",
+     "publicKey": "3059301306072a8648ce3d020106082a8648ce3d030107034200041cdf21c74f5180dae20ca6b538d355b2533d7983edf84744557841679cf62537ff61e04ff56956f926a9d081e5345af77bf1f62636f7f6ec9553ed15c65c86c0",
+     "signature": "3046022100c44772970e1aecd43070739b122794937aba8d772ceded1bb011295b84449d9a0221008dd0817c957e2b2dbedddf2eb1610813b0e5cf73e830dec72d92722d9a69b9c2",
+     "signer": "acc://probe.acme/book/1",
+     "signerVersion": 1,
+     "timestamp": 1700000000000,
+     "transactionHash": "89ffe6ebd36aef011a90c5d2debe243f140c35d8566e7846569461e0c4880c93"
+    },
+    "delegator": "acc://delegator1.acme/book/1"
+   },
+   "where": {
+    "partition": "bvn1",
+    "block": 12492272
+   },
+   "page": {
+    "entries": [
+     "83324a93cd3bd59c0fe73999f303b26f35d66907ff0d434418537c8c23f94da3"
+    ]
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "83324a93cd3bd59c0fe73999f303b26f35d66907ff0d434418537c8c23f94da3",
+    "form": "metadata",
+    "delegators": [
+     "acc://delegator1.acme/book/1"
+    ]
+   }
+  },
+  {
+   "id": "ecdsaSha256/valid/delegated-2",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "ecdsaSha256",
+   "description": "a ecdsaSha256 signature over the metadata digest, 2 delegator(s); the key hash is the type's own",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f64617461022b0105022701030223736967747970657320766563746f722065636473615368613235362076616c69642032",
+   "txHash": "7f3cc386f7b9a38093ff6788aba8d874fefe50b9541820886f674da3d99283f4",
+   "signature": "010b028d02010b02ea01010f025b3059301306072a8648ce3d020106082a8648ce3d030107034200041cdf21c74f5180dae20ca6b538d355b2533d7983edf84744557841679cf62537ff61e04ff56956f926a9d081e5345af77bf1f62636f7f6ec9553ed15c65c86c003463044022006908e3cc0c4e4e9566d7aa15d70d974d251034923223e7adb83654695a94b0b022018c2e7fc0e8b29b8bfd708d718d9747fd7b416e1504b4184690461871c21acda04176163633a2f2f70726f62652e61636d652f626f6f6b2f3105010680d095ffbc31087f3cc386f7b9a38093ff6788aba8d874fefe50b9541820886f674da3d99283f4031c6163633a2f2f64656c656761746f72322e61636d652f626f6f6b2f31031c6163633a2f2f64656c656761746f72312e61636d652f626f6f6b2f31",
+   "signatureJson": {
+    "type": "delegated",
+    "signature": {
+     "type": "delegated",
+     "signature": {
+      "type": "ecdsaSha256",
+      "publicKey": "3059301306072a8648ce3d020106082a8648ce3d030107034200041cdf21c74f5180dae20ca6b538d355b2533d7983edf84744557841679cf62537ff61e04ff56956f926a9d081e5345af77bf1f62636f7f6ec9553ed15c65c86c0",
+      "signature": "3044022006908e3cc0c4e4e9566d7aa15d70d974d251034923223e7adb83654695a94b0b022018c2e7fc0e8b29b8bfd708d718d9747fd7b416e1504b4184690461871c21acda",
+      "signer": "acc://probe.acme/book/1",
+      "signerVersion": 1,
+      "timestamp": 1700000000000,
+      "transactionHash": "7f3cc386f7b9a38093ff6788aba8d874fefe50b9541820886f674da3d99283f4"
+     },
+     "delegator": "acc://delegator2.acme/book/1"
+    },
+    "delegator": "acc://delegator1.acme/book/1"
+   },
+   "where": {
+    "partition": "bvn1",
+    "block": 12492272
+   },
+   "page": {
+    "entries": [
+     "83324a93cd3bd59c0fe73999f303b26f35d66907ff0d434418537c8c23f94da3"
+    ]
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "83324a93cd3bd59c0fe73999f303b26f35d66907ff0d434418537c8c23f94da3",
+    "form": "metadata",
+    "delegators": [
+     "acc://delegator1.acme/book/1",
+     "acc://delegator2.acme/book/1"
+    ]
+   }
+  },
+  {
+   "id": "typedData/valid/direct",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "typedData",
+   "description": "a typedData signature over the metadata digest, 0 delegator(s); the key hash is the type's own",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f6461746102290105022501030221736967747970657320766563746f72207479706564446174612076616c69642030",
+   "txHash": "db33fb3ca0ec9a3a8fbb6f82dedecce3668bb8fbf47bd46b6bc631721e33665f",
+   "signature": "0110024104500a975c37347f39e6b3d898c9aa9dba27d32cf7edbca11ad0fc5ca03fdb71cb99425e612a87860932676a92f34fa4e355218df500ab3d82863366cd333e65a80340bf1d6c08e65bf57ff4d379534a9520e43a0ee370b48f9bfa091ba53342f97848cddd70e20e5e29221dc2a18fc4bfb9f76cc5bcd138c5e9b10f8276c983846c4904176163633a2f2f70726f62652e61636d652f626f6f6b2f3105010680d095ffbc3108db33fb3ca0ec9a3a8fbb6f82dedecce3668bb8fbf47bd46b6bc631721e33665f0b0412f20119",
+   "signatureJson": {
+    "type": "typedData",
+    "publicKey": "04500a975c37347f39e6b3d898c9aa9dba27d32cf7edbca11ad0fc5ca03fdb71cb99425e612a87860932676a92f34fa4e355218df500ab3d82863366cd333e65a8",
+    "signature": "bf1d6c08e65bf57ff4d379534a9520e43a0ee370b48f9bfa091ba53342f97848cddd70e20e5e29221dc2a18fc4bfb9f76cc5bcd138c5e9b10f8276c983846c49",
+    "signer": "acc://probe.acme/book/1",
+    "signerVersion": 1,
+    "timestamp": 1700000000000,
+    "transactionHash": "db33fb3ca0ec9a3a8fbb6f82dedecce3668bb8fbf47bd46b6bc631721e33665f",
+    "chainID": "317849881"
+   },
+   "networkName": "DevNet",
+   "where": {
+    "partition": "bvn1",
+    "block": 12492272
+   },
+   "page": {
+    "entries": [
+     "6ef637d36d20ef61ae76af635bb9ac2e1f11ac84"
+    ]
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "6ef637d36d20ef61ae76af635bb9ac2e1f11ac84",
+    "form": "eip712"
+   }
+  },
+  {
+   "id": "typedData/valid/delegated-1",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "typedData",
+   "description": "a typedData signature over the metadata digest, 1 delegator(s); the key hash is the type's own",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f6461746102290105022501030221736967747970657320766563746f72207479706564446174612076616c69642031",
+   "txHash": "d6bc1b39c973f99c4076923bb75fa3b5cbb9c9b787e375f079826a1da3560a09",
+   "signature": "010b02d0010110024104500a975c37347f39e6b3d898c9aa9dba27d32cf7edbca11ad0fc5ca03fdb71cb99425e612a87860932676a92f34fa4e355218df500ab3d82863366cd333e65a80340e5382d6cc5c2b8aecc1b5655a45e5f871049b3b2846a65a94a99977b560146efea80a67c607945627f34e721b1de01347d61b0d88a61a7061c89ce7a035cced004176163633a2f2f70726f62652e61636d652f626f6f6b2f3105010680d095ffbc3108d6bc1b39c973f99c4076923bb75fa3b5cbb9c9b787e375f079826a1da3560a090b0412f20119031c6163633a2f2f64656c656761746f72312e61636d652f626f6f6b2f31",
+   "signatureJson": {
+    "type": "delegated",
+    "signature": {
+     "type": "typedData",
+     "publicKey": "04500a975c37347f39e6b3d898c9aa9dba27d32cf7edbca11ad0fc5ca03fdb71cb99425e612a87860932676a92f34fa4e355218df500ab3d82863366cd333e65a8",
+     "signature": "e5382d6cc5c2b8aecc1b5655a45e5f871049b3b2846a65a94a99977b560146efea80a67c607945627f34e721b1de01347d61b0d88a61a7061c89ce7a035cced0",
+     "signer": "acc://probe.acme/book/1",
+     "signerVersion": 1,
+     "timestamp": 1700000000000,
+     "transactionHash": "d6bc1b39c973f99c4076923bb75fa3b5cbb9c9b787e375f079826a1da3560a09",
+     "chainID": "317849881"
+    },
+    "delegator": "acc://delegator1.acme/book/1"
+   },
+   "networkName": "DevNet",
+   "where": {
+    "partition": "bvn1",
+    "block": 12492272
+   },
+   "page": {
+    "entries": [
+     "6ef637d36d20ef61ae76af635bb9ac2e1f11ac84"
+    ]
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "6ef637d36d20ef61ae76af635bb9ac2e1f11ac84",
+    "form": "eip712",
+    "delegators": [
+     "acc://delegator1.acme/book/1"
+    ]
+   }
+  },
+  {
+   "id": "typedData/valid/delegated-2",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "typedData",
+   "description": "a typedData signature over the metadata digest, 2 delegator(s); the key hash is the type's own",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f6461746102290105022501030221736967747970657320766563746f72207479706564446174612076616c69642032",
+   "txHash": "8fb6253a86c6a504641bed02b9f934466a6fb790f3dad0bfd341c409953c6b82",
+   "signature": "010b02f301010b02d0010110024104500a975c37347f39e6b3d898c9aa9dba27d32cf7edbca11ad0fc5ca03fdb71cb99425e612a87860932676a92f34fa4e355218df500ab3d82863366cd333e65a803404169e646431155121561e5e3f864e1e1cd839426580563dc17a61be1c5ac94347afa5cbc957867e3eb72f69d50c997a1c0dd49a4e9750de2da7fd223854fd76004176163633a2f2f70726f62652e61636d652f626f6f6b2f3105010680d095ffbc31088fb6253a86c6a504641bed02b9f934466a6fb790f3dad0bfd341c409953c6b820b0412f20119031c6163633a2f2f64656c656761746f72322e61636d652f626f6f6b2f31031c6163633a2f2f64656c656761746f72312e61636d652f626f6f6b2f31",
+   "signatureJson": {
+    "type": "delegated",
+    "signature": {
+     "type": "delegated",
+     "signature": {
+      "type": "typedData",
+      "publicKey": "04500a975c37347f39e6b3d898c9aa9dba27d32cf7edbca11ad0fc5ca03fdb71cb99425e612a87860932676a92f34fa4e355218df500ab3d82863366cd333e65a8",
+      "signature": "4169e646431155121561e5e3f864e1e1cd839426580563dc17a61be1c5ac94347afa5cbc957867e3eb72f69d50c997a1c0dd49a4e9750de2da7fd223854fd760",
+      "signer": "acc://probe.acme/book/1",
+      "signerVersion": 1,
+      "timestamp": 1700000000000,
+      "transactionHash": "8fb6253a86c6a504641bed02b9f934466a6fb790f3dad0bfd341c409953c6b82",
+      "chainID": "317849881"
+     },
+     "delegator": "acc://delegator2.acme/book/1"
+    },
+    "delegator": "acc://delegator1.acme/book/1"
+   },
+   "networkName": "DevNet",
+   "where": {
+    "partition": "bvn1",
+    "block": 12492272
+   },
+   "page": {
+    "entries": [
+     "6ef637d36d20ef61ae76af635bb9ac2e1f11ac84"
+    ]
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "6ef637d36d20ef61ae76af635bb9ac2e1f11ac84",
+    "form": "eip712",
+    "delegators": [
+     "acc://delegator1.acme/book/1",
+     "acc://delegator2.acme/book/1"
+    ]
+   }
+  },
+  {
+   "id": "ed25519/valid/delegated-20",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "ed25519",
+   "description": "a delegation chain of exactly DelegationDepthLimit (20) layers",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f6461746102280105022401030220736967747970657320766563746f722065643235353139206465707468203230",
+   "txHash": "37346462c5df02197fd3c8fa083f9ff2a8ef632d5a8a091b6991422623c0704e",
+   "signature": "010b02cd06010b02aa06010b028706010b02e405010b02c105010b029e05010b02fb04010b02d804010b02b504010b029104010b02ed03010b02c903010b02a503010b028103010b02dd02010b02b902010b029502010b02f101010b02cd01010b02a9010102022024b243d093b83b4a49df7b9903af4285d9e2aa385f5ba393adc0d3f76cb812ca0340ee906a1dce6a634c0775f757406a2e5a39a7788a817c93172e3fb67a043b8171750ec61aee59b10be32704e6ebc9add6f5a92d49855b7ecea153970807b7c70904176163633a2f2f70726f62652e61636d652f626f6f6b2f3105010680d095ffbc310837346462c5df02197fd3c8fa083f9ff2a8ef632d5a8a091b6991422623c0704e031d6163633a2f2f64656c656761746f7232302e61636d652f626f6f6b2f31031d6163633a2f2f64656c656761746f7231392e61636d652f626f6f6b2f31031d6163633a2f2f64656c656761746f7231382e61636d652f626f6f6b2f31031d6163633a2f2f64656c656761746f7231372e61636d652f626f6f6b2f31031d6163633a2f2f64656c656761746f7231362e61636d652f626f6f6b2f31031d6163633a2f2f64656c656761746f7231352e61636d652f626f6f6b2f31031d6163633a2f2f64656c656761746f7231342e61636d652f626f6f6b2f31031d6163633a2f2f64656c656761746f7231332e61636d652f626f6f6b2f31031d6163633a2f2f64656c656761746f7231322e61636d652f626f6f6b2f31031d6163633a2f2f64656c656761746f7231312e61636d652f626f6f6b2f31031d6163633a2f2f64656c656761746f7231302e61636d652f626f6f6b2f31031c6163633a2f2f64656c656761746f72392e61636d652f626f6f6b2f31031c6163633a2f2f64656c656761746f72382e61636d652f626f6f6b2f31031c6163633a2f2f64656c656761746f72372e61636d652f626f6f6b2f31031c6163633a2f2f64656c656761746f72362e61636d652f626f6f6b2f31031c6163633a2f2f64656c656761746f72352e61636d652f626f6f6b2f31031c6163633a2f2f64656c656761746f72342e61636d652f626f6f6b2f31031c6163633a2f2f64656c656761746f72332e61636d652f626f6f6b2f31031c6163633a2f2f64656c656761746f72322e61636d652f626f6f6b2f31031c6163633a2f2f64656c656761746f72312e61636d652f626f6f6b2f31",
+   "signatureJson": {
+    "type": "delegated",
+    "signature": {
+     "type": "delegated",
+     "signature": {
+      "type": "delegated",
+      "signature": {
+       "type": "delegated",
+       "signature": {
+        "type": "delegated",
+        "signature": {
+         "type": "delegated",
+         "signature": {
+          "type": "delegated",
+          "signature": {
+           "type": "delegated",
+           "signature": {
+            "type": "delegated",
+            "signature": {
+             "type": "delegated",
+             "signature": {
+              "type": "delegated",
+              "signature": {
+               "type": "delegated",
+               "signature": {
+                "type": "delegated",
+                "signature": {
+                 "type": "delegated",
+                 "signature": {
+                  "type": "delegated",
+                  "signature": {
+                   "type": "delegated",
+                   "signature": {
+                    "type": "delegated",
+                    "signature": {
+                     "type": "delegated",
+                     "signature": {
+                      "type": "delegated",
+                      "signature": {
+                       "type": "delegated",
+                       "signature": {
+                        "type": "ed25519",
+                        "publicKey": "24b243d093b83b4a49df7b9903af4285d9e2aa385f5ba393adc0d3f76cb812ca",
+                        "signature": "ee906a1dce6a634c0775f757406a2e5a39a7788a817c93172e3fb67a043b8171750ec61aee59b10be32704e6ebc9add6f5a92d49855b7ecea153970807b7c709",
+                        "signer": "acc://probe.acme/book/1",
+                        "signerVersion": 1,
+                        "timestamp": 1700000000000,
+                        "transactionHash": "37346462c5df02197fd3c8fa083f9ff2a8ef632d5a8a091b6991422623c0704e"
+                       },
+                       "delegator": "acc://delegator20.acme/book/1"
+                      },
+                      "delegator": "acc://delegator19.acme/book/1"
+                     },
+                     "delegator": "acc://delegator18.acme/book/1"
+                    },
+                    "delegator": "acc://delegator17.acme/book/1"
+                   },
+                   "delegator": "acc://delegator16.acme/book/1"
+                  },
+                  "delegator": "acc://delegator15.acme/book/1"
+                 },
+                 "delegator": "acc://delegator14.acme/book/1"
+                },
+                "delegator": "acc://delegator13.acme/book/1"
+               },
+               "delegator": "acc://delegator12.acme/book/1"
+              },
+              "delegator": "acc://delegator11.acme/book/1"
+             },
+             "delegator": "acc://delegator10.acme/book/1"
+            },
+            "delegator": "acc://delegator9.acme/book/1"
+           },
+           "delegator": "acc://delegator8.acme/book/1"
+          },
+          "delegator": "acc://delegator7.acme/book/1"
+         },
+         "delegator": "acc://delegator6.acme/book/1"
+        },
+        "delegator": "acc://delegator5.acme/book/1"
+       },
+       "delegator": "acc://delegator4.acme/book/1"
+      },
+      "delegator": "acc://delegator3.acme/book/1"
+     },
+     "delegator": "acc://delegator2.acme/book/1"
+    },
+    "delegator": "acc://delegator1.acme/book/1"
+   },
+   "page": {
+    "entries": [
+     "5b34cc796698bc19258e2993b3d835b78059e1208cbb8137f618abcca495895d"
+    ]
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "5b34cc796698bc19258e2993b3d835b78059e1208cbb8137f618abcca495895d",
+    "form": "metadata",
+    "delegators": [
+     "acc://delegator1.acme/book/1",
+     "acc://delegator2.acme/book/1",
+     "acc://delegator3.acme/book/1",
+     "acc://delegator4.acme/book/1",
+     "acc://delegator5.acme/book/1",
+     "acc://delegator6.acme/book/1",
+     "acc://delegator7.acme/book/1",
+     "acc://delegator8.acme/book/1",
+     "acc://delegator9.acme/book/1",
+     "acc://delegator10.acme/book/1",
+     "acc://delegator11.acme/book/1",
+     "acc://delegator12.acme/book/1",
+     "acc://delegator13.acme/book/1",
+     "acc://delegator14.acme/book/1",
+     "acc://delegator15.acme/book/1",
+     "acc://delegator16.acme/book/1",
+     "acc://delegator17.acme/book/1",
+     "acc://delegator18.acme/book/1",
+     "acc://delegator19.acme/book/1",
+     "acc://delegator20.acme/book/1"
+    ]
+   }
+  },
+  {
+   "id": "ecdsaSha256/valid/delegated-20",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "ecdsaSha256",
+   "description": "a delegation chain of exactly DelegationDepthLimit (20) layers",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f64617461022c0105022801030224736967747970657320766563746f72206563647361536861323536206465707468203230",
+   "txHash": "50de6ad48a8445e61895c4d0617c980a4c40dda88c8413a6e2092dcfab3617f8",
+   "signature": "010b028f07010b02ec06010b02c906010b02a606010b028306010b02e005010b02bd05010b029a05010b02f704010b02d304010b02af04010b028b04010b02e703010b02c303010b029f03010b02fb02010b02d702010b02b302010b028f02010b02eb01010f025b3059301306072a8648ce3d020106082a8648ce3d030107034200041cdf21c74f5180dae20ca6b538d355b2533d7983edf84744557841679cf62537ff61e04ff56956f926a9d081e5345af77bf1f62636f7f6ec9553ed15c65c86c0034730450221008206d768dfd4f269b0378fea59a53002acef68d887c2c59990f14fc0c1ea86c50220491593bb32d96464b4e495fc0c450a36a695c51c10fbf00db6fc63af0047a18e04176163633a2f2f70726f62652e61636d652f626f6f6b2f3105010680d095ffbc310850de6ad48a8445e61895c4d0617c980a4c40dda88c8413a6e2092dcfab3617f8031d6163633a2f2f64656c656761746f7232302e61636d652f626f6f6b2f31031d6163633a2f2f64656c656761746f7231392e61636d652f626f6f6b2f31031d6163633a2f2f64656c656761746f7231382e61636d652f626f6f6b2f31031d6163633a2f2f64656c656761746f7231372e61636d652f626f6f6b2f31031d6163633a2f2f64656c656761746f7231362e61636d652f626f6f6b2f31031d6163633a2f2f64656c656761746f7231352e61636d652f626f6f6b2f31031d6163633a2f2f64656c656761746f7231342e61636d652f626f6f6b2f31031d6163633a2f2f64656c656761746f7231332e61636d652f626f6f6b2f31031d6163633a2f2f64656c656761746f7231322e61636d652f626f6f6b2f31031d6163633a2f2f64656c656761746f7231312e61636d652f626f6f6b2f31031d6163633a2f2f64656c656761746f7231302e61636d652f626f6f6b2f31031c6163633a2f2f64656c656761746f72392e61636d652f626f6f6b2f31031c6163633a2f2f64656c656761746f72382e61636d652f626f6f6b2f31031c6163633a2f2f64656c656761746f72372e61636d652f626f6f6b2f31031c6163633a2f2f64656c656761746f72362e61636d652f626f6f6b2f31031c6163633a2f2f64656c656761746f72352e61636d652f626f6f6b2f31031c6163633a2f2f64656c656761746f72342e61636d652f626f6f6b2f31031c6163633a2f2f64656c656761746f72332e61636d652f626f6f6b2f31031c6163633a2f2f64656c656761746f72322e61636d652f626f6f6b2f31031c6163633a2f2f64656c656761746f72312e61636d652f626f6f6b2f31",
+   "signatureJson": {
+    "type": "delegated",
+    "signature": {
+     "type": "delegated",
+     "signature": {
+      "type": "delegated",
+      "signature": {
+       "type": "delegated",
+       "signature": {
+        "type": "delegated",
+        "signature": {
+         "type": "delegated",
+         "signature": {
+          "type": "delegated",
+          "signature": {
+           "type": "delegated",
+           "signature": {
+            "type": "delegated",
+            "signature": {
+             "type": "delegated",
+             "signature": {
+              "type": "delegated",
+              "signature": {
+               "type": "delegated",
+               "signature": {
+                "type": "delegated",
+                "signature": {
+                 "type": "delegated",
+                 "signature": {
+                  "type": "delegated",
+                  "signature": {
+                   "type": "delegated",
+                   "signature": {
+                    "type": "delegated",
+                    "signature": {
+                     "type": "delegated",
+                     "signature": {
+                      "type": "delegated",
+                      "signature": {
+                       "type": "delegated",
+                       "signature": {
+                        "type": "ecdsaSha256",
+                        "publicKey": "3059301306072a8648ce3d020106082a8648ce3d030107034200041cdf21c74f5180dae20ca6b538d355b2533d7983edf84744557841679cf62537ff61e04ff56956f926a9d081e5345af77bf1f62636f7f6ec9553ed15c65c86c0",
+                        "signature": "30450221008206d768dfd4f269b0378fea59a53002acef68d887c2c59990f14fc0c1ea86c50220491593bb32d96464b4e495fc0c450a36a695c51c10fbf00db6fc63af0047a18e",
+                        "signer": "acc://probe.acme/book/1",
+                        "signerVersion": 1,
+                        "timestamp": 1700000000000,
+                        "transactionHash": "50de6ad48a8445e61895c4d0617c980a4c40dda88c8413a6e2092dcfab3617f8"
+                       },
+                       "delegator": "acc://delegator20.acme/book/1"
+                      },
+                      "delegator": "acc://delegator19.acme/book/1"
+                     },
+                     "delegator": "acc://delegator18.acme/book/1"
+                    },
+                    "delegator": "acc://delegator17.acme/book/1"
+                   },
+                   "delegator": "acc://delegator16.acme/book/1"
+                  },
+                  "delegator": "acc://delegator15.acme/book/1"
+                 },
+                 "delegator": "acc://delegator14.acme/book/1"
+                },
+                "delegator": "acc://delegator13.acme/book/1"
+               },
+               "delegator": "acc://delegator12.acme/book/1"
+              },
+              "delegator": "acc://delegator11.acme/book/1"
+             },
+             "delegator": "acc://delegator10.acme/book/1"
+            },
+            "delegator": "acc://delegator9.acme/book/1"
+           },
+           "delegator": "acc://delegator8.acme/book/1"
+          },
+          "delegator": "acc://delegator7.acme/book/1"
+         },
+         "delegator": "acc://delegator6.acme/book/1"
+        },
+        "delegator": "acc://delegator5.acme/book/1"
+       },
+       "delegator": "acc://delegator4.acme/book/1"
+      },
+      "delegator": "acc://delegator3.acme/book/1"
+     },
+     "delegator": "acc://delegator2.acme/book/1"
+    },
+    "delegator": "acc://delegator1.acme/book/1"
+   },
+   "where": {
+    "partition": "bvn2",
+    "block": 12493057
+   },
+   "page": {
+    "entries": [
+     "83324a93cd3bd59c0fe73999f303b26f35d66907ff0d434418537c8c23f94da3"
+    ]
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "83324a93cd3bd59c0fe73999f303b26f35d66907ff0d434418537c8c23f94da3",
+    "form": "metadata",
+    "delegators": [
+     "acc://delegator1.acme/book/1",
+     "acc://delegator2.acme/book/1",
+     "acc://delegator3.acme/book/1",
+     "acc://delegator4.acme/book/1",
+     "acc://delegator5.acme/book/1",
+     "acc://delegator6.acme/book/1",
+     "acc://delegator7.acme/book/1",
+     "acc://delegator8.acme/book/1",
+     "acc://delegator9.acme/book/1",
+     "acc://delegator10.acme/book/1",
+     "acc://delegator11.acme/book/1",
+     "acc://delegator12.acme/book/1",
+     "acc://delegator13.acme/book/1",
+     "acc://delegator14.acme/book/1",
+     "acc://delegator15.acme/book/1",
+     "acc://delegator16.acme/book/1",
+     "acc://delegator17.acme/book/1",
+     "acc://delegator18.acme/book/1",
+     "acc://delegator19.acme/book/1",
+     "acc://delegator20.acme/book/1"
+    ]
+   }
+  },
+  {
+   "id": "typedData/valid/delegated-20",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "typedData",
+   "description": "a delegation chain of exactly DelegationDepthLimit (20) layers",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f64617461022a0105022601030222736967747970657320766563746f7220747970656444617461206465707468203230",
+   "txHash": "467cad8b2ed572c7e7952869f027c28309530b7d726d587e972169dda9a7f60e",
+   "signature": "010b02f406010b02d106010b02ae06010b028b06010b02e805010b02c505010b02a205010b02ff04010b02dc04010b02b804010b029404010b02f003010b02cc03010b02a803010b028403010b02e002010b02bc02010b029802010b02f401010b02d0010110024104500a975c37347f39e6b3d898c9aa9dba27d32cf7edbca11ad0fc5ca03fdb71cb99425e612a87860932676a92f34fa4e355218df500ab3d82863366cd333e65a8034004f69c83dd02b5ba69efd4a1e1fd244a42df2c4e6966e307abf51aaede3a2f2dd330c0adb0b81ee54a1c21fb24e35533771e5bf8b14cb70a5bf760669d90d06404176163633a2f2f70726f62652e61636d652f626f6f6b2f3105010680d095ffbc3108467cad8b2ed572c7e7952869f027c28309530b7d726d587e972169dda9a7f60e0b0412f20119031d6163633a2f2f64656c656761746f7232302e61636d652f626f6f6b2f31031d6163633a2f2f64656c656761746f7231392e61636d652f626f6f6b2f31031d6163633a2f2f64656c656761746f7231382e61636d652f626f6f6b2f31031d6163633a2f2f64656c656761746f7231372e61636d652f626f6f6b2f31031d6163633a2f2f64656c656761746f7231362e61636d652f626f6f6b2f31031d6163633a2f2f64656c656761746f7231352e61636d652f626f6f6b2f31031d6163633a2f2f64656c656761746f7231342e61636d652f626f6f6b2f31031d6163633a2f2f64656c656761746f7231332e61636d652f626f6f6b2f31031d6163633a2f2f64656c656761746f7231322e61636d652f626f6f6b2f31031d6163633a2f2f64656c656761746f7231312e61636d652f626f6f6b2f31031d6163633a2f2f64656c656761746f7231302e61636d652f626f6f6b2f31031c6163633a2f2f64656c656761746f72392e61636d652f626f6f6b2f31031c6163633a2f2f64656c656761746f72382e61636d652f626f6f6b2f31031c6163633a2f2f64656c656761746f72372e61636d652f626f6f6b2f31031c6163633a2f2f64656c656761746f72362e61636d652f626f6f6b2f31031c6163633a2f2f64656c656761746f72352e61636d652f626f6f6b2f31031c6163633a2f2f64656c656761746f72342e61636d652f626f6f6b2f31031c6163633a2f2f64656c656761746f72332e61636d652f626f6f6b2f31031c6163633a2f2f64656c656761746f72322e61636d652f626f6f6b2f31031c6163633a2f2f64656c656761746f72312e61636d652f626f6f6b2f31",
+   "signatureJson": {
+    "type": "delegated",
+    "signature": {
+     "type": "delegated",
+     "signature": {
+      "type": "delegated",
+      "signature": {
+       "type": "delegated",
+       "signature": {
+        "type": "delegated",
+        "signature": {
+         "type": "delegated",
+         "signature": {
+          "type": "delegated",
+          "signature": {
+           "type": "delegated",
+           "signature": {
+            "type": "delegated",
+            "signature": {
+             "type": "delegated",
+             "signature": {
+              "type": "delegated",
+              "signature": {
+               "type": "delegated",
+               "signature": {
+                "type": "delegated",
+                "signature": {
+                 "type": "delegated",
+                 "signature": {
+                  "type": "delegated",
+                  "signature": {
+                   "type": "delegated",
+                   "signature": {
+                    "type": "delegated",
+                    "signature": {
+                     "type": "delegated",
+                     "signature": {
+                      "type": "delegated",
+                      "signature": {
+                       "type": "delegated",
+                       "signature": {
+                        "type": "typedData",
+                        "publicKey": "04500a975c37347f39e6b3d898c9aa9dba27d32cf7edbca11ad0fc5ca03fdb71cb99425e612a87860932676a92f34fa4e355218df500ab3d82863366cd333e65a8",
+                        "signature": "04f69c83dd02b5ba69efd4a1e1fd244a42df2c4e6966e307abf51aaede3a2f2dd330c0adb0b81ee54a1c21fb24e35533771e5bf8b14cb70a5bf760669d90d064",
+                        "signer": "acc://probe.acme/book/1",
+                        "signerVersion": 1,
+                        "timestamp": 1700000000000,
+                        "transactionHash": "467cad8b2ed572c7e7952869f027c28309530b7d726d587e972169dda9a7f60e",
+                        "chainID": "317849881"
+                       },
+                       "delegator": "acc://delegator20.acme/book/1"
+                      },
+                      "delegator": "acc://delegator19.acme/book/1"
+                     },
+                     "delegator": "acc://delegator18.acme/book/1"
+                    },
+                    "delegator": "acc://delegator17.acme/book/1"
+                   },
+                   "delegator": "acc://delegator16.acme/book/1"
+                  },
+                  "delegator": "acc://delegator15.acme/book/1"
+                 },
+                 "delegator": "acc://delegator14.acme/book/1"
+                },
+                "delegator": "acc://delegator13.acme/book/1"
+               },
+               "delegator": "acc://delegator12.acme/book/1"
+              },
+              "delegator": "acc://delegator11.acme/book/1"
+             },
+             "delegator": "acc://delegator10.acme/book/1"
+            },
+            "delegator": "acc://delegator9.acme/book/1"
+           },
+           "delegator": "acc://delegator8.acme/book/1"
+          },
+          "delegator": "acc://delegator7.acme/book/1"
+         },
+         "delegator": "acc://delegator6.acme/book/1"
+        },
+        "delegator": "acc://delegator5.acme/book/1"
+       },
+       "delegator": "acc://delegator4.acme/book/1"
+      },
+      "delegator": "acc://delegator3.acme/book/1"
+     },
+     "delegator": "acc://delegator2.acme/book/1"
+    },
+    "delegator": "acc://delegator1.acme/book/1"
+   },
+   "networkName": "DevNet",
+   "where": {
+    "partition": "bvn2",
+    "block": 12493057
+   },
+   "page": {
+    "entries": [
+     "6ef637d36d20ef61ae76af635bb9ac2e1f11ac84"
+    ]
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "6ef637d36d20ef61ae76af635bb9ac2e1f11ac84",
+    "form": "eip712",
+    "delegators": [
+     "acc://delegator1.acme/book/1",
+     "acc://delegator2.acme/book/1",
+     "acc://delegator3.acme/book/1",
+     "acc://delegator4.acme/book/1",
+     "acc://delegator5.acme/book/1",
+     "acc://delegator6.acme/book/1",
+     "acc://delegator7.acme/book/1",
+     "acc://delegator8.acme/book/1",
+     "acc://delegator9.acme/book/1",
+     "acc://delegator10.acme/book/1",
+     "acc://delegator11.acme/book/1",
+     "acc://delegator12.acme/book/1",
+     "acc://delegator13.acme/book/1",
+     "acc://delegator14.acme/book/1",
+     "acc://delegator15.acme/book/1",
+     "acc://delegator16.acme/book/1",
+     "acc://delegator17.acme/book/1",
+     "acc://delegator18.acme/book/1",
+     "acc://delegator19.acme/book/1",
+     "acc://delegator20.acme/book/1"
+    ]
+   }
+  },
+  {
+   "id": "ed25519/valid/memo",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "ed25519",
+   "description": "vote, memo and data are part of the signed metadata hash: a verifier that rebuilds the signature without them cannot verify it",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f646174610224010502200103021c736967747970657320766563746f722065643235353139206d656d6f",
+   "txHash": "50afe95ee14b006d7df8e5734e6dfab721d55bca7fa38e68a62d42e5826487eb",
+   "signature": "0102022024b243d093b83b4a49df7b9903af4285d9e2aa385f5ba393adc0d3f76cb812ca0340d808d50a6fe6261396514fd1fbf8dcc03ef3319750db833b1c05203be0955d16cbf58f964b4349951d5a5ebe1b26216a00e9417bd81bc58c922afac968f5d10104176163633a2f2f70726f62652e61636d652f626f6f6b2f3105010680d095ffbc310850afe95ee14b006d7df8e5734e6dfab721d55bca7fa38e68a62d42e5826487eb0917617070726f76656420627920746865206f666669636572",
+   "signatureJson": {
+    "type": "ed25519",
+    "publicKey": "24b243d093b83b4a49df7b9903af4285d9e2aa385f5ba393adc0d3f76cb812ca",
+    "signature": "d808d50a6fe6261396514fd1fbf8dcc03ef3319750db833b1c05203be0955d16cbf58f964b4349951d5a5ebe1b26216a00e9417bd81bc58c922afac968f5d101",
+    "signer": "acc://probe.acme/book/1",
+    "signerVersion": 1,
+    "timestamp": 1700000000000,
+    "transactionHash": "50afe95ee14b006d7df8e5734e6dfab721d55bca7fa38e68a62d42e5826487eb",
+    "memo": "approved by the officer"
+   },
+   "page": {
+    "entries": [
+     "5b34cc796698bc19258e2993b3d835b78059e1208cbb8137f618abcca495895d"
+    ]
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "5b34cc796698bc19258e2993b3d835b78059e1208cbb8137f618abcca495895d",
+    "form": "metadata"
+   }
+  },
+  {
+   "id": "ed25519/valid/data",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "ed25519",
+   "description": "vote, memo and data are part of the signed metadata hash: a verifier that rebuilds the signature without them cannot verify it",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f646174610224010502200103021c736967747970657320766563746f7220656432353531392064617461",
+   "txHash": "a1b0ba8b620a52b779c8c8ef4a5c5a3aa8ddc2aecd8c2ab79997008ee2798505",
+   "signature": "0102022024b243d093b83b4a49df7b9903af4285d9e2aa385f5ba393adc0d3f76cb812ca0340bb4b1a5f90a1e0732f508cfae411fa38be31bfea52cdb885e8037cd5881bae480fa1b5e1fd2ae79c2bfdf856c1dfa69e406b5f62b96434581e43be035e4b450504176163633a2f2f70726f62652e61636d652f626f6f6b2f3105010680d095ffbc3108a1b0ba8b620a52b779c8c8ef4a5c5a3aa8ddc2aecd8c2ab79997008ee27985050a04deadbeef",
+   "signatureJson": {
+    "type": "ed25519",
+    "publicKey": "24b243d093b83b4a49df7b9903af4285d9e2aa385f5ba393adc0d3f76cb812ca",
+    "signature": "bb4b1a5f90a1e0732f508cfae411fa38be31bfea52cdb885e8037cd5881bae480fa1b5e1fd2ae79c2bfdf856c1dfa69e406b5f62b96434581e43be035e4b4505",
+    "signer": "acc://probe.acme/book/1",
+    "signerVersion": 1,
+    "timestamp": 1700000000000,
+    "transactionHash": "a1b0ba8b620a52b779c8c8ef4a5c5a3aa8ddc2aecd8c2ab79997008ee2798505",
+    "data": "deadbeef"
+   },
+   "page": {
+    "entries": [
+     "5b34cc796698bc19258e2993b3d835b78059e1208cbb8137f618abcca495895d"
+    ]
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "5b34cc796698bc19258e2993b3d835b78059e1208cbb8137f618abcca495895d",
+    "form": "metadata"
+   }
+  },
+  {
+   "id": "ed25519/valid/reject-vote",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "ed25519",
+   "description": "vote, memo and data are part of the signed metadata hash: a verifier that rebuilds the signature without them cannot verify it",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f64617461022b0105022701030223736967747970657320766563746f7220656432353531392072656a6563742d766f7465",
+   "txHash": "f322686068c5c024bb30c1974ef6816fb914221709f31e25a94b33f4f74c4b46",
+   "signature": "0102022024b243d093b83b4a49df7b9903af4285d9e2aa385f5ba393adc0d3f76cb812ca0340805a4a04c5aea9106f1ed3448110ebaec06b31419df7d2899effef7b4b22687dc6e5317f19b280526b3fcc21f28f51e080538da47e93fe0a0369b8bc18dde60904176163633a2f2f70726f62652e61636d652f626f6f6b2f3105010680d095ffbc31070108f322686068c5c024bb30c1974ef6816fb914221709f31e25a94b33f4f74c4b46",
+   "signatureJson": {
+    "type": "ed25519",
+    "publicKey": "24b243d093b83b4a49df7b9903af4285d9e2aa385f5ba393adc0d3f76cb812ca",
+    "signature": "805a4a04c5aea9106f1ed3448110ebaec06b31419df7d2899effef7b4b22687dc6e5317f19b280526b3fcc21f28f51e080538da47e93fe0a0369b8bc18dde609",
+    "signer": "acc://probe.acme/book/1",
+    "signerVersion": 1,
+    "timestamp": 1700000000000,
+    "vote": "reject",
+    "transactionHash": "f322686068c5c024bb30c1974ef6816fb914221709f31e25a94b33f4f74c4b46"
+   },
+   "page": {
+    "entries": [
+     "5b34cc796698bc19258e2993b3d835b78059e1208cbb8137f618abcca495895d"
+    ]
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "5b34cc796698bc19258e2993b3d835b78059e1208cbb8137f618abcca495895d",
+    "form": "metadata"
+   }
+  },
+  {
+   "id": "ed25519/valid/abstain-vote",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "ed25519",
+   "description": "vote, memo and data are part of the signed metadata hash: a verifier that rebuilds the signature without them cannot verify it",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f64617461022c0105022801030224736967747970657320766563746f722065643235353139206162737461696e2d766f7465",
+   "txHash": "3ff6218e47a2ca828171e66219b58a7905104c07fe0ad067f63c393ce8f8f260",
+   "signature": "0102022024b243d093b83b4a49df7b9903af4285d9e2aa385f5ba393adc0d3f76cb812ca0340c2ad9df2b7025c90bb49335c806b11f216bb5e96fe4ebada8ec3c335896fc4ef3d70ad806bd41efcf61d366b3b952c0b5152dbe9f0143cc80003438b1d0c530b04176163633a2f2f70726f62652e61636d652f626f6f6b2f3105010680d095ffbc310702083ff6218e47a2ca828171e66219b58a7905104c07fe0ad067f63c393ce8f8f260",
+   "signatureJson": {
+    "type": "ed25519",
+    "publicKey": "24b243d093b83b4a49df7b9903af4285d9e2aa385f5ba393adc0d3f76cb812ca",
+    "signature": "c2ad9df2b7025c90bb49335c806b11f216bb5e96fe4ebada8ec3c335896fc4ef3d70ad806bd41efcf61d366b3b952c0b5152dbe9f0143cc80003438b1d0c530b",
+    "signer": "acc://probe.acme/book/1",
+    "signerVersion": 1,
+    "timestamp": 1700000000000,
+    "vote": "abstain",
+    "transactionHash": "3ff6218e47a2ca828171e66219b58a7905104c07fe0ad067f63c393ce8f8f260"
+   },
+   "page": {
+    "entries": [
+     "5b34cc796698bc19258e2993b3d835b78059e1208cbb8137f618abcca495895d"
+    ]
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "5b34cc796698bc19258e2993b3d835b78059e1208cbb8137f618abcca495895d",
+    "form": "metadata"
+   }
+  },
+  {
+   "id": "ecdsaSha256/valid/reject-vote",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "ecdsaSha256",
+   "description": "vote, memo and data are part of the signed metadata hash: a verifier that rebuilds the signature without them cannot verify it",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f64617461022f0105022b01030227736967747970657320766563746f722065636473615368613235362072656a6563742d766f7465",
+   "txHash": "74ed3f04f99e4677a9a9926dd0a9c606fcc8aa52db45fada93aacbfe88302b97",
+   "signature": "010f025b3059301306072a8648ce3d020106082a8648ce3d030107034200041cdf21c74f5180dae20ca6b538d355b2533d7983edf84744557841679cf62537ff61e04ff56956f926a9d081e5345af77bf1f62636f7f6ec9553ed15c65c86c00346304402204374b63a7d57030a4b0b34cc44a996d3ed1d28eac9eb0a3dcacbbd4991dd0f6002207d375a8f5c2a1fe82d1d1ec638a63fe87fa3f2527165401339de386f816684cc04176163633a2f2f70726f62652e61636d652f626f6f6b2f3105010680d095ffbc3107010874ed3f04f99e4677a9a9926dd0a9c606fcc8aa52db45fada93aacbfe88302b97",
+   "signatureJson": {
+    "type": "ecdsaSha256",
+    "publicKey": "3059301306072a8648ce3d020106082a8648ce3d030107034200041cdf21c74f5180dae20ca6b538d355b2533d7983edf84744557841679cf62537ff61e04ff56956f926a9d081e5345af77bf1f62636f7f6ec9553ed15c65c86c0",
+    "signature": "304402204374b63a7d57030a4b0b34cc44a996d3ed1d28eac9eb0a3dcacbbd4991dd0f6002207d375a8f5c2a1fe82d1d1ec638a63fe87fa3f2527165401339de386f816684cc",
+    "signer": "acc://probe.acme/book/1",
+    "signerVersion": 1,
+    "timestamp": 1700000000000,
+    "vote": "reject",
+    "transactionHash": "74ed3f04f99e4677a9a9926dd0a9c606fcc8aa52db45fada93aacbfe88302b97"
+   },
+   "where": {
+    "partition": "bvn3",
+    "block": 12492127
+   },
+   "page": {
+    "entries": [
+     "83324a93cd3bd59c0fe73999f303b26f35d66907ff0d434418537c8c23f94da3"
+    ]
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "83324a93cd3bd59c0fe73999f303b26f35d66907ff0d434418537c8c23f94da3",
+    "form": "metadata"
+   }
+  },
+  {
+   "id": "ecdsaSha256/valid/abstain-vote",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "ecdsaSha256",
+   "description": "vote, memo and data are part of the signed metadata hash: a verifier that rebuilds the signature without them cannot verify it",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f6461746102300105022c01030228736967747970657320766563746f72206563647361536861323536206162737461696e2d766f7465",
+   "txHash": "b30c7490119101d3f5041eda3ffe5d5962fe7a27bc2c60805aef5b5313385bc6",
+   "signature": "010f025b3059301306072a8648ce3d020106082a8648ce3d030107034200041cdf21c74f5180dae20ca6b538d355b2533d7983edf84744557841679cf62537ff61e04ff56956f926a9d081e5345af77bf1f62636f7f6ec9553ed15c65c86c003473045022100fb634cf381ca0f18957d5263b54079c190cbc2c2067bc8470a8e11c10266cfb9022018ab70100260a30c2f75e12a34154f5418a447cbf752cce3c8b74b7959147fbd04176163633a2f2f70726f62652e61636d652f626f6f6b2f3105010680d095ffbc31070208b30c7490119101d3f5041eda3ffe5d5962fe7a27bc2c60805aef5b5313385bc6",
+   "signatureJson": {
+    "type": "ecdsaSha256",
+    "publicKey": "3059301306072a8648ce3d020106082a8648ce3d030107034200041cdf21c74f5180dae20ca6b538d355b2533d7983edf84744557841679cf62537ff61e04ff56956f926a9d081e5345af77bf1f62636f7f6ec9553ed15c65c86c0",
+    "signature": "3045022100fb634cf381ca0f18957d5263b54079c190cbc2c2067bc8470a8e11c10266cfb9022018ab70100260a30c2f75e12a34154f5418a447cbf752cce3c8b74b7959147fbd",
+    "signer": "acc://probe.acme/book/1",
+    "signerVersion": 1,
+    "timestamp": 1700000000000,
+    "vote": "abstain",
+    "transactionHash": "b30c7490119101d3f5041eda3ffe5d5962fe7a27bc2c60805aef5b5313385bc6"
+   },
+   "where": {
+    "partition": "bvn3",
+    "block": 12492127
+   },
+   "page": {
+    "entries": [
+     "83324a93cd3bd59c0fe73999f303b26f35d66907ff0d434418537c8c23f94da3"
+    ]
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "83324a93cd3bd59c0fe73999f303b26f35d66907ff0d434418537c8c23f94da3",
+    "form": "metadata"
+   }
+  },
+  {
+   "id": "ecdsaSha256/valid/memo",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "ecdsaSha256",
+   "description": "vote, memo and data are part of the signed metadata hash: a verifier that rebuilds the signature without them cannot verify it",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f6461746102280105022401030220736967747970657320766563746f72206563647361536861323536206d656d6f",
+   "txHash": "fe5ada41824508f548479bc8f6436d1bbf0236986de54ec8f01a5e3b8b441b64",
+   "signature": "010f025b3059301306072a8648ce3d020106082a8648ce3d030107034200041cdf21c74f5180dae20ca6b538d355b2533d7983edf84744557841679cf62537ff61e04ff56956f926a9d081e5345af77bf1f62636f7f6ec9553ed15c65c86c00347304502206c1dc90cb16fbb24a8d111b5120c98a87c5b5274f947df48003b0b2793a99bb8022100f110625c28a1be3c3f2b59a35d83ba8320b943e3865806dea827182ddcc76e0704176163633a2f2f70726f62652e61636d652f626f6f6b2f3105010680d095ffbc3108fe5ada41824508f548479bc8f6436d1bbf0236986de54ec8f01a5e3b8b441b640917617070726f76656420627920746865206f666669636572",
+   "signatureJson": {
+    "type": "ecdsaSha256",
+    "publicKey": "3059301306072a8648ce3d020106082a8648ce3d030107034200041cdf21c74f5180dae20ca6b538d355b2533d7983edf84744557841679cf62537ff61e04ff56956f926a9d081e5345af77bf1f62636f7f6ec9553ed15c65c86c0",
+    "signature": "304502206c1dc90cb16fbb24a8d111b5120c98a87c5b5274f947df48003b0b2793a99bb8022100f110625c28a1be3c3f2b59a35d83ba8320b943e3865806dea827182ddcc76e07",
+    "signer": "acc://probe.acme/book/1",
+    "signerVersion": 1,
+    "timestamp": 1700000000000,
+    "transactionHash": "fe5ada41824508f548479bc8f6436d1bbf0236986de54ec8f01a5e3b8b441b64",
+    "memo": "approved by the officer"
+   },
+   "where": {
+    "partition": "bvn3",
+    "block": 12492127
+   },
+   "page": {
+    "entries": [
+     "83324a93cd3bd59c0fe73999f303b26f35d66907ff0d434418537c8c23f94da3"
+    ]
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "83324a93cd3bd59c0fe73999f303b26f35d66907ff0d434418537c8c23f94da3",
+    "form": "metadata"
+   }
+  },
+  {
+   "id": "ecdsaSha256/valid/data",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "ecdsaSha256",
+   "description": "vote, memo and data are part of the signed metadata hash: a verifier that rebuilds the signature without them cannot verify it",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f6461746102280105022401030220736967747970657320766563746f722065636473615368613235362064617461",
+   "txHash": "538254311a8d96a0a28c187b3c5dc2f1103ff04622592cfc490ff33703b3f24f",
+   "signature": "010f025b3059301306072a8648ce3d020106082a8648ce3d030107034200041cdf21c74f5180dae20ca6b538d355b2533d7983edf84744557841679cf62537ff61e04ff56956f926a9d081e5345af77bf1f62636f7f6ec9553ed15c65c86c003483046022100843e6ec08393405a6b1d4fb50d7fc1ded23ded43bbf377911d0a27f81190cbdd02210080b4449fd11fe5c8e5fc8ae9b922ace3e3624a18937bae16d5abf2288bafbf6704176163633a2f2f70726f62652e61636d652f626f6f6b2f3105010680d095ffbc3108538254311a8d96a0a28c187b3c5dc2f1103ff04622592cfc490ff33703b3f24f0a04deadbeef",
+   "signatureJson": {
+    "type": "ecdsaSha256",
+    "publicKey": "3059301306072a8648ce3d020106082a8648ce3d030107034200041cdf21c74f5180dae20ca6b538d355b2533d7983edf84744557841679cf62537ff61e04ff56956f926a9d081e5345af77bf1f62636f7f6ec9553ed15c65c86c0",
+    "signature": "3046022100843e6ec08393405a6b1d4fb50d7fc1ded23ded43bbf377911d0a27f81190cbdd02210080b4449fd11fe5c8e5fc8ae9b922ace3e3624a18937bae16d5abf2288bafbf67",
+    "signer": "acc://probe.acme/book/1",
+    "signerVersion": 1,
+    "timestamp": 1700000000000,
+    "transactionHash": "538254311a8d96a0a28c187b3c5dc2f1103ff04622592cfc490ff33703b3f24f",
+    "data": "deadbeef"
+   },
+   "where": {
+    "partition": "bvn3",
+    "block": 12492127
+   },
+   "page": {
+    "entries": [
+     "83324a93cd3bd59c0fe73999f303b26f35d66907ff0d434418537c8c23f94da3"
+    ]
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "83324a93cd3bd59c0fe73999f303b26f35d66907ff0d434418537c8c23f94da3",
+    "form": "metadata"
+   }
+  },
+  {
+   "id": "btc/valid/data",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "btc",
+   "description": "vote, memo and data are part of the signed metadata hash: a verifier that rebuilds the signature without them cannot verify it",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f6461746102200105021c01030218736967747970657320766563746f72206274632064617461",
+   "txHash": "7f3a909cdd5f52e0b5aca8f5aec4e5ee06edc29e7d1ba4cfc966f3219eff9ff9",
+   "signature": "0108022102fc6950ff3ac901fa91454d4c98b94149b0e9234fb31ca9e07270f99cbd0bf1ec03473045022100fb388afc26481fadaea13efc34c23d322dffc25f7e3b9183bd6cbaceabae32d0022057069bfd664856e64b01b90417f5393918a8ec13e9837342d4b145a0ac304b6004176163633a2f2f70726f62652e61636d652f626f6f6b2f3105010680d095ffbc31087f3a909cdd5f52e0b5aca8f5aec4e5ee06edc29e7d1ba4cfc966f3219eff9ff90a04deadbeef",
+   "signatureJson": {
+    "type": "btc",
+    "publicKey": "02fc6950ff3ac901fa91454d4c98b94149b0e9234fb31ca9e07270f99cbd0bf1ec",
+    "signature": "3045022100fb388afc26481fadaea13efc34c23d322dffc25f7e3b9183bd6cbaceabae32d0022057069bfd664856e64b01b90417f5393918a8ec13e9837342d4b145a0ac304b60",
+    "signer": "acc://probe.acme/book/1",
+    "signerVersion": 1,
+    "timestamp": 1700000000000,
+    "transactionHash": "7f3a909cdd5f52e0b5aca8f5aec4e5ee06edc29e7d1ba4cfc966f3219eff9ff9",
+    "data": "deadbeef"
+   },
+   "page": {
+    "entries": [
+     "99e8ff24ca26005b707aa8e24420704e8f9462bb"
+    ]
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "99e8ff24ca26005b707aa8e24420704e8f9462bb",
+    "form": "metadata"
+   }
+  },
+  {
+   "id": "btc/valid/reject-vote",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "btc",
+   "description": "vote, memo and data are part of the signed metadata hash: a verifier that rebuilds the signature without them cannot verify it",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f646174610227010502230103021f736967747970657320766563746f72206274632072656a6563742d766f7465",
+   "txHash": "01b79d27ba0a8b5f9b87ab25e64b2d3dd096a59f10836d0c46dd0375fb1ceb28",
+   "signature": "0108022102fc6950ff3ac901fa91454d4c98b94149b0e9234fb31ca9e07270f99cbd0bf1ec03473045022040f26b430442573b978c7f3421b08596055e9c8ec2b27eab45ccbccec48d3206022100fc4a7702a5993637058ef1824f0d5769f412c0d886f5140f680cefafc80ab22b04176163633a2f2f70726f62652e61636d652f626f6f6b2f3105010680d095ffbc3107010801b79d27ba0a8b5f9b87ab25e64b2d3dd096a59f10836d0c46dd0375fb1ceb28",
+   "signatureJson": {
+    "type": "btc",
+    "publicKey": "02fc6950ff3ac901fa91454d4c98b94149b0e9234fb31ca9e07270f99cbd0bf1ec",
+    "signature": "3045022040f26b430442573b978c7f3421b08596055e9c8ec2b27eab45ccbccec48d3206022100fc4a7702a5993637058ef1824f0d5769f412c0d886f5140f680cefafc80ab22b",
+    "signer": "acc://probe.acme/book/1",
+    "signerVersion": 1,
+    "timestamp": 1700000000000,
+    "vote": "reject",
+    "transactionHash": "01b79d27ba0a8b5f9b87ab25e64b2d3dd096a59f10836d0c46dd0375fb1ceb28"
+   },
+   "page": {
+    "entries": [
+     "99e8ff24ca26005b707aa8e24420704e8f9462bb"
+    ]
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "99e8ff24ca26005b707aa8e24420704e8f9462bb",
+    "form": "metadata"
+   }
+  },
+  {
+   "id": "btc/valid/abstain-vote",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "btc",
+   "description": "vote, memo and data are part of the signed metadata hash: a verifier that rebuilds the signature without them cannot verify it",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f6461746102280105022401030220736967747970657320766563746f7220627463206162737461696e2d766f7465",
+   "txHash": "0ec3c62639851285884f83013517d5a07c58efd426be4379a4be9227c4dfe81b",
+   "signature": "0108022102fc6950ff3ac901fa91454d4c98b94149b0e9234fb31ca9e07270f99cbd0bf1ec03463044022017503a4c08f121758dbf0579e43df3b327d47044f289ec047f1db05d8758d7c5022024a8835c728e37ec0b097c70690dee19602c0782f432110d9bea057dc128b5f904176163633a2f2f70726f62652e61636d652f626f6f6b2f3105010680d095ffbc310702080ec3c62639851285884f83013517d5a07c58efd426be4379a4be9227c4dfe81b",
+   "signatureJson": {
+    "type": "btc",
+    "publicKey": "02fc6950ff3ac901fa91454d4c98b94149b0e9234fb31ca9e07270f99cbd0bf1ec",
+    "signature": "3044022017503a4c08f121758dbf0579e43df3b327d47044f289ec047f1db05d8758d7c5022024a8835c728e37ec0b097c70690dee19602c0782f432110d9bea057dc128b5f9",
+    "signer": "acc://probe.acme/book/1",
+    "signerVersion": 1,
+    "timestamp": 1700000000000,
+    "vote": "abstain",
+    "transactionHash": "0ec3c62639851285884f83013517d5a07c58efd426be4379a4be9227c4dfe81b"
+   },
+   "page": {
+    "entries": [
+     "99e8ff24ca26005b707aa8e24420704e8f9462bb"
+    ]
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "99e8ff24ca26005b707aa8e24420704e8f9462bb",
+    "form": "metadata"
+   }
+  },
+  {
+   "id": "btc/valid/memo",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "btc",
+   "description": "vote, memo and data are part of the signed metadata hash: a verifier that rebuilds the signature without them cannot verify it",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f6461746102200105021c01030218736967747970657320766563746f7220627463206d656d6f",
+   "txHash": "bd6db291063e7f226e9bf58fafbd2d87888c6aa051a5dc32578131eee05c797c",
+   "signature": "0108022102fc6950ff3ac901fa91454d4c98b94149b0e9234fb31ca9e07270f99cbd0bf1ec0347304502207c3128ae635986592bcb66454905553c6fdc63cf8ca8b68d8251609ca522f1a9022100afb6e15986ca1227725260423f15c4e9f86f222462823fe9ce3032e54765bdc304176163633a2f2f70726f62652e61636d652f626f6f6b2f3105010680d095ffbc3108bd6db291063e7f226e9bf58fafbd2d87888c6aa051a5dc32578131eee05c797c0917617070726f76656420627920746865206f666669636572",
+   "signatureJson": {
+    "type": "btc",
+    "publicKey": "02fc6950ff3ac901fa91454d4c98b94149b0e9234fb31ca9e07270f99cbd0bf1ec",
+    "signature": "304502207c3128ae635986592bcb66454905553c6fdc63cf8ca8b68d8251609ca522f1a9022100afb6e15986ca1227725260423f15c4e9f86f222462823fe9ce3032e54765bdc3",
+    "signer": "acc://probe.acme/book/1",
+    "signerVersion": 1,
+    "timestamp": 1700000000000,
+    "transactionHash": "bd6db291063e7f226e9bf58fafbd2d87888c6aa051a5dc32578131eee05c797c",
+    "memo": "approved by the officer"
+   },
+   "page": {
+    "entries": [
+     "99e8ff24ca26005b707aa8e24420704e8f9462bb"
+    ]
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "99e8ff24ca26005b707aa8e24420704e8f9462bb",
+    "form": "metadata"
+   }
+  },
+  {
+   "id": "ecdsaSha256/valid/high-s",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "ecdsaSha256",
+   "description": "Accumulate's ecdsa.VerifyASN1 does not enforce low-S: the flipped-S twin of a valid signature verifies",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f646174610224010502200103021c736967747970657320766563746f7220656364736120686967682d73",
+   "txHash": "0faec9f3aeff66c730e9f686ed5274002c17de6877c4b85b663e4acb7134f3f0",
+   "signature": "010f025b3059301306072a8648ce3d020106082a8648ce3d030107034200041cdf21c74f5180dae20ca6b538d355b2533d7983edf84744557841679cf62537ff61e04ff56956f926a9d081e5345af77bf1f62636f7f6ec9553ed15c65c86c003473045022100a52a3ed7eaeb3ee209f8acb5e8e50370ba05b35b426e8414c2c089d5cde32a0c02206b5cbe83a5ad3aebc351e6eaac1db0601ffbafbf6a02b79ce82e216b65f206bc04176163633a2f2f70726f62652e61636d652f626f6f6b2f3105010680d095ffbc31080faec9f3aeff66c730e9f686ed5274002c17de6877c4b85b663e4acb7134f3f0",
+   "signatureJson": {
+    "type": "ecdsaSha256",
+    "publicKey": "3059301306072a8648ce3d020106082a8648ce3d030107034200041cdf21c74f5180dae20ca6b538d355b2533d7983edf84744557841679cf62537ff61e04ff56956f926a9d081e5345af77bf1f62636f7f6ec9553ed15c65c86c0",
+    "signature": "3045022100a52a3ed7eaeb3ee209f8acb5e8e50370ba05b35b426e8414c2c089d5cde32a0c02206b5cbe83a5ad3aebc351e6eaac1db0601ffbafbf6a02b79ce82e216b65f206bc",
+    "signer": "acc://probe.acme/book/1",
+    "signerVersion": 1,
+    "timestamp": 1700000000000,
+    "transactionHash": "0faec9f3aeff66c730e9f686ed5274002c17de6877c4b85b663e4acb7134f3f0"
+   },
+   "where": {
+    "partition": "bvn1",
+    "block": 12492272
+   },
+   "page": {
+    "entries": [
+     "83324a93cd3bd59c0fe73999f303b26f35d66907ff0d434418537c8c23f94da3"
+    ]
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "83324a93cd3bd59c0fe73999f303b26f35d66907ff0d434418537c8c23f94da3",
+    "form": "metadata"
+   }
+  },
+  {
+   "id": "ecdsaSha256/valid/curve-p224",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "ecdsaSha256",
+   "description": "Accumulate verifies whatever crypto/x509 parses as an ECDSA key: P-224, P-256, P-384 and P-521",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f6461746102220105021e0103021a736967747970657320766563746f722065636473612070323234",
+   "txHash": "788788c80b4e8fd0860f79b261ce714e109e1739c52d48899ae844c3175dac74",
+   "signature": "010f0250304e301006072a8648ce3d020106052b81040021033a00048755a93de453413dd036c67e9bd89cbf9cae7d77874ebe2b688c308c725e442a05c97a4f273a8d119f466566126895342fbaab57cb67b20f033e303c021c7e06212eeea33f8a9d78bbf3de7e1190fbfd8f92291bcd56535bb49d021c1cb94c95e761a5a767eb07f4c95d83f0711190566db45c2b4b44501604176163633a2f2f70726f62652e61636d652f626f6f6b2f3105010680d095ffbc3108788788c80b4e8fd0860f79b261ce714e109e1739c52d48899ae844c3175dac74",
+   "signatureJson": {
+    "type": "ecdsaSha256",
+    "publicKey": "304e301006072a8648ce3d020106052b81040021033a00048755a93de453413dd036c67e9bd89cbf9cae7d77874ebe2b688c308c725e442a05c97a4f273a8d119f466566126895342fbaab57cb67b20f",
+    "signature": "303c021c7e06212eeea33f8a9d78bbf3de7e1190fbfd8f92291bcd56535bb49d021c1cb94c95e761a5a767eb07f4c95d83f0711190566db45c2b4b445016",
+    "signer": "acc://probe.acme/book/1",
+    "signerVersion": 1,
+    "timestamp": 1700000000000,
+    "transactionHash": "788788c80b4e8fd0860f79b261ce714e109e1739c52d48899ae844c3175dac74"
+   },
+   "where": {
+    "partition": "bvn1",
+    "block": 12492272
+   },
+   "page": {
+    "entries": [
+     "1bb9c3fbd9095b155cc85672225f3a6928b4b9fed77afa04cb210f4a5089d57b"
+    ]
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "1bb9c3fbd9095b155cc85672225f3a6928b4b9fed77afa04cb210f4a5089d57b",
+    "form": "metadata"
+   }
+  },
+  {
+   "id": "ecdsaSha256/valid/curve-p384",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "ecdsaSha256",
+   "description": "Accumulate verifies whatever crypto/x509 parses as an ECDSA key: P-224, P-256, P-384 and P-521",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f6461746102220105021e0103021a736967747970657320766563746f722065636473612070333834",
+   "txHash": "fe5f76e275e6564b49b3f8912fecd955103edb88fa77a25259f1e32e65dd8338",
+   "signature": "010f02783076301006072a8648ce3d020106052b8104002203620004e8f76d657ca6b0fa581cbeb2063672b7b2985d0f7b7c18d59fe8dfbbe00f83e235c9ef97b70e5889f50b9f2a509665fead585b27a821565d794c319cd77e9998a3d92462889ef220871e802742fa210715a256799b76d5913b9f9eac2dceba830367306502307cdd06941af6d395d57640dd83d03ed091e35a13d90f0d29c39154f620f8e25847d81a895fcbc183a514a18f22abd08c023100ee4ac465321245d6552ce2f223b8264d3b717117d7069b2aee19efb7ff2a3a1eb0f9ca98148c1fa999b5ef62e3e3024004176163633a2f2f70726f62652e61636d652f626f6f6b2f3105010680d095ffbc3108fe5f76e275e6564b49b3f8912fecd955103edb88fa77a25259f1e32e65dd8338",
+   "signatureJson": {
+    "type": "ecdsaSha256",
+    "publicKey": "3076301006072a8648ce3d020106052b8104002203620004e8f76d657ca6b0fa581cbeb2063672b7b2985d0f7b7c18d59fe8dfbbe00f83e235c9ef97b70e5889f50b9f2a509665fead585b27a821565d794c319cd77e9998a3d92462889ef220871e802742fa210715a256799b76d5913b9f9eac2dceba83",
+    "signature": "306502307cdd06941af6d395d57640dd83d03ed091e35a13d90f0d29c39154f620f8e25847d81a895fcbc183a514a18f22abd08c023100ee4ac465321245d6552ce2f223b8264d3b717117d7069b2aee19efb7ff2a3a1eb0f9ca98148c1fa999b5ef62e3e30240",
+    "signer": "acc://probe.acme/book/1",
+    "signerVersion": 1,
+    "timestamp": 1700000000000,
+    "transactionHash": "fe5f76e275e6564b49b3f8912fecd955103edb88fa77a25259f1e32e65dd8338"
+   },
+   "where": {
+    "partition": "bvn1",
+    "block": 12492272
+   },
+   "page": {
+    "entries": [
+     "04ad73418034803ef7bd28f2ff01e85600ee639bae330ebeb19d8828091069de"
+    ]
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "04ad73418034803ef7bd28f2ff01e85600ee639bae330ebeb19d8828091069de",
+    "form": "metadata"
+   }
+  },
+  {
+   "id": "ecdsaSha256/valid/curve-p521",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "ecdsaSha256",
+   "description": "Accumulate verifies whatever crypto/x509 parses as an ECDSA key: P-224, P-256, P-384 and P-521",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f6461746102220105021e0103021a736967747970657320766563746f722065636473612070353231",
+   "txHash": "3f530c3752fdd48ea369ebb5b565e3f74c3da9849a603f5c17269777d10eb95d",
+   "signature": "010f029e0130819b301006072a8648ce3d020106052b81040023038186000400bce55dc591b6e623a36b7810b06f125c18a0f710686103f20438c6529738caa73014239bc1b4fa40d90e17dcadaa27c871e275503d306338cac59d91f85e1b502700a4025a2ce033bc19801cff6859ca08ffdaca4ae2de7e66e3603ab57230673c77846bd2d8b0d1e755e763e9ce83bed52cb0dc2baa0f6666fe480316d16f42b68a96038b0130818802420145d5d7c30ca29ceb44d607fe4d9bb60cce2936a42f906d56e6bb05d5bb20c3b93212a7af5bd59ca93c19ab6b94ba186e52eb1da02618f489394fe92d298c954a700242012b2d25bea4dcf9ff30c0292dd04ca74f30d1851cfb6af8060d6f177f0d06484e3ccca5fd1b0d6b0a6ee046a0ef3ea027222ce185f16772e8c6511cb14ece937d6e04176163633a2f2f70726f62652e61636d652f626f6f6b2f3105010680d095ffbc31083f530c3752fdd48ea369ebb5b565e3f74c3da9849a603f5c17269777d10eb95d",
+   "signatureJson": {
+    "type": "ecdsaSha256",
+    "publicKey": "30819b301006072a8648ce3d020106052b81040023038186000400bce55dc591b6e623a36b7810b06f125c18a0f710686103f20438c6529738caa73014239bc1b4fa40d90e17dcadaa27c871e275503d306338cac59d91f85e1b502700a4025a2ce033bc19801cff6859ca08ffdaca4ae2de7e66e3603ab57230673c77846bd2d8b0d1e755e763e9ce83bed52cb0dc2baa0f6666fe480316d16f42b68a96",
+    "signature": "30818802420145d5d7c30ca29ceb44d607fe4d9bb60cce2936a42f906d56e6bb05d5bb20c3b93212a7af5bd59ca93c19ab6b94ba186e52eb1da02618f489394fe92d298c954a700242012b2d25bea4dcf9ff30c0292dd04ca74f30d1851cfb6af8060d6f177f0d06484e3ccca5fd1b0d6b0a6ee046a0ef3ea027222ce185f16772e8c6511cb14ece937d6e",
+    "signer": "acc://probe.acme/book/1",
+    "signerVersion": 1,
+    "timestamp": 1700000000000,
+    "transactionHash": "3f530c3752fdd48ea369ebb5b565e3f74c3da9849a603f5c17269777d10eb95d"
+   },
+   "where": {
+    "partition": "bvn1",
+    "block": 12492272
+   },
+   "page": {
+    "entries": [
+     "8109a4629fd1cee73b4b0feef7beab98899ab9ee81cf4437e276537d05b4f94a"
+    ]
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "8109a4629fd1cee73b4b0feef7beab98899ab9ee81cf4437e276537d05b4f94a",
+    "form": "metadata"
+   }
+  },
+  {
+   "id": "btc/valid/lax-der-trailing-bytes",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "btc",
+   "description": "btc uses a lax DER parser: trailing bytes, non-minimal integers and high-S are all accepted by Accumulate",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f6461746102230105021f0103021b736967747970657320766563746f7220627463206c617820646572",
+   "txHash": "894d4cde21a31a4475ed99554e567340e91cf22f5a12479532e40d15619db494",
+   "signature": "0108022102fc6950ff3ac901fa91454d4c98b94149b0e9234fb31ca9e07270f99cbd0bf1ec034a30460221008c823d36e39c690aa9412d93325108e97a62463e6a720450767c0728a22beee2022100ed5a123a994fee0fb23226a7b6079185ef6fc38d21e86322d295a35c33c07ddfdead04176163633a2f2f70726f62652e61636d652f626f6f6b2f3105010680d095ffbc3108894d4cde21a31a4475ed99554e567340e91cf22f5a12479532e40d15619db494",
+   "signatureJson": {
+    "type": "btc",
+    "publicKey": "02fc6950ff3ac901fa91454d4c98b94149b0e9234fb31ca9e07270f99cbd0bf1ec",
+    "signature": "30460221008c823d36e39c690aa9412d93325108e97a62463e6a720450767c0728a22beee2022100ed5a123a994fee0fb23226a7b6079185ef6fc38d21e86322d295a35c33c07ddfdead",
+    "signer": "acc://probe.acme/book/1",
+    "signerVersion": 1,
+    "timestamp": 1700000000000,
+    "transactionHash": "894d4cde21a31a4475ed99554e567340e91cf22f5a12479532e40d15619db494"
+   },
+   "page": {
+    "entries": [
+     "99e8ff24ca26005b707aa8e24420704e8f9462bb"
+    ]
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "99e8ff24ca26005b707aa8e24420704e8f9462bb",
+    "form": "metadata"
+   }
+  },
+  {
+   "id": "btc/valid/non-minimal-der",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "btc",
+   "description": "btc uses a lax DER parser: trailing bytes, non-minimal integers and high-S are all accepted by Accumulate",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f6461746102230105021f0103021b736967747970657320766563746f7220627463206c617820646572",
+   "txHash": "894d4cde21a31a4475ed99554e567340e91cf22f5a12479532e40d15619db494",
+   "signature": "0108022102fc6950ff3ac901fa91454d4c98b94149b0e9234fb31ca9e07270f99cbd0bf1ec03493047022200008c823d36e39c690aa9412d93325108e97a62463e6a720450767c0728a22beee2022100ed5a123a994fee0fb23226a7b6079185ef6fc38d21e86322d295a35c33c07ddf04176163633a2f2f70726f62652e61636d652f626f6f6b2f3105010680d095ffbc3108894d4cde21a31a4475ed99554e567340e91cf22f5a12479532e40d15619db494",
+   "signatureJson": {
+    "type": "btc",
+    "publicKey": "02fc6950ff3ac901fa91454d4c98b94149b0e9234fb31ca9e07270f99cbd0bf1ec",
+    "signature": "3047022200008c823d36e39c690aa9412d93325108e97a62463e6a720450767c0728a22beee2022100ed5a123a994fee0fb23226a7b6079185ef6fc38d21e86322d295a35c33c07ddf",
+    "signer": "acc://probe.acme/book/1",
+    "signerVersion": 1,
+    "timestamp": 1700000000000,
+    "transactionHash": "894d4cde21a31a4475ed99554e567340e91cf22f5a12479532e40d15619db494"
+   },
+   "page": {
+    "entries": [
+     "99e8ff24ca26005b707aa8e24420704e8f9462bb"
+    ]
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "99e8ff24ca26005b707aa8e24420704e8f9462bb",
+    "form": "metadata"
+   }
+  },
+  {
+   "id": "btc/valid/high-s",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "btc",
+   "description": "btc uses a lax DER parser: trailing bytes, non-minimal integers and high-S are all accepted by Accumulate",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f6461746102230105021f0103021b736967747970657320766563746f7220627463206c617820646572",
+   "txHash": "894d4cde21a31a4475ed99554e567340e91cf22f5a12479532e40d15619db494",
+   "signature": "0108022102fc6950ff3ac901fa91454d4c98b94149b0e9234fb31ca9e07270f99cbd0bf1ec034730450221008c823d36e39c690aa9412d93325108e97a62463e6a720450767c0728a22beee2022012a5edc566b011f04dcdd95849f86e78cb3f19598d603d18ed3cbb309c75c36204176163633a2f2f70726f62652e61636d652f626f6f6b2f3105010680d095ffbc3108894d4cde21a31a4475ed99554e567340e91cf22f5a12479532e40d15619db494",
+   "signatureJson": {
+    "type": "btc",
+    "publicKey": "02fc6950ff3ac901fa91454d4c98b94149b0e9234fb31ca9e07270f99cbd0bf1ec",
+    "signature": "30450221008c823d36e39c690aa9412d93325108e97a62463e6a720450767c0728a22beee2022012a5edc566b011f04dcdd95849f86e78cb3f19598d603d18ed3cbb309c75c362",
+    "signer": "acc://probe.acme/book/1",
+    "signerVersion": 1,
+    "timestamp": 1700000000000,
+    "transactionHash": "894d4cde21a31a4475ed99554e567340e91cf22f5a12479532e40d15619db494"
+   },
+   "page": {
+    "entries": [
+     "99e8ff24ca26005b707aa8e24420704e8f9462bb"
+    ]
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "99e8ff24ca26005b707aa8e24420704e8f9462bb",
+    "form": "metadata"
+   }
+  },
+  {
+   "id": "eth/valid/rsv-65-v0",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "eth",
+   "description": "a 65-byte r||s||v signature: the V byte is dropped and any V is accepted",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f64617461021f0105021b01030217736967747970657320766563746f722065746820727376",
+   "txHash": "2673de7661601317434406b0ae382b15f1ad1a73ce2ae48f7bad8b9250d23ffc",
+   "signature": "010a024104811a5e2acc08b90705f24f4fd23602af4eedf9891dce7914709653e9e794ecec46488d12bb845fe8ba703f01e3cea10bd9e332170910a69b67ed581a4bacd7ac0341418201dccb495cdaed3185a491dba89cedd4b2b21a2837c92182bcd8caa5e12d0281cbf141f4cf01839ab1b08a1cba2cde89376221dff6965e1e2bf535e3153d0004176163633a2f2f70726f62652e61636d652f626f6f6b2f3105010680d095ffbc31082673de7661601317434406b0ae382b15f1ad1a73ce2ae48f7bad8b9250d23ffc",
+   "signatureJson": {
+    "type": "eth",
+    "publicKey": "04811a5e2acc08b90705f24f4fd23602af4eedf9891dce7914709653e9e794ecec46488d12bb845fe8ba703f01e3cea10bd9e332170910a69b67ed581a4bacd7ac",
+    "signature": "418201dccb495cdaed3185a491dba89cedd4b2b21a2837c92182bcd8caa5e12d0281cbf141f4cf01839ab1b08a1cba2cde89376221dff6965e1e2bf535e3153d00",
+    "signer": "acc://probe.acme/book/1",
+    "signerVersion": 1,
+    "timestamp": 1700000000000,
+    "transactionHash": "2673de7661601317434406b0ae382b15f1ad1a73ce2ae48f7bad8b9250d23ffc"
+   },
+   "where": {
+    "partition": "bvn1",
+    "block": 12492272
+   },
+   "page": {
+    "entries": [
+     "67d512dd4e1d5aacaf55ba22ddaf072f1a352544"
+    ]
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "67d512dd4e1d5aacaf55ba22ddaf072f1a352544",
+    "form": "metadata",
+    "ethRule": "v2-rsv"
+   }
+  },
+  {
+   "id": "eth/valid/rsv-65-v0x99",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "eth",
+   "description": "a 65-byte r||s||v signature: the V byte is dropped and any V is accepted",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f64617461021f0105021b01030217736967747970657320766563746f722065746820727376",
+   "txHash": "2673de7661601317434406b0ae382b15f1ad1a73ce2ae48f7bad8b9250d23ffc",
+   "signature": "010a024104811a5e2acc08b90705f24f4fd23602af4eedf9891dce7914709653e9e794ecec46488d12bb845fe8ba703f01e3cea10bd9e332170910a69b67ed581a4bacd7ac0341418201dccb495cdaed3185a491dba89cedd4b2b21a2837c92182bcd8caa5e12d0281cbf141f4cf01839ab1b08a1cba2cde89376221dff6965e1e2bf535e3153d9904176163633a2f2f70726f62652e61636d652f626f6f6b2f3105010680d095ffbc31082673de7661601317434406b0ae382b15f1ad1a73ce2ae48f7bad8b9250d23ffc",
+   "signatureJson": {
+    "type": "eth",
+    "publicKey": "04811a5e2acc08b90705f24f4fd23602af4eedf9891dce7914709653e9e794ecec46488d12bb845fe8ba703f01e3cea10bd9e332170910a69b67ed581a4bacd7ac",
+    "signature": "418201dccb495cdaed3185a491dba89cedd4b2b21a2837c92182bcd8caa5e12d0281cbf141f4cf01839ab1b08a1cba2cde89376221dff6965e1e2bf535e3153d99",
+    "signer": "acc://probe.acme/book/1",
+    "signerVersion": 1,
+    "timestamp": 1700000000000,
+    "transactionHash": "2673de7661601317434406b0ae382b15f1ad1a73ce2ae48f7bad8b9250d23ffc"
+   },
+   "where": {
+    "partition": "bvn1",
+    "block": 12492272
+   },
+   "page": {
+    "entries": [
+     "67d512dd4e1d5aacaf55ba22ddaf072f1a352544"
+    ]
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "67d512dd4e1d5aacaf55ba22ddaf072f1a352544",
+    "form": "metadata",
+    "ethRule": "v2-rsv"
+   }
+  },
+  {
+   "id": "eth/valid/high-s",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "eth",
+   "description": "high-S is accepted",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f64617461021f0105021b01030217736967747970657320766563746f722065746820727376",
+   "txHash": "2673de7661601317434406b0ae382b15f1ad1a73ce2ae48f7bad8b9250d23ffc",
+   "signature": "010a024104811a5e2acc08b90705f24f4fd23602af4eedf9891dce7914709653e9e794ecec46488d12bb845fe8ba703f01e3cea10bd9e332170910a69b67ed581a4bacd7ac0340418201dccb495cdaed3185a491dba89cedd4b2b21a2837c92182bcd8caa5e12dfd7e340ebe0b30fe7c654e4f75e345d1dc25a5848d68a9a561b432979a532c0404176163633a2f2f70726f62652e61636d652f626f6f6b2f3105010680d095ffbc31082673de7661601317434406b0ae382b15f1ad1a73ce2ae48f7bad8b9250d23ffc",
+   "signatureJson": {
+    "type": "eth",
+    "publicKey": "04811a5e2acc08b90705f24f4fd23602af4eedf9891dce7914709653e9e794ecec46488d12bb845fe8ba703f01e3cea10bd9e332170910a69b67ed581a4bacd7ac",
+    "signature": "418201dccb495cdaed3185a491dba89cedd4b2b21a2837c92182bcd8caa5e12dfd7e340ebe0b30fe7c654e4f75e345d1dc25a5848d68a9a561b432979a532c04",
+    "signer": "acc://probe.acme/book/1",
+    "signerVersion": 1,
+    "timestamp": 1700000000000,
+    "transactionHash": "2673de7661601317434406b0ae382b15f1ad1a73ce2ae48f7bad8b9250d23ffc"
+   },
+   "where": {
+    "partition": "bvn1",
+    "block": 12492272
+   },
+   "page": {
+    "entries": [
+     "67d512dd4e1d5aacaf55ba22ddaf072f1a352544"
+    ]
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "67d512dd4e1d5aacaf55ba22ddaf072f1a352544",
+    "form": "metadata",
+    "ethRule": "v2-rsv"
+   }
+  },
+  {
+   "id": "eth/valid/v1-der-before-activation",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "eth",
+   "description": "the DER form is the pre-v2-baikonur rule; at a block before the partition's proven activation it verifies under that rule",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f64617461021f0105021b01030217736967747970657320766563746f722065746820727376",
+   "txHash": "2673de7661601317434406b0ae382b15f1ad1a73ce2ae48f7bad8b9250d23ffc",
+   "signature": "010a024104811a5e2acc08b90705f24f4fd23602af4eedf9891dce7914709653e9e794ecec46488d12bb845fe8ba703f01e3cea10bd9e332170910a69b67ed581a4bacd7ac034630440220418201dccb495cdaed3185a491dba89cedd4b2b21a2837c92182bcd8caa5e12d02200281cbf141f4cf01839ab1b08a1cba2cde89376221dff6965e1e2bf535e3153d04176163633a2f2f70726f62652e61636d652f626f6f6b2f3105010680d095ffbc31082673de7661601317434406b0ae382b15f1ad1a73ce2ae48f7bad8b9250d23ffc",
+   "signatureJson": {
+    "type": "eth",
+    "publicKey": "04811a5e2acc08b90705f24f4fd23602af4eedf9891dce7914709653e9e794ecec46488d12bb845fe8ba703f01e3cea10bd9e332170910a69b67ed581a4bacd7ac",
+    "signature": "30440220418201dccb495cdaed3185a491dba89cedd4b2b21a2837c92182bcd8caa5e12d02200281cbf141f4cf01839ab1b08a1cba2cde89376221dff6965e1e2bf535e3153d",
+    "signer": "acc://probe.acme/book/1",
+    "signerVersion": 1,
+    "timestamp": 1700000000000,
+    "transactionHash": "2673de7661601317434406b0ae382b15f1ad1a73ce2ae48f7bad8b9250d23ffc"
+   },
+   "where": {
+    "partition": "bvn1",
+    "block": 1000
+   },
+   "page": {
+    "entries": [
+     "67d512dd4e1d5aacaf55ba22ddaf072f1a352544"
+    ]
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "67d512dd4e1d5aacaf55ba22ddaf072f1a352544",
+    "form": "v1-rule",
+    "ethRule": "v1-der"
+   }
+  },
+  {
+   "id": "rsaSha256/valid/modulus-1024",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "rsaSha256",
+   "description": "Accumulate sets no minimum modulus: a 1024-bit RSA key verifies",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f6461746102200105021c01030218736967747970657320766563746f72207273612031303234",
+   "txHash": "44da5de77ea9dec2d2db8f11d8b076f9fcf11eaa56e5d740d348f03caf21916c",
+   "signature": "010e028c0130818902818100c619a30b5194acaeae0d4f8d37184592641959a7e339a4a2bc0bf102b4c94dbf3ef80931f74ff6315a13773e34bc855cebdf295dba21ce2035cb36ccc2443a1ddea39987fa26f76f900ed1be421be94531413df4a8a37baabb366bb5e4e35b6c31e9e3c42c8c2f687ab2533b6109f3680644cb66290c0cfba6ea07e74f2929070203010001038001504534531c1d57d8878ae8fd61e5fd6bdbfde4bcba3f851b5b732bc35dfe8c70efe1df83a3147a5ecf8bf92eeb4393ffbc7ddb54966c3b268c895f47dc875703b1b9c9959417c6b01d46c2162350ca2e6a2fbda5a4c14bb81a38465077a8e1d1bcf31aacfcce3e33b1ea9fd47f51173b9ccf2d05cd4150bda9d068bcf243d41704176163633a2f2f70726f62652e61636d652f626f6f6b2f3105010680d095ffbc310844da5de77ea9dec2d2db8f11d8b076f9fcf11eaa56e5d740d348f03caf21916c",
+   "signatureJson": {
+    "type": "rsaSha256",
+    "publicKey": "30818902818100c619a30b5194acaeae0d4f8d37184592641959a7e339a4a2bc0bf102b4c94dbf3ef80931f74ff6315a13773e34bc855cebdf295dba21ce2035cb36ccc2443a1ddea39987fa26f76f900ed1be421be94531413df4a8a37baabb366bb5e4e35b6c31e9e3c42c8c2f687ab2533b6109f3680644cb66290c0cfba6ea07e74f2929070203010001",
+    "signature": "504534531c1d57d8878ae8fd61e5fd6bdbfde4bcba3f851b5b732bc35dfe8c70efe1df83a3147a5ecf8bf92eeb4393ffbc7ddb54966c3b268c895f47dc875703b1b9c9959417c6b01d46c2162350ca2e6a2fbda5a4c14bb81a38465077a8e1d1bcf31aacfcce3e33b1ea9fd47f51173b9ccf2d05cd4150bda9d068bcf243d417",
+    "signer": "acc://probe.acme/book/1",
+    "signerVersion": 1,
+    "timestamp": 1700000000000,
+    "transactionHash": "44da5de77ea9dec2d2db8f11d8b076f9fcf11eaa56e5d740d348f03caf21916c"
+   },
+   "where": {
+    "partition": "bvn1",
+    "block": 12492272
+   },
+   "page": {
+    "entries": [
+     "dfa1a6d4100d52404a775df9aed358a7a68500fab26f7f1c1dc104a57bb8450d"
+    ]
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "dfa1a6d4100d52404a775df9aed358a7a68500fab26f7f1c1dc104a57bb8450d",
+    "form": "metadata"
+   }
+  },
+  {
+   "id": "rsaSha256/gate/after-activation",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "rsaSha256",
+   "description": "needs executor version v2-vandenberg (v2-baikonur for eth's raw r||s rule): one block after the activation",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f646174610226010502220103021e736967747970657320766563746f72207273615368613235362067617465",
+   "txHash": "669fb35c5401108d440897eab18a00e0f8797372e95a4529d74dd9cb92c3477b",
+   "signature": "010e028e023082010a0282010100b54d13950d6402db30cb665a0e83e9b655736946ed4c7357eaedf7707c652e48dc2b3c8cc691bb7610a38d16ce6e4f7119ccd7b1ee4b575b7580636f9813a40e3f8144df13a51a12782a5c7d482501564e4b951b743120a25bf9cb645ee6d6812eee7388cbb6911fdf12ea5b2eead74a90e76b0a2ad31496c9a715b5e719513f88f328bba08e3a7ffa768cafa1336e7c7e6e7f4d162b56fe5fff49ffca65930097e90354bb11800c3d38b2a20d02cce3f837f89445d38066fd869a6d9e640aa9384a64bdfa55cd79759c8ce02137fc3709a5e0fc3dc3ba1bd575f3950c4e2c57249d560b18f440b4c76df2aed66b185a5aaaa9cd5519e3e217907cf7f3eff7f1020301000103800262c9c5215350b2594c9541173ec8e6169ad5d9d3d37e7514779c438625cea9c42c1a0430835ebaa255fede13814b25d58700297df651d287d5a7917d98558f434e28f50e4daafd87c6d15be16e0e53d102e4fb3c334a28e57b0f13e1368d71e5d6d7c90311c00b93199bc373a1868551d5e4b30bb874759248ae1fe021088532920c20774685c4c87f5a88ad588bddaadba7ab0325a225e8fb6570796ab40bc1c15cd396fbcb7a42810754db822108a9e5e519af7cda7d8b49c5bd667d8a0f783884afc2b428f95d17d4295a5e9e45b5ac938e242824d19cd8460c4349635692301769db35c29f307e25865d256f4cbc46a5fb757a66802e56904d2a09d2f76d04176163633a2f2f70726f62652e61636d652f626f6f6b2f3105010680d095ffbc3108669fb35c5401108d440897eab18a00e0f8797372e95a4529d74dd9cb92c3477b",
+   "signatureJson": {
+    "type": "rsaSha256",
+    "publicKey": "3082010a0282010100b54d13950d6402db30cb665a0e83e9b655736946ed4c7357eaedf7707c652e48dc2b3c8cc691bb7610a38d16ce6e4f7119ccd7b1ee4b575b7580636f9813a40e3f8144df13a51a12782a5c7d482501564e4b951b743120a25bf9cb645ee6d6812eee7388cbb6911fdf12ea5b2eead74a90e76b0a2ad31496c9a715b5e719513f88f328bba08e3a7ffa768cafa1336e7c7e6e7f4d162b56fe5fff49ffca65930097e90354bb11800c3d38b2a20d02cce3f837f89445d38066fd869a6d9e640aa9384a64bdfa55cd79759c8ce02137fc3709a5e0fc3dc3ba1bd575f3950c4e2c57249d560b18f440b4c76df2aed66b185a5aaaa9cd5519e3e217907cf7f3eff7f10203010001",
+    "signature": "62c9c5215350b2594c9541173ec8e6169ad5d9d3d37e7514779c438625cea9c42c1a0430835ebaa255fede13814b25d58700297df651d287d5a7917d98558f434e28f50e4daafd87c6d15be16e0e53d102e4fb3c334a28e57b0f13e1368d71e5d6d7c90311c00b93199bc373a1868551d5e4b30bb874759248ae1fe021088532920c20774685c4c87f5a88ad588bddaadba7ab0325a225e8fb6570796ab40bc1c15cd396fbcb7a42810754db822108a9e5e519af7cda7d8b49c5bd667d8a0f783884afc2b428f95d17d4295a5e9e45b5ac938e242824d19cd8460c4349635692301769db35c29f307e25865d256f4cbc46a5fb757a66802e56904d2a09d2f76d",
+    "signer": "acc://probe.acme/book/1",
+    "signerVersion": 1,
+    "timestamp": 1700000000000,
+    "transactionHash": "669fb35c5401108d440897eab18a00e0f8797372e95a4529d74dd9cb92c3477b"
+   },
+   "where": {
+    "partition": "bvn3",
+    "block": 12491128
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "d7c9632b36f5ee7119da838f37ff36ef30f62a6e5425598634815ff4625ca366",
+    "form": "metadata"
+   }
+  },
+  {
+   "id": "ecdsaSha256/gate/after-activation",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "ecdsaSha256",
+   "description": "needs executor version v2-vandenberg (v2-baikonur for eth's raw r||s rule): one block after the activation",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f6461746102280105022401030220736967747970657320766563746f722065636473615368613235362067617465",
+   "txHash": "0e343d254ce3f233b39138802c84a03b329315e89e95b12b201e96f41f7e82f0",
+   "signature": "010f025b3059301306072a8648ce3d020106082a8648ce3d030107034200041cdf21c74f5180dae20ca6b538d355b2533d7983edf84744557841679cf62537ff61e04ff56956f926a9d081e5345af77bf1f62636f7f6ec9553ed15c65c86c003483046022100aa15f2cd64ba8d9735601edb17ec5db145a557d8ac7a3f598be6d3f8b6216e94022100b3ca801aef1fe421cfa8a153671c9714df581f204195df10fdb441ff77082a0504176163633a2f2f70726f62652e61636d652f626f6f6b2f3105010680d095ffbc31080e343d254ce3f233b39138802c84a03b329315e89e95b12b201e96f41f7e82f0",
+   "signatureJson": {
+    "type": "ecdsaSha256",
+    "publicKey": "3059301306072a8648ce3d020106082a8648ce3d030107034200041cdf21c74f5180dae20ca6b538d355b2533d7983edf84744557841679cf62537ff61e04ff56956f926a9d081e5345af77bf1f62636f7f6ec9553ed15c65c86c0",
+    "signature": "3046022100aa15f2cd64ba8d9735601edb17ec5db145a557d8ac7a3f598be6d3f8b6216e94022100b3ca801aef1fe421cfa8a153671c9714df581f204195df10fdb441ff77082a05",
+    "signer": "acc://probe.acme/book/1",
+    "signerVersion": 1,
+    "timestamp": 1700000000000,
+    "transactionHash": "0e343d254ce3f233b39138802c84a03b329315e89e95b12b201e96f41f7e82f0"
+   },
+   "where": {
+    "partition": "bvn3",
+    "block": 12491128
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "83324a93cd3bd59c0fe73999f303b26f35d66907ff0d434418537c8c23f94da3",
+    "form": "metadata"
+   }
+  },
+  {
+   "id": "typedData/gate/after-activation",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "typedData",
+   "description": "needs executor version v2-vandenberg (v2-baikonur for eth's raw r||s rule): one block after the activation",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f646174610226010502220103021e736967747970657320766563746f72207479706564446174612067617465",
+   "txHash": "3579a6a109c12ec457e37309f1b6632cf67d9a3597ff00041be7e6789b276dff",
+   "signature": "0110024104500a975c37347f39e6b3d898c9aa9dba27d32cf7edbca11ad0fc5ca03fdb71cb99425e612a87860932676a92f34fa4e355218df500ab3d82863366cd333e65a803404e8639f2d96f829bace54c99c5c0871c3029e598461abdddd4c0f8dd3d6e7bc7b0469041cd623787e588bb3ce95c86e7c5ff224c3e3925c1dc14eaf2a52e20b104176163633a2f2f70726f62652e61636d652f626f6f6b2f3105010680d095ffbc31083579a6a109c12ec457e37309f1b6632cf67d9a3597ff00041be7e6789b276dff0b0412f20119",
+   "signatureJson": {
+    "type": "typedData",
+    "publicKey": "04500a975c37347f39e6b3d898c9aa9dba27d32cf7edbca11ad0fc5ca03fdb71cb99425e612a87860932676a92f34fa4e355218df500ab3d82863366cd333e65a8",
+    "signature": "4e8639f2d96f829bace54c99c5c0871c3029e598461abdddd4c0f8dd3d6e7bc7b0469041cd623787e588bb3ce95c86e7c5ff224c3e3925c1dc14eaf2a52e20b1",
+    "signer": "acc://probe.acme/book/1",
+    "signerVersion": 1,
+    "timestamp": 1700000000000,
+    "transactionHash": "3579a6a109c12ec457e37309f1b6632cf67d9a3597ff00041be7e6789b276dff",
+    "chainID": "317849881"
+   },
+   "networkName": "DevNet",
+   "where": {
+    "partition": "bvn3",
+    "block": 12491128
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "6ef637d36d20ef61ae76af635bb9ac2e1f11ac84",
+    "form": "eip712"
+   }
+  },
+  {
+   "id": "eth/gate/after-activation",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "eth",
+   "description": "needs executor version v2-vandenberg (v2-baikonur for eth's raw r||s rule): one block after the activation",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f6461746102200105021c01030218736967747970657320766563746f72206574682067617465",
+   "txHash": "14fc5729c1678cb016de51d6c255a0ecfab4e001dc64b2352582a01eb6141680",
+   "signature": "010a024104811a5e2acc08b90705f24f4fd23602af4eedf9891dce7914709653e9e794ecec46488d12bb845fe8ba703f01e3cea10bd9e332170910a69b67ed581a4bacd7ac0340f63efe47ba83db1668eefa75cc779e61bd867fb68b75d61e8f575b17dbd227df6d0a8d720aed064ffd987ef5671915215926d4f38457f8e9f4fbbaa68d6b546404176163633a2f2f70726f62652e61636d652f626f6f6b2f3105010680d095ffbc310814fc5729c1678cb016de51d6c255a0ecfab4e001dc64b2352582a01eb6141680",
+   "signatureJson": {
+    "type": "eth",
+    "publicKey": "04811a5e2acc08b90705f24f4fd23602af4eedf9891dce7914709653e9e794ecec46488d12bb845fe8ba703f01e3cea10bd9e332170910a69b67ed581a4bacd7ac",
+    "signature": "f63efe47ba83db1668eefa75cc779e61bd867fb68b75d61e8f575b17dbd227df6d0a8d720aed064ffd987ef5671915215926d4f38457f8e9f4fbbaa68d6b5464",
+    "signer": "acc://probe.acme/book/1",
+    "signerVersion": 1,
+    "timestamp": 1700000000000,
+    "transactionHash": "14fc5729c1678cb016de51d6c255a0ecfab4e001dc64b2352582a01eb6141680"
+   },
+   "where": {
+    "partition": "bvn3",
+    "block": 12491128
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "67d512dd4e1d5aacaf55ba22ddaf072f1a352544",
+    "form": "metadata",
+    "ethRule": "v2-rsv"
+   }
+  },
+  {
+   "id": "ecdsaSha256/gate/directory-block-10000000",
+   "source": "locally-generated",
+   "kind": "valid",
+   "type": "ecdsaSha256",
+   "description": "block 10,000,000 is after the Directory's activation (9,538,105)",
+   "transaction": "011901176163633a2f2f766563746f72732e61636d652f646174610225010502210103021d736967747970657320766563746f722070657220706172746974696f6e",
+   "txHash": "ecf4d7ff6723732ec00f6709f0f4a830748142bbda46f916d32dcc269120aeec",
+   "signature": "010f025b3059301306072a8648ce3d020106082a8648ce3d030107034200041cdf21c74f5180dae20ca6b538d355b2533d7983edf84744557841679cf62537ff61e04ff56956f926a9d081e5345af77bf1f62636f7f6ec9553ed15c65c86c003473045022100bc0af6168b8576391799a1f7ae7349f832a89400e4466dffde3384808063a86d022054236af0b04f3145978c114716c2890016a71db5ee2f5a12be3a65b6cdb6b0a004176163633a2f2f70726f62652e61636d652f626f6f6b2f3105010680d095ffbc3108ecf4d7ff6723732ec00f6709f0f4a830748142bbda46f916d32dcc269120aeec",
+   "signatureJson": {
+    "type": "ecdsaSha256",
+    "publicKey": "3059301306072a8648ce3d020106082a8648ce3d030107034200041cdf21c74f5180dae20ca6b538d355b2533d7983edf84744557841679cf62537ff61e04ff56956f926a9d081e5345af77bf1f62636f7f6ec9553ed15c65c86c0",
+    "signature": "3045022100bc0af6168b8576391799a1f7ae7349f832a89400e4466dffde3384808063a86d022054236af0b04f3145978c114716c2890016a71db5ee2f5a12be3a65b6cdb6b0a0",
+    "signer": "acc://probe.acme/book/1",
+    "signerVersion": 1,
+    "timestamp": 1700000000000,
+    "transactionHash": "ecf4d7ff6723732ec00f6709f0f4a830748142bbda46f916d32dcc269120aeec"
+   },
+   "where": {
+    "partition": "directory",
+    "block": 10000000
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "83324a93cd3bd59c0fe73999f303b26f35d66907ff0d434418537c8c23f94da3",
+    "form": "metadata"
+   }
+  }
+ ]
+}

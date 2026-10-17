@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/govsig"
 	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/govvote"
 	"github.com/certen/independant-validator/pkg/entitlement"
 	"io"
@@ -33,6 +34,7 @@ import (
 	cmthttp "github.com/cometbft/cometbft/rpc/client/http"
 	cmttypes "github.com/cometbft/cometbft/types"
 	"github.com/ethereum/go-ethereum/common"
+	"gitlab.com/accumulatenetwork/accumulate/protocol"
 
 	lcproof "github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof"
 
@@ -1392,6 +1394,31 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 	}, nil
 }
 
+// g1KeyHash is the key-page entry hash of a counted signature's key: protocol.PublicKeyHash by the key's own type. For
+// a delegated signature the key's type is InnerType (ed25519 when empty, the only delegated type recorded before
+// RB8-B).
+func g1KeyHash(sig proof.SignatureData, pub []byte) ([]byte, error) {
+	name := strings.ToLower(strings.TrimSpace(sig.Type))
+	if name == "delegated" {
+		name = strings.ToLower(strings.TrimSpace(sig.InnerType))
+		if name == "" {
+			name = "ed25519"
+		}
+	}
+	t, class := govsig.Classify(name)
+	if class != govsig.ClassKey {
+		return nil, fmt.Errorf("a %q signature is not a key signature Accumulate's executor accepts; %s", name, govsig.TypeRule())
+	}
+	h, err := protocol.PublicKeyHash(pub, t)
+	if err != nil {
+		return nil, err
+	}
+	if len(h) == 0 {
+		return nil, fmt.Errorf("the %s key %x has no key hash", name, pub)
+	}
+	return h, nil
+}
+
 // authorizationLeavesFromG1 builds the governance proof's authorization leaves from the G1 proof: one leaf
 // per key whose signature G1 counted - the key page that signed, the SHA-256 of the key (as key pages store
 // keys), and the signature itself - in a fixed order. The field is documented as derived from key book
@@ -1417,10 +1444,15 @@ func authorizationLeavesFromG1(g1 *proof.G1Result) ([]AuthorizationLeaf, error) 
 		if strings.TrimSpace(sig.Signature) == "" || strings.TrimSpace(sig.Signer) == "" {
 			return nil, fmt.Errorf("G1 counted signature %d names no signature or signer", i)
 		}
-		keyHash := sha256.Sum256(pub)
+		// The key page stores the hash of the key by the signature type's own rule (protocol.PublicKeyHash): sha256(key)
+		// for ed25519, legacyED25519, rsaSha256 and ecdsaSha256, another hash for rcd1, btc, btclegacy, eth and typedData.
+		keyHash, err := g1KeyHash(sig, pub)
+		if err != nil {
+			return nil, fmt.Errorf("G1 counted signature %d: %w", i, err)
+		}
 		leaf := AuthorizationLeaf{
 			KeyPage:   strings.TrimSpace(sig.Signer),
-			KeyHash:   hex.EncodeToString(keyHash[:]),
+			KeyHash:   hex.EncodeToString(keyHash),
 			Role:      "signer",
 			Signature: strings.ToLower(strings.TrimPrefix(strings.TrimSpace(sig.Signature), "0x")),
 		}

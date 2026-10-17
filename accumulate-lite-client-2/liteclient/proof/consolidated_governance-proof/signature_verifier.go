@@ -7,30 +7,63 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strconv"
 	"strings"
 
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/govsig"
 	"gitlab.com/accumulatenetwork/accumulate/protocol"
 )
 
 // CERTEN Governance Proof - Signature Verification
-// This file provides Ed25519 signature verification with Accumulate protocol integration
+// This file verifies every key-signature type Accumulate's executor accepts (govsig.AcceptedKeyTypes), with
+// Accumulate's own protocol code (govsig.Verify), and provides the original Ed25519 helpers the pinned fixtures use.
 // Direct translation of Python signature verification methods from gov_proof_level_G1.py
 
 // =============================================================================
 // Signature Verifier
 // =============================================================================
 
-// SignatureVerifier handles Ed25519 signature verification and Accumulate digest computation
+// SignatureVerifier verifies key signatures and computes the Accumulate digests they are made over.
+//
+// The zero value is usable. The two optional functions give it the environment some types need: typedData signs the
+// EIP-712 encoding of the whole transaction under the network's chain id, and the executor-version gate needs the
+// partition a signature was recorded on. NewG1Layer sets both; without them a typedData signature and a gated
+// signature are NAMED STATES (transaction_unavailable_for_typed_data, network_name_unproven,
+// g1_executor_version_unproven), never accepted and never silently refused.
 type SignatureVerifier struct {
 	sigbytesPath string // Path to sigbytes tool for Accumulate-specific digest computation
+
+	// governed returns the governed transaction, decoded and bound to txHash.
+	governed func(txHash string) (*protocol.Transaction, error)
+	// network returns the network's name and routing table.
+	network func() (*govsig.Network, error)
 }
+
+// SignedAt says where a signature was recorded: the signer page whose signature chain holds it and the block of that
+// page's partition that chain's receipt names. Zero means unknown.
+type SignedAt struct {
+	Signer string
+	Block  int64
+}
+
+// RoutingUnavailable is the infrastructure failure of not being able to learn the network's routing, which the
+// executor-version gate needs. It is unavailable evidence, never a rejection.
+type RoutingUnavailable struct{ Err error }
+
+func (e RoutingUnavailable) Error() string {
+	return fmt.Sprintf("failed to compute signature digest: the network's routing could not be read: %v", e.Err)
+}
+func (e RoutingUnavailable) Reason() string { return "routing_unavailable" }
+func (e RoutingUnavailable) Unwrap() error  { return e.Err }
 
 // NewSignatureVerifier creates a new signature verifier
 func NewSignatureVerifier(sigbytesPath string) *SignatureVerifier {
@@ -174,6 +207,11 @@ func (sv *SignatureVerifier) VerifyEd25519(pubkeyHex, sigHex string, signedBytes
 
 // ComputeKeyHash converts public key to SHA256 hash for membership checking
 // Direct translation of Python _pubkey_hash_sha256
+//
+// sha256(key) is the page-entry hash of FOUR of the nine accepted types (ed25519, legacyED25519, rsaSha256,
+// ecdsaSha256). For rcd1, btc, btclegacy, eth and typedData it is the wrong hash. It is retained for the callers that
+// hold only a bare key with no type (a page entry that carries only a publicKey) and for pinned fixtures; everything
+// that holds a signature uses KeyHashOf, which applies the type's own rule.
 func (sv *SignatureVerifier) ComputeKeyHash(pubkeyHex string) (string, error) {
 	pubkeyBytes, err := hex.DecodeString(strings.TrimPrefix(pubkeyHex, "0x"))
 	if err != nil {
@@ -208,7 +246,7 @@ func (sv *SignatureVerifier) ValidateSignature(ctx context.Context, sig Validate
 	// the key. Membership is skipped here because it is the wrong question at
 	// this point, not because it goes unasked.
 	if sig.Signature.IsDelegated() {
-		return sv.VerifyAgainstAcceptedDigests(sig.Signature, txHash)
+		return sv.VerifySignature(sig, txHash)
 	}
 
 	// A SIBLING AUTHORITY'S SIGNATURE IS THE SAME SITUATION, for the same reason.
@@ -236,7 +274,7 @@ func (sv *SignatureVerifier) ValidateSignature(ctx context.Context, sig Validate
 			fmt.Printf("[SIGNATURE] [DEBUG] %s signs from %s, not the snapshot page %s - "+
 				"membership and version are resolution's question, verifying cryptography only\n",
 				SafeTruncate(sig.MessageHash, 16), signerPage, normalizeAccURL(statePage))
-			return sv.VerifyAgainstAcceptedDigests(sig.Signature, txHash)
+			return sv.VerifySignature(sig, txHash)
 		}
 	}
 
@@ -249,7 +287,7 @@ func (sv *SignatureVerifier) ValidateSignature(ctx context.Context, sig Validate
 	fmt.Printf("[SIGNATURE] [DEBUG] Public key: %s\n", SafeTruncate(sig.Signature.PublicKey, 16))
 
 	// Compute key hash for membership check
-	keyHash, err := sv.ComputeKeyHash(sig.Signature.PublicKey)
+	keyHash, err := sv.KeyHashOf(sig.Signature)
 	if err != nil {
 		fmt.Printf("[SIGNATURE] [DEBUG] FAIL: Key hash computation failed: %v\n", err)
 		return "", fmt.Errorf("failed to compute key hash: %v", err)
@@ -282,7 +320,7 @@ func (sv *SignatureVerifier) ValidateSignature(ctx context.Context, sig Validate
 	// digest verifies (protocol/signature_utils.go:26-41). Checking only the
 	// metadata form counted a valid signature as invalid, and because G1 fails
 	// closed that surfaced as a governance rejection.
-	form, err := sv.VerifyAgainstAcceptedDigests(sig.Signature, txHash)
+	form, err := sv.VerifySignature(sig, txHash)
 	if err != nil {
 		fmt.Printf("[SIGNATURE] [DEBUG] FAIL: %v\n", err)
 		return "", err
@@ -296,13 +334,28 @@ func (sv *SignatureVerifier) ValidateSignature(ctx context.Context, sig Validate
 	return form, nil
 }
 
-// VerifyAgainstAcceptedDigests verifies a signature against each digest
-// accumulate-core would accept, and reports which one carried it.
+// VerifyAgainstAcceptedDigests verifies a signature as Accumulate's executor does and reports which digest form
+// carried it.
 //
-// The digest set is computed from the signature's own transaction hash when it
-// has one, falling back to the caller's, which is the behaviour
-// ComputeAccumulateDigest already had.
+// The verdict is protocol.VerifyUserSignature on the signature rebuilt from the record (govsig.Verify): the digests
+// Accumulate accepts - the metadata hash, the initiator merkle hash, and for typedData the EIP-712 encoding - are
+// tried by Accumulate's own Verify, not recomputed here. The transaction hash it covers is the signature's own when
+// it has one, falling back to the caller's, which is the behaviour ComputeAccumulateDigest already had.
+//
+// This form knows nothing of where the signature was recorded, so a type whose acceptance depends on the executor
+// version in force there (rsaSha256, ecdsaSha256, typedData; eth by the raw r||s rule) is the named state
+// g1_executor_version_unproven. Use VerifySignature when the receipt's block is known.
 func (sv *SignatureVerifier) VerifyAgainstAcceptedDigests(sig SignatureData, txHash string) (string, error) {
+	return sv.verifyAt(sig, txHash, SignedAt{})
+}
+
+// VerifySignature verifies a validated signature where it was recorded: the executor-version gate is judged at the
+// partition of its signer page and the block its receipt names.
+func (sv *SignatureVerifier) VerifySignature(sig ValidatedSignature, txHash string) (string, error) {
+	return sv.verifyAt(sig.Signature, txHash, SignedAt{Signer: sig.Signature.Signer, Block: sig.Receipt.LocalBlock})
+}
+
+func (sv *SignatureVerifier) verifyAt(sig SignatureData, txHash string, at SignedAt) (string, error) {
 	actualTxHash := sig.TransactionHash
 	if actualTxHash == "" {
 		actualTxHash = txHash
@@ -317,23 +370,138 @@ func (sv *SignatureVerifier) VerifyAgainstAcceptedDigests(sig SignatureData, txH
 	var txHashArray [32]byte
 	copy(txHashArray[:], txHashBytes)
 
-	digests, err := AcceptedDigests(sig, txHashArray)
+	outer, err := buildProtocolSignature(sig)
 	if err != nil {
-		// An unsupported type or an over-deep chain reaches the caller as
-		// itself, so a capability limit is never reported as a bad signature.
+		// An unsupported type, a record that cannot be rebuilt or an over-deep chain reaches the caller as itself, so
+		// a capability limit is never reported as a bad signature.
 		return "", err
 	}
+	un, err := govsig.Unwrap(outer)
+	if err != nil {
+		return "", govsigRefusal(err)
+	}
 
-	var lastErr error
-	for _, d := range digests {
-		if err := sv.VerifyEd25519(sig.PublicKey, sig.Signature, d.Digest); err == nil {
-			return d.Form, nil
-		} else {
-			lastErr = err
+	env := govsig.Env{TxHash: txHashArray}
+	var net *govsig.Network
+	needsNetwork := func() (*govsig.Network, error) {
+		if net != nil {
+			return net, nil
+		}
+		if sv.network == nil {
+			return nil, nil
+		}
+		n, err := sv.network()
+		if err != nil {
+			return nil, RoutingUnavailable{Err: err}
+		}
+		net = n
+		return n, nil
+	}
+
+	ty := un.Inner.Type()
+	if ty == protocol.SignatureTypeTypedData {
+		if sv.governed != nil {
+			if txn, err := sv.governed(hex.EncodeToString(txHashArray[:])); err == nil {
+				env.Transaction = txn
+			}
+		}
+		n, err := needsNetwork()
+		if err != nil {
+			return "", err
+		}
+		if n != nil {
+			env.NetworkName = n.Name
 		}
 	}
-	return "", fmt.Errorf("signature verification failed against all %d accepted digest form(s): %v",
-		len(digests), lastErr)
+	if govsig.RequiredVersion(ty, govsig.EthRuleV2RSV) != 0 || govsig.RequiredVersion(ty, govsig.EthRuleNone) != 0 {
+		// gated: learn the signer page's partition
+		if at.Signer != "" && at.Block > 0 {
+			n, err := needsNetwork()
+			if err != nil {
+				return "", err
+			}
+			if n != nil {
+				part, err := n.Partition(at.Signer)
+				if err != nil {
+					return "", RoutingUnavailable{Err: err}
+				}
+				env.Where = govsig.Where{Partition: part, Block: at.Block}
+			}
+		}
+	}
+
+	v, err := govsig.Verify(outer, env)
+	if err != nil {
+		return "", govsigRefusal(err)
+	}
+	return v.Form, nil
+}
+
+// govsigRefusal maps govsig's typed refusals onto this package's, so that a caller classifying an error sees the same
+// types it always has for the cases that existed before.
+func govsigRefusal(err error) error {
+	var nk govsig.NotKeySignature
+	if errors.As(err, &nk) {
+		return NotAKeySignature{Type: nk.Type}
+	}
+	var de govsig.DepthExceeded
+	if errors.As(err, &de) {
+		return DelegationDepthExceeded{Depth: de.Depth, Limit: de.Limit}
+	}
+	return err
+}
+
+// namedState reports whether err is one of the named states that mean "this signature could not be judged", with the
+// reason code to record and whether retrying could change the answer.
+func namedState(err error) (reason string, permanent bool, ok bool) {
+	var (
+		unproven govsig.ExecutorVersionUnproven
+		notMet   govsig.ExecutorGateNotMet
+		noTxn    govsig.TransactionUnavailableForTypedData
+		noName   govsig.NetworkNameUnproven
+		routing  RoutingUnavailable
+		bytesAbs SignatureBytesAbsent
+		undec    SignatureUndecodable
+		disagree SignatureFieldsDisagree
+	)
+	switch {
+	case errors.As(err, &unproven):
+		return unproven.Reason(), true, true
+	case errors.As(err, &notMet):
+		return notMet.Reason(), true, true
+	case errors.As(err, &noTxn):
+		return noTxn.Reason(), false, true
+	case errors.As(err, &noName):
+		return noName.Reason(), false, true
+	case errors.As(err, &routing):
+		return routing.Reason(), false, true
+	case errors.As(err, &bytesAbs):
+		return bytesAbs.Reason(), true, true
+	case errors.As(err, &undec):
+		return undec.Reason(), true, true
+	case errors.As(err, &disagree):
+		return disagree.Reason(), true, true
+	}
+	return "", false, false
+}
+
+// KeyHashOf is the page-entry hash of the signature's innermost key by the TYPE'S OWN rule (protocol.PublicKeyHash):
+// sha256(key) for ed25519, legacyED25519, rsaSha256 and ecdsaSha256, and a different hash for rcd1, btc, btclegacy,
+// eth and typedData. ComputeKeyHash is sha256 only and is wrong for those five.
+func (sv *SignatureVerifier) KeyHashOf(sig SignatureData) (string, error) {
+	outer, err := buildProtocolSignature(sig)
+	if err != nil {
+		return "", err
+	}
+	un, err := govsig.Unwrap(outer)
+	if err != nil {
+		return "", govsigRefusal(err)
+	}
+	h, err := govsig.KeyHash(un.Inner)
+	if err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h), nil
 }
 
 // ValidateSignatureSet validates a complete set of signatures for authorization
@@ -376,11 +544,18 @@ func (sv *SignatureVerifier) ValidateSignatureSet(ctx context.Context, signature
 		// transaction. Whether its page, version and vote made it count is
 		// decided per page at the block it was recorded, by the vote model
 		// below - not here against the page at execution.
-		form, err := sv.VerifyAgainstAcceptedDigests(sig.Signature, txHash)
+		form, err := sv.VerifySignature(sig, txHash)
 		if err != nil {
 			if isInfrastructureDigestFailure(err) {
 				unavailable = append(unavailable, UnavailableSignature{
 					MessageID: sig.MessageID, Stage: "revalidate-signature", Err: err.Error(),
+				})
+				continue
+			}
+			// A signature that could not be judged (a named state) is unavailable evidence, never a rejection.
+			if reason, _, named := namedState(err); named {
+				unavailable = append(unavailable, UnavailableSignature{
+					MessageID: sig.MessageID, Stage: reason, Err: err.Error(),
 				})
 				continue
 			}
@@ -396,7 +571,7 @@ func (sv *SignatureVerifier) ValidateSignatureSet(ctx context.Context, signature
 		// one.
 		sig.Signature.DigestForm = form
 
-		keyHash, err := sv.ComputeKeyHash(sig.Signature.PublicKey)
+		keyHash, err := sv.KeyHashOf(sig.Signature)
 		if err != nil {
 			// Cannot compute the key hash, so cannot establish uniqueness.
 			// Dropping this signature would understate the signer count.
@@ -564,6 +739,7 @@ func (sv *SignatureVerifier) ExtractSignatureFromMessageResult(msgResult map[str
 	if !ok {
 		return SignatureData{}, ValidationError{Msg: "Signature is not an object"}
 	}
+	outermost := sigMap // the signature as the network delivered it, delegation wrappers included
 
 	// Unwrap any delegation before looking at the key signature.
 	//
@@ -598,36 +774,55 @@ func (sv *SignatureVerifier) ExtractSignatureFromMessageResult(msgResult map[str
 	}
 
 	// Extract required fields
+	keyType := strings.ToLower(sigTypeStr)
 	sig := SignatureData{
-		Type:  strings.ToLower(sigTypeStr),
+		Type:  keyType,
 		Chain: chain,
 	}
 	if len(chain) > 0 {
 		// The outermost type is what Accumulate calls this signature, and it is
 		// the one whose metadata is hashed.
 		sig.Type = "delegated"
+		// The key's own type is recorded beside it - a delegated ECDSA signature must not read as a delegated ed25519
+		// one. Omitted for ed25519 so every record that existed before keeps its bytes.
+		if keyType != "ed25519" {
+			sig.InnerType = keyType
+		}
 	}
 
-	// Public key
+	// Public key and signature bytes. ed25519, legacyED25519 and rcd1 keys are 32 bytes and their signatures 64; every
+	// other type has its own encoding (secp256k1 keys 33 or 65 bytes, an ECDSA P-256 SPKI 91, an RSA PKCS#1 270 for a
+	// 2048-bit modulus; signatures DER, 64 or 65 raw bytes, or the modulus size), which Accumulate's own decoder and
+	// Verify judge - this code only requires well-formed hex.
+	fixedShape := keyType == "ed25519" || keyType == "legacyed25519" || keyType == "rcd1"
+	hv := HexValidator{}
 	pubkey := pu.CaseInsensitiveGet(sigMap, "publicKey")
 	pubkeyStr, ok := pubkey.(string)
 	if !ok || pubkeyStr == "" {
 		return SignatureData{}, ValidationError{Msg: "Signature.publicKey missing/invalid"}
 	}
-	hv := HexValidator{}
-	normalizedPubkey, err := hv.RequireHex32(pubkeyStr, "signature.publicKey")
+	var normalizedPubkey string
+	if fixedShape {
+		normalizedPubkey, err = hv.RequireHex32(pubkeyStr, "signature.publicKey")
+	} else {
+		normalizedPubkey, err = hv.NormalizeHex(pubkeyStr, 0)
+	}
 	if err != nil {
 		return SignatureData{}, err
 	}
 	sig.PublicKey = normalizedPubkey
 
-	// Signature bytes
 	signature := pu.CaseInsensitiveGet(sigMap, "signature")
 	signatureStr, ok := signature.(string)
 	if !ok || signatureStr == "" {
 		return SignatureData{}, ValidationError{Msg: "Signature.signature missing/invalid"}
 	}
-	normalizedSig, err := hv.RequireHex64(signatureStr, "signature.signature")
+	var normalizedSig string
+	if fixedShape {
+		normalizedSig, err = hv.RequireHex64(signatureStr, "signature.signature")
+	} else {
+		normalizedSig, err = hv.NormalizeHex(signatureStr, 0)
+	}
 	if err != nil {
 		return SignatureData{}, err
 	}
@@ -747,7 +942,53 @@ func (sv *SignatureVerifier) ExtractSignatureFromMessageResult(msgResult map[str
 		}
 	}
 
+	raw, err := rawIfNeeded(sig, outermost)
+	if err != nil {
+		return SignatureData{}, err
+	}
+	sig.Raw = raw
+
 	return sig, nil
+}
+
+// rawIfNeeded decides whether the record must carry Accumulate's own binary encoding, and returns it (hex) if so.
+//
+// The record's fields describe an ed25519 signature completely - unless it carries memo or data, which are inside the
+// signed metadata hash and which the fields cannot hold. Every other key type has an encoding the fields do not
+// describe. The test is exact, not a guess: rebuild the signature from the fields alone and compare its metadata hash
+// with the one the delivered signature has. Equal -> the fields are enough and the record is byte-identical to what
+// this code wrote before RB8-B (no raw). Different -> carry raw.
+//
+// The encoding is the OUTERMOST signature as delivered, decoded by protocol.UnmarshalSignatureJSON (Accumulate's own
+// decoder) and re-encoded by its own MarshalBinary - the same bytes the vote's evidence carries (signatureBytes).
+func rawIfNeeded(sig SignatureData, outermost map[string]interface{}) (string, error) {
+	b, err := json.Marshal(outermost)
+	if err != nil {
+		return "", err
+	}
+	decoded, err := protocol.UnmarshalSignatureJSON(b)
+	if err != nil {
+		return "", SignatureUndecodable{Type: sig.Type, Err: err}
+	}
+	bin, err := decoded.MarshalBinary()
+	if err != nil {
+		return "", SignatureUndecodable{Type: sig.Type, Err: err}
+	}
+
+	keyType := sig.Type
+	if sig.Type == "delegated" {
+		keyType = sig.InnerType
+		if keyType == "" {
+			keyType = "ed25519"
+		}
+	}
+	if keyType == "ed25519" {
+		fromFields, err := buildFieldSignature(sig)
+		if err == nil && bytes.Equal(fromFields.Metadata().Hash(), decoded.Metadata().Hash()) {
+			return "", nil
+		}
+	}
+	return hex.EncodeToString(bin), nil
 }
 
 // ValidateSignatureTiming validates signature timing against execution MBI

@@ -446,11 +446,15 @@ func buildPlans(cases map[string]caseSpec) ([]casePlan, error) {
 	if err != nil {
 		return nil, err
 	}
+	// SUPERSEDED BY RB8-B (2026-10-17, research R8, gap G-42): this case was captured as the "a signature type CERTEN does
+	// not support must be refused" case, with a btc signature. btc is a key signature Accumulate's executor accepts on a
+	// key page and G1 now verifies it from its bytes, so the case is expected to be authorised. The committed
+	// traces.json keeps the refusal expectation it was captured under (history, not edited); a re-capture records the
+	// authorised one. Every other accepted type is captured the same way: a signaturePlan with Type set.
 	plans = append(plans, casePlan{
-		Case: "K", Shape: k.Shape, Principal: k.ADI, Expect: "refused", RefusalKind: "unsupported-type",
-		Why: "a signature type CERTEN does not support must be refused with its own reason " +
-			"code; silently skipping it reads as a threshold shortfall, which reads as " +
-			"'the institution did not authorize this'",
+		Case: "K", Shape: "a btc key signature - a type Accumulate accepts, verified from its bytes", Principal: k.ADI, Expect: "valid",
+		Why: "a btc signature - a key-signature type Accumulate's executor accepts - is verified from its bytes and " +
+			"counts as the key's vote (was: refused as unsupported, G-42)",
 		Signatures: []signaturePlan{{Seed: "k1", SignerPage: k.Page, Type: protocol.SignatureTypeBTC}},
 		Bootstrap:  []signaturePlan{{Seed: "k1", SignerPage: k.Page}},
 	})
