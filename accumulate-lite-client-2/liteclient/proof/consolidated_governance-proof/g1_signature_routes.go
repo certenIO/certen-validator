@@ -663,35 +663,7 @@ func (g1 *G1Layer) evaluateCandidate(ctx context.Context, cand sigCandidate, key
 	// block (g1_votes.go), not here against the page at execution.
 	form, err := g1.signatureVerifier.VerifySignature(validated, txHash)
 	if err != nil {
-		if isInfrastructureDigestFailure(err) {
-			return evalResult{Outcome: SigUnavailable, Stage: "compute-digest", Reason: err.Error()}
-		}
-		// A signature that could not be judged is a NAMED STATE, never a rejection and never a skip: the executor
-		// version in force at its block is unproven, the transaction typedData needs is not at hand, the network's
-		// name is unknown, or its record cannot be rebuilt (RB8-B).
-		if stage, permanent, named := namedState(err); named {
-			return evalResult{Outcome: SigUnavailable, Stage: stage, Reason: err.Error(), Permanent: permanent}
-		}
-		// A capability limit is UNAVAILABLE, not REJECTED, and the difference is
-		// the whole of runbook rule 7.
-		//
-		// An unsupported key type is a real vote by a real key that really did
-		// authorize the transaction - corpus case K is one Kermit DELIVERED - and
-		// we cannot check it. Recording that as a rejection lets the threshold be
-		// computed over the remainder, which is a silent skip: the count comes up
-		// short and reads as "the institution did not authorize this". A false
-		// governance rejection is worse than an error, so this is an error.
-		// SigUnavailable is exactly that: not evidence, and no threshold may be
-		// computed while one is outstanding.
-		//
-		// The same holds for a delegation we have not resolved.
-		if u, ok := IsUnsupportedSignatureType(err); ok {
-			return evalResult{Outcome: SigUnavailable, Stage: u.Reason(), Reason: err.Error(), Permanent: true}
-		}
-		if d, ok := err.(DelegationNotResolved); ok {
-			return evalResult{Outcome: SigUnavailable, Stage: d.Reason(), Reason: err.Error()}
-		}
-		return evalResult{Outcome: SigRejected, Stage: "validate-signature", Reason: err.Error()}
+		return classifyVerificationError(err)
 	}
 	validated.Signature.DigestForm = form
 	validated.CryptographicallyVerified = true
@@ -716,11 +688,11 @@ func (g1 *G1Layer) classifyMessage(result map[string]interface{}, txHash string)
 	signature, err := g1.signatureVerifier.ExtractSignatureFromMessageResult(result)
 	if err != nil {
 		// The chain holds several message kinds (signatureRequest,
-		// creditPayment, ...). Those are not ed25519 signatures and are a
+		// creditPayment, ...). Those are not key signatures and are a
 		// legitimate rejection, not an outage. Anything else is an outage.
 		if isNotASignatureMessage(err) {
 			return SignatureData{}, evalResult{Outcome: SigRejected, Stage: "extract-signature",
-				Reason: "not an ed25519 signature message"}, messageRejected
+				Reason: "not a key signature message"}, messageRejected
 		}
 		_, capability := IsUnsupportedSignatureType(err)
 		return SignatureData{}, evalResult{Outcome: SigUnavailable, Stage: "extract-signature",
@@ -762,8 +734,8 @@ func (g1 *G1Layer) settleFromRangeBody(entry signatureChainEntry, messageID, txH
 }
 
 // isNotASignatureMessage reports whether an extraction error means the entry
-// simply is not an ed25519 signature over a transaction, as opposed to the
-// extraction itself failing.
+// simply is not a key signature over a transaction (of any of the nine types Accumulate's
+// executor accepts), as opposed to the extraction itself failing.
 //
 // A key page's P#signature chain legitimately carries several message kinds -
 // signatureRequest, creditPayment, authority signatures, and so on. Those are
@@ -827,4 +799,39 @@ func sanitizeLabel(s string) string {
 	r := strings.NewReplacer("://", "_", "/", "_", "@", "_", ":", "_")
 	out := r.Replace(s)
 	return SafeTruncate(out, 48)
+}
+
+// classifyVerificationError turns the error of verifying one candidate signature into the outcome the collectors act on.
+// Only a conclusion that the signature does not count is a rejection; everything that stopped a conclusion is
+// unavailable evidence, with the reason code of the state that stopped it.
+func classifyVerificationError(err error) evalResult {
+	if isInfrastructureDigestFailure(err) {
+		return evalResult{Outcome: SigUnavailable, Stage: "compute-digest", Reason: err.Error()}
+	}
+	// A signature that could not be judged is a NAMED STATE, never a rejection and never a skip: the executor
+	// version in force at its block is unproven, the transaction typedData needs is not at hand, the network's
+	// name is unknown, or its record cannot be rebuilt (RB8-B).
+	if stage, permanent, named := namedState(err); named {
+		return evalResult{Outcome: SigUnavailable, Stage: stage, Reason: err.Error(), Permanent: permanent}
+	}
+	// A capability limit is UNAVAILABLE, not REJECTED, and the difference is
+	// the whole of runbook rule 7.
+	//
+	// An unsupported key type is a real vote by a real key that really did
+	// authorize the transaction - corpus case K is one Kermit DELIVERED - and
+	// we cannot check it. Recording that as a rejection lets the threshold be
+	// computed over the remainder, which is a silent skip: the count comes up
+	// short and reads as "the institution did not authorize this". A false
+	// governance rejection is worse than an error, so this is an error.
+	// SigUnavailable is exactly that: not evidence, and no threshold may be
+	// computed while one is outstanding.
+	//
+	// The same holds for a delegation we have not resolved.
+	if u, ok := IsUnsupportedSignatureType(err); ok {
+		return evalResult{Outcome: SigUnavailable, Stage: u.Reason(), Reason: err.Error(), Permanent: true}
+	}
+	if d, ok := err.(DelegationNotResolved); ok {
+		return evalResult{Outcome: SigUnavailable, Stage: d.Reason(), Reason: err.Error()}
+	}
+	return evalResult{Outcome: SigRejected, Stage: "validate-signature", Reason: err.Error()}
 }

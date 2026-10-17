@@ -80,6 +80,11 @@ type SigFact struct {
 	KeyHash string // lower hex
 	Vote    protocol.VoteType
 	Block   int64 // on the signer page's partition
+	// Partition is the partition the signer page lives on (lower case: "bvn1", "directory"), carried exactly for the
+	// signature types whose acceptance depends on the executor version in force at Block - rsaSha256, ecdsaSha256,
+	// typedData, and eth by the raw r||s rule. Empty for every other type, so every fact recorded before RB8-B keeps its
+	// bytes. A gated type with no partition is the named state g1_executor_version_unproven, never acceptance.
+	Partition string `json:",omitempty"`
 }
 
 // arrivalFact is one delegated vote, as the chain recorded it on the delegator

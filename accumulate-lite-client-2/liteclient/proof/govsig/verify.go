@@ -190,6 +190,16 @@ type metadataOnly struct{ protocol.Signature }
 // unexported wrapper, so which of the two digests carried it is not asked.
 const FormV1Rule = "v1-rule"
 
+// Form labels which digest carried an outer signature that is already known to verify over msg: "metadata",
+// "initiator-merkle", or "eip712". It asks the inner key's own Verify; it recomputes no digest.
+func Form(outer protocol.Signature, msg protocol.Signable) (string, error) {
+	un, err := Unwrap(outer)
+	if err != nil {
+		return "", err
+	}
+	return digestForm(outer, un.Inner, msg, EthRuleNone), nil
+}
+
 // digestForm labels which digest carried a signature that is already known to verify.
 func digestForm(outer protocol.Signature, inner protocol.KeySignature, msg protocol.Signable, rule string) string {
 	if inner.Type() == protocol.SignatureTypeTypedData {

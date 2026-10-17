@@ -97,8 +97,13 @@ type Opts struct {
 	Delegators []string // OUTERMOST FIRST
 	// Merkle signs the initiator-merkle digest instead of the metadata digest. It is refused for rsaSha256 and
 	// ecdsaSha256, which cannot form a merkle initiator (ErrCannotInitiate), and ignored by typedData.
-	Merkle  bool
-	ChainID *big.Int // typedData only; default protocol.EthChainID("DevNet")
+	Merkle bool
+	// Initiate makes the signature the transaction's initiator: txn.Header.Initiator is set to the signature's merkle
+	// hash (the official builder's default) or, for the types that cannot form one (rsaSha256, ecdsaSha256, typedData),
+	// its metadata hash, before the transaction hash the signature covers is taken. The digest signed is the one the
+	// initiator names.
+	Initiate bool
+	ChainID  *big.Int // typedData only; default protocol.EthChainID("DevNet")
 }
 
 func (o *Opts) defaults() {
@@ -117,8 +122,6 @@ func (o *Opts) defaults() {
 func Sign(k Key, txn *protocol.Transaction, o Opts) (protocol.Signature, error) {
 	o.defaults()
 	signer := url.MustParse(o.Signer)
-	txHash := txn.GetHash()
-
 	var inner protocol.KeySignature
 	switch k.Type {
 	case protocol.SignatureTypeLegacyED25519:
@@ -163,10 +166,30 @@ func Sign(k Key, txn *protocol.Transaction, o Opts) (protocol.Signature, error) 
 		outer = &protocol.DelegatedSignature{Delegator: url.MustParse(o.Delegators[i]), Signature: outer}
 	}
 
+	cannotMerkle := k.Type == protocol.SignatureTypeRsaSha256 || k.Type == protocol.SignatureTypeEcdsaSha256 ||
+		k.Type == protocol.SignatureTypeTypedData
+	if o.Initiate {
+		if cannotMerkle {
+			copy(txn.Header.Initiator[:], outer.Metadata().Hash())
+		} else {
+			us, ok := outer.(protocol.UserSignature)
+			if !ok {
+				return nil, fmt.Errorf("not a user signature")
+			}
+			init, err := us.Initiator()
+			if err != nil {
+				return nil, err
+			}
+			copy(txn.Header.Initiator[:], init.MerkleHash())
+			o.Merkle = true
+		}
+	}
+
 	if k.Type == protocol.SignatureTypeTypedData {
 		return outer, protocol.SignEip712TypedData(inner.(*protocol.TypedDataSignature), k.Priv, outer, txn)
 	}
 
+	txHash := txn.GetHash()
 	sigMd := outer.Metadata().Hash()
 	if o.Merkle {
 		us, ok := outer.(protocol.UserSignature)
@@ -217,4 +240,65 @@ func Inner(sig protocol.Signature) protocol.Signature {
 		}
 		sig = d.Signature
 	}
+}
+
+// PublicKey is the public key k's signatures carry, in the encoding Accumulate's signature type uses (33-byte compressed
+// secp256k1 for btc, 65-byte uncompressed for btclegacy, eth and typedData, a PKIX SPKI for ecdsaSha256, a PKCS#1
+// RSAPublicKey for rsaSha256, 32 raw bytes for the ed25519 family).
+func PublicKey(k Key) ([]byte, error) {
+	if k.Type == protocol.SignatureTypeTypedData {
+		priv, err := altcrypto.ToECDSA(k.Priv)
+		if err != nil {
+			return nil, err
+		}
+		return altcrypto.FromECDSAPub(&priv.PublicKey), nil
+	}
+	probe, err := protocol.NewSignature(k.Type)
+	if err != nil {
+		return nil, err
+	}
+	if err := signing.PrivateKey(k.Priv).SetPublicKey(probe); err != nil {
+		return nil, err
+	}
+	ks, ok := probe.(protocol.KeySignature)
+	if !ok {
+		return nil, fmt.Errorf("%v is not a key signature", k.Type)
+	}
+	return ks.GetPublicKey(), nil
+}
+
+// SetSignature replaces the signature bytes of a key signature (any of the nine types) in place.
+func SetSignature(sig protocol.Signature, b []byte) error {
+	switch s := Inner(sig).(type) {
+	case *protocol.LegacyED25519Signature:
+		s.Signature = b
+	case *protocol.ED25519Signature:
+		s.Signature = b
+	case *protocol.RCD1Signature:
+		s.Signature = b
+	case *protocol.BTCSignature:
+		s.Signature = b
+	case *protocol.BTCLegacySignature:
+		s.Signature = b
+	case *protocol.ETHSignature:
+		s.Signature = b
+	case *protocol.RsaSha256Signature:
+		s.Signature = b
+	case *protocol.EcdsaSha256Signature:
+		s.Signature = b
+	case *protocol.TypedDataSignature:
+		s.Signature = b
+	default:
+		return fmt.Errorf("%T is not a key signature", s)
+	}
+	return nil
+}
+
+// Clone deep-copies a signature through Accumulate's own binary encoding.
+func Clone(sig protocol.Signature) (protocol.Signature, error) {
+	b, err := sig.MarshalBinary()
+	if err != nil {
+		return nil, err
+	}
+	return protocol.UnmarshalSignature(b)
 }

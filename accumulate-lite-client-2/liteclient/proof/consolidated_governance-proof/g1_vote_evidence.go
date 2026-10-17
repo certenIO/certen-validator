@@ -94,6 +94,23 @@ func (a *g1Authorization) buildVoteEvidence(ctx context.Context, facts voteFacts
 	ev := &govvote.Evidence{Version: govvote.EvidenceVersion, Account: normalizeAccURL(a.principal),
 		Transaction: txBytes, Authorities: authorities, Extra: extra.URLs, IgnoreDisabled: extra.IgnoreDisabled}
 
+	// A typedData signature's chain id is the network's, derived from its name: the evidence carries the name so the
+	// offline evaluation can apply the executor's chain-id check (RB8-B).
+	for _, v := range sigs {
+		outer, err := buildProtocolSignature(v.Signature)
+		if err != nil {
+			return nil, fmt.Errorf("the vote's evidence: signature %s: %w", SafeTruncate(v.MessageID, 24), err)
+		}
+		if key := innermostKeySignature(outer); key != nil && key.Type() == protocol.SignatureTypeTypedData {
+			n, err := a.g1.networkInfo()
+			if err != nil {
+				return nil, fmt.Errorf("the vote's evidence: the network's name for a typedData signature: %w", err)
+			}
+			ev.NetworkName = n.Name
+			break
+		}
+	}
+
 	byID := map[string]ValidatedSignature{}
 	for _, v := range sigs {
 		byID[strings.ToLower(v.MessageID)] = v

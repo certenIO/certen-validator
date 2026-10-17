@@ -1,0 +1,77 @@
+[
+ {
+  "case": "direct",
+  "data": {
+   "type": "ed25519",
+   "vote": "accept",
+   "publicKey": "0b8a2e8785e560a9cc547c932b2e354503e3981b7b6e74dc33659b310e552ad1",
+   "signature": "e81d6ab1eb0571b85ad5a1908d366df4a6debcf5d6dfdd8f1ec9b89107973dd81dbe8ea8739040ddcf663008e04dd9e77109eeeec5bf1de76629f2e49e714403",
+   "signer": "acc://golden.acme/book/1",
+   "signerVersion": 3,
+   "timestamp": 1790000000000000,
+   "transactionHash": "eb64c125d8a9f3edfa1498a0b9b3804e2d4a6fc60eca055c71dbc3030fc0fbb6",
+   "txID": "",
+   "securityLevel": "",
+   "verifiedTime": "0001-01-01T00:00:00Z"
+  },
+  "form": "metadata"
+ },
+ {
+  "case": "direct merkle",
+  "data": {
+   "type": "ed25519",
+   "vote": "accept",
+   "publicKey": "0b8a2e8785e560a9cc547c932b2e354503e3981b7b6e74dc33659b310e552ad1",
+   "signature": "706ffab9006c9e251b94bb6d8bb8ab33938c0c2fd4c35343068cc148a14fb4829dec58f966e3616350f3463fcb440f842bdc116cd575737b87002f7ee93cc203",
+   "signer": "acc://golden.acme/book/1",
+   "signerVersion": 3,
+   "timestamp": 1790000000000001,
+   "transactionHash": "eb64c125d8a9f3edfa1498a0b9b3804e2d4a6fc60eca055c71dbc3030fc0fbb6",
+   "txID": "",
+   "securityLevel": "",
+   "verifiedTime": "0001-01-01T00:00:00Z"
+  },
+  "form": "initiator-merkle"
+ },
+ {
+  "case": "delegated two hops",
+  "data": {
+   "type": "delegated",
+   "chain": [
+    {
+     "delegator": "acc://outer.acme/book/1"
+    },
+    {
+     "delegator": "acc://middle.acme/book/1"
+    }
+   ],
+   "vote": "accept",
+   "publicKey": "0b8a2e8785e560a9cc547c932b2e354503e3981b7b6e74dc33659b310e552ad1",
+   "signature": "d3def64f728f6fcf6cce7e30f14c8de37929cd82d209a7a35098d58ea990aaec39bb9b222226b39cdf8452c657b8ff48d86218c1dad97db7c2918ee052c8660e",
+   "signer": "acc://golden.acme/book/1",
+   "signerVersion": 3,
+   "timestamp": 1790000000000002,
+   "transactionHash": "eb64c125d8a9f3edfa1498a0b9b3804e2d4a6fc60eca055c71dbc3030fc0fbb6",
+   "txID": "",
+   "securityLevel": "",
+   "verifiedTime": "0001-01-01T00:00:00Z"
+  },
+  "form": "metadata"
+ },
+ {
+  "case": "reject vote",
+  "data": {
+   "type": "ed25519",
+   "vote": "reject",
+   "publicKey": "0b8a2e8785e560a9cc547c932b2e354503e3981b7b6e74dc33659b310e552ad1",
+   "signature": "3b463dd78c9bb5dbfce3ad31170d87e93f9ea295d69ebe35d261b8958f1d3b4cb844a5abe319eafe80b7a2475079e76b4f7caf112e6fa6d8cf0a010b84e13407",
+   "signer": "acc://golden.acme/book/1",
+   "signerVersion": 3,
+   "timestamp": 1790000000000003,
+   "transactionHash": "eb64c125d8a9f3edfa1498a0b9b3804e2d4a6fc60eca055c71dbc3030fc0fbb6",
+   "txID": "",
+   "securityLevel": "",
+   "verifiedTime": "0001-01-01T00:00:00Z"
+  }
+ }
+]
