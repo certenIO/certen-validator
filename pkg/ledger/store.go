@@ -80,7 +80,8 @@ var (
 
 	// CERTEN's anchor set as the chain recorded it (rules v14, RB4-F35): every accepted version, oldest first. It is the
 	// anchor each ValidatorBlock's chain target must name, per chain, deterministically.
-	keyAnchorSet = []byte("abci:anchor_set") // -> AnchorSetLog
+	keyAnchorSet    = []byte("abci:anchor_set")    // -> AnchorSetLog
+	keyG1Activation = []byte("abci:g1_activation") // -> G1ActivationLog (rules v15)
 
 	// Per operation: committed intent signatures and their quorum certificates (RB5 D3).
 	keyIntentQuorumPrefix = []byte("abci:intent_quorum:") // + operation id -> IntentQuorumLog
@@ -624,6 +625,33 @@ func (s *LedgerStore) LoadAnchorSet() (*AnchorSetLog, error) {
 	var l AnchorSetLog
 	if err := json.Unmarshal(b, &l); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal AnchorSetLog: %w", err)
+	}
+	return &l, nil
+}
+
+// SaveG1Activation persists the cross-partition activation log (rules v15).
+func (s *LedgerStore) SaveG1Activation(l *G1ActivationLog) error {
+	b, err := json.Marshal(l)
+	if err != nil {
+		return fmt.Errorf("failed to marshal G1ActivationLog: %w", err)
+	}
+	return s.kv.Set(keyG1Activation, b)
+}
+
+// LoadG1Activation returns the cross-partition activation log: empty when the chain has recorded none, an error when it
+// could not be read - never empty for an unreadable log, which would read as "not activated" and decide every block the
+// v14 way.
+func (s *LedgerStore) LoadG1Activation() (*G1ActivationLog, error) {
+	b, err := s.read(keyG1Activation, "g1 activation")
+	if err != nil {
+		return nil, err
+	}
+	if b == nil {
+		return &G1ActivationLog{}, nil
+	}
+	var l G1ActivationLog
+	if err := json.Unmarshal(b, &l); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal G1ActivationLog: %w", err)
 	}
 	return &l, nil
 }

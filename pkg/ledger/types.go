@@ -380,3 +380,18 @@ type IntentQuorumCertificate struct {
 	ThresholdNumerator   uint64   `json:"threshold_numerator"`
 	ThresholdDenominator uint64   `json:"threshold_denominator"`
 }
+
+// G1ActivationLog is the cross-partition activations this chain has accepted (rules v15, docs/proof/G1_CROSS_PARTITION.md
+// D7). At most one is ever accepted: the activation is a single height H, and every ValidatorBlock at a height above H
+// must carry proof v2 evidence 2.1. The log is append-only; its first record is the activation.
+type G1ActivationLog struct {
+	Activations []G1ActivationRecord `json:"activations"`
+}
+
+// G1ActivationRecord is one accepted activation: the block that accepted it (H) and the id folded into that block's app
+// hash. Blocks at heights above Height must carry 2.1; blocks at or below it are decided exactly as rules v14 decided them.
+type G1ActivationRecord struct {
+	Version uint64 `json:"version"` // always 1: a second activation is refused
+	Height  int64  `json:"height"`  // H, the block that accepted it
+	ID      string `json:"id"`      // folded into the app hash of Height
+}
