@@ -140,3 +140,5 @@ bls_zk_keys_bls12381_v2/
 # Python bytecode
 __pycache__/
 *.pyc
+/keys/
+/captures/

@@ -208,7 +208,13 @@ func ManifestHash(files []ManifestFile) string {
 // LoadVectors reads every vector file the manifest in dir names, requiring each file to match its pinned hash and the
 // manifest to match its own.
 func LoadVectors(dir string) ([]Vector, *Manifest, error) {
-	mb, err := os.ReadFile(filepath.Join(dir, "manifest.json"))
+	return LoadVectorsFrom(dir, "manifest.json")
+}
+
+// LoadVectorsFrom is LoadVectors for the named manifest in dir. manifest.json pins the first 154 vectors and is never
+// changed; manifest2.json pins the same files plus the Kermit-delivered live set (RB8-D).
+func LoadVectorsFrom(dir, manifestName string) ([]Vector, *Manifest, error) {
+	mb, err := os.ReadFile(filepath.Join(dir, manifestName))
 	if err != nil {
 		return nil, nil, err
 	}
