@@ -196,9 +196,17 @@ func (c *Collector) collect(ctx context.Context, st *runState, account, tx strin
 	// The certified key page, exactly as the intent certificate resolves it. A page that cannot be resolved does not stop the
 	// capture of the rest; it is the named state the capture ends with.
 	var softErr error
+	if executorOverrides[facts.Type] {
+		// These body types decide who may sign by an executor override (chain/utils.go, chain/update_key.go,
+		// chain/update_account_auth.go), not by the default rule the proof re-evaluates (design D6).
+		softErr = &proofv2.NamedState{Code: proofv2.StateExecutorOverrideUnsupported, Partition: x, Block: b,
+			Detail: fmt.Sprintf("%v has an executor override of who may sign; the default rule is not what judged it", facts.Type)}
+	}
 	if c.Certified != nil {
 		if cp, err := c.Certified(ctx, account, tx); err != nil {
-			softErr = &proofv2.NamedState{Code: proofv2.StateCertifiedPageUnproven, Partition: x, Block: b, Detail: err.Error()}
+			if softErr == nil {
+				softErr = &proofv2.NamedState{Code: proofv2.StateCertifiedPageUnproven, Partition: x, Block: b, Detail: err.Error()}
+			}
 		} else {
 			facts.Certified = cp
 		}
@@ -507,6 +515,22 @@ func (c *Collector) collect(ctx context.Context, st *runState, account, tx strin
 		out.Notes = append(out.Notes, n.Error())
 	}
 	return out, softErr
+}
+
+// executorOverrides are the transaction types whose executor decides who may sign itself (SignerValidator and the
+// AuthorityWillVote / TransactionIsReady overrides in internal/core/execute/v2/chain); only WriteData and the other types
+// without an override follow the default rule the proof re-evaluates.
+var executorOverrides = map[protocol.TransactionType]bool{
+	protocol.TransactionTypeCreateDataAccount:      true,
+	protocol.TransactionTypeCreateIdentity:         true,
+	protocol.TransactionTypeCreateKeyBook:          true,
+	protocol.TransactionTypeCreateLiteTokenAccount: true,
+	protocol.TransactionTypeCreateToken:            true,
+	protocol.TransactionTypeCreateTokenAccount:     true,
+	protocol.TransactionTypeReleaseLockedOperation: true,
+	protocol.TransactionTypeUpdateAccountAuth:      true,
+	protocol.TransactionTypeUpdateKey:              true,
+	protocol.TransactionTypeUpdateKeyPage:          true,
 }
 
 func isDirectory(partition string) bool { return strings.EqualFold(partition, protocol.Directory) }

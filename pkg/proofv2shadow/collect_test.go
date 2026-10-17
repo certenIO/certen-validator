@@ -638,3 +638,23 @@ func TestCollectNamesAGoverningPageOnTheDirectory(t *testing.T) {
 		t.Fatalf("a Directory page gave %v", err)
 	}
 }
+
+// A body type whose executor overrides who may sign is never judged by the default rule: the pages are captured and the
+// capture ends with the named state.
+func TestCollectNamesAnExecutorOverride(t *testing.T) {
+	f := newFakeNet(t, tclWorld())
+	f.facts = facts("acc://cust.acme/pay")
+	f.facts.Type = protocol.TransactionTypeUpdateKeyPage
+	c, err := f.collect()
+	var ns *proofv2.NamedState
+	if !errors.As(err, &ns) || ns.Code != proofv2.StateExecutorOverrideUnsupported {
+		t.Fatalf("an UpdateKeyPage gave %v", err)
+	}
+	if c == nil || len(c.Pages) == 0 {
+		t.Fatal("the captured pages were dropped with the named state")
+	}
+	f.facts.Type = protocol.TransactionTypeWriteData
+	if _, err := f.collect(); err != nil {
+		t.Fatalf("a WriteData was refused: %v", err)
+	}
+}

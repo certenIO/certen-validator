@@ -24,6 +24,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/govvote"
 	"github.com/certen/independant-validator/pkg/accumulate"
 	"github.com/certen/independant-validator/pkg/commitment"
 	"github.com/certen/independant-validator/pkg/consensus"
@@ -369,6 +370,12 @@ type ProofV2Shadow interface {
 	Capture(intentID, account, tx, keyBook, keyPage string)
 	Build(intentID, account, tx, bvn string)
 	Prove(ctx context.Context, intentID, account, tx, bvn string, maxMajors uint64) (*proofv2.Evidence, error)
+}
+
+// ProofV2CrossChecker is implemented by a shadow that compares the pages v1 replayed for an intent with the pages v2 captured
+// (docs/proof/PROOF_V2.md §5.2: a disagreement on any page is stop-the-line). It never delays or fails an intent.
+type ProofV2CrossChecker interface {
+	CrossCheck(intentID string, ev *govvote.Evidence)
 }
 
 // SetProofV2Shadow installs the proof v2 shadow.
@@ -1399,6 +1406,9 @@ func chainedRetryBackoff(base time.Duration, step, maxShift int, capDur time.Dur
 // on the checkpoints the chain has verified, and the intent fails closed (retryably) without it, as it does without
 // its chained proof. Before that, proof v2 is a shadow built in the background.
 func (id *IntentDiscovery) proveV2(ctx context.Context, intentID, accountURL, txHash, partition string, cp *proof.CertenProof) error {
+	if cc, ok := id.v2Shadow.(ProofV2CrossChecker); ok && cp != nil && cp.GovVoteEvidence != nil {
+		cc.CrossCheck(intentID, cp.GovVoteEvidence)
+	}
 	required, maxMajors := false, uint64(0)
 	if id.v2Gate != nil {
 		var err error
