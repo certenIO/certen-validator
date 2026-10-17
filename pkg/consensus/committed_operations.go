@@ -455,6 +455,9 @@ type CommittedRecords struct {
 	// AnchorSets nil: the anchor set log could not be read - a node on rules before v14 serves none, and none can have
 	// accepted an anchor set, so an accepted one is then a violation.
 	AnchorSets *ledger.AnchorSetLog
+	// G1Activations nil: the cross-partition activation log could not be read - a node on rules before v15 serves none, and
+	// none can have accepted an activation, so an accepted one is then a violation.
+	G1Activations *ledger.G1ActivationLog
 }
 
 // committedRecords reads this node's committed records.
@@ -475,7 +478,11 @@ func (app *ValidatorApp) committedRecords() (*CommittedRecords, error) {
 	if err != nil {
 		return nil, fmt.Errorf("the anchor set log: %w", err)
 	}
-	return &CommittedRecords{Policy: policy, Registry: registry, Spine: spine, AnchorSets: anchorSets}, nil
+	g1Activations, err := app.ledgerStore.LoadG1Activation()
+	if err != nil {
+		return nil, fmt.Errorf("the cross-partition activation log: %w", err)
+	}
+	return &CommittedRecords{Policy: policy, Registry: registry, Spine: spine, AnchorSets: anchorSets, G1Activations: g1Activations}, nil
 }
 
 // kindViolationWith is kindViolation with the committed records read through records, only when an acceptance has to
