@@ -50,6 +50,7 @@
 //	    Rotate CERTEN's admin set with the admin quorum in force (rules v12; adminrotate.go).
 //
 //	validator-rotate anchor-set status|propose|sign|preflight|submit
+//	validator-rotate g1-activate status|propose|sign|preflight|submit
 //	    Commit CERTEN's V8 anchor on every settlement chain as consensus state (rules v14; anchorset.go). The first
 //	    anchor set committed activates rules v14.
 //
@@ -132,6 +133,8 @@ func main() {
 		err = spineGenesis(os.Args[2:], http.DefaultClient)
 	case "anchor-set":
 		err = anchorSet(os.Args[2:], http.DefaultClient)
+	case "g1-activate":
+		err = g1Activate(os.Args[2:], http.DefaultClient)
 	case "-h", "--help", "help":
 		usage()
 		return
@@ -162,7 +165,7 @@ func usage() {
   submit     commit the rotation
   status     the chain's rotation log
   tick       make the chain produce blocks (empty blocks are disabled)
-  history-check  prove no committed transaction is of a kind rules v8 adds (--rules 12 / 13 / 14: judge history as v12 / v13 / v14 does)
+  history-check  prove no committed transaction is of a kind rules v8 adds (--rules 12 / 13 / 14 / 15: judge history as v12 / v13 / v14 / v15 does)
 
   bls-possession          on a validator: its BLS registry entry and the key's proof of possession
   bls-registry-propose    assemble the BLS registry (RB5 D3), verify every possession, first admin signature
@@ -190,6 +193,12 @@ func usage() {
   anchor-set sign         another admin's approval, offline
   anchor-set preflight    every node on rules v14 agrees, the chain's rule accepts it, every anchor is a contract on its chain
   anchor-set submit       preflight, then commit it (--dry-run: preflight only); the first one activates rules v14
+
+  g1-activate status      the cross-partition activation in force (none: rules v15 not yet activated), per node
+  g1-activate propose     the one-way activation of proof v2 evidence 2.1 (rules v15), with the first admin signature
+  g1-activate sign        another admin's approval, offline
+  g1-activate preflight   every node on rules v15 agrees and records no activation; the chain's rule accepts it
+  g1-activate submit      preflight, then commit it (--dry-run: preflight only); from the next height evidence 2.1 is required
 
 Run any subcommand with --help for its flags. The runbook is RUNBOOK_F95_CONSENSUS_KEY_ROTATION.md.
 `)
@@ -817,7 +826,7 @@ func kindOf(tx []byte) string {
 func historyCheck(args []string, c rpcDoer) error {
 	fs := flag.NewFlagSet("history-check", flag.ContinueOnError)
 	rpc := fs.String("rpc", "", "one validator's CometBFT RPC (it must hold every block from 1)")
-	rules := fs.Int("rules", 8, "the rules whose continuation to check: 8 (the kinds v8 adds), 12, 13 or 14 (history as v12, v13 or v14 judges it)")
+	rules := fs.Int("rules", 8, "the rules whose continuation to check: 8 (the kinds v8 adds), 12, 13, 14 or 15 (history as v12, v13, v14 or v15 judges it)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -826,10 +835,10 @@ func historyCheck(args []string, c rpcDoer) error {
 	}
 	switch *rules {
 	case 8:
-	case 12, 13, 14:
+	case 12, 13, 14, 15:
 		return historyCheckRules(*rpc, c, uint64(*rules))
 	default:
-		return fmt.Errorf("--rules is 8, 12, 13 or 14")
+		return fmt.Errorf("--rules is 8, 12, 13, 14 or 15")
 	}
 	var st struct {
 		SyncInfo struct {
