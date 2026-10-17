@@ -51,6 +51,15 @@ type PageState struct {
 	Chains      []proof.ChainRoot `json:"chains,omitempty"`
 	PendingHash string            `json:"pendingHash,omitempty"`
 	ChainError  string            `json:"chainError,omitempty"`
+
+	// Evidence 2.1 only (design D4); empty, and so absent from the encoding, in 2.0.
+	//
+	// Partition is the partition the page is proven through, as the Source of Evidence.Anchors' message names it
+	// ("acc://bvn-BVN2.acme"). The verifier DERIVES it from that anchor and requires this to equal it; a page whose
+	// claimed partition differs is the named state g1_foreign_partition_mismatch. Roles say why the page is proven; the
+	// verifier re-derives them from the proven states and requires them equal (see PageRole).
+	Partition string     `json:"partition,omitempty"`
+	Roles     []PageRole `json:"roles,omitempty"`
 }
 
 // PageChain is what the verifier established about one page's chains.
@@ -147,7 +156,8 @@ func trimPage(p *PageState, stateRoot []byte) (*PageState, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &PageState{URL: p.URL, State: p.State, Receipt: hex.EncodeToString(rb), Chains: p.Chains, PendingHash: p.PendingHash, ChainError: p.ChainError}, nil
+	return &PageState{URL: p.URL, State: p.State, Receipt: hex.EncodeToString(rb), Chains: p.Chains, PendingHash: p.PendingHash, ChainError: p.ChainError,
+		Partition: p.Partition, Roles: p.Roles}, nil
 }
 
 // anchorBody decodes a delivered partition anchor and returns its body and transaction hash.

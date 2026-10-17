@@ -74,7 +74,30 @@ type PortableEvidence struct {
 		Receipt json.RawMessage `json:"receipt"` // merkle.Receipt
 	} `json:"anchor"`
 	Pages []PortablePage `json:"pages,omitempty"`
-	Check PortableCheck  `json:"check"`
+
+	// Evidence 2.1 only (design D3, D4); absent from a 2.0 document, which therefore re-encodes byte for byte.
+	Anchors map[string]PortableAnchor `json:"anchors,omitempty"`
+	Votes   []PortableVote            `json:"votes,omitempty"`
+
+	Check PortableCheck `json:"check"`
+}
+
+// PortableAnchor is a partition anchor in the portable form: the delivered message and the receipt, as Accumulate's JSON.
+type PortableAnchor struct {
+	Message json.RawMessage `json:"message"` // messaging.SequencedMessage
+	Receipt json.RawMessage `json:"receipt"` // merkle.Receipt
+}
+
+// PortableVote is Vote with its receipt as Accumulate's JSON.
+type PortableVote struct {
+	Authority  string          `json:"authority"`
+	Origin     string          `json:"origin"`
+	Vote       string          `json:"vote"`
+	Delegators []string        `json:"delegators,omitempty"`
+	Cause      []string        `json:"cause,omitempty"`
+	Transport  VoteTransport   `json:"transport"`
+	Message    string          `json:"message"`
+	Receipt    json.RawMessage `json:"receipt"` // merkle.Receipt
 }
 
 type PortablePage struct {
@@ -84,6 +107,10 @@ type PortablePage struct {
 	Chains      []proof.ChainRoot `json:"chains,omitempty"`
 	PendingHash string            `json:"pendingHash,omitempty"`
 	ChainError  string            `json:"chainError,omitempty"`
+
+	// Evidence 2.1 only (see PageState).
+	Partition string     `json:"partition,omitempty"`
+	Roles     []PageRole `json:"roles,omitempty"`
 }
 
 type PortableCheck struct {
@@ -92,6 +119,9 @@ type PortableCheck struct {
 	Incarnation string            `json:"incarnation"`
 	Network     PortableAccount   `json:"network"`
 	Globals     PortableAccount   `json:"globals"`
+
+	// Evidence 2.1 only: the routing table proven beside the network and globals accounts (design D5).
+	Routing *PortableAccount `json:"routing,omitempty"`
 }
 
 // PortableAccount is proof.AccountStateProof with the account as JSON, and the record its single data entry holds
@@ -193,7 +223,26 @@ func ExportDocument(ev *Evidence, in proof.IncarnationInputs, pin [32]byte) (*Po
 		if err != nil {
 			return nil, err
 		}
-		e.Pages = append(e.Pages, PortablePage{URL: pg.URL, Account: acct, Receipt: r, Chains: pg.Chains, PendingHash: pg.PendingHash, ChainError: pg.ChainError})
+		e.Pages = append(e.Pages, PortablePage{URL: pg.URL, Account: acct, Receipt: r, Chains: pg.Chains, PendingHash: pg.PendingHash, ChainError: pg.ChainError,
+			Partition: pg.Partition, Roles: pg.Roles})
+	}
+	if len(ev.Anchors) > 0 {
+		e.Anchors = make(map[string]PortableAnchor, len(ev.Anchors))
+		for k, a := range ev.Anchors {
+			pa, err := exportAnchor(a)
+			if err != nil {
+				return nil, fmt.Errorf("anchor %s: %w", k, err)
+			}
+			e.Anchors[k] = pa
+		}
+	}
+	for _, v := range ev.Votes {
+		r, err := receiptJSON(v.Receipt)
+		if err != nil {
+			return nil, fmt.Errorf("vote of %s: %w", v.Authority, err)
+		}
+		e.Votes = append(e.Votes, PortableVote{Authority: v.Authority, Origin: v.Origin, Vote: v.Vote, Delegators: v.Delegators, Cause: v.Cause,
+			Transport: v.Transport, Message: v.Message, Receipt: r})
 	}
 
 	e.Check.Majors, e.Check.Incarnation = ev.Check.Majors, ev.Check.Set.Incarnation
@@ -210,7 +259,46 @@ func ExportDocument(ev *Evidence, in proof.IncarnationInputs, pin [32]byte) (*Po
 	if e.Check.Globals, err = exportAccount(&ev.Check.Set.Globals, new(protocol.NetworkGlobals)); err != nil {
 		return nil, fmt.Errorf("set check globals: %w", err)
 	}
+	if ev.Check.Routing != nil {
+		ra, err := exportAccount(ev.Check.Routing, new(protocol.RoutingTable))
+		if err != nil {
+			return nil, fmt.Errorf("set check routing: %w", err)
+		}
+		e.Check.Routing = &ra
+	}
 	return p, nil
+}
+
+func exportAnchor(a PartitionAnchor) (PortableAnchor, error) {
+	var out PortableAnchor
+	raw, err := hex.DecodeString(a.Message)
+	if err != nil {
+		return out, err
+	}
+	seq := new(messaging.SequencedMessage)
+	if err := seq.UnmarshalBinary(raw); err != nil {
+		return out, err
+	}
+	if out.Message, err = json.Marshal(seq); err != nil {
+		return out, err
+	}
+	out.Receipt, err = receiptJSON(a.Receipt)
+	return out, err
+}
+
+func importAnchor(a PortableAnchor) (PartitionAnchor, error) {
+	var out PartitionAnchor
+	seq := new(messaging.SequencedMessage)
+	if err := json.Unmarshal(a.Message, seq); err != nil {
+		return out, fmt.Errorf("anchor message: %w", err)
+	}
+	b, err := seq.MarshalBinary()
+	if err != nil {
+		return out, err
+	}
+	out.Message = hex.EncodeToString(b)
+	out.Receipt, err = receiptHex(a.Receipt)
+	return out, err
 }
 
 // Import reads the portable form back into the evidence, archive and incarnation inputs Verify takes. Every binary
@@ -294,7 +382,26 @@ func Import(p *Portable) (*Evidence, *Archive, proof.IncarnationInputs, [32]byte
 		if err != nil {
 			return fail(err)
 		}
-		ev.Pages = append(ev.Pages, PageState{URL: pg.URL, State: hex.EncodeToString(st), Receipt: r, Chains: pg.Chains, PendingHash: pg.PendingHash, ChainError: pg.ChainError})
+		ev.Pages = append(ev.Pages, PageState{URL: pg.URL, State: hex.EncodeToString(st), Receipt: r, Chains: pg.Chains, PendingHash: pg.PendingHash, ChainError: pg.ChainError,
+			Partition: pg.Partition, Roles: pg.Roles})
+	}
+	if len(e.Anchors) > 0 {
+		ev.Anchors = make(map[string]PartitionAnchor, len(e.Anchors))
+		for k, a := range e.Anchors {
+			pa, err := importAnchor(a)
+			if err != nil {
+				return fail(fmt.Errorf("anchor %s: %w", k, err))
+			}
+			ev.Anchors[k] = pa
+		}
+	}
+	for _, v := range e.Votes {
+		r, err := receiptHex(v.Receipt)
+		if err != nil {
+			return fail(fmt.Errorf("vote of %s: %w", v.Authority, err))
+		}
+		ev.Votes = append(ev.Votes, Vote{Authority: v.Authority, Origin: v.Origin, Vote: v.Vote, Delegators: v.Delegators, Cause: v.Cause,
+			Transport: v.Transport, Message: v.Message, Receipt: r})
 	}
 
 	ev.Check.Majors, ev.Check.Set.Incarnation = e.Check.Majors, e.Check.Incarnation
@@ -310,6 +417,12 @@ func Import(p *Portable) (*Evidence, *Archive, proof.IncarnationInputs, [32]byte
 	}
 	if err := importAccount(&e.Check.Globals, &ev.Check.Set.Globals, new(protocol.NetworkGlobals)); err != nil {
 		return fail(fmt.Errorf("set check globals: %w", err))
+	}
+	if e.Check.Routing != nil {
+		ev.Check.Routing = new(proof.AccountStateProof)
+		if err := importAccount(e.Check.Routing, ev.Check.Routing, new(protocol.RoutingTable)); err != nil {
+			return fail(fmt.Errorf("set check routing: %w", err))
+		}
 	}
 	return ev, ar, in, pin, nil
 }
