@@ -21,10 +21,13 @@ func Verdict(err error) string {
 		unproven ExecutorVersionUnproven
 		noTxn    TransactionUnavailableForTypedData
 		noName   NetworkNameUnproven
+		malform  SignatureMalformed
 	)
 	switch {
 	case errors.As(err, &inv):
 		return "refused:signature_invalid"
+	case errors.As(err, &malform):
+		return "refused:signature_malformed"
 	case errors.As(err, &nk):
 		return "refused:not_a_key_signature"
 	case errors.As(err, &de):

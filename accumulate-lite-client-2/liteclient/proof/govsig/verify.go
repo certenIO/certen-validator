@@ -27,6 +27,26 @@ const (
 	EthRuleV1DER = "v1-der"
 )
 
+// SignatureMalformed is a signature the Accumulate library cannot even evaluate: its own Verify panics on the input (for
+// example a delegated typedData signature with no delegator dereferences it). The executor never records such a
+// signature, so it can never count; a validator must refuse it by name and keep running, never crash on it.
+type SignatureMalformed struct{ Reason string }
+
+func (e SignatureMalformed) Error() string {
+	return "signature_malformed: Accumulate's own verification cannot evaluate it (" + e.Reason + ")"
+}
+
+// callVerify runs one of Accumulate's own Verify functions and turns a panic inside it into the named refusal
+// SignatureMalformed. It is a refusal, never an acceptance, and is not a fallback to any weaker check.
+func callVerify(f func(protocol.UserSignature, protocol.Signable) bool, us protocol.UserSignature, msg protocol.Signable) (valid bool, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			valid, err = false, SignatureMalformed{Reason: fmt.Sprint(r)}
+		}
+	}()
+	return f(us, msg), nil
+}
+
 // Where is where a signature was recorded: the partition whose chain holds it and that partition's local block.
 // Block numbers are per partition (the Directory's are ~9.5M, a BVN's ~12.5M), so a block without its partition says
 // nothing about the executor version.
@@ -132,12 +152,21 @@ func Verify(sig protocol.Signature, env Env) (*Verified, error) {
 
 	// The verdict: Accumulate's own Verify on the OUTERMOST signature.
 	rule := EthRuleNone
-	valid := protocol.VerifyUserSignature(us, msg)
+	valid, perr := callVerify(protocol.VerifyUserSignature, us, msg)
+	if perr != nil {
+		return nil, perr
+	}
 	if valid && inner.Type() == protocol.SignatureTypeETH {
 		rule = EthRuleV2RSV
 	}
-	if !valid && inner.Type() == protocol.SignatureTypeETH && protocol.VerifyUserSignatureV1(us, msg) {
-		valid, rule = true, EthRuleV1DER
+	if !valid && inner.Type() == protocol.SignatureTypeETH {
+		v1, perr := callVerify(protocol.VerifyUserSignatureV1, us, msg)
+		if perr != nil {
+			return nil, perr
+		}
+		if v1 {
+			valid, rule = true, EthRuleV1DER
+		}
 	}
 	if !valid {
 		return nil, SignatureInvalid{Type: inner.Type().String(), Forms: formsTried(inner)}
