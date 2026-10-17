@@ -407,3 +407,21 @@ func stringsEqual(a, b []string) bool {
 	}
 	return true
 }
+
+// ReplayPageHistories replays every page history the evidence carries, binding each entry as VerifyEvidence does, and returns
+// the states each page passed through, by page in its canonical spelling. It is how another verifier reads the pages v1
+// evaluated: the proof v2 shadow compares them with the pages it captured.
+func ReplayPageHistories(ev *Evidence) (map[string]States, error) {
+	if ev == nil {
+		return nil, fmt.Errorf("no vote evidence")
+	}
+	out := make(map[string]States, len(ev.Pages))
+	for _, ph := range ev.Pages {
+		states, err := replayHistory(ph)
+		if err != nil {
+			return nil, fmt.Errorf("page %s: %w", ph.Page, err)
+		}
+		out[normalizeAccURL(ph.Page)] = states
+	}
+	return out, nil
+}

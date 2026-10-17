@@ -46,8 +46,19 @@ type Evidence struct {
 	// and the partition's state root at it, which every page must be proven into.
 	Anchor PartitionAnchor `json:"anchor"`
 
-	// Pages are the governing key pages and the principal account as of the anchor's block (G1(a)).
+	// Pages are the governing key pages and the principal account as of the anchor's block (G1(a)). In evidence 2.1 each
+	// page is as of ITS partition's block, proven through Anchors[its partition].
 	Pages []PageState `json:"pages,omitempty"`
+
+	// Evidence 2.1 only (docs/proof/G1_CROSS_PARTITION.md D3, D4); empty, and so absent from the encoding, in 2.0.
+	//
+	// Anchors holds, for the transaction's partition and for every other partition that holds a proven page, that
+	// partition's BlockValidatorAnchor for the block its pages are proven at (B_Y) and the receipt proving the anchor
+	// into the certified Directory root, keyed by the anchor message's Source ("acc://bvn-BVN2.acme"). Anchors[X] is the
+	// 2.0 field Anchor.
+	Anchors map[string]PartitionAnchor `json:"anchors,omitempty"`
+	// Votes are the authority votes copied from the principal's proven signature chain (D3).
+	Votes []Vote `json:"votes,omitempty"`
 
 	// Check proves the validator set in force at a certified block at or after the certified one.
 	Check SetCheck `json:"check"`
@@ -59,6 +70,11 @@ type SetCheck struct {
 	Majors uint64                  `json:"majors"`
 	Hops   []string                `json:"hops"`
 	Set    proof.ValidatorSetProof `json:"set"`
+
+	// Routing, in evidence 2.1, is the Directory's routing table (acc://dn.acme/routing) proven into the same state root as
+	// the network and globals accounts, so a verifier can check Partition == route(URL) for every page (design D5). Absent
+	// in 2.0; absent in 2.1 only with the named state g1_routing_unproven.
+	Routing *proof.AccountStateProof `json:"routing,omitempty"`
 }
 
 // Report is what Verify established.
@@ -76,9 +92,12 @@ type Report struct {
 	AnchorBlock uint64
 	Pages       []protocol.Account
 	PageChains  []PageChain // per page, in the same order: whether its chains are proven at AnchorBlock
-	SetVerdict  proof.Verdict
-	Validators  int
-	Threshold   uint64
+	// Proven lists every proven page as (partition, block, roles), in the same order as Pages. Evidence 2.0 leaves it
+	// empty (every page is the transaction's partition's, at AnchorBlock); 2.1 fills it (design D4).
+	Proven     []ProvenPage
+	SetVerdict proof.Verdict
+	Validators int
+	Threshold  uint64
 
 	// TxHash is the transaction the receipt starts at; AnchorTxHash the partition anchor transaction proven into the
 	// certified root, and AnchorStateRoot that anchor's StateTreeAnchor: the partition's state root at AnchorBlock,
