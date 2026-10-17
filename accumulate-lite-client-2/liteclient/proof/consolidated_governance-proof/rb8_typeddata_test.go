@@ -107,6 +107,15 @@ func TestRB8_TypedDataNamedStatesAndRefusals(t *testing.T) {
 
 func err0(_ string, err error) error { return err }
 
+// flipLastNibble changes the last hex digit whatever it is, so a tamper can never be a no-op on a random key or signature.
+func flipLastNibble(h string) string {
+	last := h[len(h)-1]
+	if last == '0' {
+		return h[:len(h)-1] + "1"
+	}
+	return h[:len(h)-1] + "0"
+}
+
 // The raw encoding is the ONE source: every field beside it must agree, and a tampered record is a named state.
 func TestRB8_RawIsCheckedAgainstEveryField(t *testing.T) {
 	txn := sigfixture.Txn("acc://probe.acme/data", "raw")
@@ -122,8 +131,8 @@ func TestRB8_RawIsCheckedAgainstEveryField(t *testing.T) {
 	for field, mutate := range map[string]func(*SignatureData){
 		"type":          func(s *SignatureData) { s.Type = "ed25519" },
 		"innerType":     func(s *SignatureData) { s.InnerType = "rsasha256" },
-		"publicKey":     func(s *SignatureData) { s.PublicKey = s.PublicKey[:len(s.PublicKey)-2] + "00" },
-		"signature":     func(s *SignatureData) { s.Signature = s.Signature[:len(s.Signature)-2] + "00" },
+		"publicKey":     func(s *SignatureData) { s.PublicKey = flipLastNibble(s.PublicKey) },
+		"signature":     func(s *SignatureData) { s.Signature = flipLastNibble(s.Signature) },
 		"signer":        func(s *SignatureData) { s.Signer = "acc://other.acme/book/1" },
 		"signerVersion": func(s *SignatureData) { s.SignerVersion += 1 },
 		"timestamp":     func(s *SignatureData) { s.Timestamp = &ts },

@@ -79,7 +79,7 @@ func FetchNetwork(ctx context.Context, endpoint string) (*Network, error) {
 		return nil, fmt.Errorf("network-status: %w", err)
 	}
 	defer res.Body.Close()
-	raw, err := io.ReadAll(res.Body)
+	raw, err := io.ReadAll(io.LimitReader(res.Body, 4<<20)) // a network-status document is tens of KB; never read an unbounded body
 	if err != nil {
 		return nil, fmt.Errorf("network-status: %w", err)
 	}
