@@ -8,6 +8,7 @@ package main
 
 import (
 	"encoding/hex"
+	"errors"
 	"testing"
 
 	"gitlab.com/accumulatenetwork/accumulate/protocol"
@@ -201,6 +202,14 @@ func TestP7_DigestParity_DelegationIsInTheDigest(t *testing.T) {
 // which reads as an unmet threshold, which reads as "the institution did not
 // authorize this" - and the corpus's case K is a signature Kermit DELIVERED, so
 // that reading would be flatly wrong.
+//
+// SUPERSEDED BY RB8-B (2026-10-17, research R8, gap G-42), and restated rather than removed. The corpus's only
+// non-ed25519 signature is case K, a btc signature Kermit DELIVERED; btc is a key signature Accumulate's executor
+// accepts, so it is no longer refused on its type. Rule 7 still holds in the form that remains true and is what this
+// test now pins: a record that cannot be rebuilt (a btc record WITHOUT the binary encoding) is refused by a NAMED
+// state of its own - signature_bytes_absent - never as invalid and never dropped; and the same signature built the way
+// the extractor builds it verifies. The old assertion (refused as unsupported-signature-type) is pinned for the names
+// that remain unsupported in TestPhase7_UnsupportedKeyTypesAreOutagesNotRejections.
 func TestP7_UnsupportedTypeIsRefusedByItsOwnReason(t *testing.T) {
 	cf := loadCorpus(t)
 
@@ -217,22 +226,27 @@ func TestP7_UnsupportedTypeIsRefusedByItsOwnReason(t *testing.T) {
 					"'unsupported' from 'invalid'", tr.Case)
 			}
 
+			// without the binary encoding the record cannot be rebuilt: a named state, not a type refusal
 			_, err := AcceptedDigests(corpusSignatureData(tr), corpusTxHash(t, tr))
-			if err == nil {
-				t.Fatalf("a %s signature produced digests - it must be refused on its type",
-					tr.KeyType)
+			var absent SignatureBytesAbsent
+			if !errors.As(err, &absent) || absent.Reason() != "signature_bytes_absent" || absent.Type != tr.KeyType {
+				t.Fatalf("a %s record with no raw encoding must be signature_bytes_absent, got %v", tr.KeyType, err)
 			}
-			u, ok := IsUnsupportedSignatureType(err)
-			if !ok {
-				t.Fatalf("refused, but not with the unsupported-type reason: %v", err)
+			if _, unsupported := IsUnsupportedSignatureType(err); unsupported {
+				t.Fatalf("%s is a type Accumulate accepts; it must not be refused as unsupported", tr.KeyType)
 			}
-			if u.Reason() != "unsupported-signature-type" {
-				t.Fatalf("unexpected reason code %q", u.Reason())
+			// the record the extractor builds carries it, and verifies
+			sd, err := (&SignatureVerifier{}).ExtractSignatureFromMessageResult(messageResultFor(tr))
+			if err != nil {
+				t.Fatalf("extraction: %v", err)
 			}
-			if u.Type != tr.KeyType {
-				t.Fatalf("reason names type %q, signature is %q", u.Type, tr.KeyType)
+			digests, err := AcceptedDigests(sd, corpusTxHash(t, tr))
+			if err != nil || len(digests) == 0 {
+				t.Fatalf("a %s record with its encoding produced no digests: %v", tr.KeyType, err)
 			}
-			t.Logf("%s refused: %v", tr.KeyType, err)
+			if _, err := rb8Verify(t, rb8Verifier(t), sd, tr.TransactionHash); err != nil {
+				t.Fatalf("%s does not verify from its bytes: %v", tr.KeyType, err)
+			}
 		})
 	}
 	if checked == 0 {

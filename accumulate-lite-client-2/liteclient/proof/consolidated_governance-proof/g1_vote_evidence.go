@@ -74,23 +74,7 @@ func transactionBytes(txn *protocol.Transaction) (string, error) {
 // governedTransaction is the transaction G0 carried forward, decoded with Accumulate's types and bound to the hash
 // G0 proved executed.
 func (a *g1Authorization) governedTransaction() (*protocol.Transaction, error) {
-	raw := a.g1.g0Layer.Transaction()
-	if raw == nil {
-		return nil, fmt.Errorf("G0 did not carry the transaction forward")
-	}
-	b, err := json.Marshal(raw)
-	if err != nil {
-		return nil, err
-	}
-	txn := new(protocol.Transaction)
-	if err := txn.UnmarshalJSON(b); err != nil {
-		return nil, fmt.Errorf("the transaction does not decode with Accumulate's types: %w", err)
-	}
-	if !strings.EqualFold(hex.EncodeToString(txn.GetHash()), a.txHash) {
-		return nil, fmt.Errorf("the transaction G0 carried hashes to %x, not to the executed %s", txn.GetHash(),
-			SafeTruncate(a.txHash, 16))
-	}
-	return txn, nil
+	return a.g1.governedTransactionFor(a.txHash)
 }
 
 // buildVoteEvidence assembles what the vote read, verifies it by the offline evaluation, and requires that

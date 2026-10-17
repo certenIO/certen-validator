@@ -145,8 +145,10 @@ func sigFactOf(v ValidatedSignature) (sigFact, bool, error) {
 	if v.Receipt.LocalBlock <= 0 {
 		return sigFact{}, false, fmt.Errorf("signature %s has no recorded block", SafeTruncate(v.MessageID, 24))
 	}
+	// The key hash is the one the signature's TYPE gives (protocol.PublicKeyHash), which is what the key page
+	// stores: sha256(key) for ed25519, legacyED25519, rsaSha256 and ecdsaSha256, a different hash for the other five.
 	sv := SignatureVerifier{}
-	kh, err := sv.ComputeKeyHash(s.PublicKey)
+	kh, err := sv.KeyHashOf(s)
 	if err != nil {
 		return sigFact{}, false, fmt.Errorf("signature %s: key hash: %w", SafeTruncate(v.MessageID, 24), err)
 	}

@@ -661,10 +661,16 @@ func (g1 *G1Layer) evaluateCandidate(ctx context.Context, cand sigCandidate, key
 	// sign when the signature was recorded - and whether its vote counted - is
 	// the authority vote's question, answered per page at the signature's own
 	// block (g1_votes.go), not here against the page at execution.
-	form, err := g1.signatureVerifier.VerifyAgainstAcceptedDigests(validated.Signature, txHash)
+	form, err := g1.signatureVerifier.VerifySignature(validated, txHash)
 	if err != nil {
 		if isInfrastructureDigestFailure(err) {
 			return evalResult{Outcome: SigUnavailable, Stage: "compute-digest", Reason: err.Error()}
+		}
+		// A signature that could not be judged is a NAMED STATE, never a rejection and never a skip: the executor
+		// version in force at its block is unproven, the transaction typedData needs is not at hand, the network's
+		// name is unknown, or its record cannot be rebuilt (RB8-B).
+		if stage, permanent, named := namedState(err); named {
+			return evalResult{Outcome: SigUnavailable, Stage: stage, Reason: err.Error(), Permanent: permanent}
 		}
 		// A capability limit is UNAVAILABLE, not REJECTED, and the difference is
 		// the whole of runbook rule 7.
