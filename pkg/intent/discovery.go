@@ -364,7 +364,9 @@ func (id *IntentDiscovery) SetBFTConsensus(consensus BFTConsensusProtocol) {
 // ProofV2Shadow captures an intent's governing pages at discovery and builds its v2 proof after the v1 proof: in the
 // background (Build) until the chain requires the v3 intent certificate, then at once for the certificate (Prove).
 type ProofV2Shadow interface {
-	Capture(intentID, account, tx string)
+	// Capture reads the governing pages. keyBook and keyPage are the key book and page the intent declares (its governance data),
+	// from which the certified key page is resolved; either may be empty.
+	Capture(intentID, account, tx, keyBook, keyPage string)
 	Build(intentID, account, tx, bvn string)
 	Prove(ctx context.Context, intentID, account, tx, bvn string, maxMajors uint64) (*proofv2.Evidence, error)
 }
@@ -1861,7 +1863,8 @@ func (id *IntentDiscovery) processIntent(intent *CertenIntent, blockHeight uint6
 				intent.IntentID, intent.TransactionHash[:16]+"...", intent.ProofPartition, inlineAttempts)
 
 			if id.v2Shadow != nil {
-				id.v2Shadow.Capture(intent.IntentID, accountURL, intent.TransactionHash)
+				keyBook, keyPage := declaredKeyPage(intent)
+				id.v2Shadow.Capture(intent.IntentID, accountURL, intent.TransactionHash, keyBook, keyPage)
 			}
 			cp, perr := id.buildChainedCertenProof(ctx, accountURL, intent.TransactionHash, intent.ProofPartition, intent.IntentID, inlineAttempts)
 			if perr != nil {
@@ -2026,7 +2029,8 @@ func (id *IntentDiscovery) processMultiLegIntent(intent *CertenIntent, blockHeig
 			id.logger.Printf("🔗 [MULTI-LEG] Generating L1-L3 chained proof for %s (attempts=%d)", intent.IntentID, inlineAttempts)
 
 			if id.v2Shadow != nil {
-				id.v2Shadow.Capture(intent.IntentID, accountURL, intent.TransactionHash)
+				keyBook, keyPage := declaredKeyPage(intent)
+				id.v2Shadow.Capture(intent.IntentID, accountURL, intent.TransactionHash, keyBook, keyPage)
 			}
 			cp, perr := id.buildChainedCertenProof(ctx, accountURL, intent.TransactionHash, intent.ProofPartition, intent.IntentID, inlineAttempts)
 			if perr != nil {
@@ -2377,4 +2381,13 @@ func failureClassOf(err error) database.IntentFailureClass {
 		return database.FailureGovernanceUnavailable
 	}
 	return database.FailureProcessingFailed
+}
+
+// declaredKeyPage is the key book and page an intent's governance data declares; empty when it declares none or cannot be read.
+func declaredKeyPage(ci *consensus.CertenIntent) (keyBook, keyPage string) {
+	gov, err := ci.ParseGovernance()
+	if err != nil || gov == nil {
+		return "", ""
+	}
+	return gov.Authorization.RequiredKeyBook, gov.Authorization.RequiredKeyPage
 }

@@ -47,6 +47,16 @@ func LoadNetworkRouter(ctx context.Context, endpoint string) (*NetworkRouter, er
 
 // Partition is the lower-case partition name ("bvn1", "directory") the network routes account to.
 func (r *NetworkRouter) Partition(account string) (string, error) {
+	id, err := r.PartitionID(account)
+	if err != nil {
+		return "", err
+	}
+	return strings.ToLower(id), nil
+}
+
+// PartitionID is the partition the network routes account to, spelled exactly as the routing table spells it ("BVN2",
+// "Directory"): the spelling a partition's own URLs (acc://bvn-BVN2.acme) carry, which a hash over a URL is sensitive to.
+func (r *NetworkRouter) PartitionID(account string) (string, error) {
 	u, err := url.Parse(account)
 	if err != nil {
 		return "", fmt.Errorf("account %q: %w", account, err)
@@ -60,7 +70,7 @@ func (r *NetworkRouter) Partition(account string) (string, error) {
 	id := u.IdentityAccountID32()
 	for _, o := range r.table.Overrides {
 		if o.Account != nil && o.Account.IdentityAccountID32() == id {
-			return strings.ToLower(o.Partition), nil
+			return o.Partition, nil
 		}
 	}
 	n := u.Routing()
@@ -76,5 +86,5 @@ func (r *NetworkRouter) Partition(account string) (string, error) {
 	if len(match) != 1 {
 		return "", fmt.Errorf("route %s: %d routes match routing number %016x (%v); the table is not a partition of the space", account, len(match), n, match)
 	}
-	return strings.ToLower(match[0]), nil
+	return match[0], nil
 }
