@@ -24,10 +24,12 @@ func g1With(sigs ...proof.SignatureData) *proof.G1Result {
 func TestAuthorizationLeavesAreTheKeysG1Counted(t *testing.T) {
 	pubA, pubB := strings.Repeat("aa", 32), strings.Repeat("bb", 32)
 	sigA, sigB := strings.Repeat("11", 64), strings.Repeat("22", 64)
+	// RB8-B: the key hash is the signature TYPE's own, so the fixture names its type (G1 always does; it used to be
+	// left empty because only ed25519 was ever counted and the hash was sha256 for every record).
 	g1 := g1With(
-		proof.SignatureData{PublicKey: pubB, Signature: sigB, Signer: "acc://org.acme/book/1"},
-		proof.SignatureData{PublicKey: pubA, Signature: sigA, Signer: "acc://org.acme/book/1"},
-		proof.SignatureData{PublicKey: pubA, Signature: sigA, Signer: "acc://org.acme/book/1"}, // the same key again
+		proof.SignatureData{Type: "ed25519", PublicKey: pubB, Signature: sigB, Signer: "acc://org.acme/book/1"},
+		proof.SignatureData{Type: "ed25519", PublicKey: pubA, Signature: sigA, Signer: "acc://org.acme/book/1"},
+		proof.SignatureData{Type: "ed25519", PublicKey: pubA, Signature: sigA, Signer: "acc://org.acme/book/1"}, // the same key again
 	)
 	leaves, err := authorizationLeavesFromG1(g1)
 	if err != nil {
