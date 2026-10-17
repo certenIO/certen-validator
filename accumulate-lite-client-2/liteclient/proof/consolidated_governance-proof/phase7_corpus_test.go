@@ -343,6 +343,25 @@ func TestP7_1_D4_MerkleFormVerifies(t *testing.T) {
 					"does not accept it - the corpus is wrong")
 			}
 
+			if tr.KeyType != "ed25519" {
+				// A non-ed25519 key signature (case K, btc) carries Accumulate's binary encoding in the record the extractor
+				// builds; it must verify from its bytes under the merkle form. The metadata-digest control below is
+				// ed25519-specific (VerifyEd25519), so the control for these types is accumulate-core's own verdict plus
+				// digestForm recorded when the trace was captured.
+				sd, err := (&SignatureVerifier{}).ExtractSignatureFromMessageResult(messageResultFor(tr))
+				if err != nil {
+					t.Fatalf("extraction of a %s signature Kermit delivered: %v", tr.KeyType, err)
+				}
+				form, err := sv.VerifyAgainstAcceptedDigests(sd, tr.TransactionHash)
+				if err != nil {
+					t.Fatalf("a %s signature Kermit delivered is still refused: %v", tr.KeyType, err)
+				}
+				if form != DigestFormMerkle {
+					t.Fatalf("verified under the %q form; accumulate-core used %q", form, DigestFormMerkle)
+				}
+				return
+			}
+
 			form, err := sv.VerifyAgainstAcceptedDigests(corpusSignatureData(tr), tr.TransactionHash)
 			if err != nil {
 				t.Fatalf("a signature Kermit delivered is still refused: %v", err)
