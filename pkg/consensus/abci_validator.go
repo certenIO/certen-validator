@@ -671,6 +671,8 @@ func (app *ValidatorApp) CheckTx(ctx context.Context, req *abcitypes.RequestChec
 	if nextSet != nil && app.ledgerStore != nil {
 		if log, err := app.ledgerStore.LoadG1Activation(); err == nil {
 			checkCfg.RequireBoundingBasis = G1ActivationAt(log, app.LatestHeight()+1) != nil
+		} else {
+			app.logger.Printf("⚠️ [G1-ACTIVATION] CheckTx could not read the cross-partition activation log for bundle %s: %v; the v14 reading of a zero cost basis applies to this filter and FinalizeBlock, which stops the node on an unreadable log, decides", vb.BundleID, err)
 		}
 	}
 	if reason, err := VerifyEntitlement(&vb, PrincipalOf(&vb), approxNow.Unix(), checkCfg); err != nil {
