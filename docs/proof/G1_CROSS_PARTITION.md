@@ -189,6 +189,8 @@ report states `AuthorizationMode = all_authorities_disabled`: readiness is one r
 outside the list is the disclosure `g1_authority_voter_outside_list`. Otherwise the mode is `authorities_required` and a vote by an authority outside the
 principal's set is refused.
 
+**The governing set follows the timeline.** A delegate book named by ANY state of a page with a certified history (not only its state at B_Y) is a delegate-book of the closure, with all its pages: the delegation a counted signature went through may have been removed after it arrived. A delegated hop is judged on the delegating page at the authority signature arrival: the page must hold the delegate entry then, and - unlike a key signature - takes its then-current version.
+
 **When the evidence is silent.** Without the transaction, a history for every page a counted signature was recorded on, or the arrival proof of every counted
 signature, the votes are NOT re-evaluated and the report says so by name (`g1_completeness_unproven`, with the missing member in its detail): never a verified S3.
 A carried history is always verified, whatever else is missing.
