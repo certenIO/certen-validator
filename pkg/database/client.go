@@ -15,6 +15,7 @@ import (
 	_ "github.com/lib/pq" // PostgreSQL driver
 
 	"github.com/certen/independant-validator/pkg/config"
+	"github.com/certen/independant-validator/pkg/metrics"
 )
 
 // Client represents a database client with connection pooling and automatic reconnection
@@ -124,8 +125,27 @@ func (c *Client) connectionHealthMonitor() {
 					c.logger.Printf("✅ [DB-HEALTH] Connection recovered after %d failures", consecutiveFailures)
 				}
 				consecutiveFailures = 0
+				c.sampleLockWaiters()
 			}
 		}
+	}
+}
+
+// sampleLockWaiters records how many sessions of this database wait on a lock (RB8-F). A stalled write that is
+// really a lock wait is otherwise invisible: the statement just takes long. A failed sample is counted, never
+// guessed at.
+func (c *Client) sampleLockWaiters() {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	var n int
+	if err := c.db.QueryRowContext(ctx,
+		`SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'`).Scan(&n); err != nil {
+		metrics.RecordDBLockProbeError()
+		return
+	}
+	metrics.SetDBLockWaiters(n)
+	if n > 0 {
+		c.logger.Printf("⚠️ [DB-HEALTH] %d session(s) of this database are waiting on a lock", n)
 	}
 }
 
