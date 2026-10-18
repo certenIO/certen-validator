@@ -249,7 +249,13 @@ func checkProofV2(in consensus.IntentMessageInputs, trust *ProofV2Trust, inc, op
 	case trust == nil || trust.Archive == nil:
 		return zero, false, ErrProofV2TrustMissing
 	}
-	rep, err := proofv2.VerifyFromGenesis(in.ProofV2, trust.Archive, trust.Inputs, inc)
+	// The entry point by the evidence's version, as consensus chooses its own (defaultProofV2Verifier): the 2.0 entry point refuses 2.1 by
+	// version and the 2.1 one refuses 2.0, so a document is never judged by the other version's verifier.
+	verify := proofv2.VerifyFromGenesis
+	if in.ProofV2.Version == proofv2.Version21 {
+		verify = proofv2.Verify21FromGenesis
+	}
+	rep, err := verify(in.ProofV2, trust.Archive, trust.Inputs, inc)
 	if err != nil {
 		return zero, false, fmt.Errorf("the certified proof v2: %w", err)
 	}
