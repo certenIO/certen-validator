@@ -34,7 +34,7 @@ Three defects, one rules version:
 | `version` = 1 + the newest version recorded | 16 | A set cannot be replayed, skipped or reordered. |
 | Recorded append-only at its height (`/certen/anchor_set`), in force from the **next** height | - | A block is judged identically however often it is executed. |
 | From the height after the first anchor set, every ValidatorBlock chain target names its chain's committed anchor (compared as an address) | 14, `ANCHOR_NOT_COMMITTED` | RB4-F35. |
-| From the same height, a ceiling that touches a chain the epoch does not price is refused. A chain is not priced if the epoch lists no basis for it, or lists one that is not a bound: `base_micro_usd` of 0, or `per_leg_micro_usd` of 0 on a block that settles more than one leg on that chain (a zero sums to nothing and passes every ceiling) | 4, `ENTITLEMENT_UNPRICED` | RB4-F6, PV2-F3. |
+| From the same height, a ceiling that touches a chain the epoch does not price (lists no basis for) is refused. A listed basis of zero is a price under v14, as it was when v14 began deciding blocks; from rules v15 (the block after the cross-partition activation) a basis that is not a bound - `base_micro_usd` of 0, or `per_leg_micro_usd` of 0 on a block that settles more than one leg on that chain - is unpriced too, because a zero sums to nothing and passes every ceiling | 4, `ENTITLEMENT_UNPRICED` | RB4-F6, PV2-F3. |
 | From the same height, a negative basis, or one that overflows int64 for the block's legs, is refused | 4, `ENTITLEMENT_COST_BASIS_INVALID` | RB4-F6. |
 
 The accepted set's id (`anchor-set:<hex SigningBytes>`) goes into the app hash.
@@ -107,9 +107,10 @@ Apply every env change **before** any rebuild (lesson of 2026-10-03: the NTFY_UR
      Until an epoch prices 2017 from real measurements, v14 would refuse every Adiri intent that carries a ceiling
      (`ENTITLEMENT_UNPRICED`). This step is not optional for the four-chain set.
   - **Measured 2026-10-17 (PV2-F3): the live epoch listed 2017 with `base_micro_usd` 0 and `per_leg_micro_usd` 0.** A zero is not a
-    price: it sums to nothing and passes every ceiling. Rules v14 (this binary) counts a zero where the block multiplies it as
-    unpriced (`ENTITLEMENT_UNPRICED`), and the gateway (`pv2/rb8-h-chain2017`) no longer publishes such a chain. Both must be in
-    place before the anchor set is committed; the verification above then shows 2017 only once its measured costs are positive.
+    price: it sums to nothing and passes every ceiling. The gateway (`pv2/rb8-h-chain2017`) no longer publishes such a chain, which
+    under v14 makes 2017 unlisted and so unpriced (`ENTITLEMENT_UNPRICED`). Rules v15 also reads a listed zero as no bound, so a gateway
+    that publishes one is refused from the activation on. v14 itself keeps counting a listed zero as a price: it was deciding blocks
+    when this was found, and changing its verdict would decide the same bytes two ways. Deploy the gateway change before relying on the ceiling for Adiri.
    - v13 validators already understand the v2 (cost-basis) preimage, so publishing the basis changes nothing for them.
 2. **History check before the validator deploy.** Build `validator-rotate` from the release commit and run it against one
    v13 validator that holds every block from 1:

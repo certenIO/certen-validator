@@ -666,6 +666,13 @@ func (app *ValidatorApp) CheckTx(ctx context.Context, req *abcitypes.RequestChec
 	}
 	checkCfg := app.entitlement
 	checkCfg.RequireCostBasis = nextSet != nil
+	// Rules v15 reads a zero cost basis as no bound (PV2-F3) from the height after the cross-partition activation. Another
+	// filter: a log it cannot read leaves the v14 reading and FinalizeBlock, the authority, judges (and stops the node).
+	if nextSet != nil && app.ledgerStore != nil {
+		if log, err := app.ledgerStore.LoadG1Activation(); err == nil {
+			checkCfg.RequireBoundingBasis = G1ActivationAt(log, app.LatestHeight()+1) != nil
+		}
+	}
 	if reason, err := VerifyEntitlement(&vb, PrincipalOf(&vb), approxNow.Unix(), checkCfg); err != nil {
 		metrics.RecordEntitlementDecision("checktx", "refused", reason, PrincipalOf(&vb))
 		app.logger.Printf("🚫 [ENTITLEMENT] CheckTx rejecting bundle=%s principal=%q reason=%s",
@@ -749,6 +756,10 @@ func (app *ValidatorApp) processValidatorTransaction(tx []byte) abcitypes.ExecTx
 	}
 	gate := app.entitlement
 	gate.RequireCostBasis = anchorSet != nil
+	// Rules v15 (PV2-F3): a published cost basis that is zero where the block multiplies it is no bound, so the chain is
+	// unpriced. Only from the height after the accepted cross-partition activation, a committed fact on every node; until
+	// then v14's verdict stands exactly (a listed zero is a price).
+	gate.RequireBoundingBasis = anchorSet != nil && app.g1ActivationInForce(int64(app.currentBlockHeight)) != nil
 
 	// Entitlement gate — THE AUTHORITY.
 	//
