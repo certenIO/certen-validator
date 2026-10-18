@@ -131,7 +131,7 @@ func (s *Spine) Advance(r *api.MajorHeaderRecord) error {
 		return errors.Conflict.WithFormat("anchor for minor block %d does not advance past %d", body.MinorBlockIndex, s.LastMinorBlock)
 	}
 
-	err = s.verifyAndCommit(body, r.Anchor, r.Signatures, r.Updates)
+	err = s.verifyAndCommit(body, r.Anchor, r.Signatures, r.Updates, s.refuseReplay)
 	if err != nil {
 		return errors.UnknownError.WithFormat("major block %d: %w", r.Index, err)
 	}
@@ -172,7 +172,7 @@ func (s *Spine) AdvanceEpoch(r *api.MinorRootRecord) error {
 		return errors.Unauthenticated.With("invalid root proof")
 	}
 
-	err = s.verifyAndCommit(body, r.Anchor, r.Signatures, r.Updates)
+	err = s.verifyAndCommit(body, r.Anchor, r.Signatures, r.Updates, s.refuseReplay)
 	if err != nil {
 		if cs, ok := err.(*CertifyState); ok {
 			return cs
@@ -218,7 +218,7 @@ func (s *Spine) AdvanceAnchored(r *api.MinorRootRecord, link *merkle.Receipt) er
 		return certifyState(StateCertifyLinkInvalid, "0")
 	}
 
-	err = s.verifyAndCommit(body, r.Anchor, r.Signatures, r.Updates)
+	err = s.verifyAndCommit(body, r.Anchor, r.Signatures, r.Updates, true)
 	if err != nil {
 		if cs, ok := err.(*CertifyState); ok {
 			return cs
@@ -251,7 +251,7 @@ func hasUpdate(list []AppliedUpdate, h [32]byte) bool {
 	return false
 }
 
-func (s *Spine) verifyAndCommit(body *protocol.DirectoryAnchor, anchor *messaging.SequencedMessage, sigs []protocol.KeySignature, updates []*api.NetworkUpdateProof) error {
+func (s *Spine) verifyAndCommit(body *protocol.DirectoryAnchor, anchor *messaging.SequencedMessage, sigs []protocol.KeySignature, updates []*api.NetworkUpdateProof, refuseReplay bool) error {
 	candidate := s.globals.Copy()
 	var applied []AppliedUpdate
 	for _, u := range updates {
@@ -260,7 +260,7 @@ func (s *Spine) verifyAndCommit(body *protocol.DirectoryAnchor, anchor *messagin
 			return err
 		}
 		if a != nil {
-			if s.refuseReplay && (hasUpdate(s.Applied, a.TxHash) || hasUpdate(applied, a.TxHash)) {
+			if refuseReplay && (hasUpdate(s.Applied, a.TxHash) || hasUpdate(applied, a.TxHash)) {
 				return certifyState(StateCertifyUpdateReplayed, hex.EncodeToString(a.TxHash[:]))
 			}
 			a.AnchorMinorBlock = body.MinorBlockIndex

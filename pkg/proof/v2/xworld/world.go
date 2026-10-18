@@ -537,11 +537,17 @@ func build(o Options) *Built {
 		RootProof: &merkle.ReceiptList{MerkleState: ms, Elements: [][]byte{q}, Receipt: rcpt(q, step{false, base})},
 	}
 	certify := []string{hexs(must(certRecord.MarshalBinary()))}
+	hops := []string{}
 	if o.Chain != nil {
 		fin, finLink := o.Chain.final(base, q, a32(certRoot), a32(bpt), v)
 		certify = append(chainRecs, fin)
 		if finLink != "" {
 			chainLinks = append(chainLinks, finLink)
+		}
+		if len(o.Chain.Hops) > 0 {
+			var hopLinks []string
+			hops, hopLinks = o.Chain.buildHops(r1, must(genGlob.MarshalBinary()), a32(bpt), v)
+			chainLinks = append(chainLinks, hopLinks...)
 		}
 	}
 
@@ -584,7 +590,7 @@ func build(o Options) *Built {
 		},
 		Pages: pages,
 		Votes: []proofv2.Vote{vote},
-		Check: proofv2.SetCheck{Majors: 1, Hops: []string{}, Set: proof.ValidatorSetProof{Incarnation: hexs(pin[:]), Network: netProof, Globals: globProof}},
+		Check: proofv2.SetCheck{Majors: 1, Hops: hops, Set: proof.ValidatorSetProof{Incarnation: hexs(pin[:]), Network: netProof, Globals: globProof}},
 	}
 	if !o.NoRouting {
 		ev.Check.Routing = &routProof

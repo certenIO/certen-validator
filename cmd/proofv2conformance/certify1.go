@@ -85,6 +85,9 @@ func certify1Worlds() map[string]xworld.Options {
 		"chain-duplicated-update":   {Chain: &xworld.Chain{Items: []xworld.ChainItem{{Anchored: true, Update: xworld.UpdateGlobals, Repeat: 2}}, Final: xworld.ChainItem{Anchored: true}}},
 		"chain-continuous-then-end": {Chain: &xworld.Chain{Items: []xworld.ChainItem{orc(false)}, Final: xworld.ChainItem{Anchored: true}}},
 		"chain-anchored-then-end":   {Chain: &xworld.Chain{Items: []xworld.ChainItem{orc(true)}}},
+		"chain-hops-anchored":       {Chain: &xworld.Chain{Final: xworld.ChainItem{Anchored: true}, Hops: []xworld.ChainItem{orc(true), {Anchored: true}}}},
+		"chain-hops-no-effect":      {Chain: &xworld.Chain{Final: xworld.ChainItem{Anchored: true}, Hops: []xworld.ChainItem{{Anchored: true}, {Anchored: true}}}},
+		"chain-hops-duplicated":     {Chain: &xworld.Chain{Final: xworld.ChainItem{Anchored: true}, Hops: []xworld.ChainItem{{Anchored: true, Update: xworld.UpdateGlobals, Repeat: 2}, {Anchored: true}}}},
 	}
 }
 
@@ -302,6 +305,21 @@ func certify1Specs() []certify1Spec {
 				return setMember(d, append(certifyAt(0), "$epilogue"), "05010a")
 			}},
 
+		// The set check's own items (check.hops): the same rules, the links numbered on after certify's.
+		{Certify1Case: c("hops-anchored-verified", "chain-hops-anchored", "none", "an anchored closing certify item and two anchored hops, three links in the order certify then hops", ok), apply: noEdit},
+		{Certify1Case: c("hop-link-absent", "chain-hops-anchored", "evidence/links/2 removed", "the last hop has no link: the ordinal is counted across certify and hops", certify1State(proofv2.StateCertifyLinkMissing, "2")),
+			apply: func(d map[string]any, _ *xworld.Built) error {
+				ls, okl := memberAt(d, "evidence", "links").([]any)
+				if !okl || len(ls) != 3 {
+					return fmt.Errorf("the base document has no three links")
+				}
+				return setMember(d, []any{"evidence", "links"}, ls[:2])
+			}},
+		{Certify1Case: c("hop-link-start-altered", "chain-hops-anchored", "evidence/links/1/start first byte flipped", "the first hop's link starts somewhere other than the checkpoint's root chain anchor", certify1State(proofv2.StateCertifyLinkStart, "1")),
+			apply: flipLink(1, "start")},
+		{Certify1Case: c("hop-anchored-item-without-update-not-last", "chain-hops-no-effect", "none (the first hop is anchored, carries no update and is not the last)", "the canonical form holds for the set check's hops; the item is numbered across certify and hops", certify1State(proofv2.StateCertifyItemWithoutEffect, "1", "310")), apply: noEdit},
+		{Certify1Case: c("hop-duplicated-update", "chain-hops-duplicated", "none (the first hop carries the same globals write twice)", "the replay refusal holds for the set check's hops", Certify1Case{Expect: "refused"}), apply: noEdit},
+
 		// Evidence 2.0 is frozen.
 		{Certify1Case: c("anchored-item-in-an-evidence-2.0-document", "conformance:network-update", "evidence/certify/0/rootProof removed", "an item without a root proof in a document that claims 2.0: refused as it always was", plain("certify run 0: incomplete minor root record")),
 			apply: func(d map[string]any, _ *xworld.Built) error {
@@ -354,7 +372,7 @@ func writeCertify1(out string) error {
 		rep, verr := verifyGuarded(edited)
 		xc := s.Certify1Case
 		xc.File = s.Name + ".json"
-		if s.Name == "duplicated-update" {
+		if s.Name == "duplicated-update" || s.Name == "hop-duplicated-update" {
 			x := certify1State(proofv2.StateCertifyUpdateReplayed, xworld.UpdateTxHash(xworld.UpdateGlobals, built.Inputs.GlobalsRecord))
 			xc.Expect, xc.State, xc.Fields, xc.Wording = x.Expect, x.State, x.Fields, x.Wording
 		}

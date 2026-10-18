@@ -680,6 +680,141 @@
       }
     },
     {
+      "name": "hops-anchored-verified",
+      "description": "an anchored closing certify item and two anchored hops, three links in the order certify then hops",
+      "world": "chain-hops-anchored",
+      "edit": "none",
+      "file": "hops-anchored-verified.json",
+      "sha256": "a23a18d4aa0229e7dc0e4254bbc9b39c779b45cf0d2817d08f9d1151ef6eae33",
+      "expect": "verified",
+      "report": {
+        "version": "2.1",
+        "tag": "certen:g1:v4",
+        "partition": "acc://bvn-BVN1.acme",
+        "anchorBlock": 50,
+        "certifiedRoot": "4b5bb5147f4ecfcfb3ef2e772d1038990c61697e24620fb97c9224a22b15e2ba",
+        "checkBlock": 320,
+        "setVerdict": "verified",
+        "routingHeight": 1,
+        "proven": [
+          {
+            "url": "acc://pv2-cust-5.acme/data",
+            "partition": "acc://bvn-BVN1.acme",
+            "block": 50,
+            "roles": [
+              "principal-chain"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/1",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page",
+              "voter"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/2",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book/1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-page"
+            ]
+          }
+        ],
+        "pagesBound": 6,
+        "unproven": [
+          "g1_completeness_unproven"
+        ]
+      }
+    },
+    {
+      "name": "hop-link-absent",
+      "description": "the last hop has no link: the ordinal is counted across certify and hops",
+      "world": "chain-hops-anchored",
+      "edit": "evidence/links/2 removed",
+      "file": "hop-link-absent.json",
+      "sha256": "29609166df2f24147d6d70e3df065d22eb0b17dace2a130e28da5c5d16764a79",
+      "expect": "refused",
+      "state": "certify_link_missing",
+      "fields": [
+        "2"
+      ],
+      "wording": "certify_link_missing{2}: an anchored item has no link",
+      "prefix": "certify_link_missing{2}: an anchored item has no link"
+    },
+    {
+      "name": "hop-link-start-altered",
+      "description": "the first hop's link starts somewhere other than the checkpoint's root chain anchor",
+      "world": "chain-hops-anchored",
+      "edit": "evidence/links/1/start first byte flipped",
+      "file": "hop-link-start-altered.json",
+      "sha256": "54186e3a038fc1b7e19b327182c290bf668b8095afd43788a41004125360e3bf",
+      "expect": "refused",
+      "state": "certify_link_start",
+      "fields": [
+        "1"
+      ],
+      "wording": "certify_link_start{1}: the link does not start at the previous verified root chain anchor",
+      "prefix": "certify_link_start{1}: the link does not start at the previous verified root chain anchor"
+    },
+    {
+      "name": "hop-anchored-item-without-update-not-last",
+      "description": "the canonical form holds for the set check's hops; the item is numbered across certify and hops",
+      "world": "chain-hops-no-effect",
+      "edit": "none (the first hop is anchored, carries no update and is not the last)",
+      "file": "hop-anchored-item-without-update-not-last.json",
+      "sha256": "b7fb40aff4242a1cf85d08429a0a88f8535db5b4812c6d02dea66f322949085a",
+      "expect": "refused",
+      "state": "certify_item_without_effect",
+      "fields": [
+        "1",
+        "310"
+      ],
+      "wording": "certify_item_without_effect{1,310}: an anchored item that is not the last of its sequence carries no update",
+      "prefix": "certify_item_without_effect{1,310}: an anchored item that is not the last of its sequence carries no update"
+    },
+    {
+      "name": "hop-duplicated-update",
+      "description": "the replay refusal holds for the set check's hops",
+      "world": "chain-hops-duplicated",
+      "edit": "none (the first hop carries the same globals write twice)",
+      "file": "hop-duplicated-update.json",
+      "sha256": "01753d5090c0e381625c45c11abaf6c3f6798a01714e9a35ddcbf3ff735387f0",
+      "expect": "refused",
+      "state": "certify_update_replayed",
+      "fields": [
+        "57b7ace2b33e5851a709a3c29b3d3642fb137669e9ecf8a9cfec95ba31278a42"
+      ],
+      "wording": "certify_update_replayed{57b7ace2b33e5851a709a3c29b3d3642fb137669e9ecf8a9cfec95ba31278a42}: the update was already applied earlier in the walk",
+      "prefix": "certify_update_replayed{57b7ace2b33e5851a709a3c29b3d3642fb137669e9ecf8a9cfec95ba31278a42}: the update was already applied earlier in the walk"
+    },
+    {
       "name": "anchored-item-in-an-evidence-2.0-document",
       "description": "an item without a root proof in a document that claims 2.0: refused as it always was",
       "world": "conformance:network-update",

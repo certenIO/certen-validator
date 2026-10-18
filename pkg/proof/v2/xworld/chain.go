@@ -38,6 +38,9 @@ type ChainItem struct {
 type Chain struct {
 	Items []ChainItem
 	Final ChainItem
+	// Hops are the set check's items (check.hops): its own walk from the checkpoint, ending at a block at or after 300 whose state root holds
+	// the proven network accounts. Empty: the set is checked at the certified block, as in every earlier suite.
+	Hops []ChainItem
 }
 
 func updateTx(kind string, globals []byte) (*protocol.Transaction, []byte) {
@@ -146,3 +149,26 @@ func foreignUpdates() []*api.NetworkUpdateProof { return nil }
 
 // GenesisRoot is the root the world's first major block closes at: the root every chain of the world starts from.
 func GenesisRoot() []byte { return seed("root 1") }
+
+// buildHops returns the records and links of Hops: the set check's own walk from the checkpoint (the root of the first major block) to a
+// certified block at or after the certified one, whose state root is the one the network and globals accounts are proven into. The last
+// hop is the last item of its sequence.
+func (c *Chain) buildHops(start, globals []byte, state [32]byte, v []validator) (recs []string, links []string) {
+	prev := start
+	for j, it := range c.Hops {
+		label := "hop item " + string(rune('a'+j))
+		e, ups := itemEntry(it, label, prev, globals)
+		root := h2(prev, e)
+		block := it.Block
+		if block == 0 {
+			block = uint64(310 + 10*j)
+		}
+		rec, link := c.record(it, prev, e, ups, block, a32(root), state, v)
+		recs = append(recs, hexs(must(rec.MarshalBinary())))
+		if link != nil {
+			links = append(links, rcptHex(link))
+		}
+		prev = root
+	}
+	return recs, links
+}
