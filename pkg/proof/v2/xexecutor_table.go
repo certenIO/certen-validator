@@ -1,31 +1,27 @@
 // Copyright 2026 Certen Protocol
 //
-// The pinned executor-version activation table (docs/proof/G1_CROSS_PARTITION.md D6, g1_executor_version_unsupported; RB9 Phase I,
-// finding RB9-C1b-2-B2).
+// The executor-version activation table (docs/proof/G1_CROSS_PARTITION.md D6, g1_executor_version_unsupported; RB9 Phase I, finding
+// RB9-C1b-2-B2; RB9 verifier round VA, note (a)).
 //
 // Live Kermit does not serve a historical receipt for <partition>/ledger ("cannot generate a receipt when there are uncommitted
 // changes"), so a real 2.1 document carries no system-ledger page and the executor version in force at a page's (partition, block) cannot
-// be proven from the document. The binding (intentcert.BindProofV21) derives it from this table instead, and the ledger page, when a
+// be proven from the document. The binding (intentcert.BindProofV21) derives it from the table instead, and the ledger page, when a
 // document does carry one, must agree with it.
 //
-// THIS TABLE IS A PINNED TRUST INPUT. It is the same table the signature-type gate of RB8 pins, copied value for value:
+// THE TABLE HAS ONE SOURCE: accumulate-lite-client-2/liteclient/proof/govsig/gate.go (kermitActivations, RB8-B), which also gates the
+// signature types that exist only from an executor version on. This file is a view over it - the same values through the same function
+// (govsig.ExecutorFloor), in the types and spellings of the evidence (uint64 blocks, "acc://bvn-BVN1.acme") - and holds no copy.
 //
-//	source: accumulate-lite-client-2/liteclient/proof/govsig/gate.go, kermitActivations, branch pv2/rb8-b-every-key-signature-type
-//	        (commit 71fd45a; research/R8-signature-types.md Measurements M5, read from Kermit's own system ledgers on 2026-10-17)
-//
-// Each of the Directory and BVN1-3 has exactly two entries on its partition main chain: systemGenesis, and one activateProtocolVersion
-// v2-kourou. v2-kourou (9) is above v2-baikonur (6), so a transaction recorded in a block after a partition's activation block was
-// executed by an executor at or above Baikonur. The version BEFORE the activation is the genesis version, which the public API cannot show
-// (BPT history retention is about 710 blocks); it is not assumed, and a block at or below the activation block is not established.
-//
-// govsig is not part of the RB9 stack's base, so the table is pinned here. When the RB8 branch merges, one follow-up makes govsig the
-// single source (this file then delegates to govsig.KermitActivations); TestExecutorTableIsPinned pins the values meanwhile. A later
-// activation on any partition needs a row here and a library bump, exactly as protocol.ExecutorVersionLatest needs one.
+// THE TABLE IS A PINNED TRUST INPUT of the proof, the fourth beside PROOF_V2 section 1's three: it describes Kermit at the pinned
+// Accumulate commit and is published with the proof (docs/proof/EXECUTOR_VERSION_PINS.md). cmd/execversionpins re-derives it from the
+// network (each partition's activateProtocolVersion message on its main chain, with the receipt to the partition's anchor) and fails if it
+// differs from the compiled one. A later activation on any partition needs a row in govsig, a library bump and a deploy to all validators.
 package proofv2
 
 import (
 	"strings"
 
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/govsig"
 	"gitlab.com/accumulatenetwork/accumulate/protocol"
 )
 
@@ -37,19 +33,13 @@ type ExecutorActivation struct {
 	Block   uint64
 }
 
-// kermitExecutorActivations: keys are the normalised partition names (NormalizeExecutorPartition): "directory", "bvn1", "bvn2", "bvn3".
-var kermitExecutorActivations = map[string]ExecutorActivation{
-	"directory": {Version: protocol.ExecutorVersionV2Kourou, Block: 9_538_105},
-	"bvn1":      {Version: protocol.ExecutorVersionV2Kourou, Block: 12_491_272},
-	"bvn2":      {Version: protocol.ExecutorVersionV2Kourou, Block: 12_492_057},
-	"bvn3":      {Version: protocol.ExecutorVersionV2Kourou, Block: 12_491_127},
-}
-
-// KermitExecutorActivations returns a copy of the pinned activation table.
+// KermitExecutorActivations returns the pinned activation table (a copy, read from govsig): keys are the normalised partition names
+// (NormalizeExecutorPartition): "directory", "bvn1", "bvn2", "bvn3".
 func KermitExecutorActivations() map[string]ExecutorActivation {
-	out := make(map[string]ExecutorActivation, len(kermitExecutorActivations))
-	for k, v := range kermitExecutorActivations {
-		out[k] = v
+	src := govsig.KermitActivations()
+	out := make(map[string]ExecutorActivation, len(src))
+	for k, v := range src {
+		out[k] = ExecutorActivation{Version: v.Version, Block: uint64(v.Block)}
 	}
 	return out
 }
@@ -63,18 +53,11 @@ func NormalizeExecutorPartition(p string) string {
 	p = strings.TrimSuffix(p, "/")
 	p = strings.TrimSuffix(p, ".acme")
 	p = strings.TrimPrefix(p, "bvn-")
-	if p == "dn" || p == "directory" {
-		return "directory"
-	}
-	return p
+	return govsig.NormalizePartition(p)
 }
 
 // ExecutorFloorAt is the lowest executor version the pinned table proves to govern the given block of the partition. ok is false when the
 // partition is not in the table or the block is at or below its activation block: the version is then not established (never assumed).
 func ExecutorFloorAt(partition string, block uint64) (protocol.ExecutorVersion, bool) {
-	a, ok := kermitExecutorActivations[NormalizeExecutorPartition(partition)]
-	if !ok || block <= a.Block {
-		return 0, false
-	}
-	return a.Version, true
+	return govsig.ExecutorFloor(NormalizeExecutorPartition(partition), int64(block))
 }

@@ -305,6 +305,9 @@ func build(o Options) *Built {
 	// The accounts of each partition. The vote's key signature sits in BankPage1's signature chain, the vote itself in the
 	// principal's.
 	voteMsg := seed("vote message")
+	if tw != nil && tw.voteMsg != nil {
+		voteMsg = tw.voteMsg // Timeline.BindSequenced: the SignatureMessage of a real authority signature
+	}
 	hopMsg := seed("hop message")
 	hopSig := &protocol.ED25519Signature{PublicKey: seed("hop key"), Signature: append(seed("hop sig a"), seed("hop sig b")...), Signer: mustURL(lay.page1), SignerVersion: 1, Timestamp: 1}
 	principal := acct{a: &protocol.DataAccount{Url: mustURL(lay.principal),

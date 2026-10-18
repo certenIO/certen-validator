@@ -258,6 +258,8 @@ type Assembly struct {
 	Votes []Vote
 	// Sequenced maps a sequenced vote's message to the hash of the SequencedMessage the source partition recorded in its synthetic ledger.
 	Sequenced map[string]string
+	// SequencedMessages maps the same vote messages to the SequencedMessage (binary, hex) the production of the vote carries.
+	SequencedMessages map[string]string
 	// Transaction is the governed transaction, binary, hex.
 	Transaction string
 	Source      ChainSource
@@ -337,7 +339,7 @@ func (a *Assembly) ProveMembers(ctx context.Context, principal string) ([]Vote, 
 			if err != nil {
 				return nil, fmt.Errorf("the production of the vote of %s: %w", v.Authority, err)
 			}
-			v.Produced = &Production{Account: lp.URL, Chain: "main", Message: seq, Receipt: ep.Receipt, Arrival: ep.Arrival}
+			v.Produced = &Production{Account: lp.URL, Chain: "main", Message: seq, Receipt: ep.Receipt, Arrival: ep.Arrival, Sequenced: a.SequencedMessages[v.Message]}
 		}
 		out[vi] = v
 	}

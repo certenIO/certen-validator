@@ -214,7 +214,10 @@ func TestReal21TamperedIsRefusedByName(t *testing.T) {
 			held = true
 		}
 	}
-	if !held {
-		t.Fatalf("a vote without its production proof must report g1_vote_held: %v", rep.Unproven)
+	// verifier round VA (d): g1_vote_held names a vote whose production a HoldUntil release could have moved. The real transaction is
+	// not held, so an inline vote without its production proof reports nothing (TestJ1HeldIsReportedOnlyForAHeldTransaction pins the
+	// held case).
+	if held {
+		t.Fatalf("a vote on a transaction that is not held reported g1_vote_held: %v", rep.Unproven)
 	}
 }

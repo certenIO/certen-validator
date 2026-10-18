@@ -67,6 +67,8 @@ type xIn struct {
 	certRoot []byte
 	x        xAnchor
 	setRoot  [32]byte
+	// network is the name of the network the proven Network account (the validator set check) holds: the chain id of a typedData signature.
+	network string
 }
 
 // kindOfAnchor says what a delivered anchor message carries, without requiring it to be a block validator anchor.
@@ -96,11 +98,11 @@ func verifyAnchor21(key string, a PartitionAnchor, certRoot []byte) (*xAnchor, e
 		return nil, fmt.Errorf("anchors[%s]: %w", key, err)
 	}
 	body, anchorTx := pa.body, pa.tx
-	derived := pa.seq.Source.String()
 	id, err := pa.partition()
 	if err != nil {
 		return nil, err
 	}
+	derived := pa.body.Source.String() // the committed value (partition() has required the wrapper to agree)
 	if !strings.EqualFold(key, derived) {
 		return nil, refusal21(StateForeignPartitionMismatch, id, body.MinorBlockIndex,
 			"url anchors[%s]: claimed %s, derived %s", key, key, derived)
@@ -135,6 +137,13 @@ func verify21(ev *Evidence, rep *Report, in xIn) error {
 	// The evidence travels in one consensus transaction: a closure over the budget is a named state (xbudget.go).
 	if err := CheckEvidenceBudget(ev, in.x); err != nil {
 		return err
+	}
+	// A transaction whose executor replaces the default authorization rule is not judged by it (xoverride.go). A carried transaction that
+	// does not decode or does not match is refused by its own name later, as before.
+	if txn, err := carriedTransaction(ev, in.x); err == nil {
+		if err := refuseExecutorOverride(txn, in.x); err != nil {
+			return err
+		}
 	}
 
 	// 1. Anchors: the transaction's own, and one per other partition, each proven into the certified root; the partition of each
@@ -228,7 +237,7 @@ func verify21(ev *Evidence, rep *Report, in xIn) error {
 	if err != nil {
 		return err
 	}
-	derived, err := deriveRoles(ev, byURL, anchors, tl, in.x)
+	derived, err := deriveRoles(ev, byURL, anchors, tl, in.x, in.network)
 	if err != nil {
 		return err
 	}
@@ -306,7 +315,7 @@ func verify21(ev *Evidence, rep *Report, in xIn) error {
 // and requires every page it needs to be present: every page 1..PageCount of every book, every account on the principal's
 // inheritance chain, every delegate book to the depth limit, every page a counted vote names. Roles that depend on facts outside
 // the evidence (declaredRoles) are not derived; the books a header-authority declaration names are expanded as authorities.
-func deriveRoles(ev *Evidence, byURL map[string]*provenAcct, anchors map[string]*xAnchor, tl states, x xAnchor) (*derivedRoles, error) {
+func deriveRoles(ev *Evidence, byURL map[string]*provenAcct, anchors map[string]*xAnchor, tl states, x xAnchor, network string) (*derivedRoles, error) {
 	out := map[string]map[PageRole]bool{}
 	dr := &derivedRoles{want: out}
 	// The transaction the evidence carries derives header-authority (and, with the initiating signature, initiator-signer): xroles.go.
@@ -547,7 +556,7 @@ func deriveRoles(ev *Evidence, byURL map[string]*provenAcct, anchors map[string]
 
 	// (f) The initiator's pages, from the initiating signature when the evidence carries it (xroles.go).
 	if txn != nil {
-		pages, found, err := initiatorPages(ev, txn, byURL)
+		pages, found, err := initiatorPages(ev, txn, byURL, network)
 		if err != nil {
 			return nil, err
 		}

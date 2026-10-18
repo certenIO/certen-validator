@@ -295,32 +295,55 @@ func receiptFlags(p, n uint64) []bool {
 	return nil
 }
 
-// maxPositionScan bounds the chain heights a position is decoded for (the decode is linear in the height).
-const maxPositionScan = 1 << 22
-
 // receiptPositions returns every position p < n whose receipt in a chain of n entries has r's shape. A receipt does not carry its
 // entry's position in anything it hashes, but the shape (which side each sibling is on) fixes it given the chain's height; a result
-// of more than one position, or none, means the position is not established.
+// of more than one position, or none, means the position is not established. The Right flags are decoded directly (receiptFlags
+// inverted): a receipt of the entry at offset off inside the perfect subtree of height h that is the j-th largest peak has h flags that
+// are the bits of off (Right when the bit is 0), then one Right flag when a smaller peak exists, then j non-Right flags. At most 64
+// peaks are tried, so the cost is O(log n) in the chain's height, not linear in it.
 func receiptPositions(r *merkle.Receipt, n uint64) []uint64 {
-	if n == 0 || n > maxPositionScan {
+	if n == 0 {
 		return nil
 	}
-	var out []uint64
-	for p := uint64(0); p < n; p++ {
-		f := receiptFlags(p, n)
-		if len(f) != len(r.Entries) {
-			continue
+	f := make([]bool, len(r.Entries))
+	for i, e := range r.Entries {
+		f[i] = e.Right
+	}
+	var heights []uint
+	for h := 63; h >= 0; h-- {
+		if n>>uint(h)&1 == 1 {
+			heights = append(heights, uint(h))
 		}
-		same := true
-		for i := range f {
-			if r.Entries[i].Right != f[i] {
-				same = false
-				break
+	}
+	var out []uint64
+	start := uint64(0)
+	for j, h := range heights {
+		want := int(h) + j
+		last := j == len(heights)-1
+		if !last {
+			want++
+		}
+		if len(f) == want {
+			k := int(h)
+			ok := true
+			if !last {
+				ok = f[k]
+				k++
+			}
+			for i := 0; i < j && ok; i++ {
+				ok = !f[k+i]
+			}
+			if ok {
+				off := uint64(0)
+				for i := 0; i < int(h); i++ {
+					if !f[i] {
+						off |= 1 << uint(i)
+					}
+				}
+				out = append(out, start+off)
 			}
 		}
-		if same {
-			out = append(out, p)
-		}
+		start += uint64(1) << h
 	}
 	return out
 }
@@ -585,20 +608,18 @@ func evaluateTimeline(in timelineIn, tl states) error {
 					Authority: normURL(as.Authority), Path: path, Block: int64(block), Origin: normURL(as.Origin), Vote: as.Vote})
 				continue
 			}
-			us, ok := sig.(protocol.UserSignature)
-			if !ok || !protocol.VerifyUserSignature(us, txn) {
-				return refusal21(StateSignatureInvalid, pa.anchor.id, pa.anchor.block, "the signature on %s does not sign the transaction", h.Page)
+			vs, verr := verifyKeySignature(sig, txn, in.x.network, pa, h.Page, block)
+			if verr != nil {
+				return verr
 			}
-			key, path := unwrapSignature(sig)
-			ks, ok := key.(protocol.KeySignature)
-			if !ok {
-				return refusal21(StateSignatureInvalid, pa.anchor.id, pa.anchor.block, "the signature on %s carries no key", h.Page)
-			}
+			ks := vs.Inner
 			if normURL(ks.GetSigner()) != govvote.CanonicalAccSpelling(h.Page) {
 				return refusal21(StateSignatureInvalid, pa.anchor.id, pa.anchor.block, "the signature on %s is by %v", h.Page, ks.GetSigner())
 			}
+			_, path := unwrapSignature(sig)
 			facts.Sigs = append(facts.Sigs, govvote.SigFact{ID: h.Message, Signer: govvote.CanonicalAccSpelling(h.Page), Path: path,
-				Version: ks.GetSignerVersion(), KeyHash: hex.EncodeToString(ks.GetPublicKeyHash()), Vote: sig.GetVote(), Block: int64(block)})
+				Version: ks.GetSignerVersion(), KeyHash: hex.EncodeToString(vs.KeyHash), Vote: sig.GetVote(), Block: int64(block),
+				Partition: strings.ToLower(pa.anchor.id)})
 		}
 		facts.Votes = append(facts.Votes, govvote.RecordedVote{ID: v.Message, Authority: govvote.CanonicalAccSpelling(v.Authority),
 			Origin: govvote.CanonicalAccSpelling(v.Origin), Vote: vt, ReleasedAt: releasedAt(in, txn, v)})
@@ -717,6 +738,10 @@ func voteNameOf(s string) string { return strings.ToLower(s) }
 // the evidence does not establish.
 func verifyProductions(in timelineIn) error {
 	ev, rep := in.ev, in.rep
+	held := false
+	if txn, err := carriedTransaction(ev, in.x.x); err == nil && txn != nil {
+		held = txn.Header.HoldUntil != nil && txn.Header.HoldUntil.MinorBlock != 0
+	}
 	for vi := range ev.Votes {
 		v := &ev.Votes[vi]
 		srcID, srcBlock := in.x.x.id, in.x.x.block
@@ -726,8 +751,13 @@ func verifyProductions(in timelineIn) error {
 			}
 		}
 		if v.Produced == nil {
-			rep.Unproven = append(rep.Unproven, NamedState{Code: StateVoteHeld, Partition: srcID, Block: srcBlock,
-				Detail: fmt.Sprintf("the block that produced the vote of %s is not established (a HoldUntil release may have produced it later than its signature arrived)", v.Authority)})
+			// The production is needed to place a vote only when the transaction is held (a HoldUntil release produces the vote in a later block
+			// than its signature arrived in). A sequenced vote without a production keeps the name the shipped vectors pin whether or not the
+			// transaction is held; an inline vote on a transaction that is not held needs no production to be placed (verifier round VA, (d)).
+			if held || v.Transport.Kind == TransportSequenced {
+				rep.Unproven = append(rep.Unproven, NamedState{Code: StateVoteHeld, Partition: srcID, Block: srcBlock,
+					Detail: fmt.Sprintf("the block that produced the vote of %s is not established (a HoldUntil release may have produced it later than its signature arrived)", v.Authority)})
+			}
 			continue
 		}
 		pr := v.Produced
@@ -756,6 +786,12 @@ func verifyProductions(in timelineIn) error {
 			if _, isLedger := pa.acct.(*protocol.SyntheticLedger); !isLedger {
 				return refusal21(StateArrivalUnproven, src.id, src.block, "%s is %T, not a synthetic ledger", pr.Account, pa.acct)
 			}
+			if pr.Sequenced == "" {
+				rep.Disclosures = append(rep.Disclosures, NamedState{Code: StateVoteProductionUnbound, Partition: src.id, Block: src.block,
+					Detail: fmt.Sprintf("the production of the vote of %s names the synthetic ledger entry that holds it but the document does not carry the SequencedMessage that entry is the hash of: nothing ties the entry to the vote", v.Authority)})
+			} else if err := bindSequenced(pr, v, src); err != nil {
+				return err
+			}
 		}
 		block, err := deriveArrival(pa, &ev.Pages[pa.i], pr.Chain, pr.Message, pr.Receipt, &pr.Arrival)
 		if err != nil {
@@ -770,6 +806,39 @@ func verifyProductions(in timelineIn) error {
 			}
 		}
 		rep.Arrivals = append(rep.Arrivals, ArrivalReport{Kind: "produced", Account: pr.Account, Partition: pa.anchor.source, Message: pr.Message, Block: block})
+	}
+	return nil
+}
+
+// bindSequenced requires a sequenced vote's production to be the vote (RB9 verifier round VA, DEF-4): the carried SequencedMessage hashes
+// to the synthetic ledger entry the production proves, wraps the SignatureMessage whose hash is the vote's Message (the entry of the
+// principal's signature chain), and names the vote's transport (source, destination, number).
+func bindSequenced(pr *Production, v *Vote, src *xAnchor) error {
+	bad := func(format string, a ...any) error {
+		return refusal21(StateArrivalUnproven, src.id, src.block, format, a...)
+	}
+	raw, err := hex.DecodeString(pr.Sequenced)
+	if err != nil {
+		return bad("the production of the vote of %s: the sequenced message is not hex", v.Authority)
+	}
+	seq := new(messaging.SequencedMessage)
+	if err := seq.UnmarshalBinary(raw); err != nil {
+		return bad("the production of the vote of %s: the sequenced message does not decode: %v", v.Authority, err)
+	}
+	if h := seq.Hash(); hex.EncodeToString(h[:]) != strings.ToLower(pr.Message) {
+		return bad("the production of the vote of %s: the sequenced message hashes to %x, not to the synthetic ledger entry %s", v.Authority, h[:8], pr.Message)
+	}
+	sm, ok := seq.Message.(*messaging.SignatureMessage)
+	if !ok {
+		return bad("the production of the vote of %s: the sequenced message wraps a %T, not a signature message", v.Authority, seq.Message)
+	}
+	if h := sm.Hash(); hex.EncodeToString(h[:]) != strings.ToLower(v.Message) {
+		return bad("the production of the vote of %s: the sequenced message wraps the signature message %x, not the vote %s", v.Authority, h[:8], v.Message)
+	}
+	if seq.Source == nil || seq.Destination == nil || !strings.EqualFold(seq.Source.String(), v.Transport.Source) ||
+		!strings.EqualFold(seq.Destination.String(), v.Transport.Destination) || seq.Number != v.Transport.Number {
+		return bad("the production of the vote of %s: the sequenced message is %v -> %v #%d, the vote's transport is %s -> %s #%d", v.Authority,
+			seq.Source, seq.Destination, seq.Number, v.Transport.Source, v.Transport.Destination, v.Transport.Number)
 	}
 	return nil
 }

@@ -71,18 +71,29 @@ func decodeAnchor21(msgHex string) (*partitionAnchor21, error) {
 // partition derives the partition the anchor proves from its Source and requires the anchor's kind to be the one that partition's
 // kind is proven by. The returned id is "Directory" or the block validator partition's ID ("BVN2").
 func (a *partitionAnchor21) partition() (string, error) {
-	id, ok := protocol.ParsePartitionUrl(a.seq.Source)
+	// The partition is the one the committed anchor body names: the transaction's hash (header and body) is what the anchor's receipt
+	// proves into the certified root, and the executor keys the partition's anchor chain by ParsePartitionUrl(body.Source)
+	// (partition_anchor.go:49-56). The SequencedMessage wrapper that carries the transaction is not covered by that hash, so its Source
+	// is only a claim that must equal the body's (RB9 verifier round VA, DEF-2).
+	if a.body.Source == nil {
+		return "", refusal21(StateForeignPartitionMismatch, "", a.body.MinorBlockIndex, "the anchor body names no source")
+	}
+	id, ok := protocol.ParsePartitionUrl(a.body.Source)
 	if !ok {
-		return "", refusal21(StateForeignPartitionMismatch, "", a.body.MinorBlockIndex, "the anchor's source %v is not a partition", a.seq.Source)
+		return "", refusal21(StateForeignPartitionMismatch, "", a.body.MinorBlockIndex, "the anchor's source %v is not a partition", a.body.Source)
+	}
+	if !strings.EqualFold(a.seq.Source.String(), a.body.Source.String()) {
+		return id, refusal21(StateForeignPartitionMismatch, id, a.body.MinorBlockIndex,
+			"url %v: the anchor's body (the committed value) names %v, the message that delivered it %v", a.body.Source, a.body.Source, a.seq.Source)
 	}
 	isDir := strings.EqualFold(id, protocol.Directory)
 	switch {
 	case isDir && !a.directory:
 		return id, refusal21(StateForeignPartitionMismatch, id, a.body.MinorBlockIndex,
-			"url %v: the Directory is proven by a DirectoryAnchor, this anchor is a BlockValidatorAnchor", a.seq.Source)
+			"url %v: the Directory is proven by a DirectoryAnchor, this anchor is a BlockValidatorAnchor", a.body.Source)
 	case !isDir && a.directory:
 		return id, refusal21(StateForeignPartitionMismatch, id, a.body.MinorBlockIndex,
-			"url %v: a block validator partition is proven by a BlockValidatorAnchor, this anchor is a DirectoryAnchor", a.seq.Source)
+			"url %v: a block validator partition is proven by a BlockValidatorAnchor, this anchor is a DirectoryAnchor", a.body.Source)
 	}
 	return id, nil
 }

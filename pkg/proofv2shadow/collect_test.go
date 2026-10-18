@@ -17,7 +17,9 @@ import (
 	"time"
 
 	proofv2 "github.com/certen/independant-validator/pkg/proof/v2"
+	"gitlab.com/accumulatenetwork/accumulate/pkg/api/v3"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/database/merkle"
+	"gitlab.com/accumulatenetwork/accumulate/pkg/types/messaging"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/url"
 	"gitlab.com/accumulatenetwork/accumulate/protocol"
 )
@@ -680,5 +682,56 @@ func TestCollectNamesAnExecutorOverride(t *testing.T) {
 	f.facts.Type = protocol.TransactionTypeWriteData
 	if _, err := f.collect(); err != nil {
 		t.Fatalf("a WriteData was refused: %v", err)
+	}
+}
+
+// RB9 verifier round VA, DEF-1: the capture and the verifier read ONE table of executor-override body types. Every type of the table is
+// named by the capture; the types the verifier models (UpdateAccountAuth: the default rule plus the authorities the body adds and
+// RequireAuthorization) are captured.
+func TestCollectRefusesEveryTypeOfTheSharedOverrideTable(t *testing.T) {
+	for _, typ := range proofv2.ExecutorOverrideTypes() {
+		f := newFakeNet(t, tclWorld())
+		f.facts = facts("acc://cust.acme/pay")
+		f.facts.Type = typ
+		_, err := f.collect()
+		var ns *proofv2.NamedState
+		if !errors.As(err, &ns) || ns.Code != proofv2.StateExecutorOverrideUnsupported {
+			t.Fatalf("%v gave %v", typ, err)
+		}
+	}
+	f := newFakeNet(t, tclWorld())
+	f.facts = facts("acc://cust.acme/pay")
+	f.facts.Type = protocol.TransactionTypeUpdateAccountAuth
+	if _, err := f.collect(); err != nil {
+		t.Fatalf("UpdateAccountAuth, which the verifier models, was refused: %v", err)
+	}
+}
+
+// RB9 verifier round VA, DEF-4: the fact of a sequenced vote carries the SequencedMessage itself, and it is the message whose hash the
+// source partition's synthetic ledger holds (SeqHash), so the production of the vote can carry what the verifier binds.
+func TestVoteFactCarriesTheSequencedMessageTheLedgerHolds(t *testing.T) {
+	var cause [32]byte
+	cause[0] = 7
+	as := &protocol.AuthoritySignature{Origin: url.MustParse("acc://bank.acme/book/1"), Authority: url.MustParse("acc://bank.acme/book"), Vote: protocol.VoteTypeAccept,
+		Cause: url.MustParse("acc://bank.acme/book/1").WithTxID(cause), TxID: url.MustParse("acc://cust.acme/pay").WithTxID(cause)}
+	rec := &api.MessageRecord[messaging.Message]{
+		ID:       url.MustParse("acc://cust.acme/pay").WithTxID(cause),
+		Message:  &messaging.SignatureMessage{Signature: as, TxID: url.MustParse("acc://cust.acme/pay").WithTxID(cause)},
+		Sequence: &messaging.SequencedMessage{Source: url.MustParse("acc://bvn-BVN2.acme"), Destination: url.MustParse("acc://bvn-BVN1.acme"), Number: 9},
+	}
+	v := voteFact(as, rec)
+	if !v.Sequenced || len(v.SeqRaw) == 0 {
+		t.Fatalf("sequenced %v, %d bytes", v.Sequenced, len(v.SeqRaw))
+	}
+	seq := new(messaging.SequencedMessage)
+	if err := seq.UnmarshalBinary(v.SeqRaw); err != nil {
+		t.Fatal(err)
+	}
+	h := seq.Hash()
+	if h != v.SeqHash || seq.Number != 9 || seq.Source.String() != "acc://bvn-BVN2.acme" {
+		t.Fatalf("the carried message hashes to %x (SeqHash %x), number %d", h[:6], v.SeqHash[:6], seq.Number)
+	}
+	if mh := seq.Message.Hash(); mh != [32]byte(rec.Message.Hash()) {
+		t.Fatalf("the carried message wraps %x, not the recorded %x", mh[:6], rec.Message.Hash())
 	}
 }

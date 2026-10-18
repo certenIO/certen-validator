@@ -171,6 +171,11 @@ type Production struct {
 	Message string  `json:"message"` // the entry's hash in Account's Chain, hex32
 	Receipt string  `json:"receipt"` // from Message to Chain's root as bound at B_Y (binary merkle.Receipt, hex)
 	Arrival Arrival `json:"arrival"`
+	// Sequenced is, for a sequenced vote, the SequencedMessage (binary, hex) the source partition recorded in its synthetic ledger: Message is its
+	// hash, it wraps the SignatureMessage that is the vote's Message, and its Source, Destination and Number are the vote's Transport (RB9
+	// verifier round VA, DEF-4). Absent from an inline vote's production and from a document made before the round (evidence 2.1 members
+	// are additive), which the verifier then discloses as unbound (g1_vote_production_unbound).
+	Sequenced string `json:"sequenced,omitempty"`
 }
 
 // HistoryEntry is one entry of a key page's main chain: the transaction whose hash the chain holds. Initiator is the initiating
@@ -262,6 +267,10 @@ const (
 	StateDirectoryPartitionUnsupported = "g1_directory_partition_unsupported"
 	// StateVoteHeld: the vote was produced by a HoldUntil release.
 	StateVoteHeld = "g1_vote_held"
+	// StateVoteProductionUnbound: a sequenced vote's production names the synthetic ledger entry that holds it, but the document does not carry the
+	// SequencedMessage that entry is the hash of, so nothing ties that entry to the vote. It is a disclosure of the report (RB9 verifier round VA,
+	// DEF-4); documents made since the round always carry the message, and the consensus binding refuses a report that discloses it.
+	StateVoteProductionUnbound = "g1_vote_production_unbound"
 	// StateExecutorVersionUnsupported: the transaction executed under a version whose path or inheritance semantics differ.
 	StateExecutorVersionUnsupported = "g1_executor_version_unsupported"
 	// StateCompletenessUnproven: the closure could not be derived from proven state.

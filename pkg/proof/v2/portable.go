@@ -126,6 +126,8 @@ type PortableProduction struct {
 	Message string          `json:"message"`
 	Receipt json.RawMessage `json:"receipt"` // merkle.Receipt
 	Arrival PortableArrival `json:"arrival"`
+	// Sequenced is Production.Sequenced as Accumulate's JSON of the messaging.SequencedMessage.
+	Sequenced json.RawMessage `json:"sequenced,omitempty"`
 }
 
 // PortableHop is VoteHop with its receipt as Accumulate's JSON.
@@ -307,6 +309,11 @@ func ExportDocument(ev *Evidence, in proof.IncarnationInputs, pin [32]byte) (*Po
 				return nil, fmt.Errorf("vote of %s, production: %w", v.Authority, err)
 			}
 			pv.Produced = &PortableProduction{Account: v.Produced.Account, Chain: v.Produced.Chain, Message: v.Produced.Message, Receipt: pr, Arrival: a}
+			if v.Produced.Sequenced != "" {
+				if pv.Produced.Sequenced, err = exportSequenced(v.Produced.Sequenced); err != nil {
+					return nil, fmt.Errorf("vote of %s, production: %w", v.Authority, err)
+				}
+			}
 		}
 		e.Votes = append(e.Votes, pv)
 	}
@@ -407,6 +414,31 @@ func importArrival(a PortableArrival) (Arrival, error) {
 		out.Before = &b
 	}
 	return out, nil
+}
+
+// exportSequenced / importSequenced convert a SequencedMessage between its binary (hex) and Accumulate's JSON form.
+func exportSequenced(h string) (json.RawMessage, error) {
+	raw, err := hex.DecodeString(h)
+	if err != nil {
+		return nil, err
+	}
+	seq := new(messaging.SequencedMessage)
+	if err := seq.UnmarshalBinary(raw); err != nil {
+		return nil, fmt.Errorf("sequenced message: %w", err)
+	}
+	return json.Marshal(seq)
+}
+
+func importSequenced(j json.RawMessage) (string, error) {
+	seq := new(messaging.SequencedMessage)
+	if err := json.Unmarshal(j, seq); err != nil {
+		return "", fmt.Errorf("sequenced message: %w", err)
+	}
+	b, err := seq.MarshalBinary()
+	if err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
 }
 
 func exportAnchor(a PartitionAnchor) (PortableAnchor, error) {
@@ -566,6 +598,11 @@ func Import(p *Portable) (*Evidence, *Archive, proof.IncarnationInputs, [32]byte
 				return fail(fmt.Errorf("vote of %s, production: %w", v.Authority, err))
 			}
 			vote.Produced = &Production{Account: v.Produced.Account, Chain: v.Produced.Chain, Message: v.Produced.Message, Receipt: pr, Arrival: a}
+			if len(v.Produced.Sequenced) > 0 {
+				if vote.Produced.Sequenced, err = importSequenced(v.Produced.Sequenced); err != nil {
+					return fail(fmt.Errorf("vote of %s, production: %w", v.Authority, err))
+				}
+			}
 		}
 		ev.Votes = append(ev.Votes, vote)
 	}

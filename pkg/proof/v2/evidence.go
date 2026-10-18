@@ -336,7 +336,11 @@ func verifyFrom(ev *Evidence, rep *Report, at map[uint64]*Spine, pinned [32]byte
 	if len(anchorTx) != 32 {
 		return nil, fmt.Errorf("partition anchor: its transaction hash is %d bytes, not 32", len(anchorTx))
 	}
-	rep.Partition, rep.AnchorBlock = seq.Source.String(), body.MinorBlockIndex
+	srcURL := seq.Source
+	if is21 {
+		srcURL = body.Source // the committed value; anchorOf has required the wrapper to agree (xdirectory.go partition)
+	}
+	rep.Partition, rep.AnchorBlock = srcURL.String(), body.MinorBlockIndex
 	copy(rep.AnchorTxHash[:], anchorTx)
 	rep.AnchorStateRoot, rep.AnchorRootChainAnchor = body.StateTreeAnchor, body.RootChainAnchor
 	for i := 0; i < len(ev.Pages) && !is21; i++ {
@@ -348,8 +352,8 @@ func verifyFrom(ev *Evidence, rep *Report, at map[uint64]*Spine, pinned [32]byte
 		rep.PageChains = append(rep.PageChains, pc)
 	}
 	xin := xIn{certRoot: append([]byte(nil), cert.RootChainAnchor[:]...), setRoot: [32]byte{}}
-	xin.x = xAnchor{source: seq.Source.String(), block: body.MinorBlockIndex, stateRoot: append([]byte(nil), body.StateTreeAnchor[:]...)}
-	xin.x.id, _ = protocol.ParsePartitionUrl(seq.Source)
+	xin.x = xAnchor{source: srcURL.String(), block: body.MinorBlockIndex, stateRoot: append([]byte(nil), body.StateTreeAnchor[:]...)}
+	xin.x.id, _ = protocol.ParsePartitionUrl(srcURL)
 
 	// The validator set: walked to a certified block at or after the certified one, proven there, equal to the set
 	// the walk derived. Every write the walk applied must be accounted for by the network account's main chain.
@@ -417,6 +421,7 @@ func verifyFrom(ev *Evidence, rep *Report, at map[uint64]*Spine, pinned [32]byte
 	rep.Threshold = chk.Globals().ValidatorThreshold(protocol.Directory)
 	if is21 {
 		xin.setRoot = chk.StateTreeAnchor
+		xin.network = chk.Globals().Network.NetworkName
 		if err := verify21(ev, rep, xin); err != nil {
 			return nil, err
 		}

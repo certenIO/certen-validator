@@ -70,6 +70,10 @@ type Capture struct {
 	// (RB9 Phase C1b-2). A capture without a Transaction is a capture made before them; its votes cannot be re-evaluated.
 	Transaction string            `json:"transaction,omitempty"`
 	Sequenced   map[string]string `json:"sequenced,omitempty"`
+	// SequencedMessages maps the same vote messages to the SequencedMessage itself (binary, hex), which the production of the vote carries
+	// (verifier round VA, DEF-4). A capture made before it has none: its sequenced votes are assembled with an unbound production, which the
+	// verifier discloses and the consensus binding refuses.
+	SequencedMessages map[string]string `json:"sequencedMessages,omitempty"`
 }
 
 // DecodeCapture reads a stored capture: this version's object, or a version 1 bare array of pages captured on the
@@ -209,7 +213,7 @@ func (c *Collector) collect(ctx context.Context, st *runState, account, tx strin
 	// The certified key page, exactly as the intent certificate resolves it. A page that cannot be resolved does not stop the
 	// capture of the rest; it is the named state the capture ends with.
 	var softErr error
-	if executorOverrides[facts.Type] {
+	if proofv2.HasExecutorOverride(facts.Type) { // the one table the verifier also reads (pkg/proof/v2 xoverride.go)
 		// These body types decide who may sign by an executor override (chain/utils.go, chain/update_key.go,
 		// chain/update_account_auth.go), not by the default rule the proof re-evaluates (design D6).
 		softErr = &proofv2.NamedState{Code: proofv2.StateExecutorOverrideUnsupported, Partition: x, Block: b,
@@ -574,6 +578,12 @@ func (c *Collector) collect(ctx context.Context, st *runState, account, tx strin
 				out.Sequenced = map[string]string{}
 			}
 			out.Sequenced[hex.EncodeToString(v.Message[:])] = hex.EncodeToString(v.SeqHash[:])
+			if len(v.SeqRaw) > 0 {
+				if out.SequencedMessages == nil {
+					out.SequencedMessages = map[string]string{}
+				}
+				out.SequencedMessages[hex.EncodeToString(v.Message[:])] = hex.EncodeToString(v.SeqRaw)
+			}
 		}
 	}
 	if facts.Txn != nil {
@@ -603,22 +613,6 @@ func (c *Collector) collect(ctx context.Context, st *runState, account, tx strin
 		softErr = proofv2.CheckClosureBudget(pages, out.Votes, x, b)
 	}
 	return out, softErr
-}
-
-// executorOverrides are the transaction types whose executor decides who may sign itself (SignerValidator and the
-// AuthorityWillVote / TransactionIsReady overrides in internal/core/execute/v2/chain); only WriteData and the other types
-// without an override follow the default rule the proof re-evaluates.
-var executorOverrides = map[protocol.TransactionType]bool{
-	protocol.TransactionTypeCreateDataAccount:      true,
-	protocol.TransactionTypeCreateIdentity:         true,
-	protocol.TransactionTypeCreateKeyBook:          true,
-	protocol.TransactionTypeCreateLiteTokenAccount: true,
-	protocol.TransactionTypeCreateToken:            true,
-	protocol.TransactionTypeCreateTokenAccount:     true,
-	protocol.TransactionTypeReleaseLockedOperation: true,
-	protocol.TransactionTypeUpdateAccountAuth:      true,
-	protocol.TransactionTypeUpdateKey:              true,
-	protocol.TransactionTypeUpdateKeyPage:          true,
 }
 
 func isDirectory(partition string) bool { return strings.EqualFold(partition, protocol.Directory) }
@@ -812,7 +806,9 @@ func voteFact(as *protocol.AuthoritySignature, rec *api.MessageRecord[messaging.
 		v.Sequenced = true
 		v.Source, v.Destination, v.Number = rec.Sequence.Source, rec.Sequence.Destination, rec.Sequence.Number
 		// The SequencedMessage the source partition recorded in its synthetic ledger (synthetic.go: chain.AddEntry(seq.Hash())).
-		v.SeqHash = (&messaging.SequencedMessage{Message: rec.Message, Source: rec.Sequence.Source, Destination: rec.Sequence.Destination, Number: rec.Sequence.Number}).Hash()
+		sm := &messaging.SequencedMessage{Message: rec.Message, Source: rec.Sequence.Source, Destination: rec.Sequence.Destination, Number: rec.Sequence.Number}
+		v.SeqHash = sm.Hash()
+		v.SeqRaw, _ = sm.MarshalBinary()
 	}
 	return v
 }
@@ -929,7 +925,7 @@ func (cp *Capture) Assembly(ctx context.Context, log proofv2.AnchorLog, src proo
 		n := cp.Absent[0]
 		return nil, &n
 	}
-	a := &proofv2.Assembly{Roots: map[string][32]byte{}, Votes: cp.Votes, Sequenced: cp.Sequenced, Transaction: cp.Transaction, Source: src}
+	a := &proofv2.Assembly{Roots: map[string][32]byte{}, Votes: cp.Votes, Sequenced: cp.Sequenced, SequencedMessages: cp.SequencedMessages, Transaction: cp.Transaction, Source: src}
 	for i := range cp.Pages {
 		p := cp.Pages[i].PageState
 		a.Pages = append(a.Pages, &p)

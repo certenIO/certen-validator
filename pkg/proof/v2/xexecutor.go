@@ -11,9 +11,11 @@
 // version before Baikonur is refused by name with the partition and block it was judged at. The capture reads the ledger of every
 // partition it reads pages from (proofv2shadow collect.go).
 //
-// What a document that carries no ledger page proves about the version is nothing: the verifier cannot add a named state for it without
-// changing the pinned reports of the earlier suites (xpartition2, xpartition2b, xpartition3), so BindProofV2 (RB9 Phase C2) must require
-// the system-ledger page of every partition among the proven pages, as it requires the certified key page.
+// A document that carries no ledger page proves nothing about the version by itself: live Kermit serves no historical receipt for
+// <partition>/ledger (RB9-C1b-2-B2), so real documents carry none. The version is then derived by the binding (BindProofV21) from the
+// pinned activation table (xexecutor_table.go, a view over govsig; superseding the earlier text that said BindProofV2 must require the
+// system-ledger page of every partition, RB9-I-F3). A ledger page the document does carry is checked here (a version before Baikonur is refused) and the binding requires it to agree
+// with the table.
 package proofv2
 
 import (

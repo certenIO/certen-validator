@@ -59,6 +59,16 @@ type Timeline struct {
 	// LedgerVersion, when non-zero, proves the transaction partition's system ledger at its block with this executor version
 	// (protocol.ExecutorVersion, e.g. 6 for Baikonur): the document then proves the version in force (RB9 Phase C1b-2).
 	LedgerVersion uint64
+
+	// Body, when set, is the governed transaction's body (default: a WriteData to the principal). It is a body of any type: the world
+	// builds the same document around it (RB9 verifier round VA).
+	Body protocol.TransactionBody
+	// BindSequenced makes the vote's production a real SequencedMessage (RB9 verifier round VA, DEF-4): the vote is the
+	// SignatureMessage of an authority signature, the SequencedMessage wrapping it (source the authority's partition, destination the
+	// transaction's, Number voteNumber) is the synthetic ledger's entry, and the production carries the message. Needs ProduceBlock.
+	BindSequenced bool
+	// HoldUntil, when non-zero, makes the transaction a held one (Header.HoldUntil.MinorBlock).
+	HoldUntil uint64
 }
 
 // PageEvent is one transaction on the page's main chain.
@@ -255,6 +265,9 @@ type timelineWorld struct {
 	synthBlks  []uint64
 	synthEnt   [][]byte
 	dw         *delegatedWorld
+	// BindSequenced: the vote message (the SignatureMessage's hash) and the SequencedMessage wrapping it, binary.
+	voteMsg []byte
+	seqRaw  []byte
 }
 
 func (t Timeline) withDefaults() Timeline {
@@ -275,6 +288,12 @@ func newTimelineWorld(spec Timeline) *timelineWorld {
 	w.txn = &protocol.Transaction{
 		Header: protocol.TransactionHeader{Principal: mustURL(Principal), Memo: "timeline world"},
 		Body:   &protocol.WriteData{Entry: &protocol.DoubleHashDataEntry{Data: [][]byte{[]byte("timeline world")}}},
+	}
+	if t.Body != nil {
+		w.txn.Body = t.Body
+	}
+	if t.HoldUntil != 0 {
+		w.txn.Header.HoldUntil = &protocol.HoldUntilOptions{MinorBlock: t.HoldUntil}
 	}
 	if t.HeaderAuthority != "" {
 		w.txn.Header.Authorities = append(w.txn.Header.Authorities, mustURL(t.HeaderAuthority))
@@ -389,6 +408,17 @@ func (w *timelineWorld) addSynth() {
 	t := w.t
 	if t.ProduceBlock != 0 {
 		w.synthMsg = seed("sequenced vote message")
+		if t.BindSequenced {
+			var cause [32]byte
+			copy(cause[:], seed("cause of the vote"))
+			auth := &protocol.AuthoritySignature{Origin: mustURL(BankPage1), Authority: mustURL(BankBook), Vote: protocol.VoteTypeAccept, TxID: w.txn.ID(),
+				Cause: mustURL(BankPage1).WithTxID(cause)}
+			inner := &messaging.SignatureMessage{Signature: auth, TxID: w.txn.ID()}
+			seq := &messaging.SequencedMessage{Message: inner, Source: mustURL(PartBVN2), Destination: mustURL(PartBVN1), Number: voteNumber}
+			ih, sh := inner.Hash(), seq.Hash()
+			w.voteMsg, w.synthMsg = ih[:], sh[:]
+			w.seqRaw = must(seq.MarshalBinary())
+		}
 		w.synthEnt = [][]byte{seed("earlier synthetic a"), w.synthMsg, seed("later synthetic")}
 		w.synthBlks = []uint64{20, t.ProduceBlock, 69}
 		w.synthIdx = indexFor(w.synthBlks)
@@ -425,8 +455,12 @@ func (w *timelineWorld) production() *proofv2.Production {
 	if w.synth == nil {
 		return nil
 	}
+	var seqHex string
+	if w.seqRaw != nil {
+		seqHex = hexs(w.seqRaw)
+	}
 	return &proofv2.Production{
-		Account: w.synth.url(), Chain: "main", Message: hexs(w.synthMsg),
+		Account: w.synth.url(), Chain: "main", Message: hexs(w.synthMsg), Sequenced: seqHex,
 		Receipt: rcptHex(entryReceipt(w.synthEnt, w.synthPos)),
 		Arrival: arrivalFor(w.synthIdx, w.synthBlks, w.synthPos),
 	}

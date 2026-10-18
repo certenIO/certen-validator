@@ -66,6 +66,8 @@ type VoteFact struct {
 	Number              uint64
 	// SeqHash is the hash of the SequencedMessage the source partition recorded in its synthetic ledger's main chain for a sequenced vote.
 	SeqHash [32]byte
+	// SeqRaw is that SequencedMessage, binary: the production of the vote carries it so the verifier can bind the ledger entry to the vote (verifier round VA, DEF-4).
+	SeqRaw []byte
 }
 
 // Hop is one signature message of a vote's cause chain and the block of its page's partition it arrived in.

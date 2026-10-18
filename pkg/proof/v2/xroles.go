@@ -26,6 +26,7 @@ import (
 	"encoding/hex"
 	"strings"
 
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/govsig"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/types/messaging"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/url"
 	"gitlab.com/accumulatenetwork/accumulate/protocol"
@@ -85,7 +86,7 @@ func initiatorPayerURL(signer *url.URL) *url.URL {
 // returns the pages it makes initiator-signers: its payer and every delegator in its path. found is false when no carried signature
 // initiated the transaction. A signature used here is bound first, exactly as the vote re-evaluation binds it: it is the message its
 // chain entry holds, and a key signature must sign the transaction (g1_signature_invalid).
-func initiatorPages(ev *Evidence, txn *protocol.Transaction, byURL map[string]*provenAcct) (pages []*url.URL, found bool, err error) {
+func initiatorPages(ev *Evidence, txn *protocol.Transaction, byURL map[string]*provenAcct, network string) (pages []*url.URL, found bool, err error) {
 	var none [32]byte
 	if txn.Header.Initiator == none {
 		return nil, false, nil
@@ -122,14 +123,23 @@ func initiatorPages(ev *Evidence, txn *protocol.Transaction, byURL map[string]*p
 			if hex.EncodeToString(msgHash[:]) != strings.ToLower(h.Message) {
 				return nil, false, refusal21(StateSignatureInvalid, id, blk, "the initiating signature on %s is not the message its chain entry holds", h.Page)
 			}
-			us, ok := sig.(protocol.UserSignature)
-			if !ok || !protocol.VerifyUserSignature(us, txn) {
+			var vs *govsig.Verified
+			if pa != nil {
+				if vs, err = verifyKeySignature(sig, txn, network, pa, h.Page, h.Block); err != nil {
+					return nil, false, err
+				}
+			} else if _, ok := sig.(protocol.UserSignature); !ok || !protocol.VerifyUserSignature(sig.(protocol.UserSignature), txn) {
 				return nil, false, refusal21(StateSignatureInvalid, id, blk, "the initiating signature on %s does not sign the transaction", h.Page)
 			}
-			inner, _ := unwrapSignature(sig)
-			ks, ok := inner.(protocol.KeySignature)
-			if !ok {
-				return nil, false, refusal21(StateSignatureInvalid, id, blk, "the initiating signature on %s carries no key", h.Page)
+			var ks protocol.KeySignature
+			if vs != nil {
+				ks = vs.Inner
+			} else {
+				inner, _ := unwrapSignature(sig)
+				var ok bool
+				if ks, ok = inner.(protocol.KeySignature); !ok {
+					return nil, false, refusal21(StateSignatureInvalid, id, blk, "the initiating signature on %s carries no key", h.Page)
+				}
 			}
 			pages = append(pages, initiatorPayerURL(ks.GetSigner()))
 			pages = append(pages, delegatorPages(sig)...)
