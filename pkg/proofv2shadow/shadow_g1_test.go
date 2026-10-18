@@ -3,7 +3,11 @@
 package proofv2shadow
 
 import (
+	"context"
+	"strings"
 	"testing"
+
+	proofv2 "github.com/certen/independant-validator/pkg/proof/v2"
 )
 
 // RB9-I item 4: once the rules v15 activation is in force consensus refuses a 2.0 certificate (ErrIntentProofV21Missing), so the proof for an
@@ -52,5 +56,19 @@ func TestPlanBuildFromTheActivationEveryCertificateProofIsEvidence21(t *testing.
 	}
 	if pl, err = planBuild(foreign, true, true); err != nil || !pl.is21 {
 		t.Fatalf("cross-partition capture, activation in force: %+v, %v", pl, err)
+	}
+}
+
+// The shadow installed in discovery (Lazy) and the shadow itself both implement the cross-partition entry point pkg/intent asks for
+// (intent.ProofV2G1Prover), so a node on this build can build 2.1 once the activation is in force.
+func TestTheShadowImplementsTheCrossPartitionProver(t *testing.T) {
+	type prover interface {
+		ProveG1(ctx context.Context, intentID, account, tx, bvn string, maxMajors uint64, g1InForce bool) (*proofv2.Evidence, error)
+	}
+	var _ prover = (*Shadow)(nil)
+	var _ prover = (*Lazy)(nil)
+	// Before the spine walk finishes there is nothing to prove from, by name (never a 2.0 answer).
+	if _, err := NewLazy(nil, func(string, ...any) {}).ProveG1(context.Background(), "i", "a", "t", "b", 1, true); err == nil || !strings.Contains(err.Error(), "proof_v2_not_ready") {
+		t.Fatalf("a shadow that is not ready: %v", err)
 	}
 }
