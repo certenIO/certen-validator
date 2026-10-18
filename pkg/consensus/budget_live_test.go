@@ -5,8 +5,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/certen/independant-validator/pkg/ledger"
@@ -164,5 +167,72 @@ func TestBudgetLiveAnchoredMeasured(t *testing.T) {
 	if proofv2.FixedEvidenceBytes != derived {
 		t.Fatalf("FixedEvidenceBytes is %d, the derivation from the anchored fixtures gives %d (max fixed %d + %d records x %d x (%d-%d) validators, rounded up to 5,000)",
 			proofv2.FixedEvidenceBytes, derived, maxFixed, maxRecords, proofv2.ValidatorSignatureBytes, proofv2.BudgetedValidators, proofv2.MeasuredValidators)
+	}
+}
+
+// The certificate is judged whole before it is signed: where R is known exactly (the block as it will be broadcast, json.Marshal of the
+// ValidatorBlock), a block carrying evidence 2.1 that is over the transaction path limit is refused by certificate_budget{size,limit}, with
+// nothing signed and no certificate left on the block.
+func TestBudgetBuildIntentCertificateRefusesAnOversizeBlockBeforeSigning(t *testing.T) {
+	links := loadAnchoredLiveLinks(t)
+	raw, err := os.ReadFile("../proof/testdata/incarnation/kermit.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var inc govproof.IncarnationEvidence
+	if err := json.Unmarshal(raw, &inc); err != nil {
+		t.Fatal(err)
+	}
+	ir, err := inc.Verify()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := "testdata/g1_live"
+	var m struct {
+		Archive string `json:"archive"`
+		Cases   []struct {
+			Name string `json:"name"`
+			File string `json:"file"`
+		} `json:"cases"`
+	}
+	mb, err := os.ReadFile(filepath.Join(dir, "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(mb, &m); err != nil {
+		t.Fatal(err)
+	}
+	f := new(anchoredLiveFixture)
+	if err := json.Unmarshal(gunzipFile(t, filepath.Join(dir, m.Cases[0].File)), f); err != nil {
+		t.Fatal(err)
+	}
+	f.Archive = gunzipFile(t, filepath.Join(dir, m.Archive))
+	fx := &intentFixtureV3{intentFixture: f.intentFixture, ProofV2: f.ProofV2, Archive: f.Archive}
+	ar, err := proofv2.UnmarshalArchive(f.Archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	anchored, err := proofv2.AnchorEvidence(context.Background(), v3Evidence(t, fx), ar, ir.Inputs, links)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rf, reg := intentRegistry(t)
+	spine := v3Spine(t, fx)
+	activation := &ledger.G1ActivationRecord{Version: 1, Height: 100, ID: "g1-activation:rb9-f5-budget"}
+
+	vb := v3Block(t, fx, strings.Repeat("v", proofv2.ConsensusTxLimit))
+	err = BuildIntentCertificate(vb, intentChain, reg, rf.keys[0], f.KeyPage, f.KeyBook, fx.record(t), f.VoteEvidence, f.ChainedProof, spine, activation, anchored)
+	var cs *proofv2.CertifyState
+	if !errors.As(err, &cs) || cs.Code != proofv2.StateCertificateBudget || len(cs.Fields) != 2 {
+		t.Fatalf("a block over the path limit: %v, want certificate_budget{size,limit}", err)
+	}
+	if cs.Fields[1] != strconv.Itoa(proofv2.ConsensusTxLimit) {
+		t.Fatalf("the limit field is %s, want %d", cs.Fields[1], proofv2.ConsensusTxLimit)
+	}
+	if size, _ := strconv.Atoi(cs.Fields[0]); size <= proofv2.ConsensusTxLimit {
+		t.Fatalf("the size field %s is not over the limit", cs.Fields[0])
+	}
+	if vb.IntentCertificate != nil {
+		t.Fatal("a refused block keeps its intent certificate")
 	}
 }

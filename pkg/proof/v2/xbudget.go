@@ -178,3 +178,9 @@ func CheckClosureBudget(pages []PageState, votes []Vote, partition string, block
 	}
 	return CheckCertificateFits(size, len(pages), fmt.Sprintf("%s block %d", partition, block))
 }
+
+// CertificateTooLarge is certificate_budget{size,limit} for a transaction of size bytes that is over ConsensusTxLimit, judged at where. The
+// consensus package uses it where the whole block is known exactly, before the block is signed.
+func CertificateTooLarge(size int, where string) error {
+	return certificateBudget(size, where, "the transaction is %d bytes, %d over the %d the consensus path accepts (tx_too_large)", size, size-ConsensusTxLimit, ConsensusTxLimit)
+}
