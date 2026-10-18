@@ -129,6 +129,7 @@ type delegatedWorld struct {
 	hopKey    proofv2.VoteHop // the key signature recorded on DelePage1
 	authBlock uint64
 	keyBlock  uint64
+	mids      []midPage // the intermediate delegations of a chain (timeline_chain.go), P1..P(N-1)
 }
 
 func newDelegatedWorld(t Timeline, txn *protocol.Transaction, txHash []byte) *delegatedWorld {

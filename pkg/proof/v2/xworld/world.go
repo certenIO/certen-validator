@@ -351,6 +351,11 @@ func build(o Options) *Built {
 		bvn2Roles[BankPage1] = []proofv2.PageRole{proofv2.RoleAuthorityPage}
 		bvn2Roles[BankPage2] = []proofv2.PageRole{proofv2.RoleAuthorityPage, proofv2.RoleVoter}
 		bvn3Roles[DelePage1] = []proofv2.PageRole{proofv2.RoleDelegatePage, proofv2.RoleVoter}
+		for _, mp := range tw.dw.mids {
+			bvn3 = append(bvn3, acct{a: &protocol.KeyBook{Url: mustURL(mp.book), BookType: protocol.BookTypeNormal, PageCount: 1}}, mp.page.acct)
+			bvn3Roles[mp.book] = []proofv2.PageRole{proofv2.RoleDelegateBook}
+			bvn3Roles[mp.pageURL] = []proofv2.PageRole{proofv2.RoleDelegatePage, proofv2.RoleVoter}
+		}
 	}
 	if tw != nil {
 		if tw.dw == nil {
@@ -539,6 +544,9 @@ func build(o Options) *Built {
 		vote.Hops = []proofv2.VoteHop{hop}
 		if tw.dw != nil {
 			vote.Origin = BankPage2
+			for _, mp := range tw.dw.mids {
+				vote.Hops = append(vote.Hops, mp.hop)
+			}
 			vote.Hops = append(vote.Hops, tw.dw.hopKey)
 		}
 		vote.Counted = counted
@@ -572,6 +580,8 @@ func build(o Options) *Built {
 				ev.Pages[i].History = tw.dw.p2.history
 			case tw.dw != nil && ev.Pages[i].URL == DelePage1:
 				ev.Pages[i].History = tw.dw.p3.history
+			case tw.dw != nil && midHistory(tw.dw, ev.Pages[i].URL) != nil:
+				ev.Pages[i].History = midHistory(tw.dw, ev.Pages[i].URL)
 			case tw.dw == nil && ev.Pages[i].URL == BankPage1:
 				ev.Pages[i].History = tw.history
 			}

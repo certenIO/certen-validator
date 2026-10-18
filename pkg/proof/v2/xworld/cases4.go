@@ -153,6 +153,12 @@ func Cases4() []Case {
 				}
 				h.Signature = hex.EncodeToString(must(sig.MarshalBinary()))
 			}},
+		{Name: "delegation-chain-depth-2", Description: "the vote is cast through two delegations: BankPage2 delegates to book 1, whose page delegates to the delegate book; the key signature is wrapped in two delegated signatures and each hop's authority signature is recorded on the page that delegated", Expect: verified,
+			Unproven: []string{held}, Opts: Options{Timeline: &Timeline{Delegated: true, DelegateDepth: 2}}},
+		{Name: "delegation-chain-depth-20", Description: "the vote is cast through 20 delegations, the limit (protocol.DelegationDepthLimit): 21 pages on two partitions, every hop's arrival derived", Expect: verified,
+			Unproven: []string{held}, Opts: Options{Timeline: &Timeline{Delegated: true, DelegateDepth: 20}}},
+		{Name: "delegation-chain-depth-21", Description: "the key signature is wrapped in 21 delegated signatures, one more than the limit: the executor refuses it, so the document is refused by name", Expect: refused,
+			State: proofv2.StateDelegationDepthExceeded, Opts: Options{Timeline: &Timeline{Delegated: true, DelegateDepth: 21}}},
 		{Name: "delegation-cycle-between-the-books", Description: "the delegate book's page delegates back to the authority book that delegates to it: the governing set contains a cycle, each book is expanded once and the vote, cast through the first delegation, verifies", Expect: verified,
 			Unproven: []string{held}, Opts: Options{Timeline: &Timeline{Delegated: true, DelegateCycle: true}}},
 		{Name: "transaction-other-than-the-evidence-names", Description: "the carried transaction is another transaction than TxHash names", Expect: refused,

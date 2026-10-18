@@ -757,6 +757,626 @@
       "state": "g1_delegation_depth_exceeded"
     },
     {
+      "name": "delegation-chain-depth-2",
+      "description": "the vote is cast through two delegations: BankPage2 delegates to book 1, whose page delegates to the delegate book; the key signature is wrapped in two delegated signatures and each hop's authority signature is recorded on the page that delegated",
+      "file": "delegation-chain-depth-2.json",
+      "sha256": "5a9e2ffee1127e97ad71eb7f06eb9e2be01d58398bc7a0d9cb5949249a5dbe74",
+      "expect": "verified",
+      "report": {
+        "version": "2.1",
+        "tag": "certen:g1:v4",
+        "partition": "acc://bvn-BVN1.acme",
+        "anchorBlock": 50,
+        "certifiedRoot": "a6eb09a143f797c32e7deca54af154bb3e8535ae9790dac7e346289d8320b7e4",
+        "checkBlock": 300,
+        "setVerdict": "verified",
+        "routingHeight": 1,
+        "proven": [
+          {
+            "url": "acc://pv2-cust-5.acme/data",
+            "partition": "acc://bvn-BVN1.acme",
+            "block": 50,
+            "roles": [
+              "principal-chain"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/1",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/2",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page",
+              "voter"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book/1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-page",
+              "voter"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/mid1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/mid1/1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-page",
+              "voter"
+            ]
+          }
+        ],
+        "pagesBound": 8,
+        "unproven": [
+          "g1_vote_held"
+        ],
+        "authorizationMode": "authorities_required",
+        "arrivals": [
+          {
+            "kind": "signature",
+            "account": "acc://pv2-bank-5.acme/book/2",
+            "block": 66
+          },
+          {
+            "kind": "signature",
+            "account": "acc://pv2-dele-5.acme/mid1/1",
+            "block": 65
+          },
+          {
+            "kind": "signature",
+            "account": "acc://pv2-dele-5.acme/book/1",
+            "block": 64
+          }
+        ]
+      }
+    },
+    {
+      "name": "delegation-chain-depth-20",
+      "description": "the vote is cast through 20 delegations, the limit (protocol.DelegationDepthLimit): 21 pages on two partitions, every hop's arrival derived",
+      "file": "delegation-chain-depth-20.json",
+      "sha256": "83067e5f81c10bd4a8f1c15ba8efc572a5847fe9a23672e7db27fcbdb550ef36",
+      "expect": "verified",
+      "report": {
+        "version": "2.1",
+        "tag": "certen:g1:v4",
+        "partition": "acc://bvn-BVN1.acme",
+        "anchorBlock": 50,
+        "certifiedRoot": "ab0d623680e9edf2fc3ab7bd2e4b94dd9a83bb2c3cc3abc76a8e189a67ae8fe5",
+        "checkBlock": 300,
+        "setVerdict": "verified",
+        "routingHeight": 1,
+        "proven": [
+          {
+            "url": "acc://pv2-cust-5.acme/data",
+            "partition": "acc://bvn-BVN1.acme",
+            "block": 50,
+            "roles": [
+              "principal-chain"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/1",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/2",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page",
+              "voter"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book/1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-page",
+              "voter"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/mid1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/mid1/1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-page",
+              "voter"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/mid2",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/mid2/1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-page",
+              "voter"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/mid3",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/mid3/1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-page",
+              "voter"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/mid4",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/mid4/1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-page",
+              "voter"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/mid5",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/mid5/1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-page",
+              "voter"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/mid6",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/mid6/1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-page",
+              "voter"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/mid7",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/mid7/1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-page",
+              "voter"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/mid8",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/mid8/1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-page",
+              "voter"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/mid9",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/mid9/1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-page",
+              "voter"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/mid10",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/mid10/1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-page",
+              "voter"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/mid11",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/mid11/1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-page",
+              "voter"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/mid12",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/mid12/1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-page",
+              "voter"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/mid13",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/mid13/1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-page",
+              "voter"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/mid14",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/mid14/1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-page",
+              "voter"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/mid15",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/mid15/1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-page",
+              "voter"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/mid16",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/mid16/1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-page",
+              "voter"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/mid17",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/mid17/1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-page",
+              "voter"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/mid18",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/mid18/1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-page",
+              "voter"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/mid19",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/mid19/1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-page",
+              "voter"
+            ]
+          }
+        ],
+        "pagesBound": 44,
+        "unproven": [
+          "g1_vote_held"
+        ],
+        "authorizationMode": "authorities_required",
+        "arrivals": [
+          {
+            "kind": "signature",
+            "account": "acc://pv2-bank-5.acme/book/2",
+            "block": 66
+          },
+          {
+            "kind": "signature",
+            "account": "acc://pv2-dele-5.acme/mid1/1",
+            "block": 65
+          },
+          {
+            "kind": "signature",
+            "account": "acc://pv2-dele-5.acme/mid2/1",
+            "block": 64
+          },
+          {
+            "kind": "signature",
+            "account": "acc://pv2-dele-5.acme/mid3/1",
+            "block": 63
+          },
+          {
+            "kind": "signature",
+            "account": "acc://pv2-dele-5.acme/mid4/1",
+            "block": 62
+          },
+          {
+            "kind": "signature",
+            "account": "acc://pv2-dele-5.acme/mid5/1",
+            "block": 61
+          },
+          {
+            "kind": "signature",
+            "account": "acc://pv2-dele-5.acme/mid6/1",
+            "block": 60
+          },
+          {
+            "kind": "signature",
+            "account": "acc://pv2-dele-5.acme/mid7/1",
+            "block": 59
+          },
+          {
+            "kind": "signature",
+            "account": "acc://pv2-dele-5.acme/mid8/1",
+            "block": 58
+          },
+          {
+            "kind": "signature",
+            "account": "acc://pv2-dele-5.acme/mid9/1",
+            "block": 57
+          },
+          {
+            "kind": "signature",
+            "account": "acc://pv2-dele-5.acme/mid10/1",
+            "block": 56
+          },
+          {
+            "kind": "signature",
+            "account": "acc://pv2-dele-5.acme/mid11/1",
+            "block": 55
+          },
+          {
+            "kind": "signature",
+            "account": "acc://pv2-dele-5.acme/mid12/1",
+            "block": 54
+          },
+          {
+            "kind": "signature",
+            "account": "acc://pv2-dele-5.acme/mid13/1",
+            "block": 53
+          },
+          {
+            "kind": "signature",
+            "account": "acc://pv2-dele-5.acme/mid14/1",
+            "block": 52
+          },
+          {
+            "kind": "signature",
+            "account": "acc://pv2-dele-5.acme/mid15/1",
+            "block": 51
+          },
+          {
+            "kind": "signature",
+            "account": "acc://pv2-dele-5.acme/mid16/1",
+            "block": 50
+          },
+          {
+            "kind": "signature",
+            "account": "acc://pv2-dele-5.acme/mid17/1",
+            "block": 49
+          },
+          {
+            "kind": "signature",
+            "account": "acc://pv2-dele-5.acme/mid18/1",
+            "block": 48
+          },
+          {
+            "kind": "signature",
+            "account": "acc://pv2-dele-5.acme/mid19/1",
+            "block": 47
+          },
+          {
+            "kind": "signature",
+            "account": "acc://pv2-dele-5.acme/book/1",
+            "block": 46
+          }
+        ]
+      }
+    },
+    {
+      "name": "delegation-chain-depth-21",
+      "description": "the key signature is wrapped in 21 delegated signatures, one more than the limit: the executor refuses it, so the document is refused by name",
+      "file": "delegation-chain-depth-21.json",
+      "sha256": "a53c96f2d7e69d27f97b5cb89a78cc6edb77fc119ca94a9ef604e8ed80bb2e47",
+      "expect": "refused",
+      "state": "g1_delegation_depth_exceeded"
+    },
+    {
       "name": "delegation-cycle-between-the-books",
       "description": "the delegate book's page delegates back to the authority book that delegates to it: the governing set contains a cycle, each book is expanded once and the vote, cast through the first delegation, verifies",
       "file": "delegation-cycle-between-the-books.json",

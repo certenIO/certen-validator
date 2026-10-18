@@ -66,7 +66,7 @@ func TestXPartition4SharedVectors(t *testing.T) {
 	if err := json.Unmarshal(mj, &m); err != nil {
 		t.Fatal(err)
 	}
-	if m.Format != "certen-xpartition4-conformance/1" || m.Domain != proofv2.DomainG1V4 || len(m.Cases) < 19 {
+	if m.Format != "certen-xpartition4-conformance/1" || m.Domain != proofv2.DomainG1V4 || len(m.Cases) < 22 {
 		t.Fatalf("manifest %q %q with %d cases", m.Format, m.Domain, len(m.Cases))
 	}
 	verified, refused := 0, 0
@@ -142,7 +142,7 @@ func TestXPartition4SharedVectors(t *testing.T) {
 			}
 		})
 	}
-	if verified < 9 || refused < 10 {
+	if verified < 11 || refused < 11 {
 		t.Fatalf("%d verified and %d refused cases", verified, refused)
 	}
 }

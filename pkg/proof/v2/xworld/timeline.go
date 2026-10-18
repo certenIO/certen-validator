@@ -67,6 +67,9 @@ type Timeline struct {
 	// SignatureMessage of an authority signature, the SequencedMessage wrapping it (source the authority's partition, destination the
 	// transaction's, Number voteNumber) is the synthetic ledger's entry, and the production carries the message. Needs ProduceBlock.
 	BindSequenced bool
+	// DelegateDepth (with Delegated), when greater than 1, puts that many delegations between the authority book and the key
+	// (timeline_chain.go); 0 and 1 are the one-hop world.
+	DelegateDepth int
 	// DelegateCycle (with Delegated) gives the delegate book's page an entry delegating back to the authority book, which delegates to
 	// it: the governing set contains a delegation cycle.
 	DelegateCycle bool
@@ -320,7 +323,11 @@ func newTimelineWorld(spec Timeline) *timelineWorld {
 	}
 	w.txHash = w.txn.GetHash()
 	if t.Delegated {
-		w.dw = newDelegatedWorld(t, w.txn, w.txHash)
+		if t.DelegateDepth > 1 {
+			w.dw = newChainDelegatedWorld(t, w.txn, w.txHash)
+		} else {
+			w.dw = newDelegatedWorld(t, w.txn, w.txHash)
+		}
 		w.addSynth()
 		return w
 	}
