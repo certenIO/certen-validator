@@ -26,6 +26,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi"
@@ -200,6 +201,7 @@ func (a *app) accounts(ctx context.Context, l liveConfig, o accountsOpts) error 
 
 	var pk *ecdsa.PrivateKey
 	var from common.Address
+	var nonce uint64 // the sender's next nonce, tracked here: a load-balanced RPC answers PendingNonceAt from a lagging node right after a receipt
 	if o.Create || (o.FundWei != nil && o.FundWei.Sign() > 0) {
 		pk, err = crypto.HexToECDSA(strings.TrimPrefix(strings.TrimSpace(os.Getenv("ETH_PRIVATE_KEY")), "0x"))
 		if err != nil {
@@ -208,6 +210,9 @@ func (a *app) accounts(ctx context.Context, l liveConfig, o accountsOpts) error 
 		from = crypto.PubkeyToAddress(pk.PublicKey)
 		bal, _ := c.BalanceAt(ctx, from, nil)
 		fmt.Printf("sender %s balance %s wei\n", from.Hex(), bal)
+		if nonce, err = c.PendingNonceAt(ctx, from); err != nil {
+			return err
+		}
 	}
 
 	salt := canonicalSalt(a.adi)
@@ -232,7 +237,7 @@ func (a *app) accounts(ctx context.Context, l liveConfig, o accountsOpts) error 
 			if err != nil {
 				return err
 			}
-			auth.Context, auth.Value = ctx, fee
+			auth.Context, auth.Value, auth.Nonce = ctx, fee, new(big.Int).SetUint64(nonce)
 			bc := bind.NewBoundContract(factory, factoryABIv11, c, c, c)
 			tx, err := bc.Transact(auth, "createAccountForADI", a.adi, book, salt)
 			if err != nil {
@@ -242,11 +247,15 @@ func (a *app) accounts(ctx context.Context, l liveConfig, o accountsOpts) error 
 			if err != nil {
 				return err
 			}
+			nonce++
 			if rc.Status != types.ReceiptStatusSuccessful {
 				return fmt.Errorf("createAccountForADI(%s) reverted: tx %s", book, tx.Hash().Hex())
 			}
 			fmt.Printf("%-24s created %s tx %s gas %d\n", cs.Name, addr.Hex(), tx.Hash().Hex(), rc.GasUsed)
-			if code, err = c.CodeAt(ctx, addr, nil); err != nil {
+			if err := waitState(ctx, "code at "+addr.Hex(), func() (bool, error) {
+				code, err = c.CodeAt(ctx, addr, nil)
+				return len(code) > 0, err
+			}); err != nil {
 				return err
 			}
 		}
@@ -256,8 +265,15 @@ func (a *app) accounts(ctx context.Context, l liveConfig, o accountsOpts) error 
 			if o.FundWei != nil && o.FundWei.Sign() > 0 {
 				bal, _ := c.BalanceAt(ctx, addr, nil)
 				if bal.Cmp(o.FundWei) < 0 {
-					if err := sendValue(ctx, c, pk, chainID, addr, new(big.Int).Sub(o.FundWei, bal)); err != nil {
+					if err := sendValue(ctx, c, pk, chainID, nonce, addr, new(big.Int).Sub(o.FundWei, bal)); err != nil {
 						return fmt.Errorf("fund %s: %w", addr.Hex(), err)
+					}
+					nonce++
+					if err := waitState(ctx, "balance of "+addr.Hex(), func() (bool, error) {
+						b, err := c.BalanceAt(ctx, addr, nil)
+						return err == nil && b.Cmp(o.FundWei) >= 0, err
+					}); err != nil {
+						return err
 					}
 				}
 			}
@@ -322,12 +338,8 @@ func checkBinding(ctx context.Context, c *ethclient.Client, acct common.Address,
 
 // sendValue sends wei to a contract account (a call into a contract costs more than a bare transfer, so the gas is
 // estimated, not 21000).
-func sendValue(ctx context.Context, c *ethclient.Client, pk *ecdsa.PrivateKey, chainID *big.Int, to common.Address, wei *big.Int) error {
+func sendValue(ctx context.Context, c *ethclient.Client, pk *ecdsa.PrivateKey, chainID *big.Int, nonce uint64, to common.Address, wei *big.Int) error {
 	from := crypto.PubkeyToAddress(pk.PublicKey)
-	nonce, err := c.PendingNonceAt(ctx, from)
-	if err != nil {
-		return err
-	}
 	tip, err := c.SuggestGasTipCap(ctx)
 	if err != nil {
 		return err
@@ -358,4 +370,27 @@ func sendValue(ctx context.Context, c *ethclient.Client, pk *ecdsa.PrivateKey, c
 	}
 	fmt.Printf("  funded %s with %s wei tx %s\n", to.Hex(), wei, signed.Hash().Hex())
 	return nil
+}
+
+// waitState polls until ok reports true: the target chain's public RPC is load-balanced, and a node that has not yet seen
+// the block of a receipt answers reads of the new state with the old one.
+func waitState(ctx context.Context, what string, ok func() (bool, error)) error {
+	deadline := time.Now().Add(2 * time.Minute)
+	for {
+		good, err := ok()
+		if err != nil {
+			return err
+		}
+		if good {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("%s: not visible on the RPC within 2 minutes", what)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(3 * time.Second):
+		}
+	}
 }

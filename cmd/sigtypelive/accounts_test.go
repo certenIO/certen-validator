@@ -130,3 +130,53 @@ func TestLocalScriptsDeclareTheLiveBatchSelector(t *testing.T) {
 	}
 	t.Logf("%d selector declarations in %d local scripts checked", checked, len(files))
 }
+
+// CERTEN reads an intent's ADI as its principal minus the trailing "/data" (pkg/intent/discovery.go), so only an intent
+// written to <adi>/data binds to the ADI's CertenAccount; the first run's per-type data accounts made the ADI
+// "acc://pv2-sig-1.acme/data-<tag>" and the validators refused every case "account is bound to a different ADI" (RB8-E).
+// -data-root writes the intent to <adi>/data, and the body of that account's creation must not be an ambiguous length.
+func TestDataRootPutsTheIntentOnTheADIsDataAccount(t *testing.T) {
+	dataAtRoot = true
+	defer func() { dataAtRoot = false }()
+	for n := 1; n <= 999; n++ {
+		adi := fmt.Sprintf("acc://pv2-sig-%d.acme", n)
+		for _, c := range liveCases() {
+			if got := c.data(adi); got != adi+"/data" {
+				t.Fatalf("%s: data account %s, want %s/data", c.Name, got, adi)
+			}
+		}
+	}
+	// the identities this run uses (n = 11..15, one non-delegated case each) create their /data account
+	for n, name := range map[int]string{11: "legacyED25519", 12: "ed25519", 13: "rcd1", 14: "rsaSha256", 15: "ecdsaSha256"} {
+		sel, err := liveConfig{Cases: name}.selected()
+		if err != nil || len(sel) != 1 {
+			t.Fatal(name, err)
+		}
+		if err := createDataBodyLength(sel[0], fmt.Sprintf("acc://pv2-sig-%d.acme", n)); err != nil {
+			t.Errorf("n=%d: %v", n, err)
+		}
+	}
+	// and the guard refuses the 64-byte body that cost the first run a setup (ed25519 under a one-digit number)
+	sel, _ := liveConfig{Cases: "ed25519"}.selected()
+	if err := createDataBodyLength(sel[0], "acc://pv2-sig-1.acme"); err == nil {
+		t.Error("a 64-byte creation body must be refused before it is written")
+	}
+}
+
+// setup of a selection creates only that selection: the delegating books exist only when the delegated case is selected.
+func TestSetupSelectionCoversOnlyTheSelectedCases(t *testing.T) {
+	l := liveConfig{Cases: "legacyED25519,btc"}
+	sel, err := l.selected()
+	if err != nil || len(sel) != 2 {
+		t.Fatalf("selected: %v, %v", sel, err)
+	}
+	for _, c := range sel {
+		if c.Delegated {
+			t.Errorf("%s must not be delegated", c.Name)
+		}
+	}
+	l = liveConfig{Cases: "delegated-ecdsaSha256"}
+	if sel, err = l.selected(); err != nil || len(sel) != 1 || !sel[0].Delegated {
+		t.Fatalf("delegated selection: %v, %v", sel, err)
+	}
+}

@@ -43,6 +43,7 @@ func main() {
 		accounts = fs.String("accounts", filepath.Join("captures", "accounts.json"), "accounts file written by `accounts` (tag -> address); -account is merged over it")
 		factory  = fs.String("factory", factoryV11Address, "accounts: CertenAccountFactoryV11 on the target chain")
 		create   = fs.Bool("create", false, "accounts: create the missing accounts (sender key from ETH_PRIVATE_KEY in the environment only)")
+		dataRoot = fs.Bool("data-root", false, "write each intent to <adi>/data (the one principal CERTEN binds to the ADI's account); needs one ADI per case: -n <k> -cases <case>")
 		fund     = fs.String("fund", "0", "accounts: fund each deployed account up to this many wei (sender key from ETH_PRIVATE_KEY)")
 		rpc      = fs.String("rpc", "", "JSON-RPC URL of the target chain (accounts)")
 		wait     = fs.Duration("wait", 5*time.Minute, "how long to wait for each transaction")
@@ -52,6 +53,7 @@ func main() {
 		vecDir   = fs.String("vectors", filepath.Join("accumulate-lite-client-2", "liteclient", "proof", "govsig", "testdata", "sigtypes"), "vectors: the directory holding manifest.json (read) and receiving kermit2.json + manifest2.json")
 	)
 	_ = fs.Parse(os.Args[2:])
+	dataAtRoot = *dataRoot
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Minute)
 	defer cancel()
@@ -74,7 +76,7 @@ func main() {
 	var err error
 	switch cmd {
 	case "setup":
-		err = a.setup(ctx)
+		err = a.setup(ctx, live)
 	case "submit":
 		_, err = a.submit(ctx, live)
 	case "accounts":
