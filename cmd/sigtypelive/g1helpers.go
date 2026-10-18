@@ -128,3 +128,29 @@ func (e *g1Env) secondPage(ctx context.Context, owner *g1ADI, book string, k2 si
 	}
 	return e.funder.ensureCredits(ctx, page2, 10_000_000, 1)
 }
+
+// addKeyAfter adds a second key to page, signed by the identity's root key: a change of the page after a vote of it has arrived.
+func (e *g1Env) addKeyAfter(ctx context.Context, owner *g1ADI, page string) error {
+	k2, err := owner.app.ks.loadOrCreate("key-after", protocol.SignatureTypeED25519)
+	if err != nil {
+		return err
+	}
+	_, h2, err := pubAndHash(k2)
+	if err != nil {
+		return err
+	}
+	txn := new(protocol.Transaction)
+	txn.Header.Principal = mustURL(page)
+	txn.Body = &protocol.UpdateKeyPage{Operation: []protocol.KeyPageOperation{
+		&protocol.AddKeyOperation{Entry: protocol.KeySpecParams{KeyHash: h2}},
+	}}
+	s, err := owner.app.pageSigner(ctx, owner.root, page, true)
+	if err != nil {
+		return err
+	}
+	env, err := owner.app.envelope(txn, s)
+	if err != nil {
+		return err
+	}
+	return owner.app.run(ctx, "add a key to "+shortURL(page)+" after the intent", txn, env)
+}

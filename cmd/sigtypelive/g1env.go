@@ -38,7 +38,7 @@ import (
 
 // g1Topo is the shape of one scenario, derived from its parameters alone.
 type g1Topo struct {
-	Kind    string   // same | cross | bankonly | deleg | cycle | header | disabled | disabled-voted | alldisabled | thresh2 | page2
+	Kind    string   // same | cross | after | bankonly | deleg | cycle | header | disabled | disabled-voted | alldisabled | thresh2 | page2
 	N       int      // number of pv2-cust-<n> and pv2-bank-<n>
 	Hosts   []int    // numbers of the pv2-deleg-<h> identities hosting the delegation chain
 	Depth   int      // delegators between the bank book's page and the key (deleg kinds); the chain has Depth books
@@ -345,6 +345,7 @@ type g1Plan struct {
 	Book, Page string // what the intent declares (the certified key page)
 	Sigs       []g1Sig
 	Header     []string // Header.Authorities
+	AfterKey   *g1ADI   // when set, the intent is followed by a new key added to this identity's /book/1 (the page the vote came from)
 	Cust       *g1ADI
 	Placement  map[string]string
 	Notes      []string
@@ -375,11 +376,17 @@ func (e *g1Env) setup(ctx context.Context, t g1Topo) (*g1Plan, error) {
 			return nil, err
 		}
 		plan.Sigs = []g1Sig{{ADI: cust, Page: cust.url + "/book/1", Initiate: true}}
-	case "cross":
+	case "cross", "after":
 		if err := e.createData(ctx, cust, []string{cust.url + "/book", bank.url + "/book"}, bank); err != nil {
 			return nil, err
 		}
 		plan.Sigs = []g1Sig{{ADI: cust, Page: cust.url + "/book/1", Initiate: true}, {ADI: bank, Page: bank.url + "/book/1"}}
+		if t.Kind == "after" {
+			// the foreign page is changed right after the vote arrived: the timeline must judge the signature against the page as it
+			// stood when it arrived, not against the page as it is when the evidence is captured
+			plan.AfterKey = bank
+			plan.Notes = append(plan.Notes, "a key is added to the foreign voting page right after the intent is delivered")
+		}
 	case "bankonly":
 		// the foreign book is the account's only authority and the page the intent declares; no CertenAccount can be governed by a book
 		// of another identity, so this intent cannot settle - it is the harbor-mfg shape (a certified page that is not the principal's).
@@ -589,6 +596,13 @@ func (e *g1Env) submit(ctx context.Context, t g1Topo, plan *g1Plan, from string,
 		cp.Status, cp.Error = e.k.await(ctx, txn.ID(), wait)
 		if cp.Status == "delivered" {
 			cp.DeliveredAt = time.Now().UTC().Format(time.RFC3339)
+			if plan.AfterKey != nil {
+				if err := e.addKeyAfter(ctx, plan.AfterKey, plan.AfterKey.url+"/book/1"); err != nil {
+					cp.Error = "the page change after the intent failed: " + err.Error()
+				} else {
+					cp.Notes = append(cp.Notes, "page "+plan.AfterKey.url+"/book/1"+" changed at "+time.Now().UTC().Format(time.RFC3339))
+				}
+			}
 		}
 	}
 	dir := filepath.Join(out, fmt.Sprintf("%s-%d", t.Kind, t.N))
