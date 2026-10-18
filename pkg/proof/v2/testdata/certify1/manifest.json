@@ -3,7 +3,7 @@
   "domain": "certen:g1:v4",
   "portableFormat": "certen-proof-v2-accumulate-portable/1",
   "namesFile": "names.json",
-  "namesSha256": "09e110cc4959a67a1d34e02ca4588102e9b50406a79f02fd9e643a7f9c72a061",
+  "namesSha256": "b20bf59beb16b08e9a036075b0c7bf816df28e0b80dfb31f7e0839838986a3b1",
   "cases": [
     {
       "name": "continuous-chain-verified",
@@ -709,6 +709,21 @@
       ],
       "wording": "certify_link_invalid{0}: the link is not a valid receipt of an anchored item",
       "prefix": "certify_link_invalid{0}: the link is not a valid receipt of an anchored item"
+    },
+    {
+      "name": "link-undecodable-before-an-earlier-items-refusal",
+      "description": "every link is decoded before any item is judged: link 1 does not decode, and item 0, which comes first, has no quorum; the verdict is the link's, at its ordinal, never item 0's",
+      "world": "chain-two-anchored",
+      "edit": "evidence/links/1/$epilogue = field 5 and evidence/certify/0/signatures = []",
+      "file": "link-undecodable-before-an-earlier-items-refusal.json",
+      "sha256": "c329eecf152c28baf5a30483b54526ac1af38a1ebf46a6134606b46d8eedd15b",
+      "expect": "refused",
+      "state": "certify_link_invalid",
+      "fields": [
+        "1"
+      ],
+      "wording": "certify_link_invalid{1}: the link is not a valid receipt of an anchored item",
+      "prefix": "certify_link_invalid{1}: the link is not a valid receipt of an anchored item"
     },
     {
       "name": "hops-anchored-verified",

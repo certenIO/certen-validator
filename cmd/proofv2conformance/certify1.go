@@ -84,6 +84,7 @@ func certify1Worlds() map[string]xworld.Options {
 		"chain-continuous":          {Chain: &xworld.Chain{Items: []xworld.ChainItem{eff(false), eff(false)}}},
 		"chain-anchored":            {Chain: &xworld.Chain{Items: []xworld.ChainItem{eff(true), eff(true)}, Final: xworld.ChainItem{Anchored: true}}},
 		"chain-mixed":               {Chain: &xworld.Chain{Items: []xworld.ChainItem{eff(true), eff(false)}, Final: xworld.ChainItem{Anchored: true}}},
+		"chain-two-anchored":        {Chain: &xworld.Chain{Items: []xworld.ChainItem{eff(true)}, Final: xworld.ChainItem{Anchored: true}}},
 		"chain-final-only":          {Chain: &xworld.Chain{Final: xworld.ChainItem{Anchored: true}}},
 		"chain-no-effect":           {Chain: &xworld.Chain{Items: []xworld.ChainItem{{Anchored: true}, orc(false)}}},
 		"chain-non-monotone":        {Chain: &xworld.Chain{Items: []xworld.ChainItem{{Anchored: true, Update: xworld.UpdateGenesisGlobals, Block: 130}, {Anchored: true, Update: xworld.UpdateGenesisGlobals, Block: 120}}, Final: xworld.ChainItem{Anchored: true}}},
@@ -315,6 +316,14 @@ func certify1Specs() []certify1Spec {
 		{Certify1Case: c("link-with-an-unknown-trailing-field", "chain-final-only", "evidence/links/0/$epilogue = field 5", "a link is a receipt, not a record: unlike a record, whose unknown trailing field leaves the verdict unchanged, a receipt carrying one is refused as an invalid link at its ordinal", certify1State(proofv2.StateCertifyLinkInvalid, "0")),
 			apply: func(d map[string]any, _ *xworld.Built) error {
 				return setMember(d, linkAt(0, "$epilogue"), "05010a")
+			}},
+
+		{Certify1Case: c("link-undecodable-before-an-earlier-items-refusal", "chain-two-anchored", "evidence/links/1/$epilogue = field 5 and evidence/certify/0/signatures = []", "every link is decoded before any item is judged: link 1 does not decode, and item 0, which comes first, has no quorum; the verdict is the link's, at its ordinal, never item 0's", certify1State(proofv2.StateCertifyLinkInvalid, "1")),
+			apply: func(d map[string]any, _ *xworld.Built) error {
+				if err := setMember(d, append(certifyAt(0), "signatures"), []any{}); err != nil {
+					return err
+				}
+				return setMember(d, linkAt(1, "$epilogue"), "05010a")
 			}},
 
 		// The set check's own items (check.hops): the same rules, the links numbered on after certify's.
