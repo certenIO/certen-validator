@@ -3,6 +3,8 @@ package intentcert
 import (
 	"encoding/hex"
 	"fmt"
+	"maps"
+	"slices"
 	"sort"
 	"strings"
 
@@ -97,10 +99,12 @@ func GoverningFactsFromVoteEvidence(ev *govvote.Evidence) (*GoverningFacts, erro
 		f.Authorities[i].URL = canon(f.Authorities[i].URL)
 	}
 	seen := map[string]bool{}
-	for _, a := range txn.Header.Authorities {
-		f.HeaderAuthorities = appendOnce(f.HeaderAuthorities, seen, a.String())
-	}
-	for _, a := range txn.GetAdditionalAuthorities() {
+	// An authority with no URL cannot have been executed and cannot be required: refused, as an authority with no URL in the carried
+	// transaction is (pkg/proof/v2 decodeTxn), never dereferenced (RB9-L).
+	for _, a := range append(append([]*url.URL(nil), txn.Header.Authorities...), txn.GetAdditionalAuthorities()...) {
+		if a == nil {
+			return nil, fmt.Errorf("proof v2 binding: the governed transaction names an authority with no URL")
+		}
 		f.HeaderAuthorities = appendOnce(f.HeaderAuthorities, seen, a.String())
 	}
 	for _, a := range ev.Extra {
@@ -118,6 +122,9 @@ func GoverningFactsFromVoteEvidence(ev *govvote.Evidence) (*GoverningFacts, erro
 		sig, err := protocol.UnmarshalSignature(b)
 		if err != nil {
 			return nil, fmt.Errorf("proof v2 binding: signature %d does not decode: %w", i, err)
+		}
+		if sig == nil { // Accumulate's union decoder answers neither a signature nor an error for bytes that hold no type
+			return nil, fmt.Errorf("proof v2 binding: signature %d does not decode: it holds no signature", i)
 		}
 		if did, _ := protocol.SignatureDidInitiate(sig, txn.Header.Initiator[:], nil); !did {
 			continue
@@ -444,7 +451,10 @@ func samePartition(a, c string) bool {
 
 // checkBlocks: a page on the transaction's partition is proven at the report's anchor block.
 func (b *binder) checkBlocks() error {
-	for u, p := range b.pages {
+	// In ascending order of the pages' canonical URLs: when more than one page is at another block the refusal names the first of them
+	// in that order, a function of the report and not of the order a map is walked in (RB9-L).
+	for _, u := range slices.Sorted(maps.Keys(b.pages)) {
+		p := b.pages[u]
 		if samePartition(p.proof.Partition, b.rep.Partition) && p.proof.Block != b.rep.AnchorBlock {
 			return ns(proofv2.StatePageBlockMismatch, p.proof.Partition, p.proof.Block,
 				"%s is on the transaction's partition and must be proven at its anchor block %d", u, b.rep.AnchorBlock)

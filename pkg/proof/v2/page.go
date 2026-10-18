@@ -180,9 +180,18 @@ func anchorBody(msgHex string) (*protocol.BlockValidatorAnchor, *messaging.Seque
 	if err := seq.UnmarshalBinary(raw); err != nil {
 		return nil, nil, nil, fmt.Errorf("partition anchor: %w", err)
 	}
+	// Every member read below is checked present first, with the refusals decodeAnchor21 makes of the same documents: a delivered message is
+	// chosen by whoever submits the evidence, and a codec decodes one without its transaction, body, source, destination or principal
+	// (RB9-L: the body's type used to be asked of a nil body).
 	txm, ok := seq.Message.(*messaging.TransactionMessage)
-	if !ok {
+	if !ok || txm == nil {
 		return nil, nil, nil, fmt.Errorf("partition anchor is %T, not a transaction", seq.Message)
+	}
+	if txm.Transaction == nil || txm.Transaction.Body == nil {
+		return nil, nil, nil, fmt.Errorf("partition anchor carries no transaction body")
+	}
+	if seq.Source == nil || seq.Destination == nil || txm.Transaction.Header.Principal == nil {
+		return nil, nil, nil, fmt.Errorf("partition anchor names no source, destination or principal")
 	}
 	body, ok := txm.Transaction.Body.(*protocol.BlockValidatorAnchor)
 	if !ok {
@@ -246,6 +255,9 @@ func verifyPageState(p *PageState, stateRoot []byte) (protocol.Account, error) {
 	acct, err := protocol.UnmarshalAccount(state)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", p.URL, err)
+	}
+	if isNil(acct) { // the union decoder's answer for bytes that hold no type
+		return nil, fmt.Errorf("%s: the state holds no account", p.URL)
 	}
 	if !strings.EqualFold(acct.GetUrl().String(), p.URL) {
 		return nil, fmt.Errorf("the proven state is %v, not %s", acct.GetUrl(), p.URL)

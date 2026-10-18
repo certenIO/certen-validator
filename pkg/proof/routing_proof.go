@@ -79,6 +79,9 @@ func VerifyRoutingProof(a *AccountStateProof, boundStateRoot string) (*protocol.
 	if err != nil {
 		return nil, 0, fmt.Errorf("routing proof: %w", err)
 	}
+	if acct == nil { // the union decoder's answer for bytes that hold no type
+		return nil, 0, fmt.Errorf("routing proof: the state holds no account")
+	}
 	if !strings.EqualFold(acct.GetUrl().String(), RoutingAccountURL) {
 		return nil, 0, fmt.Errorf("routing proof: the proven state is %v, not %s", acct.GetUrl(), RoutingAccountURL)
 	}

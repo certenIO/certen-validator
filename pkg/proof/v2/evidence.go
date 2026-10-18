@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/certen/independant-validator/pkg/ledger"
 	"strings"
@@ -25,6 +26,12 @@ import (
 
 // Version is the proof_version a v2 proof is stored under; proofverify dispatches on it.
 const Version = "2.0"
+
+// errNoMajors is the refusal of evidence whose certification builds on no major block (majors 0 or absent). Major blocks are 1-based and
+// the certification's minor-root runs extend a spine that has verified at least the first, so there is nothing to extend: every entry point
+// (VerifyFromGenesis, Verify21FromGenesis, VerifyFromSpine, VerifyEvidence21FromSpine) refuses it with this one text, before any spine is
+// built, and the document is never read further.
+var errNoMajors = errors.New("evidence builds on 0 major blocks: the certification needs at least the first")
 
 // Evidence is the Accumulate side of one v2 proof. The spine's major records are shared by every proof and carried
 // once, in an Archive; Evidence names how many of them it builds on.
@@ -194,16 +201,21 @@ func verifyFromGenesis(ev *Evidence, ar *Archive, in proof.IncarnationInputs, pi
 		return nil, err
 	}
 
-	// The spine to the larger of the two starting points, keeping the state at each.
+	// The spine to the larger of the two starting points, keeping the state at each. The certification builds on at least the first major
+	// block (errNoMajors, the same refusal VerifyFromSpine makes); the set check may build on none, as it may from a spine log
+	// (SpineAt(l, 0) is the genesis spine), so the genesis spine is kept as the state after 0 major blocks.
+	if ev.Majors == 0 {
+		return nil, errNoMajors
+	}
 	need := max(ev.Majors, ev.Check.Majors)
-	if need == 0 || need > uint64(len(ar.Majors)) {
+	if need > uint64(len(ar.Majors)) {
 		return nil, fmt.Errorf("evidence builds on %d major blocks; the archive has %d", need, len(ar.Majors))
 	}
 	sp, err := NewSpine(g, 1)
 	if err != nil {
 		return nil, err
 	}
-	at := map[uint64]*Spine{}
+	at := map[uint64]*Spine{0: sp.Clone()}
 	for i := uint64(0); i < need; i++ {
 		if err := sp.Advance(ar.Majors[i]); err != nil {
 			return nil, fmt.Errorf("spine: %w", err)
@@ -249,8 +261,11 @@ func verifyFromSpine(ev *Evidence, l *ledger.AccumulateSpineLog, pinned [32]byte
 	if !strings.EqualFold(strings.TrimPrefix(l.Genesis.Incarnation, "0x"), hex.EncodeToString(pinned[:])) {
 		return nil, fmt.Errorf("the chain's spine is incarnation %s, not the pinned %x", l.Genesis.Incarnation, pinned)
 	}
+	if ev.Majors == 0 {
+		return nil, errNoMajors
+	}
 	need := max(ev.Majors, ev.Check.Majors)
-	if ev.Majors == 0 || need > uint64(len(l.Checkpoints)) {
+	if need > uint64(len(l.Checkpoints)) {
 		return nil, fmt.Errorf("evidence builds on %d major blocks; the chain has verified %d", need, len(l.Checkpoints))
 	}
 	at := map[uint64]*Spine{}

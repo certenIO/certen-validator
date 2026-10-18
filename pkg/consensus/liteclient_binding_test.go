@@ -3,6 +3,7 @@ package consensus
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -125,5 +126,40 @@ func TestAccountWithoutReceiptsStillRequiresAMatch(t *testing.T) {
 	if err := verifyLiteClientBinding(
 		"acc://stranger.acme/data", "", nil, nil, nil, "acc://payer.acme/data"); err == nil {
 		t.Fatal("a proof naming a different account with no receipts was accepted")
+	}
+}
+
+// RB9-L: a receipt the block carries is decoded from JSON, where a step can be null; Accumulate's Validate reads the hash of every step.
+func TestProofWhoseReceiptHoldsANullStepIsRefusedNotDereferenced(t *testing.T) {
+	txHex, txBytes := txHashHex("tx-1")
+	var r merkle.Receipt
+	raw := `{"start":"` + hex.EncodeToString(txBytes) + `","anchor":"` + hex.EncodeToString(txBytes) + `","entries":[null]}`
+	if err := json.Unmarshal([]byte(raw), &r); err != nil {
+		t.Fatalf("the premise: a receipt with a null step decodes from JSON: %v", err)
+	}
+	if len(r.Entries) != 1 || r.Entries[0] != nil {
+		t.Fatalf("the premise: the decoded receipt holds %d entries, first %v", len(r.Entries), r.Entries)
+	}
+	for _, slot := range []string{"main", "bpt", "combined"} {
+		var main, bpt, combined *merkle.Receipt
+		switch slot {
+		case "main":
+			main = &r
+		case "bpt":
+			bpt = &r
+		default:
+			combined = &r
+		}
+		func() {
+			defer func() {
+				if p := recover(); p != nil {
+					t.Errorf("%s receipt with a null step: PANIC %v", slot, p)
+				}
+			}()
+			err := verifyLiteClientBinding("acc://payer.acme/data", txHex, main, bpt, combined, "acc://payer.acme/data")
+			if err == nil || !strings.Contains(err.Error(), "its entries hold a null") {
+				t.Errorf("%s receipt with a null step: got %v, want the null step named", slot, err)
+			}
+		}()
 	}
 }

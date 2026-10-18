@@ -400,6 +400,9 @@ func decodeSignature(h string) (protocol.Signature, error) {
 	if err != nil {
 		return nil, fmt.Errorf("the signature does not decode: %w", err)
 	}
+	if sig == nil { // Accumulate's union decoder answers neither a signature nor an error for bytes that hold no type (a run of zeros)
+		return nil, fmt.Errorf("the signature holds no signature")
+	}
 	return sig, nil
 }
 

@@ -60,6 +60,8 @@
 package proofv2
 
 import (
+	"slices"
+
 	"gitlab.com/accumulatenetwork/accumulate/protocol"
 )
 
@@ -81,12 +83,14 @@ var executorOverrides = map[protocol.TransactionType]bool{
 // one (the table above). It is the one function the capture and the verifier ask.
 func HasExecutorOverride(t protocol.TransactionType) bool { return executorOverrides[t] }
 
-// ExecutorOverrideTypes returns the refused body types (a copy), for a test that must cover every one.
+// ExecutorOverrideTypes returns the refused body types (a copy), in ascending order of the type's number, for a test that must cover
+// every one: the same list, in the same order, on every call (RB9-L).
 func ExecutorOverrideTypes() []protocol.TransactionType {
 	out := make([]protocol.TransactionType, 0, len(executorOverrides))
 	for t := range executorOverrides {
 		out = append(out, t)
 	}
+	slices.Sort(out)
 	return out
 }
 
