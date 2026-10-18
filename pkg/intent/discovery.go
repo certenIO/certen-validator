@@ -132,7 +132,8 @@ type IntentDiscoveryConfig struct {
 	IntentBatchSize int    `json:"intent_batch_size"`
 	MinStartHeight  uint64 `json:"min_start_height"` // Minimum starting height fallback
 
-	// IntentWorkers is the number of goroutines processing the intents block jobs hand off; zero means
+	// IntentWorkers is the number of goroutines processing the intents block jobs hand off; zero means the same number as
+	// BlockWorkers when that is set (the most intents processed at once is then what BLOCK_WORKERS has always set), else
 	// DefaultIntentWorkers.
 	IntentWorkers int `json:"intent_workers"`
 
@@ -349,6 +350,16 @@ func DefaultIntentDiscoveryConfig() *IntentDiscoveryConfig {
 	}
 }
 
+// intentWorkersFor is the intent worker count for a configuration that names none: the block worker count when one is set
+// (BLOCK_WORKERS has always bounded how many intents are processed at once; an operator running N != 12 must not get 12),
+// else DefaultIntentWorkers.
+func intentWorkersFor(blockWorkers int) int {
+	if blockWorkers > 0 {
+		return blockWorkers
+	}
+	return DefaultIntentWorkers
+}
+
 // NewIntentDiscovery creates a new intent discovery service with configuration and persistence
 func NewIntentDiscovery(
 	client accumulate.Client,
@@ -379,7 +390,7 @@ func NewIntentDiscovery(
 		config.ChainedProofRequeueBackoff = 10 * time.Second
 	}
 	if config.IntentWorkers <= 0 {
-		config.IntentWorkers = DefaultIntentWorkers
+		config.IntentWorkers = intentWorkersFor(config.BlockWorkers)
 	}
 
 	return &IntentDiscovery{
