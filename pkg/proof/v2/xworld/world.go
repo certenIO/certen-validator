@@ -281,9 +281,15 @@ func build(o Options) *Built {
 		FeeSchedule:              &protocol.FeeSchedule{CreateIdentitySliding: []protocol.Fee{500000}, CreateSubIdentity: 10000},
 		Limits:                   &protocol.NetworkLimits{DataEntryParts: 100, AccountAuthorities: 20, BookPages: 20, PageEntries: 100, IdentityAccounts: 1000},
 	}
+	// A chain world pins its own chain's start as the incarnation's genesis root chain anchor (the genesis link, Evidence.GenesisLink, starts
+	// there); every earlier suite keeps its seed.
+	genesisRoot := seed("genesis root")
+	if o.Chain != nil {
+		genesisRoot = GenesisRoot()
+	}
 	in := proof.IncarnationInputs{
 		GenesisMinorBlockIndex: protocol.GenesisBlock,
-		GenesisRootChainAnchor: a32(seed("genesis root")),
+		GenesisRootChainAnchor: a32(genesisRoot),
 		GenesisStateTreeAnchor: a32(seed("genesis state")),
 		GenesisTimeUnix:        1700000000,
 		NetworkRecord:          must(genNet.MarshalBinary()),
@@ -297,14 +303,26 @@ func build(o Options) *Built {
 
 	// Major block 1, closed by the genesis set.
 	r1 := seed("root 1")
+	if o.Chain != nil && o.Chain.Start != nil {
+		r1 = o.Chain.Start // a chain of another incarnation: the major block and the items start at its own root
+	}
+	genNetV2 := *genNet
+	genNetV2.Version = 2
+	genNetV2.Validators = append(append([]*protocol.ValidatorInfo(nil), genNet.Validators...), newValidator(4).info())
+	netV2 := &genNetV2
+	globB := *genGlob
+	globB.MajorBlockSchedule = "0 */6 * * *"
 	a1 := directoryAnchor(100, a32(r1), a32(seed("state 1")))
 	m1 := &api.MajorHeaderRecord{Index: 1, Entry: &protocol.IndexEntry{BlockIndex: 1}, Anchor: a1, Signatures: signAnchor(a1, v[0], v[1], v[2])}
 
 	// The certify chain (RB9-F5): base is the root the closing item starts from. Without Options.Chain it is the major block's root, as always.
 	base := r1
 	var chainRecs, chainLinks []string
+	var chainB chainBuilt
+	crec := chainRecords{globals: must(genGlob.MarshalBinary()), globalsB: must(globB.MarshalBinary()), networkV2: must(netV2.MarshalBinary())}
 	if o.Chain != nil {
-		chainRecs, chainLinks, base = o.Chain.build(r1, must(genGlob.MarshalBinary()), v)
+		chainB = o.Chain.build(r1, crec, v)
+		chainRecs, chainLinks, base = chainB.recs, chainB.links, chainB.base
 	}
 
 	var tw *timelineWorld
@@ -474,9 +492,24 @@ func build(o Options) *Built {
 	txReceipt := rcpt(txHash, step{true, seed("tx sibling")}, step{true, anchors["x"].tx}, step{true, q2}, step{true, q3}, step{false, base})
 
 	// The network, globals and routing accounts at the certified block, proven into one state tree.
-	netRec := must(genNet.MarshalBinary())
+	// The chain's writes decide what the proven accounts hold and how long their main chains are (RB9-F5, V-E A2(b), A3).
+	netHeight, globHeight := uint64(1), uint64(1)
+	finalNet, finalGlob := genNet, genGlob
+	if o.Chain != nil {
+		n, last := o.Chain.writes(true)
+		netHeight += n
+		if last == UpdateNetworkV2 {
+			finalNet = netV2
+		}
+		g, lastG := o.Chain.writes(false)
+		globHeight += g
+		if lastG == UpdateGlobalsB {
+			finalGlob = &globB
+		}
+	}
+	netRec := must(finalNet.MarshalBinary())
 	netAcct := &protocol.DataAccount{Url: protocol.DnUrl().JoinPath(protocol.Network), Entry: &protocol.DoubleHashDataEntry{Data: [][]byte{netRec}}}
-	globAcct := &protocol.DataAccount{Url: protocol.DnUrl().JoinPath(protocol.Globals), Entry: &protocol.DoubleHashDataEntry{Data: [][]byte{must(genGlob.MarshalBinary())}}}
+	globAcct := &protocol.DataAccount{Url: protocol.DnUrl().JoinPath(protocol.Globals), Entry: &protocol.DoubleHashDataEntry{Data: [][]byte{must(finalGlob.MarshalBinary())}}}
 	table := RoutingTable()
 	if o.Routing != nil {
 		o.Routing(table)
@@ -494,10 +527,29 @@ func build(o Options) *Built {
 			e := hexs(entry)
 			chain = proof.ChainRoot{Name: "main", Count: 1, Pending: []*string{&e}, Anchor: e}
 		} else {
-			// height 2: the genesis entry and a later write
-			d := h2(entry, seed(tag+" later write"))
-			dh := hexs(d)
-			chain = proof.ChainRoot{Name: "main", Count: 2, Pending: []*string{nil, &dh}, Anchor: dh}
+			// the genesis entry and height-1 later writes, as the chain's own state accumulates them (height 2 is the entry and one later write)
+			st := &merkle.State{}
+			st.AddEntry(entry)
+			for i := uint64(1); i < height; i++ {
+				later := seed(tag + " later write")
+				if i > 1 {
+					later = seed(fmt.Sprintf("%s write %d", tag, i+1))
+				}
+				st.AddEntry(later)
+			}
+			chain = proof.ChainRoot{Name: "main", Count: height, Anchor: hexs(st.Anchor())}
+			pend := st.Pending
+			for len(pend) > 0 && pend[len(pend)-1] == nil { // the state pads a trailing empty slot; the chain's encoding has none
+				pend = pend[:len(pend)-1]
+			}
+			for _, p := range pend {
+				if p == nil {
+					chain.Pending = append(chain.Pending, nil)
+					continue
+				}
+				ph := hexs(p)
+				chain.Pending = append(chain.Pending, &ph)
+			}
 		}
 		chainAnchorBytes := must(hex.DecodeString(chain.Anchor))
 		cp := h2(chainAnchorBytes, pending)
@@ -508,8 +560,8 @@ func build(o Options) *Built {
 			StateReceipt: chained_proof.Receipt{Start: hexs(main[:]), Anchor: hexs(sr.Anchor), Entries: []chained_proof.ReceiptStep{{Hash: hexs(secondary), Right: true}, {Hash: hexs(cp), Right: true}}},
 		}, sr.Anchor
 	}
-	netProof, netRoot := dataProof(netAcct, 1, "network")
-	globProof, globRoot := dataProof(globAcct, 1, "globals")
+	netProof, netRoot := dataProof(netAcct, netHeight, "network")
+	globProof, globRoot := dataProof(globAcct, globHeight, "globals")
 	rh := o.RoutingHeight
 	routProof, routRoot := dataProof(routAcct, rh, "routing")
 	ng := h2(netRoot, globRoot)
@@ -538,15 +590,17 @@ func build(o Options) *Built {
 	}
 	certify := []string{hexs(must(certRecord.MarshalBinary()))}
 	hops := []string{}
+	var genesisLink string
 	if o.Chain != nil {
-		fin, finLink := o.Chain.final(base, q, a32(certRoot), a32(bpt), v)
+		fin, finLink := o.Chain.final(chainB, q, a32(certRoot), a32(bpt), v)
+		genesisLink = o.Chain.genesisLink(r1, chainB, q)
 		certify = append(chainRecs, fin)
 		if finLink != "" {
 			chainLinks = append(chainLinks, finLink)
 		}
 		if len(o.Chain.Hops) > 0 {
 			var hopLinks []string
-			hops, hopLinks = o.Chain.buildHops(r1, must(genGlob.MarshalBinary()), a32(bpt), v)
+			hops, hopLinks = o.Chain.buildHops(r1, crec, a32(bpt), v)
 			chainLinks = append(chainLinks, hopLinks...)
 		}
 	}
@@ -579,11 +633,12 @@ func build(o Options) *Built {
 
 	ev := &proofv2.Evidence{
 		Version: proofv2.Version21, Account: lay.principal, TxHash: hexs(txHash),
-		Receipt: rcptHex(txReceipt),
-		Majors:  1,
-		Certify: certify,
-		Links:   chainLinks,
-		Anchor:  proofv2.PartitionAnchor{Message: hexs(must(anchors["x"].msg.MarshalBinary())), Receipt: rcptHex(anchorReceipt("x"))},
+		Receipt:     rcptHex(txReceipt),
+		Majors:      1,
+		Certify:     certify,
+		Links:       chainLinks,
+		GenesisLink: genesisLink,
+		Anchor:      proofv2.PartitionAnchor{Message: hexs(must(anchors["x"].msg.MarshalBinary())), Receipt: rcptHex(anchorReceipt("x"))},
 		Anchors: map[string]proofv2.PartitionAnchor{
 			lay.a.src: {Message: hexs(must(anchors["a"].msg.MarshalBinary())), Receipt: rcptHex(anchorReceipt("a"))},
 			lay.d.src: {Message: hexs(must(anchors["d"].msg.MarshalBinary())), Receipt: rcptHex(anchorReceipt("d"))},

@@ -12,6 +12,7 @@
 package proofv2
 
 import (
+	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -86,6 +87,9 @@ type PortableEvidence struct {
 	// set check's hops. It is held undecoded: a document that claims 2.0 never reads the member, whatever its JSON type, exactly as before it
 	// existed, and only a document that claims 2.1 decodes it (Import).
 	Links json.RawMessage `json:"links,omitempty"`
+	// GenesisLink (evidence 2.1 only): the merkle.Receipt from the pinned genesis root chain anchor to the certified root, as Accumulate's JSON; held
+	// undecoded for the same reason as Links.
+	GenesisLink json.RawMessage `json:"genesisLink,omitempty"`
 
 	Check PortableCheck `json:"check"`
 }
@@ -257,6 +261,11 @@ func ExportDocument(ev *Evidence, in proof.IncarnationInputs, pin [32]byte) (*Po
 		}
 		if e.Links, err = json.Marshal(ls); err != nil {
 			return nil, err
+		}
+	}
+	if ev.GenesisLink != "" {
+		if e.GenesisLink, err = receiptJSON(ev.GenesisLink); err != nil {
+			return nil, fmt.Errorf("genesis link: %w", err)
 		}
 	}
 	raw, err := hex.DecodeString(ev.Anchor.Message)
@@ -589,6 +598,14 @@ func importPortable(p *Portable, section *string) (*Evidence, *Archive, proof.In
 			}
 			ev.Links = append(ev.Links, h)
 		}
+	}
+	if e.Version == Version21 && len(e.GenesisLink) > 0 && string(bytes.TrimSpace(e.GenesisLink)) != "null" {
+		*section = "genesis link"
+		h, err := receiptHex(e.GenesisLink)
+		if err != nil {
+			return fail(err)
+		}
+		ev.GenesisLink = h
 	}
 	*section = "anchor message"
 	seq := new(messaging.SequencedMessage)

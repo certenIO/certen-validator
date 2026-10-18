@@ -217,6 +217,13 @@ func AnchorEvidence(ctx context.Context, ev *Evidence, ar *Archive, in proof.Inc
 		links = append(links, hl...)
 	}
 	out.Links = links
+	// The chain identity (V-E A1b, F-VE-2): a document with any link also carries the receipt from the pinned incarnation's genesis root chain
+	// anchor to the certified root, asked of the same account chain (entry 0, the genesis root, at the certified anchor's height).
+	if len(links) > 0 {
+		if out.GenesisLink, err = genesisLinkOf(ctx, src, in.GenesisRootChainAnchor, out.Certify[len(out.Certify)-1]); err != nil {
+			return nil, err
+		}
+	}
 	return &out, nil
 }
 
@@ -257,4 +264,35 @@ func RunRootProofEnd(run string) (uint64, error) {
 		return 0, fmt.Errorf("the record carries no root proof")
 	}
 	return uint64(mr.RootProof.MerkleState.Count) + uint64(len(mr.RootProof.Elements)) - 1, nil
+}
+
+// genesisLinkOf asks src for the chain identity of an anchored document (V-E A1b): the receipt from the pinned incarnation's genesis root chain
+// anchor (entry 0 of the account chain) to the root chain anchor of lastRun, the last run of certify (hex), at that run's RootChainIndex.
+func genesisLinkOf(ctx context.Context, src LinkSource, genesis [32]byte, lastRun string) (string, error) {
+	height, root, err := RunAnchor(lastRun)
+	if err != nil {
+		return "", err
+	}
+	gl, lerr := src.Link(ctx, genesis, height)
+	if lerr != nil {
+		return "", fmt.Errorf("%w: %v", certifyState(StateCertifyLinkUnavailable, hexOf32(genesis), strconv.FormatUint(height, 10)), lerr)
+	}
+	if !stepsPresent(gl) || !bytesEq(gl.Start, genesis[:]) || !bytesEq(gl.Anchor, root[:]) || !gl.Validate(nil) {
+		return "", fmt.Errorf("%w: the served receipt does not join the genesis root %s to the certified root %s", certifyState(StateCertifyLinkUnavailable, hexOf32(genesis), strconv.FormatUint(height, 10)), hexOf32(genesis), hexOf32(root))
+	}
+	gb, err := gl.MarshalBinary()
+	if err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(gb), nil
+}
+
+// addGenesisLink gives an anchored document the chain identity, asked of the live Directory.
+func (b *Builder) addGenesisLink(ctx context.Context, ev *Evidence) error {
+	ir, err := b.incEv.Verify()
+	if err != nil {
+		return err
+	}
+	ev.GenesisLink, err = genesisLinkOf(ctx, NewClientLinks(b.C), ir.Inputs.GenesisRootChainAnchor, ev.Certify[len(ev.Certify)-1])
+	return err
 }

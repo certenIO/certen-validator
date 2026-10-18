@@ -346,6 +346,11 @@ func (b *Builder) assemble21(ctx context.Context, ev *Evidence, x *Assembly, ar 
 		return nil, nil, err
 	}
 	ev.Version = Version21
+	if len(ev.Links) > 0 { // the chain identity of an anchored document (V-E A1b)
+		if err := b.addGenesisLink(ctx, ev); err != nil {
+			return nil, nil, err
+		}
+	}
 	ev.Anchors = map[string]PartitionAnchor{seq.Source.String(): ev.Anchor}
 	for _, pb := range x.Foreign {
 		pa, _, err := AnchorAt(ctx, b.C, pb, uint64(rootHeight))

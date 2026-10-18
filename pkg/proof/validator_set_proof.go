@@ -262,6 +262,17 @@ func (p *ValidatorSetProof) MainChainHeight() (uint64, bool) {
 	return 0, false
 }
 
+// GlobalsMainChainHeight returns the height of the globals account's main chain at the proven root, and whether a main chain was present
+// at all.
+func (p *ValidatorSetProof) GlobalsMainChainHeight() (uint64, bool) {
+	for _, c := range p.Globals.Chains {
+		if c.Name == "main" {
+			return c.Count, true
+		}
+	}
+	return 0, false
+}
+
 // DerivedSet reconstructs the validator set from the network account and the
 // threshold from the globals account. Both are DERIVED; neither is asserted.
 func (p *ValidatorSetProof) DerivedSet() ([]chained_proof.ValidatorKey, chained_proof.Rational, error) {
@@ -309,6 +320,13 @@ type VerifyInput struct {
 	// VerdictVerified. See the package comment: without a pin the derivation is
 	// circular.
 	PinnedIncarnation *string // hex32
+
+	// AccountedHistory is set only by the evidence 2.1 verifier (RB9-F5, V-E A3), and only when its walk from the pinned genesis has
+	// applied every write to BOTH accounts: the network account's main chain holds exactly 1 + the writes to the network definition the
+	// walk applied, and the globals account's exactly 1 + the writes to the globals. The set is then derived, with its whole history,
+	// by induction from the genesis the incarnation pins, so a main chain height above 1 is not an unproven history and Verify may
+	// report verified. Unset (every other caller, evidence 2.0 included) a height above 1 stays validator_set_asserted, as ever.
+	AccountedHistory bool
 }
 
 // Verify runs steps 10-17 of the L4 contract. It performs NO network access.
@@ -382,11 +400,12 @@ func (p *ValidatorSetProof) Verify(in VerifyInput) (Verdict, error) {
 	if !ok {
 		return "", fmt.Errorf("validatorSetProof: no main chain in the network account's chain set")
 	}
-	if height != 1 {
+	if height != 1 && !in.AccountedHistory {
 		// Height > 1 means the set has changed at least once. Proving what it WAS
 		// needs the historical membership path AIP-058 asks for, plus one update
 		// record per change. Neither is carried yet, so this is a could-not-read
-		// rather than a refusal.
+		// rather than a refusal. (Evidence 2.1 carries them: its walk applies one
+		// proven update per write and sets AccountedHistory.)
 		return VerdictValidatorSetAsserted, nil
 	}
 

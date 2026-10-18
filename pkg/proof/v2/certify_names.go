@@ -6,7 +6,12 @@
 
 package proofv2
 
-import "strings"
+import (
+	"bytes"
+	"strings"
+
+	"gitlab.com/accumulatenetwork/accumulate/pkg/database/merkle"
+)
 
 // The verifier's refusals and the builder's states.
 const (
@@ -57,3 +62,26 @@ func certifyState(code string, fields ...string) *CertifyState {
 
 // CertifyStateDetail is the fixed detail text of a code (empty for a name this package does not define).
 func CertifyStateDetail(code string) string { return certifyDetails[code] }
+
+// genesisLinkIndex is the index a certify_link_* state carries for the genesis link (Evidence.GenesisLink), which has no ordinal in the
+// links member.
+const genesisLinkIndex = "genesis"
+
+// checkGenesisLink judges the chain identity of an anchored document (V-E A1b): the genesis link must start at the pinned incarnation's
+// genesis root chain anchor, end at the certified root chain anchor and validate. Its refusals are the certify_link_* states at index
+// "genesis".
+func checkGenesisLink(link *merkle.Receipt, genesisRoot, certifiedRoot [32]byte) error {
+	switch {
+	case link == nil:
+		return certifyState(StateCertifyLinkMissing, genesisLinkIndex)
+	case !stepsPresent(link):
+		return certifyState(StateCertifyLinkInvalid, genesisLinkIndex)
+	case !bytes.Equal(link.Start, genesisRoot[:]):
+		return certifyState(StateCertifyLinkStart, genesisLinkIndex)
+	case !bytes.Equal(link.Anchor, certifiedRoot[:]):
+		return certifyState(StateCertifyLinkEnd, genesisLinkIndex)
+	case !link.Validate(nil):
+		return certifyState(StateCertifyLinkInvalid, genesisLinkIndex)
+	}
+	return nil
+}

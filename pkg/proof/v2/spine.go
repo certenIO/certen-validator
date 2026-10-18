@@ -59,6 +59,10 @@ type Spine struct {
 	// restored from a checkpoint (RestoreSpine) rather than walked from genesis.
 	priorNetworkUpdates uint64
 
+	// priorGlobalsUpdates is the same for the globals account, as the checkpoint recorded it (evidence 2.1: ledger.AccumulateSpineCheckpoint
+	// GlobalsUpdates, held from the activation of rules v15; a spine restored from an earlier checkpoint starts at 0).
+	priorGlobalsUpdates uint64
+
 	// refuseReplay, set by the evidence 2.1 verifier on the spines it walks, makes a record that applies an update the walk already
 	// applied (the same transaction hash) a refusal, certify_update_replayed. A 2.0 spine never sets it, so 2.0 verdicts do not move.
 	refuseReplay bool
@@ -70,6 +74,18 @@ func (s *Spine) NetworkUpdates() uint64 {
 	n := s.priorNetworkUpdates
 	for _, a := range s.Applied {
 		if a.Principal == protocol.DnUrl().JoinPath(protocol.Network).String() {
+			n++
+		}
+	}
+	return n
+}
+
+// GlobalsUpdates is the number of writes to acc://dn.acme/globals the spine has counted (V-E A2(b)): what the globals account's main
+// chain must account for, beside its genesis entry. Only the evidence 2.1 verifier compares it; 2.0 never has.
+func (s *Spine) GlobalsUpdates() uint64 {
+	n := s.priorGlobalsUpdates
+	for _, a := range s.Applied {
+		if a.Principal == protocol.DnUrl().JoinPath(protocol.Globals).String() {
 			n++
 		}
 	}

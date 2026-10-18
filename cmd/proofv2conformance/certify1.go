@@ -95,6 +95,19 @@ func certify1Worlds() map[string]xworld.Options {
 		"chain-hops-anchored":       {Chain: &xworld.Chain{Final: xworld.ChainItem{Anchored: true}, Hops: []xworld.ChainItem{eff(true), {Anchored: true}}}},
 		"chain-hops-no-effect":      {Chain: &xworld.Chain{Final: xworld.ChainItem{Anchored: true}, Hops: []xworld.ChainItem{{Anchored: true}, {Anchored: true}}}},
 		"chain-hops-duplicated":     {Chain: &xworld.Chain{Final: xworld.ChainItem{Anchored: true}, Hops: []xworld.ChainItem{{Anchored: true, Update: xworld.UpdateGlobals, Repeat: 2}, {Anchored: true}}}},
+		// The set changes in the minor run (V-E A3): the globals are rewritten (content B, then the genesis content again: an A -> B -> A
+		// sequence) and the network is rewritten to its version 2 (a fourth validator). The proven network account holds 2 entries and the
+		// globals account 3; the walk applies every write, so the set check reports verified.
+		"chain-accounted": {Chain: &xworld.Chain{Items: []xworld.ChainItem{
+			{Anchored: true, Update: xworld.UpdateGlobalsB}, {Anchored: true, Update: xworld.UpdateGenesisGlobals}, {Anchored: true, Update: xworld.UpdateNetworkV2}},
+			Final: xworld.ChainItem{Anchored: true}}},
+		// The same chain as the globals part of chain-accounted, with the first write left out of the document although the chain holds it: the
+		// globals end at the genesis content again, so a comparison of content cannot see the omission; only the count can.
+		"chain-globals-aba-omitted": {Chain: &xworld.Chain{Items: []xworld.ChainItem{
+			{Anchored: true, Update: xworld.UpdateGlobalsB}, {Anchored: true, Update: xworld.UpdateGenesisGlobals}},
+			Final: xworld.ChainItem{Anchored: true}, Omit: []int{0}}},
+		// A complete chain of another incarnation: it shares the pinned genesis records and the genesis set, and starts at a root of its own.
+		"chain-foreign-genesis": {Chain: &xworld.Chain{Final: xworld.ChainItem{Anchored: true}, Start: xworld.ForeignGenesis()}},
 	}
 }
 
@@ -197,6 +210,16 @@ func certify1Specs() []certify1Spec {
 			return setMember(d, p, flipFirstByte(h))
 		}
 	}
+	flipGenesisLink := func(member ...any) edit {
+		return func(d map[string]any, _ *xworld.Built) error {
+			p := append([]any{"evidence", "genesisLink"}, member...)
+			h, okh := memberAt(d, p...).(string)
+			if !okh {
+				return fmt.Errorf("the base document has no hex at %v", p)
+			}
+			return setMember(d, p, flipFirstByte(h))
+		}
+	}
 	flipPending := func(i int) edit {
 		return func(d map[string]any, _ *xworld.Built) error {
 			p := append(certifyAt(i), "rootProof", "merkleState", "pending", 0)
@@ -292,10 +315,17 @@ func certify1Specs() []certify1Spec {
 				rec, link := xworld.ForeignItem(nil, 110, false)
 				return replaceItem(0, 0, rec, link)(d, nil)
 			}},
-		{Certify1Case: c("anchor-re-rooted-off-the-verified-root", "chain-final-only", "evidence/certify/0 and links/0 replaced by a record of another chain signed by the genesis set, linked from the verified root", "the link starts at the verified root and ends at the foreign anchor's root, which the genesis set signed: the walk accepts it and the transaction's receipt, which ends at the world's own root, is refused", Certify1Case{Expect: "refused", Prefix: "receipt ends at "}),
+		{Certify1Case: c("anchor-re-rooted-off-the-verified-root", "chain-final-only", "evidence/certify/0, links/0 and genesisLink replaced by a record of another chain signed by the genesis set, linked from the verified root", "the link starts at the verified root and ends at the foreign anchor's root, which the genesis set signed, and the genesis link is the same receipt: the walk accepts it and the transaction's receipt, which ends at the world's own root, is refused", Certify1Case{Expect: "refused", Prefix: "receipt ends at "}),
 			apply: func(d map[string]any, _ *xworld.Built) error {
 				rec, link := xworld.ForeignItem(xworld.GenesisRoot(), 110, false)
-				return replaceItem(0, 0, rec, link)(d, nil)
+				if err := replaceItem(0, 0, rec, link)(d, nil); err != nil {
+					return err
+				}
+				l, err := asValue(receiptJSONOf(link))
+				if err != nil {
+					return err
+				}
+				return setMember(d, []any{"evidence", "genesisLink"}, l)
 			}},
 		{Certify1Case: c("anchor-of-another-incarnation", "chain-final-only", "evidence/certify/0 and links/0 replaced by a record signed by a validator set the genesis does not hold, linked from the verified root", "a cross-incarnation anchor: the link is valid and starts at the verified root, the signers are not in the set in force", plain("certify run 0: block 110: signer is not an active directory validator")),
 			apply: func(d map[string]any, _ *xworld.Built) error {
@@ -341,7 +371,33 @@ func certify1Specs() []certify1Spec {
 		{Certify1Case: c("hop-anchored-item-without-update-not-last", "chain-hops-no-effect", "none (the first hop is anchored, carries no update and is not the last)", "the canonical form holds for the set check's hops; the item is numbered across certify and hops", certify1State(proofv2.StateCertifyItemWithoutEffect, "1", "310")), apply: noEdit},
 		{Certify1Case: c("hop-duplicated-update", "chain-hops-duplicated", "none (the first hop carries the same globals write twice)", "the replay refusal holds for the set check's hops", Certify1Case{Expect: "refused"}), apply: noEdit},
 
+		// The chain identity (V-E A1b, F-VE-2): a receipt from the pinned incarnation's genesis root chain anchor to the certified root.
+		{Certify1Case: c("genesis-link-absent", "chain-final-only", "evidence/genesisLink removed", "an anchored document without the chain identity", certify1State(proofv2.StateCertifyLinkMissing, "genesis")),
+			apply: func(d map[string]any, _ *xworld.Built) error {
+				return deleteMember(d, []any{"evidence", "genesisLink"})
+			}},
+		{Certify1Case: c("genesis-link-start-altered", "chain-final-only", "evidence/genesisLink/start first byte flipped", "the genesis link starts somewhere other than the pinned incarnation's genesis root chain anchor", certify1State(proofv2.StateCertifyLinkStart, "genesis")),
+			apply: flipGenesisLink("start")},
+		{Certify1Case: c("genesis-link-end-altered", "chain-final-only", "evidence/genesisLink/anchor first byte flipped", "the genesis link ends somewhere other than the certified root chain anchor", certify1State(proofv2.StateCertifyLinkEnd, "genesis")),
+			apply: flipGenesisLink("anchor")},
+		{Certify1Case: c("genesis-link-step-altered", "chain-final-only", "evidence/genesisLink/entries/0/hash first byte flipped", "the genesis link starts and ends where it must but its path does not recompute", certify1State(proofv2.StateCertifyLinkInvalid, "genesis")),
+			apply: flipGenesisLink("entries", 0, "hash")},
+		{Certify1Case: c("genesis-link-with-an-unknown-trailing-field", "chain-final-only", "evidence/genesisLink/$epilogue = field 5", "a genesis link is a receipt: one carrying a member the receipt does not know is refused as an invalid genesis link", certify1State(proofv2.StateCertifyLinkInvalid, "genesis")),
+			apply: func(d map[string]any, _ *xworld.Built) error {
+				return setMember(d, []any{"evidence", "genesisLink", "$epilogue"}, "05010a")
+			}},
+		{Certify1Case: c("genesis-link-of-another-incarnation", "chain-foreign-genesis", "none (the world's chain, major block and genesis link start at a root of another incarnation that shares the pinned genesis records)", "a complete chain of another incarnation, signed by the genesis set, with its own genesis link: it does not start at the pinned genesis root chain anchor", certify1State(proofv2.StateCertifyLinkStart, "genesis")), apply: noEdit},
+
+		// The accounting (V-E A2(b), A3): every write to the network and the globals accounts, counted against their main chains.
+		{Certify1Case: c("accounted-set-change-verified", "chain-accounted", "none", "updates in the minor run: the globals are rewritten (B, then the genesis content again) and the network to version 2 (a fourth validator); the proven accounts hold 3 and 2 main chain entries, the walk applied every write: the set check is verified, not asserted", ok), apply: noEdit},
+		{Certify1Case: c("omitted-globals-update", "chain-globals-aba-omitted", "none (the document leaves out the first globals write of an A -> B -> A sequence; the proven globals account holds 3 main chain entries and the genesis content)", "the content of the globals the walk derives equals the proven one, so only the count of writes shows the omission", certify1State(proofv2.StateCertifyWindowUnaccounted, "globals", "300", "2", "3")), apply: noEdit},
+
 		// Evidence 2.0 is frozen.
+		{Certify1Case: c("genesis-link-member-in-an-evidence-2.0-document", "conformance:network-update", "evidence/genesisLink = a string", "a genesisLink member in a document that claims 2.0 is not read: the verdict is the unmodified document's, whatever the member holds", Certify1Case{}),
+			sameAsBase: true,
+			apply: func(d map[string]any, _ *xworld.Built) error {
+				return setMember(d, []any{"evidence", "genesisLink"}, "not a receipt at all")
+			}},
 		{Certify1Case: c("anchored-item-in-an-evidence-2.0-document", "conformance:network-update", "evidence/certify/0/rootProof removed", "an item without a root proof in a document that claims 2.0: refused as it always was", plain("certify run 0: incomplete minor root record")),
 			apply: func(d map[string]any, _ *xworld.Built) error {
 				return deleteMember(d, append(certifyAt(0), "rootProof"))
