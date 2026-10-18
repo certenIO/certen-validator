@@ -5,8 +5,10 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/govsig/sigfixture"
 	"gitlab.com/accumulatenetwork/accumulate/protocol"
@@ -66,7 +68,12 @@ func (e *g1Env) setDisabled(ctx context.Context, cust, bank *g1ADI, book string,
 	if err != nil {
 		return err
 	}
-	return cust.app.run(ctx, what+" "+shortURL(book)+" on "+shortURL(data), txn, env)
+	if err := cust.app.run(ctx, what+" "+shortURL(book)+" on "+shortURL(data), txn, env); err != nil {
+		return err
+	}
+	e.ops = append(e.ops, g1Op{What: "UpdateAccountAuth/" + what, Principal: data, TxHash: hex.EncodeToString(txn.GetHash()),
+		Book: cust.url + "/book", Page: cust.url + "/book/1", At: time.Now().UTC().Format(time.RFC3339)})
+	return nil
 }
 
 // twoKeys gives page a second key and threshold 2 (one transaction, signed by the page's own root key).

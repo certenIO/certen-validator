@@ -16,6 +16,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -95,6 +96,16 @@ func runG1(cmd string, args []string) {
 		fmt.Printf("placement (routing table, both sources agree):\n")
 		for _, k := range sortedKeys(plan.Placement) {
 			fmt.Printf("  %-22s %s\n", k, plan.Placement[k])
+		}
+		if t.Kind == "authop" {
+			// the transactions to capture, with the time each was executed (the pages are servable for about 945 s)
+			b, _ := json.MarshalIndent(e.ops, "", "  ")
+			dir := filepath.Join(f.out, fmt.Sprintf("authop-%d", t.N))
+			if err = os.MkdirAll(dir, 0o755); err == nil {
+				err = os.WriteFile(filepath.Join(dir, "ops.json"), append(b, byte(10)), 0o644)
+			}
+			fmt.Printf("account-level transactions executed:%c%s%c", 10, b, 10)
+			break
 		}
 		if cmd == "g1intent" {
 			accts, aerr := parseAccounts(f.accounts, "", nil)

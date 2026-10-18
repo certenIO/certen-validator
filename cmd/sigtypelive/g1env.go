@@ -70,6 +70,17 @@ type g1Env struct {
 	keys   string
 	funder *app
 	adis   map[string]*g1ADI
+	ops    []g1Op // the account-level transactions this run executed, in order (authop scenario)
+}
+
+// g1Op is a transaction a scenario executed that is not an intent: the thing to capture for the transaction types the verifier models.
+type g1Op struct {
+	What      string `json:"what"`
+	Principal string `json:"principal"`
+	TxHash    string `json:"txHash"`
+	Book      string `json:"declaredBook"`
+	Page      string `json:"declaredPage"`
+	At        string `json:"at"`
 }
 
 type g1ADI struct {
@@ -327,7 +338,12 @@ func (e *g1Env) createData(ctx context.Context, cust *g1ADI, auths []string, cos
 	if err != nil {
 		return err
 	}
-	return cust.app.run(ctx, "create "+shortURL(data), txn, env)
+	if err := cust.app.run(ctx, "create "+shortURL(data), txn, env); err != nil {
+		return err
+	}
+	e.ops = append(e.ops, g1Op{What: "CreateDataAccount", Principal: cust.url, TxHash: hex.EncodeToString(txn.GetHash()),
+		Book: cust.url + "/book", Page: cust.url + "/book/1", At: time.Now().UTC().Format(time.RFC3339)})
+	return nil
 }
 
 // g1Sig is one signature of the intent's envelope.
@@ -396,6 +412,18 @@ func (e *g1Env) setup(ctx context.Context, t g1Topo) (*g1Plan, error) {
 		plan.Book, plan.Page = bank.url+"/book", bank.url+"/book/1"
 		plan.Sigs = []g1Sig{{ADI: bank, Page: bank.url + "/book/1", Initiate: true}}
 		plan.Notes = append(plan.Notes, "bankonly: the declared key page is the foreign book's; no CertenAccount is governed by it, so it cannot settle")
+	case "authop":
+		// no intent: the account-level transactions themselves (create the data account with the foreign authority, disable it, enable it)
+		// are the transactions to capture; each is voted by the customer's book and the bank's.
+		if err := e.createData(ctx, cust, []string{cust.url + "/book", bank.url + "/book"}, bank); err != nil {
+			return nil, err
+		}
+		if err := e.setDisabled(ctx, cust, bank, bank.url+"/book", true); err != nil {
+			return nil, err
+		}
+		if err := e.setDisabled(ctx, cust, bank, bank.url+"/book", false); err != nil {
+			return nil, err
+		}
 	case "header":
 		// the tcl per-payment layer: the foreign book is not an authority of the account but is named in the transaction header, so
 		// Accumulate holds the transaction until it approves.
