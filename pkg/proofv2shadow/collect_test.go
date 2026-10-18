@@ -183,9 +183,13 @@ func (l fakeLog) Block(_ context.Context, p string, i uint64) (uint64, error) {
 }
 func (l fakeLog) Produced(_ context.Context, p string, i uint64) (*protocol.Transaction, error) {
 	a := l.f.anchors[p][i]
-	return &protocol.Transaction{Body: &protocol.BlockValidatorAnchor{PartitionAnchor: protocol.PartitionAnchor{
+	pa := protocol.PartitionAnchor{
 		Source: protocol.PartitionUrl(p), MinorBlockIndex: a.block, RootChainIndex: i,
-		RootChainAnchor: sha256.Sum256([]byte(fmt.Sprintf("root:%s:%d", p, a.block))), StateTreeAnchor: l.f.rootAt(p, a.block)}}}, nil
+		RootChainAnchor: sha256.Sum256([]byte(fmt.Sprintf("root:%s:%d", p, a.block))), StateTreeAnchor: l.f.rootAt(p, a.block)}
+	if p == protocol.Directory { // the Directory is proven by the DirectoryAnchor it executes for itself
+		return &protocol.Transaction{Body: &protocol.DirectoryAnchor{PartitionAnchor: pa}}, nil
+	}
+	return &protocol.Transaction{Body: &protocol.BlockValidatorAnchor{PartitionAnchor: pa}}, nil
 }
 
 func (f *fakeNet) collector() *Collector {
@@ -459,18 +463,36 @@ func TestCollectRefusesAnAuthorityBookWhosePageIsMissing(t *testing.T) {
 	}
 }
 
-// A 2.0 evidence document carries only the transaction's partition's pages; a capture with pages elsewhere needs 2.1.
-func TestEvidencePagesRefusesForeignPagesFor20(t *testing.T) {
+// A 2.0 evidence document carries only the transaction's partition's pages; a capture with pages elsewhere is built as evidence 2.1, and
+// a proof for an intent's certificate is the named state g1_evidence_21_not_in_force until the rules that accept 2.1 are in force.
+func TestPlanBuildForeignPagesNeedEvidence21(t *testing.T) {
 	f := newFakeNet(t, tclWorld())
 	f.facts = facts("acc://cust.acme/pay")
 	c, err := f.collect()
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = evidencePages(c)
+	if !c.HasForeignPages() {
+		t.Fatal("the cross-partition capture reports no foreign page")
+	}
+	_, err = planBuild(c, true, false)
 	var ns *proofv2.NamedState
-	if !errors.As(err, &ns) || ns.Code != proofv2.StateEvidence21Required || !strings.Contains(ns.Detail, "bank.acme/book") {
-		t.Fatalf("foreign pages in a 2.0 build gave %v", err)
+	if !errors.As(err, &ns) || ns.Code != proofv2.StateEvidence21NotInForce || ns.Block != c.Block {
+		t.Fatalf("a certificate proof with foreign pages gave %v", err)
+	}
+	if strings.Contains(err.Error(), "g1_evidence_21_required") {
+		t.Fatalf("the interim name is still emitted: %v", err)
+	}
+	pl, err := planBuild(c, false, false)
+	if err != nil || !pl.is21 {
+		t.Fatalf("the shadow builds evidence 2.1 for a foreign capture: %+v, %v", pl, err)
+	}
+	pl, err = planBuild(c, true, true)
+	if err != nil || !pl.is21 {
+		t.Fatalf("with the rules in force a certificate proof is 2.1: %+v, %v", pl, err)
+	}
+	if _, err := evidencePages(c); err == nil || !strings.Contains(err.Error(), "bank.acme/book") {
+		t.Fatalf("2.0 pages of a foreign capture gave %v", err)
 	}
 	// Own-partition pages only: a 2.0 document, without 2.1 members.
 	w := world{}
@@ -482,11 +504,11 @@ func TestEvidencePagesRefusesForeignPagesFor20(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pages, err := evidencePages(c)
-	if err != nil || len(pages) != 3 {
-		t.Fatalf("own-partition pages: %d, %v", len(pages), err)
+	pl, err = planBuild(c, true, false)
+	if err != nil || pl.is21 || len(pl.pages) != 3 {
+		t.Fatalf("own-partition pages: %+v, %v", pl, err)
 	}
-	for _, p := range pages {
+	for _, p := range pl.pages {
 		if p.Partition != "" || p.Roles != nil {
 			t.Fatalf("a 2.0 page carries 2.1 members: %+v", p)
 		}
@@ -624,7 +646,9 @@ func TestCollectCapturesTheCertifiedKeyPageOfAnUnrelatedIdentity(t *testing.T) {
 	}
 }
 
-// A page on the Directory is a named state: capture of Directory pages is not built.
+// A page on the Directory is captured like any partition's (RB9 C1b-2 supersedes the g1_directory_partition_unsupported refusal this test
+// pinned): with no anchor of the Directory's own recorded, it is the named state g1_partition_anchor_unavailable with the partition,
+// never a read of current state. The captures that succeed are in collect_directory_test.go.
 func TestCollectNamesAGoverningPageOnTheDirectory(t *testing.T) {
 	w := tclWorld()
 	f := newFakeNet(t, w)
@@ -634,8 +658,8 @@ func TestCollectNamesAGoverningPageOnTheDirectory(t *testing.T) {
 	f.facts = facts("acc://cust.acme/dirpay")
 	_, err := f.collect()
 	var ns *proofv2.NamedState
-	if !errors.As(err, &ns) || ns.Code != proofv2.StateDirectoryPartitionUnsupported {
-		t.Fatalf("a Directory page gave %v", err)
+	if !errors.As(err, &ns) || ns.Code != proofv2.StatePartitionAnchorUnavailable || ns.Partition != "Directory" {
+		t.Fatalf("a Directory page with no Directory anchor gave %v", err)
 	}
 }
 

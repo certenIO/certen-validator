@@ -167,27 +167,44 @@ func (b *Builder) Build(ctx context.Context, account, txHash, bvn string, pages 
 // must start at a checkpoint the chain has verified, so a proposer bounds it by the consensus spine's height; the
 // proof's own minor-root runs cover the blocks past it.
 func (b *Builder) BuildBounded(ctx context.Context, maxMajors uint64, account, txHash, bvn string, pages ...*PageState) (*Evidence, error) {
+	ev, _, err := b.buildBounded(ctx, maxMajors, account, txHash, bvn, nil, pages...)
+	return ev, err
+}
+
+// Build21 proves one transaction and assembles evidence 2.1 from a capture (docs/proof/G1_CROSS_PARTITION.md; RB9 Phase C1b-2): the
+// transaction's own proof as Build does it, the captured pages of every partition each trimmed to its own partition's state root,
+// the anchor of every partition proven into the same certified root (AnchorAt), the votes with their receipts, arrival proofs and
+// production, the carried transaction, and the routing table proven beside the validator set. The producer verifies its own
+// document with Verify21FromGenesis; the report is returned with it.
+func (b *Builder) Build21(ctx context.Context, maxMajors uint64, account, txHash, bvn string, a *Assembly) (*Evidence, *Report, error) {
+	if a == nil || len(a.Pages) == 0 {
+		return nil, nil, &NamedState{Code: StateCompletenessUnproven, Detail: "evidence 2.1 needs the captured pages"}
+	}
+	return b.buildBounded(ctx, maxMajors, account, txHash, bvn, a)
+}
+
+func (b *Builder) buildBounded(ctx context.Context, maxMajors uint64, account, txHash, bvn string, x *Assembly, pages ...*PageState) (*Evidence, *Report, error) {
 	majors, ar := b.view(maxMajors)
 	if len(majors) == 0 {
-		return nil, fmt.Errorf("no major block has been walked")
+		return nil, nil, fmt.Errorf("no major block has been walked")
 	}
 	cp, err := chained_proof.NewProofBuilder(b.C, false).BuildProof(ctx, chained_proof.ProofInput{Account: account, TxHash: txHash, BVN: bvn})
 	if err != nil {
-		return nil, fmt.Errorf("account and partition legs: %w", err)
+		return nil, nil, fmt.Errorf("account and partition legs: %w", err)
 	}
 	r1, err := toMerkle(cp.Layer1.Receipt)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	r2, err := toMerkle(cp.Layer2.RootReceipt)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	// Certify the Directory block the Directory leg reached, from the last major block before it.
 	n, cert, err := lastMajorBefore(majors, cp.Layer3.DNSelfAnchorRecordedAtMinorBlockIndex)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	// A minor-root run is bounded, so a long range can take several; walk until the run covers the target block.
 	target := cp.Layer3.DNSelfAnchorRecordedAtMinorBlockIndex
@@ -197,16 +214,16 @@ func (b *Builder) BuildBounded(ctx context.Context, maxMajors uint64, account, t
 		mr, err = b.C.MinorRootRange(ctx, api.MinorRootRangeOptions{Partition: protocol.Directory, Since: cert.LastMinorBlock, Until: target})
 		if err != nil {
 			if strings.Contains(err.Error(), "no anchor at or after") {
-				return nil, fmt.Errorf("DN %d: %w", target, ErrNotYetCertified)
+				return nil, nil, fmt.Errorf("DN %d: %w", target, ErrNotYetCertified)
 			}
-			return nil, fmt.Errorf("certify DN %d: %w", target, err)
+			return nil, nil, fmt.Errorf("certify DN %d: %w", target, err)
 		}
 		if err := cert.AdvanceEpoch(mr); err != nil {
-			return nil, fmt.Errorf("certify: %w", err)
+			return nil, nil, fmt.Errorf("certify: %w", err)
 		}
 		rb, err := mr.MarshalBinary()
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		runs = append(runs, hex.EncodeToString(rb))
 	}
@@ -217,60 +234,79 @@ func (b *Builder) BuildBounded(ctx context.Context, maxMajors uint64, account, t
 	q, err := b.C.Query(ctx, protocol.DnUrl().JoinPath(protocol.AnchorPool), &api.ChainQuery{
 		Name: "anchor(directory)-root", Entry: r2.Anchor, IncludeReceipt: &api.ReceiptOptions{ForHeight: uint64(height)}})
 	if err != nil {
-		return nil, fmt.Errorf("directory leg at root height %d: %w", height, err)
+		return nil, nil, fmt.Errorf("directory leg at root height %d: %w", height, err)
 	}
 	ce, ok := q.(*api.ChainEntryRecord[api.Record])
 	if !ok || ce.Receipt == nil {
-		return nil, fmt.Errorf("directory leg: got %T without a receipt", q)
+		return nil, nil, fmt.Errorf("directory leg: got %T without a receipt", q)
 	}
 	cont, err := r1.Combine(r2, &ce.Receipt.Receipt)
 	if err != nil {
-		return nil, fmt.Errorf("combine: %w", err)
+		return nil, nil, fmt.Errorf("combine: %w", err)
 	}
 
 	// The partition anchor for the transaction's block, proven into the same certified root.
 	l4 := cp.Layer4BVN
 	if l4 == nil {
-		return nil, fmt.Errorf("no partition anchor leg for the transaction's block")
+		return nil, nil, fmt.Errorf("no partition anchor leg for the transaction's block")
 	}
 	pool, err := url.Parse(l4.AnchorPool)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	idx := l4.AnchorIndex
 	aq, err := b.C.Query(ctx, pool, &api.ChainQuery{Name: "main", Index: &idx, IncludeReceipt: &api.ReceiptOptions{ForHeight: uint64(height)}})
 	if err != nil {
-		return nil, fmt.Errorf("partition anchor at root height %d: %w", height, err)
+		return nil, nil, fmt.Errorf("partition anchor at root height %d: %w", height, err)
 	}
 	ace, ok := aq.(*api.ChainEntryRecord[api.Record])
 	if !ok || ace.Receipt == nil {
-		return nil, fmt.Errorf("partition anchor: got %T without a receipt", aq)
+		return nil, nil, fmt.Errorf("partition anchor: got %T without a receipt", aq)
 	}
 	arb, err := ace.Receipt.Receipt.MarshalBinary()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	stateRoot, err := hex.DecodeString(l4.StateTreeAnchor)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var trimmed []PageState
+	xSource := ""
+	if x != nil {
+		_, seq, _, aerr := anchorBody(l4.SequencedMessage)
+		if aerr != nil {
+			return nil, nil, aerr
+		}
+		xSource = seq.Source.String()
+		pages = x.Pages
+	}
 	for _, p := range pages {
-		t, err := trimPage(p, stateRoot)
+		root := stateRoot
+		if x != nil {
+			if strings.EqualFold(p.Partition, xSource) {
+				root = stateRoot
+			} else if r, ok := x.Roots[p.Partition]; ok {
+				root = r[:]
+			} else {
+				return nil, nil, &NamedState{Code: StatePartitionAnchorUnavailable, Partition: p.Partition, Detail: fmt.Sprintf("%s: no state root is captured for its partition", p.URL)}
+			}
+		}
+		t, err := trimPage(p, root)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		trimmed = append(trimmed, *t)
 	}
 
-	set, err := b.buildSetCheckAt(ctx, majors, n, cert)
+	set, chk, err := b.buildSetCheckAt(ctx, majors, n, cert)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	rb, err := cont.MarshalBinary()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	ev := &Evidence{
 		Version: Version, Account: account, TxHash: txHash,
@@ -280,11 +316,52 @@ func (b *Builder) BuildBounded(ctx context.Context, maxMajors uint64, account, t
 		Check:  *set,
 	}
 
+	if x != nil {
+		return b.assemble21(ctx, ev, x, ar, height, chk)
+	}
+
 	// The producer verifies its own output, so a malformed proof never reaches storage.
 	if _, err := Verify(ev, ar, b.incEv, b.inc); err != nil {
-		return nil, fmt.Errorf("built evidence that does not verify: %w", err)
+		return nil, nil, fmt.Errorf("built evidence that does not verify: %w", err)
 	}
-	return ev, nil
+	return ev, nil, nil
+}
+
+// assemble21 turns the 2.0 document built from the transaction's proof into evidence 2.1: the anchors of the other partitions, the
+// votes, the transaction and the routing proof, then verifies it.
+func (b *Builder) assemble21(ctx context.Context, ev *Evidence, x *Assembly, ar *Archive, rootHeight int64, chk *Spine) (*Evidence, *Report, error) {
+	_, seq, _, err := anchorBody(ev.Anchor.Message)
+	if err != nil {
+		return nil, nil, err
+	}
+	ev.Version = Version21
+	ev.Anchors = map[string]PartitionAnchor{seq.Source.String(): ev.Anchor}
+	for _, pb := range x.Foreign {
+		pa, _, err := AnchorAt(ctx, b.C, pb, uint64(rootHeight))
+		if err != nil {
+			return nil, nil, fmt.Errorf("anchor of %s block %d: %w", pb.Partition, pb.Block, err)
+		}
+		ev.Anchors[protocol.PartitionUrl(pb.Partition).String()] = pa
+	}
+	if ev.Votes, err = x.ProveMembers(ctx, ev.Account); err != nil {
+		return nil, nil, err
+	}
+	if len(x.Votes) == 0 {
+		ev.Votes = nil
+	}
+	ev.Transaction = x.Transaction
+	if ev.Check.Routing, err = proof.BuildRoutingProofAt(ctx, b.Q, chk.LastMinorBlock, chk.StateTreeAnchor); err != nil {
+		return nil, nil, fmt.Errorf("routing proof: %w", err)
+	}
+	ir, err := b.incEv.Verify()
+	if err != nil {
+		return nil, nil, fmt.Errorf("incarnation evidence: %w", err)
+	}
+	rep, err := Verify21FromGenesis(ev, ar, ir.Inputs, b.inc)
+	if err != nil {
+		return nil, nil, fmt.Errorf("built evidence 2.1 that does not verify: %w", err)
+	}
+	return ev, rep, nil
 }
 
 // buildSetCheckAt proves the validator set at the certified block itself, reusing the certification: no runs of its
@@ -292,21 +369,21 @@ func (b *Builder) BuildBounded(ctx context.Context, maxMajors uint64, account, t
 // promptly, so its state is inside the node's retention; when it is not (a proof built later), the set is proven at
 // the newest certified block instead (buildSetCheck). Both are the same guarantee: the set proven at a certified block
 // at or after the certified one.
-func (b *Builder) buildSetCheckAt(ctx context.Context, majors []*Spine, n uint64, cert *Spine) (*SetCheck, error) {
+func (b *Builder) buildSetCheckAt(ctx context.Context, majors []*Spine, n uint64, cert *Spine) (*SetCheck, *Spine, error) {
 	set, err := proof.BuildValidatorSetProofAt(ctx, b.Q, b.inc, cert.LastMinorBlock, cert.StateTreeAnchor)
 	if err != nil {
 		if strings.Contains(err.Error(), "retained") {
 			return b.buildSetCheck(ctx, majors, cert.LastMinorBlock)
 		}
-		return nil, fmt.Errorf("set check: %w", err)
+		return nil, nil, fmt.Errorf("set check: %w", err)
 	}
-	return &SetCheck{Majors: n, Set: *set}, nil
+	return &SetCheck{Majors: n, Set: *set}, cert, nil
 }
 
 // buildSetCheck walks a copy of the spine from the last major block to the newest certified block, keeping every
 // minor-root run, and proves the validator set there. The newest certified block is inside the public node's
 // retention, and its state receipt passes through the state root the anchor certifies whatever later root it ends at.
-func (b *Builder) buildSetCheck(ctx context.Context, majors []*Spine, atLeast uint64) (*SetCheck, error) {
+func (b *Builder) buildSetCheck(ctx context.Context, majors []*Spine, atLeast uint64) (*SetCheck, *Spine, error) {
 	n := uint64(len(majors))
 	chk := majors[n-1].Clone()
 	var hops []string
@@ -316,22 +393,22 @@ func (b *Builder) buildSetCheck(ctx context.Context, majors []*Spine, atLeast ui
 			break
 		}
 		if err := chk.AdvanceEpoch(mr); err != nil {
-			return nil, fmt.Errorf("set check: %w", err)
+			return nil, nil, fmt.Errorf("set check: %w", err)
 		}
 		hb, err := mr.MarshalBinary()
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		hops = append(hops, hex.EncodeToString(hb))
 	}
 	if len(hops) == 0 || chk.LastMinorBlock < atLeast {
-		return nil, fmt.Errorf("set check: the walk reached DN %d, not the certified DN %d", chk.LastMinorBlock, atLeast)
+		return nil, nil, fmt.Errorf("set check: the walk reached DN %d, not the certified DN %d", chk.LastMinorBlock, atLeast)
 	}
 	set, err := proof.BuildValidatorSetProofAt(ctx, b.Q, b.inc, chk.LastMinorBlock, chk.StateTreeAnchor)
 	if err != nil {
-		return nil, fmt.Errorf("set check: %w", err)
+		return nil, nil, fmt.Errorf("set check: %w", err)
 	}
-	return &SetCheck{Majors: n, Hops: hops, Set: *set}, nil
+	return &SetCheck{Majors: n, Hops: hops, Set: *set}, chk, nil
 }
 
 func toMerkle(r chained_proof.Receipt) (*merkle.Receipt, error) {

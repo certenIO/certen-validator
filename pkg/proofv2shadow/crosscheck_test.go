@@ -121,3 +121,22 @@ func TestCrossCheckNamesThresholdDelegateEntryCountAndUncapturedDifferences(t *t
 		t.Fatalf("a page captured before v1 says it existed: %s", r)
 	}
 }
+
+// The comparison is the verifier's (proofv2.AuthorityFieldDiffs, RB9-C1b-1-F3): a transaction blacklist decides who may sign, so a
+// page whose blacklist differs between v1's replay and v2's capture is a disagreement.
+func TestPageDifferencesSeesTheTransactionBlacklist(t *testing.T) {
+	mk := func() *protocol.KeyPage {
+		return &protocol.KeyPage{Url: mustURL("acc://a.acme/book/1"), Version: 1, AcceptThreshold: 1, Keys: []*protocol.KeySpec{{PublicKeyHash: []byte{1}}}}
+	}
+	a, b := mk(), mk()
+	if d := pageDifferences(a, b); len(d) != 0 {
+		t.Fatalf("equal pages differ: %v", d)
+	}
+	b.TransactionBlacklist = new(protocol.AllowedTransactions)
+	bit, _ := protocol.TransactionTypeWriteData.AllowedTransactionBit()
+	b.TransactionBlacklist.Set(bit)
+	d := pageDifferences(a, b)
+	if len(d) != 1 || d[0].Field != "transactionBlacklist" {
+		t.Fatalf("a blacklist difference was not reported: %v", d)
+	}
+}

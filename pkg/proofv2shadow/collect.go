@@ -58,6 +58,12 @@ type Capture struct {
 	Pages      []CapturedPage              `json:"pages"`
 	Votes      []proofv2.Vote              `json:"votes,omitempty"` // the counted votes, without their receipts (added when the evidence is built)
 	Notes      []string                    `json:"notes,omitempty"` // named states that did not stop the capture
+
+	// Transaction is the governed transaction (binary, hex) and Sequenced maps each sequenced vote's message to the hash of the
+	// SequencedMessage its source partition recorded in its synthetic ledger: what the timeline members of evidence 2.1 are built from
+	// (RB9 Phase C1b-2). A capture without a Transaction is a capture made before them; its votes cannot be re-evaluated.
+	Transaction string            `json:"transaction,omitempty"`
+	Sequenced   map[string]string `json:"sequenced,omitempty"`
 }
 
 // DecodeCapture reads a stored capture: this version's object, or a version 1 bare array of pages captured on the
@@ -110,6 +116,9 @@ type Collector struct {
 	// Certified resolves the key page the intent certificate names, as ResolveSigningKeyPage does; nil when the caller has no
 	// declared key book or page to resolve from (the certified page is then unproven by name).
 	Certified func(ctx context.Context, account, tx string) (*url.URL, error)
+	// Chains reads the chains the timeline members are built from: a page's main chain as transactions (its history). Nil: no history is
+	// captured and the evidence says so by name (g1_completeness_unproven).
+	Chains proofv2.ChainSource
 
 	// PositionWait bounds the wait for Position; Poll is the interval.
 	PositionWait time.Duration
@@ -176,10 +185,8 @@ func (c *Collector) collect(ctx context.Context, st *runState, account, tx strin
 	if err != nil {
 		return nil, fmt.Errorf("route %s: %w", account, err)
 	}
-	if isDirectory(x) {
-		return nil, &proofv2.NamedState{Code: proofv2.StateDirectoryPartitionUnsupported, Partition: x,
-			Detail: fmt.Sprintf("the principal %s is on the Directory: evidence for a Directory transaction is not built (design D2c)", account)}
-	}
+	// A principal on the Directory (design D2c) is captured like any other: the Directory is a partition whose anchor is the
+	// DirectoryAnchor it executed for its own block (collect_directory.go).
 	b, err := c.Block(ctx, account, tx)
 	if err != nil {
 		return nil, fmt.Errorf("transaction block: %w", err)
@@ -211,11 +218,12 @@ func (c *Collector) collect(ctx context.Context, st *runState, account, tx strin
 			facts.Certified = cp
 		}
 	}
-	if facts.Held && softErr == nil {
-		// A vote released by HoldUntil was produced in a later block than its signature arrived in; this build does not establish
-		// that block, so it names the state (design D6) after capturing everything else.
+	if facts.Held && softErr == nil && c.Chains == nil {
+		// A vote released by HoldUntil was produced in a later block than its signature arrived in. With the chains readable the
+		// production of each vote is proven from the synthetic ledger or the principal's signature chain (evidence 2.1 Vote.Produced);
+		// without them the block is not established, so the capture names the state (design D6) after capturing everything else.
 		softErr = &proofv2.NamedState{Code: proofv2.StateVoteHeld, Partition: x, Block: b,
-			Detail: "the transaction is held (HoldUntil): the block that released each vote is not established by this build"}
+			Detail: "the transaction is held (HoldUntil) and the chains are not readable: the block that released each vote is not established"}
 	}
 
 	// Follow every vote's cause back to its key signature: the pages of the chain, and the block each message arrived in on
@@ -228,16 +236,13 @@ func (c *Collector) collect(ctx context.Context, st *runState, account, tx strin
 	}
 	var arrivals []arrival
 	bounds := map[string]uint64{}
+	needHist := map[string]bool{} // key pages a counted signature was recorded on: their history is captured
 	routeOf := func(u *url.URL) (string, error) {
 		p, err := c.Route(ctx, u.String())
 		if err != nil {
 			return "", fmt.Errorf("route %v: %w", u, err)
 		}
-		if isDirectory(p) {
-			return "", &proofv2.NamedState{Code: proofv2.StateDirectoryPartitionUnsupported, Partition: p,
-				Detail: fmt.Sprintf("%v is on the Directory: capture of a Directory page is not built (design D2b)", u)}
-		}
-		return p, nil
+		return p, nil // the Directory included (design D2b): its block is chosen from its own anchors like any partition's
 	}
 	record := func(page *url.URL, block uint64, what string) error {
 		p, err := routeOf(page)
@@ -265,8 +270,32 @@ func (c *Collector) collect(ctx context.Context, st *runState, account, tx strin
 		}
 		v.Hops, v.Delegators = hops, dels
 		for _, h := range hops {
+			needHist[key(h.Page)] = true
 			if err := record(h.Page, h.Block, "the vote of "+v.Authority.String()); err != nil {
 				return nil, err
+			}
+		}
+		// The other signatures the pages on the cause chain recorded for the transaction: a threshold above 1 counts them too, and each
+		// bounds from below the block its page's partition is read at.
+		inHops := map[string]bool{}
+		for _, h := range hops {
+			inHops[hashHex(h.ID)] = true
+		}
+		for _, h := range hops {
+			for _, sr := range facts.PageSigs[key(h.Page)] {
+				hx := hashHex(sr.ID)
+				if inHops[hx] {
+					continue
+				}
+				inHops[hx] = true
+				_, blk, err := c.Arrival(ctx, sr.ID)
+				if err != nil {
+					return nil, fmt.Errorf("arrival of %v: %w", sr.ID, err)
+				}
+				v.Counted = append(v.Counted, Hop{Page: h.Page, ID: sr.ID, Block: blk, Sig: sr.Sig})
+				if err := record(h.Page, blk, "a counted signature of the vote of "+v.Authority.String()); err != nil {
+					return nil, err
+				}
 			}
 		}
 	}
@@ -374,6 +403,7 @@ func (c *Collector) collect(ctx context.Context, st *runState, account, tx strin
 	}
 
 	cache := st.cache
+	histDelegates := map[string][]*url.URL{}
 	get := func(ctx context.Context, u *url.URL) (protocol.Account, error) {
 		k := key(u)
 		if cp, ok := cache[k]; ok {
@@ -417,13 +447,36 @@ func (c *Collector) collect(ctx context.Context, st *runState, account, tx strin
 			return nil, err
 		}
 		ps.Partition = protocol.PartitionUrl(p).String()
+		// A page a counted signature was recorded on carries its history, so the verifier can judge the signature against the page as it
+		// stood when it arrived; the delegate books its earlier states named are part of the governing set.
+		if _, isPage := acct.(*protocol.KeyPage); isPage && needHist[k] && c.Chains != nil {
+			if herr := proofv2.AttachHistory(ctx, c.Chains, ps); herr != nil {
+				softErr = firstState(softErr, &proofv2.NamedState{Code: proofv2.StateHistoryUnavailable, Partition: p, Block: bd.block, Detail: herr.Error()})
+			} else if states, herr := proofv2.HistoryStates(ps, p, bd.block); herr != nil {
+				return nil, herr
+			} else {
+				for _, st := range states {
+					for _, ks := range st.Page.Keys {
+						if ks.Delegate != nil {
+							histDelegates[k] = append(histDelegates[k], ks.Delegate)
+						}
+					}
+				}
+			}
+		}
 		cache[k] = &captured{page: ps, block: bd.block}
 		return acct, nil
 	}
 
-	cl, err := governing(ctx, facts, get)
+	cl, err := governingWith(ctx, facts, get, func(page *url.URL) []*url.URL { return histDelegates[key(page)] })
 	if err != nil {
 		return nil, err
+	}
+	// The executor version in force at each partition's block is proven by that partition's system ledger (proofv2 xexecutor.go): read as
+	// of the block the partition's other pages are read at. A version before Baikonur is the named state the capture ends with, after the
+	// rest is captured; a ledger that cannot be read is a note, never an assumed version.
+	if vErr := c.captureLedgers(ctx, st, cl, get); vErr != nil && softErr == nil {
+		softErr = vErr
 	}
 
 	// The transaction's own partition's pages are bound to its state root once the Directory has recorded the anchor.
@@ -510,9 +563,31 @@ func (c *Collector) collect(ctx context.Context, st *runState, account, tx strin
 	}
 	for _, v := range cl.Counted {
 		out.Votes = append(out.Votes, voteOf(v))
+		if v.Sequenced {
+			if out.Sequenced == nil {
+				out.Sequenced = map[string]string{}
+			}
+			out.Sequenced[hex.EncodeToString(v.Message[:])] = hex.EncodeToString(v.SeqHash[:])
+		}
+	}
+	if facts.Txn != nil {
+		raw, err := facts.Txn.MarshalBinary()
+		if err != nil {
+			return nil, fmt.Errorf("the governed transaction: %w", err)
+		}
+		out.Transaction = hex.EncodeToString(raw)
 	}
 	for _, n := range cl.Notes {
 		out.Notes = append(out.Notes, n.Error())
+	}
+	// The evidence travels in one consensus transaction: a closure whose pages and votes cannot fit the budget is a named state, after the
+	// capture is kept (proofv2 xbudget.go).
+	if softErr == nil {
+		pages := make([]proofv2.PageState, len(out.Pages))
+		for i := range out.Pages {
+			pages[i] = out.Pages[i].PageState
+		}
+		softErr = proofv2.CheckClosureBudget(pages, out.Votes, x, b)
 	}
 	return out, softErr
 }
@@ -540,14 +615,26 @@ func voteOf(v VoteFact) proofv2.Vote {
 	if v.Origin != nil {
 		pv.Origin = v.Origin.String()
 	}
-	// The hops are recorded by page, message and arrival block; their signatures and receipts are added when the evidence is built.
-	for _, h := range v.Hops {
+	// The hops are recorded by page, message, signature and arrival block; their receipts and arrival proofs are added when the evidence
+	// is built (proofv2.Assembly.ProveMembers).
+	hopOf := func(h Hop) proofv2.VoteHop {
 		hp := proofv2.VoteHop{Page: h.Page.String(), Block: h.Block}
 		if h.ID != nil {
 			hash := h.ID.Hash()
 			hp.Message = hex.EncodeToString(hash[:])
 		}
-		pv.Hops = append(pv.Hops, hp)
+		if h.Sig != nil {
+			if sb, err := h.Sig.MarshalBinary(); err == nil {
+				hp.Signature = hex.EncodeToString(sb)
+			}
+		}
+		return hp
+	}
+	for _, h := range v.Hops {
+		pv.Hops = append(pv.Hops, hopOf(h))
+	}
+	for _, h := range v.Counted {
+		pv.Counted = append(pv.Counted, hopOf(h))
 	}
 	if v.Cause != nil {
 		pv.Cause = v.Cause.String()
@@ -622,7 +709,7 @@ func ReadTxFacts(ctx context.Context, net api.Querier, principal, txHash string)
 		return nil, fmt.Errorf("%s is %T, not a transaction", txHash, mr.Message)
 	}
 	txn := tm.Transaction
-	f := &TxFacts{Principal: pu, Type: txn.Body.Type(), Held: txn.Header.HoldUntil != nil}
+	f := &TxFacts{Principal: pu, Type: txn.Body.Type(), Held: txn.Header.HoldUntil != nil, Txn: txn, PageSigs: map[string][]SigRecord{}}
 	seen := map[string]bool{}
 	for _, a := range append(append([]*url.URL(nil), txn.Header.Authorities...), txn.GetAdditionalAuthorities()...) {
 		if !seen[key(a)] {
@@ -658,8 +745,16 @@ func ReadTxFacts(ctx context.Context, net api.Querier, principal, txHash string)
 				if as, ok := m.Signature.(*protocol.AuthoritySignature); ok {
 					if set.Account.GetUrl().Equal(pu) {
 						f.Votes = append(f.Votes, voteFact(as, rec))
+						continue
+					}
+					// A delegating page's authority signature is recorded in that page's set and counted by its threshold.
+					if rec.ID != nil {
+						f.PageSigs[key(set.Account.GetUrl())] = append(f.PageSigs[key(set.Account.GetUrl())], SigRecord{ID: rec.ID, Sig: m.Signature})
 					}
 					continue
+				}
+				if rec.ID != nil {
+					f.PageSigs[key(set.Account.GetUrl())] = append(f.PageSigs[key(set.Account.GetUrl())], SigRecord{ID: rec.ID, Sig: m.Signature})
 				}
 				if rec.ID != nil {
 					// The signature message, at the page whose set holds it: its arrival bounds the block that page's partition is read at.
@@ -703,13 +798,15 @@ func voteFact(as *protocol.AuthoritySignature, rec *api.MessageRecord[messaging.
 	if rec.Sequence != nil && rec.Sequence.Source != nil {
 		v.Sequenced = true
 		v.Source, v.Destination, v.Number = rec.Sequence.Source, rec.Sequence.Destination, rec.Sequence.Number
+		// The SequencedMessage the source partition recorded in its synthetic ledger (synthetic.go: chain.AddEntry(seq.Hash())).
+		v.SeqHash = (&messaging.SequencedMessage{Message: rec.Message, Source: rec.Sequence.Source, Destination: rec.Sequence.Destination, Number: rec.Sequence.Number}).Hash()
 	}
 	return v
 }
 
-// evidencePages are the captured pages a 2.0 evidence document carries: those of the transaction's own partition, as 2.0 holds
-// them. A capture that holds pages of other partitions needs evidence 2.1, which this build does not yet produce or verify
-// (RB9 Phase C); it is refused by name rather than built as a 2.0 document that proves fewer pages than the governing set.
+// evidencePages are the captured pages a 2.0 evidence document carries: those of the transaction's own partition, as 2.0 holds them.
+// A capture that holds pages of other partitions is built as evidence 2.1 (planBuild); handing one to this function is a caller's error,
+// reported as such rather than answered with a document that proves fewer pages than the governing set.
 func evidencePages(cp *Capture) ([]*proofv2.PageState, error) {
 	own := ""
 	if cp.Partition != "" {
@@ -726,8 +823,7 @@ func evidencePages(cp *Capture) ([]*proofv2.PageState, error) {
 		out = append(out, &proofv2.PageState{URL: p.URL, State: p.State, Receipt: p.Receipt, Chains: p.Chains, PendingHash: p.PendingHash, ChainError: p.ChainError})
 	}
 	if len(foreign) > 0 {
-		return nil, &proofv2.NamedState{Code: proofv2.StateEvidence21Required, Block: cp.Block,
-			Detail: fmt.Sprintf("pages on other partitions are captured (%s) and need evidence 2.1, which is built and verified by RB9 Phase C", strings.Join(foreign, ", "))}
+		return nil, fmt.Errorf("evidence 2.0 cannot carry pages on other partitions (%s): build evidence 2.1 (planBuild)", strings.Join(foreign, ", "))
 	}
 	return out, nil
 }
@@ -772,7 +868,7 @@ func TraceCause(ctx context.Context, net api.Querier, cause *url.TxID) ([]Hop, [
 		if err != nil {
 			return nil, nil, err
 		}
-		hops = append(hops, Hop{Page: id.Account(), ID: id, Block: blk})
+		hops = append(hops, Hop{Page: id.Account(), ID: id, Block: blk, Sig: sm.Signature})
 		if as, ok := sm.Signature.(*protocol.AuthoritySignature); ok {
 			if as.Cause == nil {
 				return nil, nil, &proofv2.NamedState{Code: proofv2.StateCompletenessUnproven, Detail: fmt.Sprintf("the authority signature %v records no cause", id)}
@@ -784,4 +880,69 @@ func TraceCause(ctx context.Context, net api.Querier, cause *url.TxID) ([]Hop, [
 	}
 	return nil, nil, &proofv2.NamedState{Code: proofv2.StateDelegationDepthExceeded,
 		Detail: fmt.Sprintf("the cause chain of %v is longer than %d hops", cause, DelegationDepthLimit+2)}
+}
+
+func hashHex(id *url.TxID) string {
+	h := id.Hash()
+	return hex.EncodeToString(h[:])
+}
+
+// firstState keeps the first named state a capture met that did not stop it.
+func firstState(prior error, s *proofv2.NamedState) error {
+	if prior != nil {
+		return prior
+	}
+	return s
+}
+
+// HasForeignPages says the capture holds pages on partitions other than the transaction's own: a 2.0 document cannot carry them.
+func (cp *Capture) HasForeignPages() bool {
+	own := ""
+	if cp.Partition != "" {
+		own = protocol.PartitionUrl(cp.Partition).String()
+	}
+	for i := range cp.Pages {
+		if p := cp.Pages[i].Partition; p != "" && !strings.EqualFold(p, own) {
+			return true
+		}
+	}
+	return false
+}
+
+// Assembly converts a capture into the input of proofv2.Builder.Build21: every page with its partition, roles and history, the state
+// root of each partition, the anchors of the partitions other than the transaction's, and the votes and transaction the timeline needs.
+func (cp *Capture) Assembly(ctx context.Context, log proofv2.AnchorLog, src proofv2.ChainSource) (*proofv2.Assembly, error) {
+	a := &proofv2.Assembly{Roots: map[string][32]byte{}, Votes: cp.Votes, Sequenced: cp.Sequenced, Transaction: cp.Transaction, Source: src}
+	for i := range cp.Pages {
+		p := cp.Pages[i].PageState
+		a.Pages = append(a.Pages, &p)
+	}
+	var names []string
+	for n := range cp.Partitions {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		pc := cp.Partitions[n]
+		raw, err := hex.DecodeString(pc.StateRoot)
+		if err != nil || len(raw) != 32 {
+			return nil, fmt.Errorf("the state root of %s is not 32 bytes of hex", n)
+		}
+		var root [32]byte
+		copy(root[:], raw)
+		a.Roots[protocol.PartitionUrl(n).String()] = root
+		if strings.EqualFold(n, cp.Partition) {
+			continue
+		}
+		pb, err := proofv2.LoadPartitionBlock(ctx, log, n, pc.Index)
+		if err != nil {
+			return nil, fmt.Errorf("the anchor of %s block %d: %w", n, pc.Block, err)
+		}
+		if pb.Block != pc.Block || pb.Anchor.StateTreeAnchor != root {
+			return nil, &proofv2.NamedState{Code: proofv2.StateChainMoved, Partition: n, Block: pc.Block,
+				Detail: fmt.Sprintf("the Directory's anchor %d of %s is for block %d with state root %x, the capture was made at block %d with %x", pc.Index, n, pb.Block, pb.Anchor.StateTreeAnchor, pc.Block, root)}
+		}
+		a.Foreign = append(a.Foreign, pb)
+	}
+	return a, nil
 }

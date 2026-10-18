@@ -9,13 +9,13 @@ package proofv2shadow
 
 import (
 	"context"
-	"encoding/hex"
 	"fmt"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/govvote"
+	proofv2 "github.com/certen/independant-validator/pkg/proof/v2"
 	"gitlab.com/accumulatenetwork/accumulate/protocol"
 )
 
@@ -105,28 +105,13 @@ func CrossCheckPages(v1 map[string]govvote.States, c *Capture) *CrossCheckResult
 	return res
 }
 
-// pageDifferences lists what differs between two key pages in what decides who may sign: the version, the thresholds, and each
-// entry's key hash and delegate. (LastUsedOn and the credit balance change without changing who may sign.)
+// pageDifferences lists what differs between two key pages in what decides who may sign. It is the shared comparison of the
+// verifier's certified timeline (proofv2.AuthorityFieldDiffs, RB9-C1b-1-F3): the version, the thresholds, the transaction blacklist and
+// each entry's key hash and delegate. (LastUsedOn and the credit balance change without changing who may sign.)
 func pageDifferences(v1, v2 *protocol.KeyPage) []PageDisagreement {
 	var out []PageDisagreement
-	add := func(field, a, b string) {
-		if a != b {
-			out = append(out, PageDisagreement{Field: field, V1: a, V2: b})
-		}
-	}
-	add("version", fmt.Sprint(v1.Version), fmt.Sprint(v2.Version))
-	add("acceptThreshold", fmt.Sprint(v1.AcceptThreshold), fmt.Sprint(v2.AcceptThreshold))
-	add("rejectThreshold", fmt.Sprint(v1.RejectThreshold), fmt.Sprint(v2.RejectThreshold))
-	add("responseThreshold", fmt.Sprint(v1.ResponseThreshold), fmt.Sprint(v2.ResponseThreshold))
-	add("blockThreshold", fmt.Sprint(v1.BlockThreshold), fmt.Sprint(v2.BlockThreshold))
-	add("entries", fmt.Sprint(len(v1.Keys)), fmt.Sprint(len(v2.Keys)))
-	n := len(v1.Keys)
-	if len(v2.Keys) < n {
-		n = len(v2.Keys)
-	}
-	for i := 0; i < n; i++ {
-		add(fmt.Sprintf("keys[%d].publicKeyHash", i), hex.EncodeToString(v1.Keys[i].PublicKeyHash), hex.EncodeToString(v2.Keys[i].PublicKeyHash))
-		add(fmt.Sprintf("keys[%d].delegate", i), delegateOf(v1.Keys[i]), delegateOf(v2.Keys[i]))
+	for _, d := range proofv2.AuthorityFieldDiffs(v1, v2) {
+		out = append(out, PageDisagreement{Field: d.Field, V1: d.A, V2: d.B})
 	}
 	return out
 }
