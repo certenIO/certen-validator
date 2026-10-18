@@ -38,13 +38,17 @@ type VoteFact struct {
 	// arrived in on its page's partition.
 	Delegators []*url.URL
 	Hops       []Hop
-	Cause      *url.TxID
-	Message    [32]byte // the vote's entry hash in the principal's signature chain
+	// Counted are the other signatures the pages on the cause chain recorded for the transaction.
+	Counted []Hop
+	Cause   *url.TxID
+	Message [32]byte // the vote's entry hash in the principal's signature chain
 	// Sequenced is false for a vote counted in the block that produced it (same root identity as the principal); a vote
 	// from another root identity always travels as a sequenced synthetic message, even on the same partition.
 	Sequenced           bool
 	Source, Destination *url.URL
 	Number              uint64
+	// SeqHash is the hash of the SequencedMessage the source partition recorded in its synthetic ledger's main chain for a sequenced vote.
+	SeqHash [32]byte
 }
 
 // Hop is one signature message of a vote's cause chain and the block of its page's partition it arrived in.
@@ -52,6 +56,13 @@ type Hop struct {
 	Page  *url.URL
 	ID    *url.TxID // the message, as recorded on Page
 	Block uint64
+	Sig   protocol.Signature // the signature the message carries
+}
+
+// SigRecord is one signature message recorded for the transaction in a signer page's signature set.
+type SigRecord struct {
+	ID  *url.TxID
+	Sig protocol.Signature
 }
 
 // TxFacts is what the transaction record says about who approved it.
@@ -74,6 +85,10 @@ type TxFacts struct {
 	// KeySigs are the signature messages (ids at their signer page) recorded for the transaction that are not authority
 	// votes, by signer page: the arrival of each is a lower bound of the block its page's partition is read at.
 	KeySigs map[string][]*url.TxID
+	// Txn is the governed transaction; PageSigs the signature messages recorded for it in each signer page's set (key signatures and
+	// authority signatures alike), by page: the signatures a page's threshold counted besides the one that completed it.
+	Txn      *protocol.Transaction
+	PageSigs map[string][]SigRecord
 }
 
 // GovPage is one governing account and why it is governing.
@@ -144,6 +159,15 @@ const DelegationDepthLimit = protocol.DelegationDepthLimit
 // governing derives the governing set of a transaction through get. See the file comment for the rules; each is cited in
 // docs/proof/G1_CROSS_PARTITION.md D1 and R9 §1c/§4.2.
 func governing(ctx context.Context, f *TxFacts, get AccountReader) (*Closure, error) {
+	return governingWith(ctx, f, get, nil)
+}
+
+// DelegatesOf names, for a key page, the delegate books an EARLIER state of the page held (from its certified history): a delegation
+// removed after a counted signature went through it still puts its book in the governing set (G1_CROSS_PARTITION.md section 5).
+type DelegatesOf func(page *url.URL) []*url.URL
+
+// governingWith is governing with the delegates of earlier page states followed too.
+func governingWith(ctx context.Context, f *TxFacts, get AccountReader, hist DelegatesOf) (*Closure, error) {
 	if f == nil || f.Principal == nil {
 		return nil, fmt.Errorf("no principal to resolve the governing set of")
 	}
@@ -176,7 +200,7 @@ func governing(ctx context.Context, f *TxFacts, get AccountReader) (*Closure, er
 		named[key(h)] = true
 	}
 
-	ex := &expander{b: b, get: get, expanded: map[string]bool{}}
+	ex := &expander{b: b, get: get, expanded: map[string]bool{}, hist: hist}
 
 	// (b) Every listed authority, enabled or disabled, and its pages.
 	for _, a := range auths {
@@ -223,6 +247,11 @@ func governing(ctx context.Context, f *TxFacts, get AccountReader) (*Closure, er
 		}
 		for _, d := range v.Delegators {
 			b.add(d, proofv2.RoleVoter)
+		}
+		// A sequenced vote is produced in the source partition's synthetic ledger: its main chain places the vote's SequencedMessage in
+		// the block that produced it (a HoldUntil release is judged there).
+		if v.Sequenced && v.Source != nil {
+			b.add(v.Source.JoinPath(protocol.Synthetic), proofv2.RoleSyntheticChain)
 		}
 	}
 
@@ -315,6 +344,7 @@ type expander struct {
 	pending  []delegateEdge  // page entries to follow, breadth first
 	books    []bookRecord    // every book expanded, with its pages
 	notes    []*proofv2.NamedState
+	hist     DelegatesOf // delegates of earlier states of a page (nil: only the state read)
 }
 
 type delegateEdge struct {
@@ -374,6 +404,11 @@ func (e *expander) bookAt(ctx context.Context, u *url.URL, bookRole, pageRole pr
 			for _, ks := range kp.Keys {
 				if ks.Delegate != nil {
 					e.pending = append(e.pending, delegateEdge{to: ks.Delegate, depth: depth + 1})
+				}
+			}
+			if e.hist != nil {
+				for _, d := range e.hist(p) {
+					e.pending = append(e.pending, delegateEdge{to: d, depth: depth + 1})
 				}
 			}
 		}

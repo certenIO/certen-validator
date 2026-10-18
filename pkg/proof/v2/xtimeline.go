@@ -161,51 +161,6 @@ func decodeSig(h string) (protocol.Signature, error) {
 	return sig, nil
 }
 
-// authorityDiff names what differs between two key pages in what decides who may sign: version, thresholds, the blacklist and each
-// entry's key hash and delegate. (LastUsedOn and the credit balance change without changing who may sign.)
-func authorityDiff(a, b *protocol.KeyPage) string {
-	switch {
-	case a.Version != b.Version:
-		return fmt.Sprintf("version %d vs %d", a.Version, b.Version)
-	case a.AcceptThreshold != b.AcceptThreshold:
-		return fmt.Sprintf("acceptThreshold %d vs %d", a.AcceptThreshold, b.AcceptThreshold)
-	case a.RejectThreshold != b.RejectThreshold:
-		return fmt.Sprintf("rejectThreshold %d vs %d", a.RejectThreshold, b.RejectThreshold)
-	case a.ResponseThreshold != b.ResponseThreshold:
-		return fmt.Sprintf("responseThreshold %d vs %d", a.ResponseThreshold, b.ResponseThreshold)
-	case a.BlockThreshold != b.BlockThreshold:
-		return fmt.Sprintf("blockThreshold %d vs %d", a.BlockThreshold, b.BlockThreshold)
-	case len(a.Keys) != len(b.Keys):
-		return fmt.Sprintf("%d entries vs %d", len(a.Keys), len(b.Keys))
-	}
-	var ba, bb protocol.AllowedTransactions
-	if a.TransactionBlacklist != nil {
-		ba = *a.TransactionBlacklist
-	}
-	if b.TransactionBlacklist != nil {
-		bb = *b.TransactionBlacklist
-	}
-	if ba != bb {
-		return "transaction blacklist"
-	}
-	for i := range a.Keys {
-		if !bytes.Equal(a.Keys[i].PublicKeyHash, b.Keys[i].PublicKeyHash) {
-			return fmt.Sprintf("keys[%d].publicKeyHash", i)
-		}
-		da, db := "", ""
-		if a.Keys[i].Delegate != nil {
-			da = lk(a.Keys[i].Delegate)
-		}
-		if b.Keys[i].Delegate != nil {
-			db = lk(b.Keys[i].Delegate)
-		}
-		if da != db {
-			return fmt.Sprintf("keys[%d].delegate", i)
-		}
-	}
-	return ""
-}
-
 // replayHistory folds and replays one page's history (PROOF_V2 5.2 steps 2-3) and returns every state the page's authority passed
 // through, each with the block it began in.
 func replayHistory(pa *provenAcct, p *PageState) (govvote.States, error) {
@@ -298,7 +253,7 @@ func replayHistory(pa *provenAcct, p *PageState) (govvote.States, error) {
 	if err != nil {
 		return nil, refusal21(StateHistoryUnreplayable, id, blk, "%s: %v", p.URL, err)
 	}
-	if d := authorityDiff(head, kp); d != "" {
+	if d := AuthorityDiff(head, kp); d != "" {
 		return nil, refusal21(StateHistoryHeadMismatch, id, blk, "%s: the replay ends in a page that differs from the proven one: %s", p.URL, d)
 	}
 	out := make(govvote.States, len(replayed))
@@ -579,6 +534,9 @@ func evaluateTimeline(in timelineIn, tl states) error {
 	txid := txn.ID()
 
 	facts := govvote.Facts{TxType: typ}
+	if h := txn.Header.HoldUntil; h != nil && h.MinorBlock != 0 {
+		facts.HoldUntil = h.MinorBlock
+	}
 	seen := map[string]bool{}
 	for vi := range ev.Votes {
 		v := &ev.Votes[vi]
@@ -643,7 +601,7 @@ func evaluateTimeline(in timelineIn, tl states) error {
 				Version: ks.GetSignerVersion(), KeyHash: hex.EncodeToString(ks.GetPublicKeyHash()), Vote: sig.GetVote(), Block: int64(block)})
 		}
 		facts.Votes = append(facts.Votes, govvote.RecordedVote{ID: v.Message, Authority: govvote.CanonicalAccSpelling(v.Authority),
-			Origin: govvote.CanonicalAccSpelling(v.Origin), Vote: vt})
+			Origin: govvote.CanonicalAccSpelling(v.Origin), Vote: vt, ReleasedAt: releasedAt(in, txn, v)})
 	}
 
 	// The authorities the transaction requires (design D1, D3): the principal's enabled authorities (the disabled too when the type
@@ -819,4 +777,27 @@ func verifyProductions(in timelineIn) error {
 // allHops are the signatures a vote's pages counted: the cause chain, then the other counted signatures.
 func (v Vote) allHops() []VoteHop {
 	return append(append([]VoteHop{}, v.Hops...), v.Counted...)
+}
+
+// releasedAt is the block that produced a held transaction's vote (the release), derived from the vote's production proof, or 0 when the
+// transaction is not held or the evidence does not establish it (the vote is then judged as an unheld one, and verifyProductions reports
+// or refuses the production by name).
+func releasedAt(in timelineIn, txn *protocol.Transaction, v *Vote) int64 {
+	if h := txn.Header.HoldUntil; h == nil || h.MinorBlock == 0 || v.Produced == nil {
+		return 0
+	}
+	pr := v.Produced
+	au, err := url.Parse(pr.Account)
+	if err != nil {
+		return 0
+	}
+	pa, ok := in.byURL[lk(au)]
+	if !ok {
+		return 0
+	}
+	block, err := deriveArrival(pa, &in.ev.Pages[pa.i], pr.Chain, pr.Message, pr.Receipt, &pr.Arrival)
+	if err != nil {
+		return 0
+	}
+	return int64(block)
 }

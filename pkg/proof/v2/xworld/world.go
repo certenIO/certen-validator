@@ -61,6 +61,13 @@ type Options struct {
 	// Timeline, when set, builds the timeline world (timeline.go) instead of the plain one: a real transaction, BankPage1 with a
 	// scripted history and signature chain, and the evidence members of RB9 Phase C1b-1. The plain world is unchanged by it.
 	Timeline *Timeline
+	// Layout puts the principal or the authority book on the Directory (RB9 Phase C1b-2, D2b and D2c); the default is three block
+	// validator partitions (D2a). It does not combine with Timeline.
+	Layout Layout
+	// SwapAnchorKind, when 1, 2 or 3, builds the anchor of slot 0, 1 or 2 in the other kind (a DirectoryAnchor for a block validator
+	// partition, a BlockValidatorAnchor for the Directory): proven into the certified root like any other, refused only by the
+	// per-partition-kind check.
+	SwapAnchorKind int
 }
 
 // Built is a built world.
@@ -280,6 +287,10 @@ func build(o Options) *Built {
 		GlobalsRecord:          must(genGlob.MarshalBinary()),
 	}
 	pin := must(proof.ComputeIncarnation(in))
+	lay := layoutOf(o.Layout)
+	if o.Layout != LayoutBVN && o.Timeline != nil {
+		panic("a Directory layout does not combine with the timeline world")
+	}
 
 	// Major block 1, closed by the genesis set.
 	r1 := seed("root 1")
@@ -295,23 +306,30 @@ func build(o Options) *Built {
 	// principal's.
 	voteMsg := seed("vote message")
 	hopMsg := seed("hop message")
-	hopSig := &protocol.ED25519Signature{PublicKey: seed("hop key"), Signature: append(seed("hop sig a"), seed("hop sig b")...), Signer: mustURL(BankPage1), SignerVersion: 1, Timestamp: 1}
-	principal := acct{a: &protocol.DataAccount{Url: mustURL(Principal),
-		AccountAuth: protocol.AccountAuth{Authorities: []protocol.AuthorityEntry{{Url: mustURL(BankBook)}}}}, sigs: [][]byte{seed("earlier signature"), voteMsg}}
+	hopSig := &protocol.ED25519Signature{PublicKey: seed("hop key"), Signature: append(seed("hop sig a"), seed("hop sig b")...), Signer: mustURL(lay.page1), SignerVersion: 1, Timestamp: 1}
+	principal := acct{a: &protocol.DataAccount{Url: mustURL(lay.principal),
+		AccountAuth: protocol.AccountAuth{Authorities: []protocol.AuthorityEntry{{Url: mustURL(lay.book)}}}}, sigs: [][]byte{seed("earlier signature"), voteMsg}}
 	bvn1 := []acct{principal}
+	xRoles := map[string][]proofv2.PageRole{lay.principal: {proofv2.RolePrincipalChain}}
+	if tw != nil && tw.t.LedgerVersion != 0 {
+		// the transaction partition's system ledger, proven at its block: the executor version in force there (RB9 Phase C1b-2)
+		led := &protocol.SystemLedger{Url: protocol.PartitionUrl(lay.x.id).JoinPath(protocol.Ledger), ExecutorVersion: protocol.ExecutorVersion(tw.t.LedgerVersion)}
+		bvn1 = append(bvn1, acct{a: led})
+		xRoles[led.Url.String()] = []proofv2.PageRole{proofv2.RoleSystemLedger}
+	}
 	bvn2 := []acct{
-		{a: &protocol.KeyBook{Url: mustURL(BankBook), BookType: protocol.BookTypeNormal, PageCount: 2}},
-		{a: page(BankPage1, ""), sigs: [][]byte{seed("earlier hop"), hopMsg}},
-		{a: page(BankPage2, DeleBook)},
+		{a: &protocol.KeyBook{Url: mustURL(lay.book), BookType: protocol.BookTypeNormal, PageCount: 2}},
+		{a: page(lay.page1, ""), sigs: [][]byte{seed("earlier hop"), hopMsg}},
+		{a: page(lay.page2, DeleBook)},
 	}
 	bvn3 := []acct{
 		{a: &protocol.KeyBook{Url: mustURL(DeleBook), BookType: protocol.BookTypeNormal, PageCount: 1}},
 		{a: page(DelePage1, "")},
 	}
 	bvn2Roles := map[string][]proofv2.PageRole{
-		BankBook:  {proofv2.RoleAuthorityBook},
-		BankPage1: {proofv2.RoleAuthorityPage, proofv2.RoleVoter},
-		BankPage2: {proofv2.RoleAuthorityPage},
+		lay.book:  {proofv2.RoleAuthorityBook},
+		lay.page1: {proofv2.RoleAuthorityPage, proofv2.RoleVoter},
+		lay.page2: {proofv2.RoleAuthorityPage},
 	}
 	bvn3Roles := map[string][]proofv2.PageRole{
 		DeleBook:  {proofv2.RoleDelegateBook},
@@ -339,11 +357,12 @@ func build(o Options) *Built {
 		block   uint64
 		accts   []acct
 		roles   map[string][]proofv2.PageRole
+		dir     bool // its anchor is the Directory's own DirectoryAnchor
 	}
 	parts := []*partition{
-		{PartBVN1, "BVN1", BlockBVN1, bvn1, map[string][]proofv2.PageRole{Principal: {proofv2.RolePrincipalChain}}},
-		{PartBVN2, "BVN2", BlockBVN2, bvn2, bvn2Roles},
-		{PartBVN3, "BVN3", BlockBVN3, bvn3, bvn3Roles},
+		{lay.x.src, lay.x.id, lay.x.block, bvn1, xRoles, lay.x.dir},
+		{lay.a.src, lay.a.id, lay.a.block, bvn2, bvn2Roles, lay.a.dir},
+		{lay.d.src, lay.d.id, lay.d.block, bvn3, bvn3Roles, lay.d.dir},
 	}
 
 	txHash := seed("transaction")
@@ -360,7 +379,7 @@ func build(o Options) *Built {
 		rootChain []byte
 	}
 	anchors := map[string]anchored{}
-	for _, p := range parts {
+	for pi, p := range parts {
 		proofs := make([]pageProof, len(p.accts))
 		leaves := make([][]byte, len(p.accts))
 		for i, a := range p.accts {
@@ -387,40 +406,47 @@ func build(o Options) *Built {
 			})
 		}
 		rc := seed("root chain of " + p.id)
-		if p.id == "BVN1" {
+		if pi == 0 {
 			rc = txToPartition.Anchor // the transaction executed in this block: its receipt passes through the block's root chain anchor
+		}
+		pa := protocol.PartitionAnchor{Source: mustURL(p.src), MinorBlockIndex: p.block, RootChainIndex: p.block, RootChainAnchor: a32(rc), StateTreeAnchor: a32(root)}
+		var body protocol.TransactionBody = &protocol.BlockValidatorAnchor{PartitionAnchor: pa}
+		if p.dir {
+			body = &protocol.DirectoryAnchor{PartitionAnchor: pa}
+		}
+		if o.SwapAnchorKind == pi+1 {
+			body = swapKind(pa, p.dir)
 		}
 		msg := &messaging.SequencedMessage{
 			Message: &messaging.TransactionMessage{Transaction: &protocol.Transaction{
 				Header: protocol.TransactionHeader{Principal: protocol.DnUrl().JoinPath(protocol.AnchorPool)},
-				Body: &protocol.BlockValidatorAnchor{PartitionAnchor: protocol.PartitionAnchor{
-					Source: mustURL(p.src), MinorBlockIndex: p.block, RootChainIndex: p.block, RootChainAnchor: a32(rc), StateTreeAnchor: a32(root)}},
+				Body:   body,
 			}},
 			Source: mustURL(p.src), Destination: protocol.DnUrl(), Number: 1,
 		}
-		anchors[p.id] = anchored{msg: msg, tx: msg.Message.(*messaging.TransactionMessage).Transaction.GetHash(), rootChain: rc}
+		anchors[slotNames[pi]] = anchored{msg: msg, tx: msg.Message.(*messaging.TransactionMessage).Transaction.GetHash(), rootChain: rc}
 	}
 
 	// One tree holds the transaction and the three anchors: qP = H(rootChainP, anchorTxP); Q = H(H(q1, q2), q3); the root the
 	// certifying record commits to is H(r1, Q).
-	q1 := h2(anchors["BVN1"].rootChain, anchors["BVN1"].tx)
-	q2 := h2(anchors["BVN2"].rootChain, anchors["BVN2"].tx)
-	q3 := h2(anchors["BVN3"].rootChain, anchors["BVN3"].tx)
+	q1 := h2(anchors["x"].rootChain, anchors["x"].tx)
+	q2 := h2(anchors["a"].rootChain, anchors["a"].tx)
+	q3 := h2(anchors["d"].rootChain, anchors["d"].tx)
 	q12 := h2(q1, q2)
 	q := h2(q12, q3)
 	certRoot := h2(r1, q)
 	anchorReceipt := func(id string) *merkle.Receipt {
 		a := anchors[id]
 		switch id {
-		case "BVN1":
+		case "x":
 			return rcpt(a.tx, step{false, a.rootChain}, step{true, q2}, step{true, q3}, step{false, r1})
-		case "BVN2":
+		case "a":
 			return rcpt(a.tx, step{false, a.rootChain}, step{false, q1}, step{true, q3}, step{false, r1})
 		default:
 			return rcpt(a.tx, step{false, a.rootChain}, step{false, q12}, step{false, r1})
 		}
 	}
-	txReceipt := rcpt(txHash, step{true, seed("tx sibling")}, step{true, anchors["BVN1"].tx}, step{true, q2}, step{true, q3}, step{false, r1})
+	txReceipt := rcpt(txHash, step{true, seed("tx sibling")}, step{true, anchors["x"].tx}, step{true, q2}, step{true, q3}, step{false, r1})
 
 	// The network, globals and routing accounts at the certified block, proven into one state tree.
 	netRec := must(genNet.MarshalBinary())
@@ -489,11 +515,11 @@ func build(o Options) *Built {
 	// The vote: a member of the principal's signature chain at the transaction's block, produced on BVN2 and sequenced to BVN1;
 	// its cause chain is the key signature in BankPage1's signature chain.
 	vote := proofv2.Vote{
-		Authority: BankBook, Origin: BankPage1, Vote: "accept",
-		Transport: proofv2.VoteTransport{Kind: proofv2.TransportSequenced, Source: PartBVN2, Destination: PartBVN1, Number: voteNumber},
+		Authority: lay.book, Origin: lay.page1, Vote: "accept",
+		Transport: proofv2.VoteTransport{Kind: proofv2.TransportSequenced, Source: lay.a.src, Destination: lay.x.src, Number: voteNumber},
 		Message:   hexs(voteMsg), Receipt: rcptHex(rcpt(voteMsg, step{false, seed("earlier signature")})),
 		Hops: []proofv2.VoteHop{{
-			Page: BankPage1, Message: hexs(hopMsg), Signature: hexs(must(hopSig.MarshalBinary())), Block: HopBlock,
+			Page: lay.page1, Message: hexs(hopMsg), Signature: hexs(must(hopSig.MarshalBinary())), Block: HopBlock,
 			Receipt: rcptHex(rcpt(hopMsg, step{false, seed("earlier hop")})),
 		}},
 	}
@@ -510,14 +536,14 @@ func build(o Options) *Built {
 	}
 
 	ev := &proofv2.Evidence{
-		Version: proofv2.Version21, Account: Principal, TxHash: hexs(txHash),
+		Version: proofv2.Version21, Account: lay.principal, TxHash: hexs(txHash),
 		Receipt: rcptHex(txReceipt),
 		Majors:  1,
 		Certify: []string{hexs(must(certRecord.MarshalBinary()))},
-		Anchor:  proofv2.PartitionAnchor{Message: hexs(must(anchors["BVN1"].msg.MarshalBinary())), Receipt: rcptHex(anchorReceipt("BVN1"))},
+		Anchor:  proofv2.PartitionAnchor{Message: hexs(must(anchors["x"].msg.MarshalBinary())), Receipt: rcptHex(anchorReceipt("x"))},
 		Anchors: map[string]proofv2.PartitionAnchor{
-			PartBVN2: {Message: hexs(must(anchors["BVN2"].msg.MarshalBinary())), Receipt: rcptHex(anchorReceipt("BVN2"))},
-			PartBVN3: {Message: hexs(must(anchors["BVN3"].msg.MarshalBinary())), Receipt: rcptHex(anchorReceipt("BVN3"))},
+			lay.a.src: {Message: hexs(must(anchors["a"].msg.MarshalBinary())), Receipt: rcptHex(anchorReceipt("a"))},
+			lay.d.src: {Message: hexs(must(anchors["d"].msg.MarshalBinary())), Receipt: rcptHex(anchorReceipt("d"))},
 		},
 		Pages: pages,
 		Votes: []proofv2.Vote{vote},

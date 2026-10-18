@@ -49,6 +49,16 @@ type Timeline struct {
 	KeyBlock        uint64
 	// ProvenHeadKeys, when set, are the key labels the proven page holds although the history says otherwise.
 	ProvenHeadKeys []string
+
+	// HeaderAuthority, when set, is an authority URL the transaction's header names (Header.Authorities): the transaction then requires its
+	// vote, and its book and pages are header-authority pages (RB9 Phase C1b-2). The valid use names a book that voted (BankBook).
+	HeaderAuthority string
+	// Initiate makes the last scripted signature the one that initiated the transaction: Header.Initiator is that signature's metadata
+	// hash, as the signing builder sets it (RB9 Phase C1b-2). Not combined with Delegated.
+	Initiate bool
+	// LedgerVersion, when non-zero, proves the transaction partition's system ledger at its block with this executor version
+	// (protocol.ExecutorVersion, e.g. 6 for Baikonur): the document then proves the version in force (RB9 Phase C1b-2).
+	LedgerVersion uint64
 }
 
 // PageEvent is one transaction on the page's main chain.
@@ -265,6 +275,18 @@ func newTimelineWorld(spec Timeline) *timelineWorld {
 	w.txn = &protocol.Transaction{
 		Header: protocol.TransactionHeader{Principal: mustURL(Principal), Memo: "timeline world"},
 		Body:   &protocol.WriteData{Entry: &protocol.DoubleHashDataEntry{Data: [][]byte{[]byte("timeline world")}}},
+	}
+	if t.HeaderAuthority != "" {
+		w.txn.Header.Authorities = append(w.txn.Header.Authorities, mustURL(t.HeaderAuthority))
+	}
+	if t.Initiate {
+		if t.Delegated {
+			panic("xworld: Initiate does not combine with Delegated")
+		}
+		last := t.Sigs[len(t.Sigs)-1]
+		k := keyOf(last.Key)
+		s := must(new(signing.Builder).SetType(protocol.SignatureTypeED25519).SetUrl(mustURL(BankPage1)).SetVersion(last.Version).SetTimestamp(1700000000000).SetPrivateKey(k.priv).Sign(make([]byte, 32)))
+		copy(w.txn.Header.Initiator[:], s.Metadata().Hash())
 	}
 	w.txHash = w.txn.GetHash()
 	if t.Delegated {

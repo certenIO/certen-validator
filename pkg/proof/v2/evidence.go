@@ -300,7 +300,7 @@ func verifyFrom(ev *Evidence, rep *Report, at map[uint64]*Spine, pinned [32]byte
 
 	// The partition anchor: executed by the Directory, proven into the same certified root, naming the block whose
 	// root chain the transaction's receipt passes through and whose state root the pages are proven into.
-	body, seq, anchorTx, err := anchorBody(ev.Anchor.Message)
+	body, seq, anchorTx, err := anchorOf(ev.Anchor.Message, is21)
 	if err != nil {
 		return nil, err
 	}

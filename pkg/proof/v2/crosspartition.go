@@ -57,11 +57,14 @@ const (
 	// RoleSyntheticChain: the source partition's synthetic ledger, whose main chain records the SequencedMessage that carried a counted vote
 	// (RB9 Phase C1b-1: the block that PRODUCED the vote is read from it, so a vote released by a HoldUntil is judged at its release).
 	RoleSyntheticChain PageRole = "synthetic-chain"
+	// RoleSystemLedger: a partition's system ledger (<partition>/ledger), proven at the partition's block: its ExecutorVersion is the executor version in force there
+	// (RB9 Phase C1b-2, g1_executor_version_unsupported). The role is derived from the proven account itself.
+	RoleSystemLedger PageRole = "system-ledger"
 )
 
 // KnownRoles are the roles evidence 2.1 may carry, in canonical order.
 var KnownRoles = []PageRole{RolePrincipalChain, RoleAuthorityBook, RoleAuthorityPage, RoleHeaderAuthority,
-	RoleDelegateBook, RoleDelegatePage, RoleVoter, RoleInitiatorSigner, RoleCertifiedKeyPage, RoleSyntheticChain}
+	RoleDelegateBook, RoleDelegatePage, RoleVoter, RoleInitiatorSigner, RoleCertifiedKeyPage, RoleSyntheticChain, RoleSystemLedger}
 
 // CanonicalRoles returns roles sorted by KnownRoles' order with duplicates removed, and an error naming an unknown
 // role. A page's roles are encoded in this order so two producers write one document for one set of facts.
@@ -280,9 +283,9 @@ const (
 	StateCrossIdentityPending = "g1_cross_identity_pending"
 )
 
-// StateEvidence21Required: pages on partitions other than the transaction's are captured, so the proof needs evidence 2.1. KEPT in
-// RB9 Phase C1a: the verifier now verifies 2.1 (pages per partition, anchors, routing, roles; pkg/proof/v2/xverify.go), but a
-// 2.1 report is never a verified S3 until the votes are re-evaluated, and Build does not yet assemble a 2.1 document (anchors,
-// vote receipts, the routing proof): both are RB9 Phase C1b. Until then a 2.0 document that omitted the foreign pages would prove
-// less than the governing set, so the build is refused by name.
+// StateEvidence21Required is the interim name the build answered with while evidence 2.1 could be verified but not assembled (RB9 Phase
+// C1a/C1b-1). SUPERSEDED 2026-10-18 (RB9 Phase C1b-2): Build21 assembles a 2.1 document from a capture (anchors, vote receipts and arrival
+// proofs, history, the carried transaction, the routing proof) and verifies it, so nothing emits this name any more; a certificate proof
+// for a cross-partition intent is StateEvidence21NotInForce until the rules that accept 2.1 are in force. The constant stays so a stored
+// shadow row that carries it still decodes and is read as the state it was.
 const StateEvidence21Required = "g1_evidence_21_required"

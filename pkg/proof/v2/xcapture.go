@@ -317,9 +317,9 @@ func partitionBlockAt(ctx context.Context, log AnchorLog, partition string, i, l
 	if err != nil {
 		return nil, err
 	}
-	body, ok := txn.Body.(*protocol.BlockValidatorAnchor)
-	if !ok {
-		return nil, fmt.Errorf("anchor %d of %s is %v, not a block validator anchor", i, partition, txn.Body.Type())
+	body, ok := anchorFields(txn.Body)
+	if !ok || !anchorKindFits(partition, txn.Body) {
+		return nil, fmt.Errorf("anchor %d of %s is %v, not the anchor kind that partition is proven by", i, partition, txn.Body.Type())
 	}
 	if body.Source == nil || !strings.EqualFold(body.Source.String(), protocol.PartitionUrl(partition).String()) {
 		return nil, fmt.Errorf("anchor %d of %s names the source %v", i, partition, body.Source)
@@ -401,7 +401,7 @@ func (l NetLog) Block(ctx context.Context, partition string, i uint64) (uint64, 
 	if !ok || tm.Transaction == nil {
 		return 0, fmt.Errorf("%v anchor-sequence[%d]: not a transaction", src, i)
 	}
-	body, ok := tm.Transaction.Body.(*protocol.BlockValidatorAnchor)
+	body, ok := anchorFields(tm.Transaction.Body)
 	if !ok {
 		return 0, fmt.Errorf("%v anchor-sequence[%d] is %v, not a block validator anchor", src, i, tm.Transaction.Body.Type())
 	}
@@ -424,7 +424,7 @@ func (l NetLog) Produced(ctx context.Context, partition string, i uint64) (*prot
 	if !ok || tm.Transaction == nil {
 		return nil, fmt.Errorf("%v anchor-sequence[%d]: not a transaction", src, i)
 	}
-	body, ok := tm.Transaction.Body.(*protocol.BlockValidatorAnchor)
+	body, ok := anchorFields(tm.Transaction.Body)
 	if !ok {
 		return nil, fmt.Errorf("%v anchor-sequence[%d] is %v, not a block validator anchor", src, i, tm.Transaction.Body.Type())
 	}
@@ -495,8 +495,8 @@ func AnchorAt(ctx context.Context, net api.Querier, pb *PartitionBlock, height u
 		return PartitionAnchor{}, none, &NamedState{Code: StateForeignPartitionMismatch, Partition: pb.Partition, Block: pb.Block,
 			Detail: fmt.Sprintf("the anchor the Directory executed is from %v", seq.Source)}
 	}
-	got, ok := tm.Transaction.Body.(*protocol.BlockValidatorAnchor)
-	if !ok || got.MinorBlockIndex != pb.Block || got.StateTreeAnchor != pb.Anchor.StateTreeAnchor || got.RootChainAnchor != pb.Anchor.RootChainAnchor {
+	got, ok := anchorFields(tm.Transaction.Body)
+	if !ok || !anchorKindFits(pb.Partition, tm.Transaction.Body) || got.MinorBlockIndex != pb.Block || got.StateTreeAnchor != pb.Anchor.StateTreeAnchor || got.RootChainAnchor != pb.Anchor.RootChainAnchor {
 		return PartitionAnchor{}, none, fmt.Errorf("the Directory executed a different anchor than block %d of %s", pb.Block, pb.Partition)
 	}
 	rec := ce.Receipt
@@ -616,4 +616,168 @@ func ChainEntryBlock(ctx context.Context, net api.Querier, account *url.URL, cha
 // state decodes to the page's URL, and its chain roots - when captured - bind to the receipt.
 func VerifyPageAt(p *PageState, stateRoot [32]byte) (protocol.Account, PageChain, error) {
 	return verifyPage(p, stateRoot[:])
+}
+
+// NetChains reads chains through a v3 querier: entries in ranges of the server's page size, in parallel, and a main chain's
+// transactions with their initiating signature where the replay needs one.
+type NetChains struct {
+	Net      api.Querier
+	Parallel int // concurrent range queries; default 8
+}
+
+const chainPage = 100 // the largest range a node serves
+
+func (n NetChains) rangeAt(ctx context.Context, account *url.URL, chain string, start, count uint64, expand bool) ([]*api.ChainEntryRecord[api.Record], error) {
+	c := count
+	q := &api.ChainQuery{Name: chain, Range: &api.RangeOptions{Start: start, Count: &c}}
+	if expand {
+		t := true
+		q.Range.Expand = &t
+	}
+	r, err := n.Net.Query(ctx, account, q)
+	if err != nil {
+		return nil, fmt.Errorf("%v %s[%d:%d]: %w", account, chain, start, start+count, err)
+	}
+	var out []*api.ChainEntryRecord[api.Record]
+	switch rr := r.(type) {
+	case *api.RecordRange[api.Record]:
+		for _, rec := range rr.Records {
+			ce, ok := rec.(*api.ChainEntryRecord[api.Record])
+			if !ok {
+				return nil, fmt.Errorf("%v %s: got %T in a chain range", account, chain, rec)
+			}
+			out = append(out, ce)
+		}
+	case *api.RecordRange[*api.ChainEntryRecord[api.Record]]:
+		out = append(out, rr.Records...)
+	default:
+		return nil, fmt.Errorf("%v %s: got %T, not a chain range", account, chain, r)
+	}
+	for i, ce := range out {
+		if ce.Index != start+uint64(i) {
+			return nil, fmt.Errorf("%v %s: asked for entry %d, got %d", account, chain, start+uint64(i), ce.Index)
+		}
+	}
+	return out, nil
+}
+
+// Entries implements ChainSource.
+func (n NetChains) Entries(ctx context.Context, account *url.URL, chain string, count uint64) ([][]byte, error) {
+	out := make([][]byte, count)
+	par := n.Parallel
+	if par <= 0 {
+		par = 8
+	}
+	type job struct{ start, count uint64 }
+	jobs := make(chan job)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var firstErr error
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	for w := 0; w < par; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := range jobs {
+				recs, err := n.rangeAt(ctx, account, chain, j.start, j.count, false)
+				mu.Lock()
+				if err == nil && uint64(len(recs)) != j.count {
+					err = fmt.Errorf("%v %s: asked for %d entries from %d, got %d", account, chain, j.count, j.start, len(recs))
+				}
+				if err != nil {
+					if firstErr == nil {
+						firstErr = err
+						cancel()
+					}
+					mu.Unlock()
+					continue
+				}
+				for i, ce := range recs {
+					e := ce.Entry
+					out[j.start+uint64(i)] = e[:]
+				}
+				mu.Unlock()
+			}
+		}()
+	}
+	for s := uint64(0); s < count; s += chainPage {
+		c := min(uint64(chainPage), count-s)
+		select {
+		case jobs <- job{s, c}:
+		case <-ctx.Done():
+		}
+	}
+	close(jobs)
+	wg.Wait()
+	if firstErr != nil {
+		return nil, firstErr
+	}
+	return out, nil
+}
+
+// History implements ChainSource: the first count main chain entries as transactions. An UpdateKey carries the signature that
+// initiated it, read from the transaction's own record (the replay rotates the initiator's entry).
+func (n NetChains) History(ctx context.Context, account *url.URL, count uint64) ([]HistoryEntry, error) {
+	out := make([]HistoryEntry, 0, count)
+	for s := uint64(0); s < count; s += chainPage {
+		recs, err := n.rangeAt(ctx, account, "main", s, min(uint64(chainPage), count-s), true)
+		if err != nil {
+			return nil, err
+		}
+		for _, ce := range recs {
+			mr, ok := ce.Value.(*api.MessageRecord[messaging.Message])
+			if !ok {
+				return nil, fmt.Errorf("%v main[%d]: got %T, not a message", account, ce.Index, ce.Value)
+			}
+			tm, ok := mr.Message.(*messaging.TransactionMessage)
+			if !ok || tm.Transaction == nil {
+				return nil, fmt.Errorf("%v main[%d]: %T is not a transaction", account, ce.Index, mr.Message)
+			}
+			raw, err := tm.Transaction.MarshalBinary()
+			if err != nil {
+				return nil, fmt.Errorf("%v main[%d]: %w", account, ce.Index, err)
+			}
+			he := HistoryEntry{Transaction: hex.EncodeToString(raw)}
+			if _, ok := tm.Transaction.Body.(*protocol.UpdateKey); ok {
+				sig, err := n.initiatingSignature(ctx, account, tm.Transaction)
+				if err != nil {
+					return nil, fmt.Errorf("%v main[%d]: %w", account, ce.Index, err)
+				}
+				sb, err := sig.MarshalBinary()
+				if err != nil {
+					return nil, err
+				}
+				he.Initiator = hex.EncodeToString(sb)
+			}
+			out = append(out, he)
+		}
+	}
+	return out, nil
+}
+
+// initiatingSignature finds, among the signatures recorded for the transaction on the account, the one that initiated it.
+func (n NetChains) initiatingSignature(ctx context.Context, account *url.URL, txn *protocol.Transaction) (protocol.Signature, error) {
+	id := account.WithTxID(txn.ID().Hash())
+	r, err := n.Net.Query(ctx, id.AsUrl(), &api.DefaultQuery{})
+	if err != nil {
+		return nil, fmt.Errorf("transaction %x: %w", txn.GetHash()[:8], err)
+	}
+	mr, ok := r.(*api.MessageRecord[messaging.Message])
+	if !ok || mr.Signatures == nil {
+		return nil, fmt.Errorf("transaction %x: no signature sets (%T)", txn.GetHash()[:8], r)
+	}
+	for _, set := range mr.Signatures.Records {
+		if set.Signatures == nil {
+			continue
+		}
+		for _, rec := range set.Signatures.Records {
+			if sm, ok := rec.Message.(*messaging.SignatureMessage); ok {
+				if did, _ := protocol.SignatureDidInitiate(sm.Signature, txn.Header.Initiator[:], nil); did {
+					return sm.Signature, nil
+				}
+			}
+		}
+	}
+	return nil, fmt.Errorf("transaction %x: no recorded signature initiated it", txn.GetHash()[:8])
 }

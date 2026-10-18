@@ -66,7 +66,25 @@ func main() {
 	out := flag.String("out", "pkg/proof/v2/testdata/conformance", "output directory")
 	x2 := flag.String("xpartition2", "", "write only the evidence 2.1 (cross-partition) suite into this directory; the 2.0 suite is not touched")
 	x2b := flag.String("xpartition2b", "", "write only the certified-timeline suite (evidence 2.1 with page histories and derived arrivals) into this directory")
+	x3 := flag.String("xpartition3", "", "write only the three-way partition suite (the Directory as a partition, D2a-D2c) into this directory")
+	x3b := flag.String("xpartition3b", "", "write only the roles / executor-version / budget suite (the timeline world, RB9 Phase C1b-2) into this directory")
 	flag.Parse()
+	if *x3b != "" {
+		if err := writeXPartition3b(*x3b); err != nil {
+			fmt.Println("FAIL:", err)
+			os.Exit(1)
+		}
+		fmt.Println("wrote the roles / executor-version / budget suite to", *x3b)
+		return
+	}
+	if *x3 != "" {
+		if err := writeXPartition3(*x3); err != nil {
+			fmt.Println("FAIL:", err)
+			os.Exit(1)
+		}
+		fmt.Println("wrote the three-way partition suite to", *x3)
+		return
+	}
 	if *x2b != "" {
 		if err := writeXPartition2b(*x2b); err != nil {
 			fmt.Println("FAIL:", err)

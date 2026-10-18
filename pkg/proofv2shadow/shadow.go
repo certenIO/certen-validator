@@ -48,6 +48,11 @@ type Shadow struct {
 	builds chan job
 	stored int // major records already stored
 	mu     sync.Mutex
+
+	// Allow21 lets Prove return evidence 2.1 for an intent's certificate. It is false until the rules that accept 2.1 are in force (design
+	// D7, RB9 Phase C2): the shadow always builds and verifies 2.1 for a capture that holds pages on other partitions, but a certificate
+	// never carries a document consensus refuses.
+	Allow21 bool
 }
 
 type job struct{ intentID, account, tx, bvn string }
@@ -160,13 +165,14 @@ func NewCollector(ctx context.Context, endpoint string, c *jsonrpc.Client, b *pr
 		Route: func(_ context.Context, account string) (string, error) { return router.PartitionID(account) },
 		Block: func(ctx context.Context, account, tx string) (uint64, error) { return b.TxBlock(ctx, account, tx) },
 		Position: func(ctx context.Context, account, tx, label string) (*proofv2.TxPosition, error) {
-			return b.Position(ctx, account, tx, label)
+			return PositionFor(ctx, b, account, tx, label)
 		},
 		Facts: func(ctx context.Context, account, tx string) (*TxFacts, error) {
 			return ReadTxFacts(ctx, c, account, tx)
 		},
-		Log:  proofv2.NetLog{Net: c},
-		Page: reader.PageAt,
+		Log:    proofv2.NetLog{Net: c},
+		Chains: proofv2.NetChains{Net: c},
+		Page:   reader.PageAt,
 		Anchor: func(ctx context.Context, pb *proofv2.PartitionBlock) ([32]byte, error) {
 			_, h, err := proofv2.AnchorAt(ctx, c, pb, 0)
 			return h, err
@@ -217,7 +223,7 @@ func (s *Shadow) buildLoop() {
 func (s *Shadow) build(j job) {
 	ctx, cancel := context.WithTimeout(context.Background(), certifyWait+10*time.Minute)
 	defer cancel()
-	ev, rep, err := s.buildOne(ctx, j, 0)
+	ev, rep, err := s.buildOne(ctx, j, 0, false)
 	s.record(ctx, j, ev, rep, err)
 }
 
@@ -286,7 +292,7 @@ func (s *Shadow) Prove(ctx context.Context, intentID, account, tx, bvn string, m
 		}
 	}
 	j := job{intentID, account, tx, bvn}
-	ev, rep, err := s.buildOne(ctx, j, maxMajors)
+	ev, rep, err := s.buildOne(ctx, j, maxMajors, true)
 	s.record(ctx, j, ev, rep, err)
 	if err != nil {
 		return nil, fmt.Errorf("proof v2: %w", err)
@@ -294,22 +300,50 @@ func (s *Shadow) Prove(ctx context.Context, intentID, account, tx, bvn string, m
 	return ev, nil
 }
 
-func (s *Shadow) buildOne(ctx context.Context, j job, maxMajors uint64) (*proofv2.Evidence, *proofv2.Report, error) {
+// buildPlan says how a capture becomes a document: evidence 2.0 over the transaction's own partition's pages, or evidence 2.1.
+type buildPlan struct {
+	is21  bool
+	pages []*proofv2.PageState // the 2.0 pages
+}
+
+// planBuild decides the document for a capture. A capture with pages on other partitions needs 2.1. A proof for an intent's certificate
+// (prove) may carry 2.1 only when allow21: until the rules switch (design D7) consensus refuses it, so the certificate path is given the
+// named state g1_evidence_21_not_in_force, never a document that fails later. The shadow (not prove) builds and verifies it either way.
+func planBuild(cp *Capture, prove, allow21 bool) (*buildPlan, error) {
+	if cp == nil {
+		return &buildPlan{}, nil
+	}
+	if cp.HasForeignPages() {
+		if prove && !allow21 {
+			return nil, &proofv2.NamedState{Code: proofv2.StateEvidence21NotInForce, Block: cp.Block,
+				Detail: "the governing pages are on more than one partition, so the proof is evidence 2.1: it is built and verified, but a certificate may carry it only after the rules that accept it are in force (design D7)"}
+		}
+		return &buildPlan{is21: true}, nil
+	}
+	pages, err := evidencePages(cp)
+	if err != nil {
+		return nil, err
+	}
+	return &buildPlan{pages: pages}, nil
+}
+
+func (s *Shadow) buildOne(ctx context.Context, j job, maxMajors uint64, prove bool) (*proofv2.Evidence, *proofv2.Report, error) {
 	raw, ok, err := s.repo.Captured(ctx, j.intentID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("load captured pages: %w", err)
 	}
-	var pages []*proofv2.PageState
+	var cp *Capture
+	var plan *buildPlan
 	if ok && raw != nil && strings.TrimSpace(string(raw)) != "null" {
-		cp, err := DecodeCapture(raw)
-		if err != nil {
+		if cp, err = DecodeCapture(raw); err != nil {
 			return nil, nil, fmt.Errorf("decode captured pages: %w", err)
 		}
-		if pages, err = evidencePages(cp); err != nil {
-			return nil, nil, err
-		}
 	}
-	if len(pages) == 0 {
+	if plan, err = planBuild(cp, prove, s.Allow21); err != nil {
+		return nil, nil, err
+	}
+	pages := plan.pages
+	if len(pages) == 0 && !plan.is21 {
 		return nil, nil, fmt.Errorf("g1_historical_unavailable: no pages were captured at discovery")
 	}
 	if err := s.b.Refresh(ctx); err != nil {
@@ -320,6 +354,22 @@ func (s *Shadow) buildOne(ctx context.Context, j job, maxMajors uint64) (*proofv
 	}
 	deadline := time.Now().Add(certifyWait)
 	for {
+		if plan.is21 {
+			asm, err := cp.Assembly(ctx, proofv2.NetLog{Net: s.c}, proofv2.NetChains{Net: s.c})
+			if err != nil {
+				return nil, nil, err
+			}
+			ev, rep, err := s.b.Build21(ctx, maxMajors, j.account, j.tx, j.bvn, asm)
+			if errors.Is(err, proofv2.ErrNotYetCertified) && time.Now().Before(deadline) {
+				select {
+				case <-ctx.Done():
+					return nil, nil, ctx.Err()
+				case <-time.After(15 * time.Second):
+				}
+				continue
+			}
+			return ev, rep, err
+		}
 		ev, err := s.b.BuildBounded(ctx, maxMajors, j.account, j.tx, j.bvn, pages...)
 		if errors.Is(err, proofv2.ErrNotYetCertified) && time.Now().Before(deadline) {
 			select {

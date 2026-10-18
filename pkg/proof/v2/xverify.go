@@ -42,9 +42,10 @@ const (
 
 // ProvenPage and Report carry the 2.1 results (see Report.Proven, Report.Unproven).
 
-// declaredRoles are the roles whose justification is a fact outside the evidence: the transaction's header and the intent
-// certificate. The evidence records them and the report lists them as declared; BindProofV2 (RB9 Phase C2) requires them against
-// the header and the certificate. A role in this set is never what a page is proven to have from its state alone.
+// declaredRoles are the roles whose justification can be a fact outside the evidence. Since RB9 Phase C1b-2 only RoleCertifiedKeyPage is
+// declared always (it depends on the key book and page the INTENT declares, which only the intent certificate carries; BindProofV2,
+// RB9 Phase C2, requires it against the certificate). RoleHeaderAuthority and RoleInitiatorSigner are derived from the transaction
+// the evidence carries (xroles.go) and are declared only when it does not carry what derives them.
 var declaredRoles = map[PageRole]bool{RoleHeaderAuthority: true, RoleInitiatorSigner: true, RoleCertifiedKeyPage: true}
 
 // refusal21 is a verifier refusal that names the state, the partition and the block it was judged at.
@@ -88,26 +89,17 @@ func kindOfAnchor(msgHex string) (protocol.TransactionType, *url.URL, error) {
 // verifyAnchor21 checks one partition anchor of the Anchors map: a BlockValidatorAnchor delivered to the Directory's anchor
 // pool, from a block validator partition, proven into the certified root. key is the map key (the claimed partition).
 func verifyAnchor21(key string, a PartitionAnchor, certRoot []byte) (*xAnchor, error) {
-	typ, src, err := kindOfAnchor(a.Message)
+	// The anchor is of either kind (design D2b: the Directory is proven by its own DirectoryAnchor); its kind must be the one the
+	// partition it names is proven by, and the partition is derived from its Source, never from the key.
+	pa, err := decodeAnchor21(a.Message)
 	if err != nil {
 		return nil, fmt.Errorf("anchors[%s]: %w", key, err)
 	}
-	if typ == protocol.TransactionTypeDirectoryAnchor {
-		return nil, refusal21(StateDirectoryPartitionUnsupported, key, 0,
-			"the anchor is a DirectoryAnchor: a governing page on the Directory is proven through the Directory's own anchors, which this build does not verify (design D2b)")
-	}
-	body, seq, anchorTx, err := anchorBody(a.Message)
+	body, anchorTx := pa.body, pa.tx
+	derived := pa.seq.Source.String()
+	id, err := pa.partition()
 	if err != nil {
-		return nil, fmt.Errorf("anchors[%s]: %w", key, err)
-	}
-	if src == nil || seq.Source == nil {
-		return nil, fmt.Errorf("anchors[%s]: the anchor names no source partition", key)
-	}
-	derived := seq.Source.String()
-	id, ok := protocol.ParsePartitionUrl(seq.Source)
-	if !ok || strings.EqualFold(id, protocol.Directory) {
-		return nil, refusal21(StateForeignPartitionMismatch, key, body.MinorBlockIndex,
-			"url anchors[%s]: claimed %s, derived %s, which is not a block validator partition", key, key, derived)
+		return nil, err
 	}
 	if !strings.EqualFold(key, derived) {
 		return nil, refusal21(StateForeignPartitionMismatch, id, body.MinorBlockIndex,
@@ -139,6 +131,10 @@ func verify21(ev *Evidence, rep *Report, in xIn) error {
 	rep.Version, rep.Tag = ev.Version, DomainG1V4
 	if len(ev.Pages) == 0 {
 		return refusal21(StateCompletenessUnproven, in.x.id, in.x.block, "evidence 2.1 carries no page")
+	}
+	// The evidence travels in one consensus transaction: a closure over the budget is a named state (xbudget.go).
+	if err := CheckEvidenceBudget(ev, in.x); err != nil {
+		return err
 	}
 
 	// 1. Anchors: the transaction's own, and one per other partition, each proven into the certified root; the partition of each
@@ -203,7 +199,7 @@ func verify21(ev *Evidence, rep *Report, in xIn) error {
 			}
 			return fmt.Errorf("page: %w", err)
 		}
-		if table != nil {
+		if _, own := ledgerOf(acct, xa); table != nil && !own { // a partition's own system ledger is addressed by its partition, not routed by the table
 			routed, err := proof.RoutePartition(table, acct.GetUrl().String())
 			if err != nil {
 				return fmt.Errorf("page %s: %w", p.URL, err)
@@ -225,14 +221,18 @@ func verify21(ev *Evidence, rep *Report, in xIn) error {
 
 	// 4. The governing set, re-derived from the proven states - and from every state a page with a certified history passed through, so a
 	// delegate entry removed after a counted signature arrived still puts its book in the set; the recorded roles must equal it.
+	if err := checkExecutorVersion(byURL); err != nil {
+		return err
+	}
 	tl, err := foldTimelines(ev, byURL)
 	if err != nil {
 		return err
 	}
-	derived, err := deriveRoles(ev, byURL, anchors, tl)
+	derived, err := deriveRoles(ev, byURL, anchors, tl, in.x)
 	if err != nil {
 		return err
 	}
+	var initiatorNotCarried []string
 	for i := range ev.Pages {
 		p := &ev.Pages[i]
 		pa := byURL[strings.ToLower(rep.Pages[i].GetUrl().String())]
@@ -246,13 +246,16 @@ func verify21(ev *Evidence, rep *Report, in xIn) error {
 		if len(recorded) == 0 {
 			return refusal21(StateRoleMismatch, pa.anchor.id, pa.anchor.block, "url %s: the page records no role", p.URL)
 		}
-		want := derived[lk(rep.Pages[i].GetUrl())]
+		want := derived.want[lk(rep.Pages[i].GetUrl())]
 		var roles, declared []PageRole
 		for _, r := range KnownRoles {
 			switch {
-			case declaredRoles[r]:
+			case declaredRoles[r] && !derived.proves(r):
 				if recorded[r] {
 					declared = append(declared, r)
+					if r == RoleInitiatorSigner {
+						initiatorNotCarried = append(initiatorNotCarried, p.URL)
+					}
 				}
 			case recorded[r] && !want[r]:
 				return refusal21(StateRoleMismatch, pa.anchor.id, pa.anchor.block, "url %s: role %s is claimed but the proven states do not justify it", p.URL, r)
@@ -266,6 +269,10 @@ func verify21(ev *Evidence, rep *Report, in xIn) error {
 			return refusal21(StateRoleMismatch, pa.anchor.id, pa.anchor.block, "url %s: no recorded role is justified", p.URL)
 		}
 		rep.Proven = append(rep.Proven, ProvenPage{URL: p.URL, Partition: pa.anchor.source, Block: pa.anchor.block, Roles: roles, Declared: declared})
+	}
+	if len(initiatorNotCarried) > 0 && ev.Transaction != "" {
+		rep.Unproven = append(rep.Unproven, NamedState{Code: StateInitiatorSignatureNotCarried, Partition: in.x.id, Block: in.x.block,
+			Detail: fmt.Sprintf("%s records the role initiator-signer but the evidence carries no signature that initiated the transaction: the role is a recorded fact, listed as declared", strings.Join(initiatorNotCarried, ", "))})
 	}
 
 	// 5. The counted signatures are members of their pages' signature chains at their pages' own B_Y.
@@ -299,8 +306,26 @@ func verify21(ev *Evidence, rep *Report, in xIn) error {
 // and requires every page it needs to be present: every page 1..PageCount of every book, every account on the principal's
 // inheritance chain, every delegate book to the depth limit, every page a counted vote names. Roles that depend on facts outside
 // the evidence (declaredRoles) are not derived; the books a header-authority declaration names are expanded as authorities.
-func deriveRoles(ev *Evidence, byURL map[string]*provenAcct, anchors map[string]*xAnchor, tl states) (map[string]map[PageRole]bool, error) {
+func deriveRoles(ev *Evidence, byURL map[string]*provenAcct, anchors map[string]*xAnchor, tl states, x xAnchor) (*derivedRoles, error) {
 	out := map[string]map[PageRole]bool{}
+	dr := &derivedRoles{want: out}
+	// The transaction the evidence carries derives header-authority (and, with the initiating signature, initiator-signer): xroles.go.
+	txn, err := carriedTransaction(ev, x)
+	if err != nil {
+		return nil, err
+	}
+	headerSet := map[string]bool{}
+	var headerURLs []*url.URL
+	if txn != nil {
+		headerURLs = headerAuthorityURLs(txn)
+		dr.header = true
+		for _, h := range headerURLs {
+			if _, ok := byURL[lk(h)]; !ok {
+				return nil, refusal21(StateHeaderAuthorityMissing, x.id, x.block, "the transaction requires the authority %v, which has no proven pages", h)
+			}
+			headerSet[lk(h)] = true
+		}
+	}
 	add := func(u *url.URL, r PageRole) {
 		if out[lk(u)] == nil {
 			out[lk(u)] = map[PageRole]bool{}
@@ -343,7 +368,14 @@ func deriveRoles(ev *Evidence, byURL map[string]*provenAcct, anchors map[string]
 		}
 		addRoot(a.Url, RoleAuthorityBook, RoleAuthorityPage)
 	}
-	for i := range ev.Pages {
+	// The books the carried transaction names are roots whether or not they are listed authorities (their header-authority role is
+	// added when each is expanded). Without a transaction the role is only a recorded fact and the books the pages record are expanded.
+	for _, h := range headerURLs {
+		if _, ok := roots[lk(h)]; !ok {
+			addRoot(h, RoleHeaderAuthority, RoleHeaderAuthority)
+		}
+	}
+	for i := 0; i < len(ev.Pages) && txn == nil; i++ {
 		for _, r := range ev.Pages[i].Roles {
 			if r == RoleHeaderAuthority {
 				if u, err := url.Parse(ev.Pages[i].URL); err == nil {
@@ -387,9 +419,15 @@ func deriveRoles(ev *Evidence, byURL map[string]*provenAcct, anchors map[string]
 		case *protocol.LiteIdentity:
 			add(u, bookRole)
 			add(u, pageRole)
+			if headerSet[lk(u)] {
+				add(u, RoleHeaderAuthority)
+			}
 			return nil
 		case *protocol.KeyBook:
 			add(u, bookRole)
+			if headerSet[lk(u)] {
+				add(u, RoleHeaderAuthority)
+			}
 			for n := uint64(0); n < bk.PageCount; n++ {
 				pages = append(pages, protocol.FormatKeyPageUrl(u, n))
 			}
@@ -403,6 +441,9 @@ func deriveRoles(ev *Evidence, byURL map[string]*provenAcct, anchors map[string]
 					"%v proves PageCount %d but its page %v is not among the proven pages", u, len(pages), pu)
 			}
 			add(pu, pageRole)
+			if headerSet[lk(u)] {
+				add(pu, RoleHeaderAuthority)
+			}
 			kp, ok := pp.acct.(*protocol.KeyPage)
 			if !ok {
 				return fmt.Errorf("%v is %T, not a key page", pu, pp.acct)
@@ -496,7 +537,50 @@ func deriveRoles(ev *Evidence, byURL map[string]*provenAcct, anchors map[string]
 			}
 		}
 	}
-	return out, nil
+
+	// A partition's system ledger proven at the partition's block carries the executor version in force there (xexecutor.go).
+	for _, pa := range byURL {
+		if l, ok := ledgerOf(pa.acct, pa.anchor); ok {
+			add(l.Url, RoleSystemLedger)
+		}
+	}
+
+	// (f) The initiator's pages, from the initiating signature when the evidence carries it (xroles.go).
+	if txn != nil {
+		pages, found, err := initiatorPages(ev, txn, byURL)
+		if err != nil {
+			return nil, err
+		}
+		if found {
+			dr.initiator = true
+			for _, ip := range pages {
+				if _, ok := byURL[lk(ip)]; !ok {
+					return nil, refusal21(StateInitiatorPageUnproven, x.id, x.block, "%v initiated the transaction (or is in the path of the signature that did) but is not among the proven pages", ip)
+				}
+				add(ip, RoleInitiatorSigner)
+			}
+		}
+	}
+	return dr, nil
+}
+
+// derivedRoles is what deriveRoles established: the roles every page is justified to have, and which of the roles that can be declared
+// were derived (proven) for this document.
+type derivedRoles struct {
+	want      map[string]map[PageRole]bool
+	header    bool // the evidence carries the transaction: header-authority is derived, not declared
+	initiator bool // the evidence carries the initiating signature: initiator-signer is derived, not declared
+}
+
+// proves says whether role r is a role this document's roles are re-derived for (never RoleCertifiedKeyPage).
+func (d *derivedRoles) proves(r PageRole) bool {
+	switch r {
+	case RoleHeaderAuthority:
+		return d.header
+	case RoleInitiatorSigner:
+		return d.initiator
+	}
+	return false
 }
 
 // delegatorPages returns the delegator pages a signature is wrapped in, outermost first.
