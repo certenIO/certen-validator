@@ -19,9 +19,11 @@ const incPath = "../../pkg/proof/testdata/incarnation/kermit.json"
 const pin = "cac6698ed49a286ad8a3de94540a3354dfe964f366a439f4fdfb34533059fda0"
 
 func TestTheLiveFixturesAgreeBetweenTheV14AndV15Decisions(t *testing.T) {
-	code, err := run(liveDir, incPath, pin)
-	if err != nil || code != 0 {
-		t.Fatalf("exit %d, %v: the live fixtures must compare with zero disagreements and zero verification failures", code, err)
+	for _, dir := range []string{liveDir, liveDir + "_fixedprover"} {
+		code, err := run(dir, incPath, pin)
+		if err != nil || code != 0 {
+			t.Fatalf("%s: exit %d, %v: the live fixtures must compare with zero disagreements and zero verification failures", dir, code, err)
+		}
 	}
 }
 

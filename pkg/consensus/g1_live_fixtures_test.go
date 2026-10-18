@@ -55,20 +55,24 @@ type g1LiveCase struct {
 
 type g1LiveManifest struct {
 	Format        string       `json:"format"`
-	Archive       string       `json:"archive"` // the Directory major records every fixture builds on, gzip JSON
+	Prover        string       `json:"prover,omitempty"` // which build produced the G0-G2 of the fixtures, when it is not the deployed one
+	Archive       string       `json:"archive"`          // the Directory major records every fixture builds on, gzip JSON
 	ArchiveSHA256 string       `json:"archiveSha256"`
 	Cases         []g1LiveCase `json:"cases"`
 }
 
-const g1LiveDir = "testdata/g1_live"
+// g1LiveDirs are the two suites: g1_live holds intents the deployed build's provers can certify (the base build's G1 and G2 produced their
+// facts); g1_live_fixedprover holds the intents it cannot (delegation through an authority book, a foreign vote that completes the approval:
+// findings C5-F6 and C5-F7), whose G0-G2 were produced by the govproof of the two fix branches (see the manifest's "prover").
+var g1LiveDirs = []string{"testdata/g1_live", "testdata/g1_live_fixedprover"}
 
-func loadG1LiveManifest(t *testing.T) *g1LiveManifest {
+func loadG1LiveManifest(t *testing.T, dir string) *g1LiveManifest {
 	t.Helper()
-	mb, err := os.ReadFile(filepath.Join(g1LiveDir, "manifest.json"))
+	mb, err := os.ReadFile(filepath.Join(dir, "manifest.json"))
 	if err != nil {
 		t.Fatalf("manifest: %v", err)
 	}
-	want, err := os.ReadFile(filepath.Join(g1LiveDir, "MANIFEST.sha256"))
+	want, err := os.ReadFile(filepath.Join(dir, "MANIFEST.sha256"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,10 +91,10 @@ func loadG1LiveManifest(t *testing.T) *g1LiveManifest {
 }
 
 // loadG1LiveArchive reads the suite's shared major records, checked against the manifest's hash.
-func loadG1LiveArchive(t *testing.T) json.RawMessage {
+func loadG1LiveArchive(t *testing.T, dir string) json.RawMessage {
 	t.Helper()
-	m := loadG1LiveManifest(t)
-	gz, err := os.ReadFile(filepath.Join(g1LiveDir, m.Archive))
+	m := loadG1LiveManifest(t, dir)
+	gz, err := os.ReadFile(filepath.Join(dir, m.Archive))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,9 +113,9 @@ func loadG1LiveArchive(t *testing.T) json.RawMessage {
 	return b
 }
 
-func loadG1LiveCase(t *testing.T, c g1LiveCase) *g1LiveFixture {
+func loadG1LiveCase(t *testing.T, dir string, c g1LiveCase) *g1LiveFixture {
 	t.Helper()
-	gz, err := os.ReadFile(filepath.Join(g1LiveDir, c.File))
+	gz, err := os.ReadFile(filepath.Join(dir, c.File))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +136,7 @@ func loadG1LiveCase(t *testing.T, c g1LiveCase) *g1LiveFixture {
 		t.Fatal(err)
 	}
 	if len(f.Archive) == 0 { // the Directory's major records are stored once for the suite (cmd/g1fixture -shared-archive)
-		f.Archive = loadG1LiveArchive(t)
+		f.Archive = loadG1LiveArchive(t, dir)
 	}
 	if f.Format != "certen-g1fixture/1" || f.ChainedProof == nil || len(f.ProofV2) == 0 || len(f.Archive) == 0 || len(f.VoteEvidence) == 0 {
 		t.Fatalf("%s: not a complete g1 fixture", c.File)
@@ -168,71 +172,74 @@ var g1LiveActivation = &ledger.G1ActivationRecord{Version: 1, Height: 100, ID: "
 // Every live case: a certificate over its evidence 2.1 is built and verified with the real verifier, binding and govRoot v4; it survives the
 // block's JSON; it is refused as not-in-force before the activation; and the 2.0 form of the same intent is refused after it.
 func TestG1LiveEvidence21IsCertifiedAndVerifiedThroughTheAppWithTheRealVerifier(t *testing.T) {
-	m := loadG1LiveManifest(t)
-	for _, c := range m.Cases {
-		t.Run(c.Name, func(t *testing.T) {
-			f := loadG1LiveCase(t, c)
-			rf, reg := intentRegistry(t)
-			spine := g1LiveSpine(t, f)
-			if !ProofV3Required(spine, reg) {
-				t.Fatal("the spine does not require v3")
-			}
-			ev := g1LiveEvidence(t, f)
-			if ev.Version != proofv2.Version21 {
-				t.Fatalf("the fixture's proof v2 is version %q, not %q", ev.Version, proofv2.Version21)
-			}
-			parts := map[string]bool{}
-			for _, p := range ev.Pages {
-				parts[strings.ToLower(p.Partition)] = true
-			}
-			var got []string
-			for p := range parts {
-				got = append(got, p)
-			}
-			if len(got) != len(c.Partitions) {
-				t.Fatalf("the document proves pages on %v, the manifest says %v", got, c.Partitions)
-			}
-			if len(ev.Pages) != c.Pages {
-				t.Fatalf("the document proves %d pages, the manifest says %d", len(ev.Pages), c.Pages)
-			}
+	for _, dir := range g1LiveDirs {
+		m := loadG1LiveManifest(t, dir)
+		for _, c := range m.Cases {
+			t.Run(filepath.Base(dir)+"/"+c.Name, func(t *testing.T) {
+				f := loadG1LiveCase(t, dir, c)
+				rf, reg := intentRegistry(t)
+				spine := g1LiveSpine(t, f)
+				if !ProofV3Required(spine, reg) {
+					t.Fatal("the spine does not require v3")
+				}
+				ev := g1LiveEvidence(t, f)
+				if ev.Version != proofv2.Version21 {
+					t.Fatalf("the fixture's proof v2 is version %q, not %q", ev.Version, proofv2.Version21)
+				}
+				parts := map[string]bool{}
+				for _, p := range ev.Pages {
+					parts[strings.ToLower(p.Partition)] = true
+				}
+				var got []string
+				for p := range parts {
+					got = append(got, p)
+				}
+				if len(got) != len(c.Partitions) {
+					t.Fatalf("the document proves pages on %v, the manifest says %v", got, c.Partitions)
+				}
+				if len(ev.Pages) != c.Pages {
+					t.Fatalf("the document proves %d pages, the manifest says %d", len(ev.Pages), c.Pages)
+				}
 
-			vb := g1LiveBlock(t, f, "validator-1")
-			rec := f.record(t)
-			if err := BuildIntentCertificate(vb, intentChain, reg, rf.keys[0], f.KeyPage, f.KeyBook, rec, f.VoteEvidence, f.ChainedProof,
-				spine, g1LiveActivation, ev); err != nil {
-				t.Fatalf("building the certificate over the live evidence 2.1: %v", err)
-			}
-			cert := vb.IntentCertificate
-			if cert.ProofV2 == nil || cert.ProofV2.Version != proofv2.Version21 || cert.GovRootV3 == "" || cert.GovRootV2 != "" {
-				t.Fatalf("not a certificate over evidence 2.1: proof v2 %v, root %q, govRoot v2 %q", cert.ProofV2 != nil, cert.GovRootV3, cert.GovRootV2)
-			}
-			b, err := json.Marshal(vb)
-			if err != nil {
-				t.Fatal(err)
-			}
-			var back ValidatorBlock
-			if err := json.Unmarshal(b, &back); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := VerifyIntentCertificate(&back, intentChain, reg, spine, g1LiveActivation); err != nil {
-				t.Fatalf("after a JSON round trip, with the activation in force: %v", err)
-			}
-			t.Logf("%s: %d bytes of block JSON, pages on %v, govRoot (v4) %s", c.Name, len(b), c.Partitions, cert.GovRootV3)
+				vb := g1LiveBlock(t, f, "validator-1")
+				rec := f.record(t)
+				if err := BuildIntentCertificate(vb, intentChain, reg, rf.keys[0], f.KeyPage, f.KeyBook, rec, f.VoteEvidence, f.ChainedProof,
+					spine, g1LiveActivation, ev); err != nil {
+					t.Fatalf("building the certificate over the live evidence 2.1: %v", err)
+				}
+				cert := vb.IntentCertificate
+				if cert.ProofV2 == nil || cert.ProofV2.Version != proofv2.Version21 || cert.GovRootV3 == "" || cert.GovRootV2 != "" {
+					t.Fatalf("not a certificate over evidence 2.1: proof v2 %v, root %q, govRoot v2 %q", cert.ProofV2 != nil, cert.GovRootV3, cert.GovRootV2)
+				}
+				b, err := json.Marshal(vb)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var back ValidatorBlock
+				if err := json.Unmarshal(b, &back); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := VerifyIntentCertificate(&back, intentChain, reg, spine, g1LiveActivation); err != nil {
+					t.Fatalf("after a JSON round trip, with the activation in force: %v", err)
+				}
+				t.Logf("%s: %d bytes of block JSON, pages on %v, govRoot (v4) %s", c.Name, len(b), c.Partitions, cert.GovRootV3)
 
-			// before the activation the chain does not accept evidence 2.1
-			if _, err := VerifyIntentCertificate(&back, intentChain, reg, spine, nil); !errors.Is(err, ErrIntentProofV21NotInForce) {
-				t.Fatalf("evidence 2.1 before the activation: %v", err)
-			}
-		})
+				// before the activation the chain does not accept evidence 2.1
+				if _, err := VerifyIntentCertificate(&back, intentChain, reg, spine, nil); !errors.Is(err, ErrIntentProofV21NotInForce) {
+					t.Fatalf("evidence 2.1 before the activation: %v", err)
+				}
+			})
+		}
 	}
 }
 
 // What the binding refuses, on the live documents: it is the intent's own vote evidence and G1 that the document is bound to, not the
 // document's own claims.
 func TestG1LiveEvidence21RefusesWhatTheLiveFactsDoNotSupport(t *testing.T) {
-	m := loadG1LiveManifest(t)
+	dir := g1LiveDirs[0]
+	m := loadG1LiveManifest(t, dir)
 	c := m.Cases[0]
-	f := loadG1LiveCase(t, c)
+	f := loadG1LiveCase(t, dir, c)
 	rf, reg := intentRegistry(t)
 	spine := g1LiveSpine(t, f)
 	built := func(t *testing.T) *ValidatorBlock {
