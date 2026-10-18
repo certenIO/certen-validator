@@ -308,3 +308,13 @@ hex members as the bytes they encode, URLs lower-cased without a trailing slash,
 (`pkg/intentcert/govroot_v4.go`), recomputed byte by byte in `TestVotesRootV4_IndependentRecomputation`, and `TestVoteEncodingV4CoversEveryField` fails when a member is added to any of the
 structs until the encoding is extended under a new tag. The v4 golden was unreleased and was regenerated once for this encoding (and for the executor-valid blocks of its fixture); the v3
 goldens are untouched.
+
+**D7, the integration of the stack (RB9 Phase I; added, nothing above is changed).** (1) Consensus verifies the evidence of a 2.1 certificate with the real verifier: `proofv2.VerifyEvidence21FromSpine` (the spine as the
+chain holds it, no I/O), chosen by the evidence version in `judgeProofV2` only after the activation gate has let the document through; `Verify`, `VerifyFromGenesis` and `VerifyFromSpine` still refuse
+2.1, and the 2.1 entry point refuses 2.0. The merge condition of RB9-C2-F7 is `TestRulesV15AcceptsAVerifiedEvidence21`: the real stored 2.1 document of a live Kermit transaction goes through the
+consensus judgement with the real verifier, the real `BindProofV21` and the real govRoot v4, and each edit of it is refused. (2) The switch is read per intent, never configured: the intent discovery asks
+the proposer's activation in force for the next block (`G1CrossPartitionRequired`) and, exactly then, calls `Shadow.ProveG1`, which builds 2.1 for EVERY capture - from the block after the activation
+consensus refuses a 2.0 certificate, so a one-partition intent needs 2.1 as well; before it nothing changes (`Shadow.Prove`, a cross-partition capture is `g1_evidence_21_not_in_force`). A report with
+anything `Unproven`, a prover that cannot build 2.1, an unreadable activation and a capture holding a nonexistent listed authority book (`g1_authority_missing`; absence of an account is provable by no
+receipt the evidence carries, so the capture refuses it by name at capture for a foreign capture and at assembly for 2.1) all hold the intent. (3) The builder maps a freshly served minor-root record
+with no validator signature yet (`quorum not met: 0 of N validator signatures`) to `ErrNotYetCertified`, under the bound the builder callers already use; the verifiers are untouched.
