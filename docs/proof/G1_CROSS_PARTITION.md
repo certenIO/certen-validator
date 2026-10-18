@@ -218,3 +218,65 @@ the transaction's block", never the timeline that judged a signature, and it car
 receipts or the transaction), the Directory cases D2b/D2c, `g1_executor_version_unsupported`, `g1_closure_exceeds_budget`. Open (RB9-C1b-1-F2): a held vote is
 judged at its release block for its production, but the model re-asks the page at the signature's arrival, while the executor re-asks `AuthorityWillVote` at the
 release; the header/initiator/certified-page roles remain `Declared` (the transaction is now carried, so C1b-2 can derive them).
+
+## 6. Revision 2026-10-18 (RB9 Phase C1b-2: assembly from a capture, the Directory cases, the remaining states). Added; nothing above is changed.
+
+**Assembly (RB9-C1b-1-F4, done).** `Collector.Collect` records, per capture, the governed transaction (`Capture.Transaction`), the `History` of every key page a counted signature was
+recorded on (read from the main and main-index chains and replayed at capture time with the verifier's own `HistoryStates`, so the delegate books an EARLIER state of a page named are
+part of the closure), each hop's signature, the other signatures the pages on the cause chain recorded for the transaction (`Vote.Counted`, read from the transaction's signature
+sets), and, for a sequenced vote, the hash of the `SequencedMessage` its source partition recorded (`synthetic.go: chain.AddEntry(seq.Hash())`) with the source partition's synthetic
+ledger as a page of role `synthetic-chain`. `Builder.Build21` assembles the document from `Capture.Assembly`: the pages trimmed to their own partition's state root, `AnchorAt` for every
+other partition at the certified root height, the vote receipts, the arrival proofs (`ProveEntry`: the receipt of the message in the page's `signature` chain, built by `ChainReceipt`
+from the chain's entries and checked against the root the page proves, and the two adjacent `signature-index` entries that bracket its position), the production of each vote
+(`Vote.Produced`: the principal's `signature` chain for an inline vote, the source partition's synthetic ledger `main` chain for a sequenced one), the transaction and the routing proof
+(`BuildRoutingProofAt` at the check block). The producer verifies its own document with `Verify21FromGenesis`. Chain entries are append-only: the first n entries read now are the n
+entries the chain had when its proven root had n, so they can be read after the block has left the node's retention; only the page states are retention-limited.
+`Shadow.Prove` still refuses a cross-partition intent for a certificate, now by the name `g1_evidence_21_not_in_force` (the document is built and verified; consensus accepts it only
+after the rules switch of D7): the interim `g1_evidence_21_required` is no longer emitted (the constant stays, superseded). The shadow build builds, verifies and stores the 2.1
+document. `g1_completeness_unproven` is emitted by the verifier only when the evidence lacks a member the re-evaluation needs; a complete document carries no `Unproven` entry.
+
+**Real data (done).** A live Kermit transaction on `certen-protocol.acme/billing-receipts` (BVN1) was captured promptly, assembled and verified end to end (`cmd/proofv2xbuild`;
+`pkg/proof/v2/testdata/xpartition3/real-bvn1-billing-receipts/`, `pkg/proofv2shadow/testdata/capture21_*`): the history of the voting page (book/2), the arrival of its signature derived
+from the real `signature-index` chain, the production of the vote in the principal's signature chain, the transaction, the routing table, the executor version from the partition's
+ledger. BVN2 and BVN3 stayed idle (RB9-C1b-1-F5): the real document is single-partition; the cross-partition documents are the synthetic vectors. RB9-E needs live activity on every
+partition it uses: a transaction whose principal is on one partition and whose authority book (and, for the delegated case, delegate book) lives on another identity on another
+partition, signed and executed inside one retention window (about 945 s), with the book's page having at least one earlier main-chain entry (an `AddCredits` suffices) so the history
+is not trivial; the live run must create that activity itself and capture within the window.
+
+**D2b (Y = Directory) and D2c (X = Directory) (done; deviates from the text of D2b).** The Directory is proven like a block validator partition: `Anchors["acc://dn.acme"]` holds the DN's
+own `DirectoryAnchor` self-anchor (Source = Destination = `dn.acme`, principal `dn.acme/anchors`) and the receipt from that anchor transaction to the certified root (measured live: the
+self-anchor for a DN block is an entry of the pool's main chain and `AnchorAt` finds and proves it), not a walk through `SetCheck.Hops`: B_Y is any DN block whose self-anchor the
+Directory executed at or before the bound, so a page can be proven at the block it needs, not only at a block the spine happens to certify. The anchor KIND is checked per partition kind
+(`xdirectory.go anchorOf`): a block validator partition by a `BlockValidatorAnchor`, the Directory by its `DirectoryAnchor`; the wrong kind is
+`g1_foreign_partition_mismatch{partition,block}`, and the partition is derived from the anchor's Source, never from the map key. Evidence 2.0 is unchanged (`anchorBody` still refuses a
+`DirectoryAnchor`; a test pins its error text). For X = Directory the transaction's receipt must pass through the self-anchor's `RootChainAnchor` and the principal's pages are proven to
+its `StateTreeAnchor`; the votes of BVN authorities are sequenced messages the DN counted after executing the BVN's `BlockValidatorAnchor` (D2c, unchanged). Capture:
+`SelectPartitionBlock` runs over the Directory's own `anchor(directory)-root`; `DirectoryPosition` gives the principal's DN block (`DNBlock` = B, per D2c). Vectors
+`pkg/proof/v2/testdata/xpartition3/` (12: D2a, D2b, D2c each valid plus the adversarial anchor-kind, block and partition cases). RB9-C1b-2-A1: before this change a 2.1 document whose
+own-partition anchor was a `BlockValidatorAnchor` with Source `dn.acme` verified (no kind-versus-partition check). RB9-C1b-2-A2: a Directory-held authority book such as
+`dn.acme/operators` is an OPERATOR book whose thresholds the network manages from globals; the default-rule replay may end in a named `g1_history_head_mismatch` or
+`g1_history_unreplayable` (never a wrong verdict): the live run needs a Directory book that follows the default rules, or the operator-book rule must be added to `govvote`.
+
+**Remaining D6 states (done).** `g1_executor_version_unsupported{partition,block}`: the executor version is `SystemLedger.ExecutorVersion` of `<partition>/ledger`; it is NOT in the network
+or globals records the spine proves, so the partition's ledger is a proven page (new role `system-ledger`) and a version before Baikonur is refused. The capture reads the ledger of every
+partition it reads pages from; an unreadable one is the note `g1_executor_version_unproven{partition,block}`. A document that carries no ledger page proves nothing about the version and
+the verifier cannot add a named state for it without changing the pinned reports of earlier suites, so `BindProofV2` (RB9-C2) must require the ledger page of every partition among the
+proven pages, as it requires the certified key page. MEASURED LIVE (Kermit BVN1, blocks 14715000, 14715100, 14715170, repeated): the node does NOT serve a historical receipt for a system ledger (`bind historical root: cannot generate a receipt when there are uncommitted changes`), so on Kermit today the capture's ledger read ends in the note `g1_executor_version_unproven{partition,block}` and the real document carries no ledger page: the executor version of a real intent is NOT proven yet. This is recorded as RB9-C1b-2-B2 (open): either the operators serve ledger receipts, or the version is established from an activation table keyed to the proven incarnation (the RB8 branch's `govsig/gate.go`, 28bf8ba, absent at this base); `BindProofV2` must not require the ledger page until one of the two exists, or no real 2.1 intent could bind. `g1_closure_exceeds_budget{pages,limit}`: the evidence travels in ONE intent-certificate transaction of CERTEN's consensus (CometBFT
+v0.38.21; `pkg/consensus` sets no limit of its own), so `max_tx_bytes` = 1 MiB (`config.go:799`) binds before the 21 MiB block limit (`params.go:99`); `MaxEvidenceBytes` = 1 MiB - 96 KiB
+reserved for the certificate = 950,272 (`xbudget.go`, with the measured sizes in its header).
+
+**Declared roles (done; semantics).** With the transaction carried, `header-authority` is PROVEN: the books `Header.Authorities` and `GetAdditionalAuthorities()` name, each book and every page
+of it; a recorded role that is not derived (or the reverse) is `g1_role_mismatch`, a named authority without proven pages `g1_header_authority_missing`. `initiator-signer` is PROVEN when the
+evidence carries the signature that initiated the transaction (the cause-chain key signature whose initiator hash is `Header.Initiator`; the pages are the payer and every delegator of its
+path); when it does not, the role is recorded and listed as Declared and the report says `g1_initiator_signature_not_carried{partition,block}`. `certified-key-page` stays Declared in every
+case: it depends on the key book and page the INTENT declares, which only the intent certificate carries; the binding in RB9-C2 (`BindProofV2`) checks it against the certificate.
+
+**Held votes (RB9-C1b-1-F2, resolved).** The executor does NOT re-ask `AuthorityWillVote` at the release (`sig_common.go:84-172`): the vote is computed when the completing signature
+arrives, stored by `recordOnHoldAuthSig` (one slot per authority and transaction, replaced when the new origin page's priority is equal or better) and `releaseHeldAuthSigs` produces the
+stored signature unchanged. The arrival-time model was right for the vote; it false-refused a held vote when a higher-numbered page had decided earlier and a lower page's vote replaced it.
+`Facts.HoldUntil` and `RecordedVote.ReleasedAt` (the production block, from `Vote.Produced`) make the model match; with the production unproven the vote is judged strictly as before. The
+sentence in section 5 and in the C1b-1 report saying that the executor re-asks `AuthorityWillVote` at the release was wrong and is superseded by this paragraph.
+
+**Not done in C1b-2 (explicit).** TypeScript consumption of xpartition3 and xpartition3b (Go writes, TS consumes byte-identical copies with the manifest hash; the TS verifier must learn the
+roles `synthetic-chain` and `system-ledger`); a live D2c capture (needs a recent transaction whose principal is on the Directory); xworld vectors for the held-vote rule, an over-budget
+document and a ledger proven through another partition's anchor; BindProofV2 / govRoot v4 / rules v15 (RB9-C2 and the integration step).
