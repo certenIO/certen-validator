@@ -25,6 +25,23 @@ import (
 // ErrAccountMissing is what an AccountReader returns for an account that does not exist as of the block it is read at.
 var ErrAccountMissing = errors.New("the account does not exist at the block")
 
+// AccountMissingError is ErrAccountMissing with where it was judged: the partition the account routes to and the block of that
+// partition it was read at (errors.Is(err, ErrAccountMissing) holds). A reader that cannot say where leaves both empty.
+type AccountMissingError struct {
+	Partition string
+	Block     uint64
+	Cause     error
+}
+
+func (e *AccountMissingError) Error() string {
+	if e.Cause == nil {
+		return ErrAccountMissing.Error()
+	}
+	return fmt.Sprintf("%v: %v", ErrAccountMissing, e.Cause)
+}
+func (e *AccountMissingError) Unwrap() error        { return e.Cause }
+func (e *AccountMissingError) Is(target error) bool { return target == ErrAccountMissing }
+
 // AccountReader reads one account as of the block its partition is read at.
 type AccountReader func(ctx context.Context, u *url.URL) (protocol.Account, error)
 
@@ -105,6 +122,9 @@ type Closure struct {
 	// Counted are the votes the executor counts: those of an authority the principal lists, the header names, or - when
 	// every listed authority is disabled - any authority.
 	Counted []VoteFact
+	// Absent are the listed authorities that do not exist at the block they were read at, with where that was judged (also in Notes):
+	// evidence 2.1 cannot prove an account absent, so it is refused from them (Capture.Absent).
+	Absent []*proofv2.NamedState
 }
 
 // URLs returns the governing accounts in order.
@@ -287,7 +307,7 @@ func governingWith(ctx context.Context, f *TxFacts, get AccountReader, hist Dele
 		}
 	}
 
-	out := &Closure{Pages: b.pages, Notes: append(b.notes, ex.notes...), Counted: counted}
+	out := &Closure{Pages: b.pages, Notes: append(b.notes, ex.notes...), Counted: counted, Absent: ex.absent}
 	for i := range out.Pages {
 		roles, err := proofv2.CanonicalRoles(out.Pages[i].Roles)
 		if err != nil {
@@ -344,7 +364,8 @@ type expander struct {
 	pending  []delegateEdge  // page entries to follow, breadth first
 	books    []bookRecord    // every book expanded, with its pages
 	notes    []*proofv2.NamedState
-	hist     DelegatesOf // delegates of earlier states of a page (nil: only the state read)
+	absent   []*proofv2.NamedState // the disabled authorities that do not exist (also in notes)
+	hist     DelegatesOf           // delegates of earlier states of a page (nil: only the state read)
 }
 
 type delegateEdge struct {
@@ -371,12 +392,24 @@ func (e *expander) bookAt(ctx context.Context, u *url.URL, bookRole, pageRole pr
 	}
 	acct, err := e.get(ctx, u)
 	if err != nil {
-		if errors.Is(err, ErrAccountMissing) && disabled {
-			e.b.note(proofv2.StateAuthorityMissing, fmt.Sprintf("the disabled authority %v does not exist", u))
-			return nil
-		}
 		if errors.Is(err, ErrAccountMissing) {
-			return &proofv2.NamedState{Code: proofv2.StateAuthorityMissing, Detail: fmt.Sprintf("the authority %v does not exist", u)}
+			// Where the absence was judged: no receipt of the evidence proves an account absent, so the verifier and the binding (which
+			// require every listed authority, disabled or not, to be a proven book) cannot carry it. A DISABLED authority that does not
+			// exist is allowed by the executor, so a 2.0 capture notes it and goes on; the fact is kept (Capture.Absent) and a 2.1 build
+			// is refused by it. An enabled one stops the capture, as before.
+			var am *AccountMissingError
+			ns := &proofv2.NamedState{Code: proofv2.StateAuthorityMissing}
+			if errors.As(err, &am) {
+				ns.Partition, ns.Block = am.Partition, am.Block
+			}
+			if disabled {
+				ns.Detail = fmt.Sprintf("the disabled authority %v does not exist at the capture block", u)
+				e.b.notes = append(e.b.notes, ns)
+				e.absent = append(e.absent, ns)
+				return nil
+			}
+			ns.Detail = fmt.Sprintf("the authority %v does not exist", u)
+			return ns
 		}
 		return fmt.Errorf("key book %v: %w", u, err)
 	}

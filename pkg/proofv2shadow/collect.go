@@ -59,6 +59,12 @@ type Capture struct {
 	Votes      []proofv2.Vote              `json:"votes,omitempty"` // the counted votes, without their receipts (added when the evidence is built)
 	Notes      []string                    `json:"notes,omitempty"` // named states that did not stop the capture
 
+	// Absent are the authorities the principal lists (or a vote names) that do not exist at the block they were read at, each with the
+	// partition and block the absence was judged at (g1_authority_missing). The executor allows a disabled one, so a 2.0 document is
+	// built exactly as before; no receipt proves an account absent, so evidence 2.1 - whose verifier and binding require every listed
+	// authority to be a proven book - is refused by name from them (Assembly) instead of failing later at the binding (RB9-C2-F1).
+	Absent []proofv2.NamedState `json:"absentAuthorities,omitempty"`
+
 	// Transaction is the governed transaction (binary, hex) and Sequenced maps each sequenced vote's message to the hash of the
 	// SequencedMessage its source partition recorded in its synthetic ledger: what the timeline members of evidence 2.1 are built from
 	// (RB9 Phase C1b-2). A capture without a Transaction is a capture made before them; its votes cannot be re-evaluated.
@@ -431,7 +437,7 @@ func (c *Collector) collect(ctx context.Context, st *runState, account, tx strin
 		}
 		if err != nil {
 			if isMissing(err) {
-				return nil, fmt.Errorf("%w: %v", ErrAccountMissing, err)
+				return nil, &AccountMissingError{Partition: p, Block: bd.block, Cause: err}
 			}
 			return nil, err
 		}
@@ -579,6 +585,13 @@ func (c *Collector) collect(ctx context.Context, st *runState, account, tx strin
 	}
 	for _, n := range cl.Notes {
 		out.Notes = append(out.Notes, n.Error())
+	}
+	for _, n := range cl.Absent {
+		out.Absent = append(out.Absent, *n)
+	}
+	// A capture with pages on other partitions is a 2.1 document whatever the rules in force: the absence is its refusal now.
+	if len(out.Absent) > 0 && out.HasForeignPages() {
+		softErr = firstState(softErr, &out.Absent[0])
 	}
 	// The evidence travels in one consensus transaction: a closure whose pages and votes cannot fit the budget is a named state, after the
 	// capture is kept (proofv2 xbudget.go).
@@ -912,6 +925,10 @@ func (cp *Capture) HasForeignPages() bool {
 // Assembly converts a capture into the input of proofv2.Builder.Build21: every page with its partition, roles and history, the state
 // root of each partition, the anchors of the partitions other than the transaction's, and the votes and transaction the timeline needs.
 func (cp *Capture) Assembly(ctx context.Context, log proofv2.AnchorLog, src proofv2.ChainSource) (*proofv2.Assembly, error) {
+	if len(cp.Absent) > 0 {
+		n := cp.Absent[0]
+		return nil, &n
+	}
 	a := &proofv2.Assembly{Roots: map[string][32]byte{}, Votes: cp.Votes, Sequenced: cp.Sequenced, Transaction: cp.Transaction, Source: src}
 	for i := range cp.Pages {
 		p := cp.Pages[i].PageState
