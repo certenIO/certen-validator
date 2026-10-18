@@ -48,3 +48,25 @@ func TestRB8F_ProofCycleCreatesTheMissingLifecycleRowInPostgres(t *testing.T) {
 		t.Fatalf("a second ensure created=%v err=%v", created, err)
 	}
 }
+
+// RB8-G (verifier defect 1) against the real repository: a request that carries only the Accumulate BLOCK hash
+// (UnifiedProofCycleRequest.AccumulateHash) creates no row; the refusal is the not-found it started from.
+func TestRB8G_ABlockHashCreatesNoLifecycleRowInPostgres(t *testing.T) {
+	db := openMigratedTestDB(t, "RB8-G")
+	ctx := context.Background()
+	o := s1Orchestrator(t, db)
+
+	const intentID = "rb8g-block-hash-only-1c152f20"
+	t.Cleanup(func() { db.Exec(`DELETE FROM intent_lifecycle WHERE intent_id = $1`, intentID) })
+	req := cycleRequest(intentID)
+	req.AccumulateTxHash = ""
+	req.AccumulateHash = "e0d1c2b3a4f5968778695a4b3c2d1e0f00112233445566778899aabbccddeeff"
+
+	if err := o.updateLifecycleInProcessFor(ctx, req, "cycle-rb8g"); err == nil {
+		t.Fatal("a proof cycle naming only a block hash was given a lifecycle row")
+	}
+	var n int
+	if err := db.QueryRow(`SELECT count(*) FROM intent_lifecycle WHERE intent_id = $1`, intentID).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("rows for the intent: %d (err %v); the block hash was used as its transaction hash", n, err)
+	}
+}

@@ -114,6 +114,22 @@ func TestAProofCycleWithoutATransactionDoesNotInventARow(t *testing.T) {
 	}
 }
 
+// RB8-G (verifier defect 1): AccumulateHash of the anchor request is the Accumulate BLOCK hash, not a transaction hash.
+// A request that names only a block hash names no Accumulate transaction: its row is not created from the block hash.
+func TestABlockHashIsNotATransactionHashForTheCreatedRow(t *testing.T) {
+	f := &fakeLifecycle{rows: map[string]string{}}
+	req := cycleRequest("only-a-block-hash")
+	req.AccumulateTxHash = ""
+	req.AccumulateHash = "e0d1c2b3a4f5968778695a4b3c2d1e0f00112233445566778899aabbccddeeff" // the block hash
+	err := ensureLifecycleInProcess(context.Background(), f, req, "c")
+	if err == nil || !errors.Is(err, database.ErrIntentLifecycleNotFound) || !strings.Contains(err.Error(), "names no Accumulate transaction") {
+		t.Fatalf("a request with only a block hash was not refused for naming no transaction: %v", err)
+	}
+	if _, ok := f.rows[req.IntentID]; ok {
+		t.Fatalf("a row was created from the block hash: %+v", f.created[req.IntentID])
+	}
+}
+
 // Any other failure of the move is returned as it always was; it is not "fixed" by creating rows.
 func TestOtherLifecycleFailuresAreStillReturned(t *testing.T) {
 	boom := errors.New("pq: the database is shutting down")

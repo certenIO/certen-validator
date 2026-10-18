@@ -685,9 +685,9 @@ type lifecycleStarter interface {
 
 // ensureLifecycleInProcess moves the intent to in_process. When the intent has no lifecycle row - discovery's write
 // failed or is still queued (RB8-F, defect D4: a settled intent's proof cycle died "intent lifecycle not found" and it
-// never got a proof) - the row is created from the request's own data, idempotently, and the move retried once. This
-// is not a weaker answer: it is the row discovery would have written, with what the request does not know left
-// unknown (NULL), and a second writer of the same row is a no-op.
+// never got a proof) - the row is created from the request's own data, idempotently, and the move retried once. What the
+// request does not know is left unknown (NULL, single-leg shape), and discovery's own write for the same intent - queued or
+// retried, it may land after this one - FILLS exactly those unknowns and nothing else (RB8-G, UpsertOnDiscovery*).
 func ensureLifecycleInProcess(ctx context.Context, store lifecycleStarter, req *UnifiedProofCycleRequest, cycleID string) error {
 	intentID := req.IntentID
 	move := func() error {
@@ -700,10 +700,10 @@ func ensureLifecycleInProcess(ctx context.Context, store lifecycleStarter, req *
 	if !errors.Is(err, database.ErrIntentLifecycleNotFound) {
 		return fmt.Errorf("lifecycle: mark %s in_process: %w", intentID, err)
 	}
+	// The Accumulate TRANSACTION hash and nothing else: the request's AccumulateHash is the Accumulate BLOCK hash, which is
+	// not a transaction hash and is never stood in for one (RB8-G). A request that names no transaction creates no row;
+	// EnsureOnProofCycle refuses it, and the cycle fails with the not-found it started from.
 	txHash := req.AccumulateTxHash
-	if txHash == "" {
-		txHash = req.AccumulateHash
-	}
 	userID := ""
 	if req.UserID != nil {
 		userID = *req.UserID
