@@ -6,7 +6,8 @@
 //
 //	DISAGREEMENTS=<n> VERIFICATION_FAILURES=<n> NOT_RUN=<n>
 //
-// It exits 0 only when all three are zero, 1 on any disagreement or verification failure, 3 when there are none but some decision was not run.
+// It exits 0 only when all three are zero and something was compared, 1 on any disagreement or verification failure, 3 when there are
+// none but some decision was not run, 4 when nothing was compared at all (an empty window is not a zero-disagreement result), 2 on a usage error.
 //
 // A DISAGREEMENT is a difference between what v1 established and what the 2.1 document proves: a page whose authority-deciding fields differ
 // (CrossCheckPages), a page v1 evaluated that the document does not prove, a vote v1 recorded that the document does not carry (or the
@@ -321,8 +322,23 @@ func compareOne(ctx context.Context, path string, incRep *proof.IncarnationRepor
 	}
 
 	// ---- vote by vote
+	r.Disagree = append(r.Disagree, compareVotes(av, ev21.Votes)...)
+	// the decisions must agree
+	if strings.HasPrefix(r.V14, "G1 satisfied") && !strings.HasPrefix(r.V15, "verified and bound") {
+		r.Disagree = append(r.Disagree, "v14 accepts the intent, v15 does not: "+r.V15)
+	}
+	if !strings.HasPrefix(r.V14, "G1 satisfied") && strings.HasPrefix(r.V15, "verified and bound") {
+		r.Disagree = append(r.Disagree, "v15 accepts an intent v14 does not satisfy")
+	}
+	return r
+}
+
+// compareVotes sets the votes v1 recorded beside the votes the 2.1 document carries: a vote v1 recorded that the document lacks, one that
+// differs, one decided by a different page, and a document vote v1 did not record are each a disagreement.
+func compareVotes(av *govvote.AccountVote, votes []proofv2.Vote) []string {
+	var out []string
 	v2 := map[string]proofv2.Vote{}
-	for _, v := range ev21.Votes {
+	for _, v := range votes {
 		v2[govvote.CanonicalAccSpelling(v.Authority)] = v
 	}
 	seen := map[string]bool{}
@@ -336,11 +352,11 @@ func compareOne(ctx context.Context, path string, incRep *proof.IncarnationRepor
 			v, ok := v2[k]
 			switch {
 			case !ok:
-				r.Disagree = append(r.Disagree, fmt.Sprintf("%s: v1 recorded a %s vote by %s, the document carries no vote for it", a.Authority, a.Vote.Vote, a.Vote.By))
+				out = append(out, fmt.Sprintf("%s: v1 recorded a %s vote by %s, the document carries no vote for it", a.Authority, a.Vote.Vote, a.Vote.By))
 			case !strings.EqualFold(v.Vote, a.Vote.Vote):
-				r.Disagree = append(r.Disagree, fmt.Sprintf("%s: v1 %s, document %s", a.Authority, a.Vote.Vote, v.Vote))
+				out = append(out, fmt.Sprintf("%s: v1 %s, document %s", a.Authority, a.Vote.Vote, v.Vote))
 			case a.Vote.By != "" && !strings.EqualFold(govvote.CanonicalAccSpelling(v.Origin), govvote.CanonicalAccSpelling(a.Vote.By)):
-				r.Disagree = append(r.Disagree, fmt.Sprintf("%s: v1 decided by page %s, the document by %s", a.Authority, a.Vote.By, v.Origin))
+				out = append(out, fmt.Sprintf("%s: v1 decided by page %s, the document by %s", a.Authority, a.Vote.By, v.Origin))
 			}
 		}
 	}
@@ -352,16 +368,9 @@ func compareOne(ctx context.Context, path string, incRep *proof.IncarnationRepor
 	}
 	sort.Strings(extra)
 	for _, k := range extra {
-		r.Disagree = append(r.Disagree, fmt.Sprintf("%s: the document carries a vote that v1 did not record", k))
+		out = append(out, fmt.Sprintf("%s: the document carries a vote that v1 did not record", k))
 	}
-	// the decisions must agree
-	if strings.HasPrefix(r.V14, "G1 satisfied") && !strings.HasPrefix(r.V15, "verified and bound") {
-		r.Disagree = append(r.Disagree, "v14 accepts the intent, v15 does not: "+r.V15)
-	}
-	if !strings.HasPrefix(r.V14, "G1 satisfied") && strings.HasPrefix(r.V15, "verified and bound") {
-		r.Disagree = append(r.Disagree, "v15 accepts an intent v14 does not satisfy")
-	}
-	return r
+	return out
 }
 
 func partitionsOf(rep *proofv2.Report) string {

@@ -170,7 +170,7 @@ func g1LiveEvidence(t *testing.T, f *g1LiveFixture) *proofv2.Evidence {
 var g1LiveActivation = &ledger.G1ActivationRecord{Version: 1, Height: 100, ID: "g1-activation:rb9-e-live"}
 
 // Every live case: a certificate over its evidence 2.1 is built and verified with the real verifier, binding and govRoot v4; it survives the
-// block's JSON; it is refused as not-in-force before the activation; and the 2.0 form of the same intent is refused after it.
+// block's JSON; it is refused as not-in-force before the activation; and a certificate carrying no proof v2 at all cannot be built on a chain that requires v3. (That a 2.0 document is refused once the activation is in force, ErrIntentProofV21Missing, is proved on real documents in g1_gate_test.go and g1_real21_test.go.)
 func TestG1LiveEvidence21IsCertifiedAndVerifiedThroughTheAppWithTheRealVerifier(t *testing.T) {
 	for _, dir := range g1LiveDirs {
 		m := loadG1LiveManifest(t, dir)
@@ -196,6 +196,11 @@ func TestG1LiveEvidence21IsCertifiedAndVerifiedThroughTheAppWithTheRealVerifier(
 				}
 				if len(got) != len(c.Partitions) {
 					t.Fatalf("the document proves pages on %v, the manifest says %v", got, c.Partitions)
+				}
+				for _, want := range c.Partitions {
+					if !parts[strings.ToLower(want)] {
+						t.Fatalf("the manifest names partition %s, the document proves pages on %v", want, got)
+					}
 				}
 				if len(ev.Pages) != c.Pages {
 					t.Fatalf("the document proves %d pages, the manifest says %d", len(ev.Pages), c.Pages)
@@ -275,7 +280,7 @@ func TestG1LiveEvidence21RefusesWhatTheLiveFactsDoNotSupport(t *testing.T) {
 			}
 		})
 	}
-	// a 2.0 certificate once the activation is in force
+	// a certificate with no proof v2 evidence on a chain that requires v3
 	vb := g1LiveBlock(t, f, "validator-1")
 	if err := BuildIntentCertificate(vb, intentChain, reg, rf.keys[0], f.KeyPage, f.KeyBook, f.record(t), f.VoteEvidence, f.ChainedProof,
 		spine, nil, nil); err == nil {

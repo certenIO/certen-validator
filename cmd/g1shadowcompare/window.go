@@ -139,7 +139,8 @@ func runWindow(ctx context.Context, dsn, since, until, fixturesDir string, incRe
 				printResult(res)
 				dis, fail, notRun, pages = dis+len(res.Disagree), fail+len(res.Failures), notRun+len(res.NotRun), pages+res.Pages
 				compared++
-				if len(res.Disagree)+len(res.Failures) == 0 {
+				// agreement means both decisions ran and none differed: a decision that was not run is not agreement
+				if agrees(len(res.NotRun) == 0, len(res.Disagree), len(res.Failures)) {
 					agree++
 				}
 				continue
@@ -177,10 +178,16 @@ func runWindow(ctx context.Context, dsn, since, until, fixturesDir string, incRe
 				return ""
 			}(), nPages)
 		fmt.Println(line)
+		v15Ran := false
 		if f, ok := byTx[strings.ToLower(r.Tx)]; ok {
 			res := compareOne(ctx, f, env.incRep)
 			fmt.Printf("   v15: %s\n", res.V15)
 			diffs, fails = append(diffs, res.Disagree...), append(fails, res.Failures...)
+			for _, d := range res.NotRun {
+				fmt.Println("   NOT RUN:", d)
+			}
+			notRun += len(res.NotRun)
+			v15Ran = len(res.NotRun) == 0
 		} else {
 			fmt.Println("   v15: NOT RUN{g1_historical_unavailable}: no fixture of this transaction; a 2.1 document needs the partitions' pages inside their retention")
 			notRun++
@@ -192,7 +199,8 @@ func runWindow(ctx context.Context, dsn, since, until, fixturesDir string, incRe
 			fmt.Println("   VERIFICATION FAILURE:", d)
 		}
 		dis, fail, pages = dis+len(diffs), fail+len(fails), pages+nPages
-		if len(diffs)+len(fails) == 0 {
+		// an intent whose v15 decision was NOT RUN is not agreement (the NOT_RUN count carries it)
+		if agrees(v15Ran, len(diffs), len(fails)) {
 			agree++
 		}
 	}
@@ -200,16 +208,38 @@ func runWindow(ctx context.Context, dsn, since, until, fixturesDir string, incRe
 	for _, n := range notComparable {
 		fmt.Println("NOT COMPARABLE:", n)
 	}
-	fmt.Printf("\nwindow [%s, %s): %d intents with a capture, %d compared (%d page comparisons, %d with no disagreement or failure), %d not comparable\n",
+	fmt.Printf("\nwindow [%s, %s): %d intents with a capture, %d compared (%d page comparisons, %d with both decisions run and no disagreement or failure), %d not comparable\n",
 		since, until, len(rows), compared, pages, agree, len(notComparable))
-	fmt.Printf("DISAGREEMENTS=%d VERIFICATION_FAILURES=%d NOT_RUN=%d\n", dis, fail, notRun)
+	fmt.Printf("DISAGREEMENTS=%d VERIFICATION_FAILURES=%d NOT_RUN=%d COMPARED=%d\n", dis, fail, notRun, compared)
+	code := windowExit(len(rows), compared, dis, fail, notRun, len(notComparable))
+	if code == exitNothingCompared {
+		fmt.Println("NOTHING COMPARED: an empty window, or one in which no intent could be compared, says nothing about disagreements. It is not a zero-disagreement result.")
+	}
+	return code, nil
+}
+
+// agrees is whether an intent counts as agreement: both decisions ran and nothing differed or failed. A decision that was not run is
+// never agreement.
+func agrees(bothRan bool, disagreements, failures int) bool {
+	return bothRan && disagreements+failures == 0
+}
+
+// exitNothingCompared is the exit code of a window that compared nothing (2 is the usage error, 3 the incomplete comparison).
+const exitNothingCompared = 4
+
+// windowExit is the window mode's verdict: 0 only when something was compared, nothing differed or failed and every decision ran;
+// 1 on any disagreement or verification failure; 4 when nothing was compared at all (an empty window must never pass as zero
+// disagreements); 3 when there are no disagreements but some decision was not run or some intent could not be compared.
+func windowExit(rows, compared, dis, fail, notRun, notComparable int) int {
 	switch {
 	case dis+fail > 0:
-		return 1, nil
-	case notRun+len(notComparable) > 0:
-		return 3, nil
+		return 1
+	case rows == 0 || compared == 0:
+		return exitNothingCompared
+	case notRun+notComparable > 0:
+		return 3
 	}
-	return 0, nil
+	return 0
 }
 
 type fixtureEnv struct{ incRep *proof.IncarnationReport }

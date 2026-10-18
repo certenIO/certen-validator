@@ -109,7 +109,7 @@ func (a *app) g1route(ctx context.Context, args []string) error {
 	}
 	sort.Strings(pl)
 	fmt.Printf("partitions a name can route to by the prefix rule: %v (the Directory is %s only through an override)\n", pl, protocol.Directory)
-	for _, n := range []string{"dn.acme", "acc://ACME", "certen-protocol.acme"} {
+	for _, n := range []string{"acc://dn.acme", "acc://ACME", "certen-protocol.acme"} {
 		fmt.Printf("  %-26s -> %s\n", n, routeOf(t, n))
 	}
 	if *names != "" {
