@@ -22,6 +22,8 @@ type Case struct {
 	Partition   string
 	Block       uint64
 	Unproven    []string
+	// Disclosures, for a verified document of the suite xpartition4, lists the codes the report must disclose (Report.Disclosures).
+	Disclosures []string
 	Opts        Options
 	Mutate      func(ev *proofv2.Evidence)
 }

@@ -68,7 +68,16 @@ func main() {
 	x2b := flag.String("xpartition2b", "", "write only the certified-timeline suite (evidence 2.1 with page histories and derived arrivals) into this directory")
 	x3 := flag.String("xpartition3", "", "write only the three-way partition suite (the Directory as a partition, D2a-D2c) into this directory")
 	x3b := flag.String("xpartition3b", "", "write only the roles / executor-version / budget suite (the timeline world, RB9 Phase C1b-2) into this directory")
+	x4 := flag.String("xpartition4", "", "write only the verifier-round suite (executor-override gate, committed anchor partition, sequenced production binding, authority-set semantics; RB9 verifier round VA) into this directory")
 	flag.Parse()
+	if *x4 != "" {
+		if err := writeXPartition4(*x4); err != nil {
+			fmt.Println("FAIL:", err)
+			os.Exit(1)
+		}
+		fmt.Println("wrote the verifier-round suite to", *x4)
+		return
+	}
 	if *x3b != "" {
 		if err := writeXPartition3b(*x3b); err != nil {
 			fmt.Println("FAIL:", err)

@@ -67,8 +67,16 @@ type Timeline struct {
 	// SignatureMessage of an authority signature, the SequencedMessage wrapping it (source the authority's partition, destination the
 	// transaction's, Number voteNumber) is the synthetic ledger's entry, and the production carries the message. Needs ProduceBlock.
 	BindSequenced bool
+	// PrincipalAuthorities, when set, replaces the principal's authority list (default: BankBook, enabled): a book and whether it is disabled.
+	PrincipalAuthorities []AuthSpec
 	// HoldUntil, when non-zero, makes the transaction a held one (Header.HoldUntil.MinorBlock).
 	HoldUntil uint64
+}
+
+// AuthSpec is one entry of the principal's authority list.
+type AuthSpec struct {
+	Book     string
+	Disabled bool
 }
 
 // PageEvent is one transaction on the page's main chain.

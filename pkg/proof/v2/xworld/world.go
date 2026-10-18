@@ -310,8 +310,15 @@ func build(o Options) *Built {
 	}
 	hopMsg := seed("hop message")
 	hopSig := &protocol.ED25519Signature{PublicKey: seed("hop key"), Signature: append(seed("hop sig a"), seed("hop sig b")...), Signer: mustURL(lay.page1), SignerVersion: 1, Timestamp: 1}
+	principalAuths := []protocol.AuthorityEntry{{Url: mustURL(lay.book)}}
+	if tw != nil && len(tw.t.PrincipalAuthorities) > 0 {
+		principalAuths = nil
+		for _, a := range tw.t.PrincipalAuthorities {
+			principalAuths = append(principalAuths, protocol.AuthorityEntry{Url: mustURL(a.Book), Disabled: a.Disabled})
+		}
+	}
 	principal := acct{a: &protocol.DataAccount{Url: mustURL(lay.principal),
-		AccountAuth: protocol.AccountAuth{Authorities: []protocol.AuthorityEntry{{Url: mustURL(lay.book)}}}}, sigs: [][]byte{seed("earlier signature"), voteMsg}}
+		AccountAuth: protocol.AccountAuth{Authorities: principalAuths}}, sigs: [][]byte{seed("earlier signature"), voteMsg}}
 	bvn1 := []acct{principal}
 	xRoles := map[string][]proofv2.PageRole{lay.principal: {proofv2.RolePrincipalChain}}
 	if tw != nil && tw.t.LedgerVersion != 0 {

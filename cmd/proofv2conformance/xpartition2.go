@@ -44,8 +44,10 @@ type XReport struct {
 	Unproven      []string      `json:"unproven"`
 
 	// The certified timeline (suite xpartition2b); absent from the first suite, whose reports have none.
-	AuthorizationMode string     `json:"authorizationMode,omitempty"`
-	Arrivals          []XArrival `json:"arrivals,omitempty"`
+	AuthorizationMode string `json:"authorizationMode,omitempty"`
+	// Disclosures (suite xpartition4): the codes of Report.Disclosures; absent from the earlier suites.
+	Disclosures []string   `json:"disclosures,omitempty"`
+	Arrivals    []XArrival `json:"arrivals,omitempty"`
 }
 
 // XArrival is one counted signature (or a vote's production) and the block the verifier derived for it.
@@ -146,6 +148,14 @@ func writeXSuite(out, format string, cases []xworld.Case) error {
 				return fmt.Errorf("%s: the Go verifier refused a verified case: %w", c.Name, verr)
 			}
 			xc.Report = xreport(rep)
+			if format == XManifestFormat4 {
+				for _, d := range rep.Disclosures {
+					xc.Report.Disclosures = append(xc.Report.Disclosures, d.Code)
+				}
+				if fmt.Sprint(xc.Report.Disclosures) != fmt.Sprint(c.Disclosures) && (len(xc.Report.Disclosures)+len(c.Disclosures) > 0) {
+					return fmt.Errorf("%s: disclosures %v, the case says %v", c.Name, xc.Report.Disclosures, c.Disclosures)
+				}
+			}
 			if fmt.Sprint(xc.Report.Unproven) != fmt.Sprint(c.Unproven) {
 				return fmt.Errorf("%s: unproven %v, the case says %v", c.Name, xc.Report.Unproven, c.Unproven)
 			}
