@@ -184,11 +184,11 @@ func anchorSetRehearsal(t *testing.T, spine bool) {
 		if err != nil || st.ExecutionRulesVersion != wantStamp {
 			t.Fatalf("%s: before the upgrade the state is stamped (%+v, %v), want v%d", n.name, st, err, wantStamp)
 		}
-		at, err := ledger.NewLedgerStore(n.kv).KindsCheckedThrough(executionRulesV14, CommittedHistoryCheckVersion)
+		at, err := ledger.NewLedgerStore(n.kv).KindsCheckedThrough(CurrentExecutionRulesVersion, CommittedHistoryCheckVersion)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := n.kv.Set([]byte(fmt.Sprintf("abci:kinds_checked_through:v14:checks%d", CommittedHistoryCheckVersion)), nil); err != nil {
+		if err := n.kv.Set([]byte(fmt.Sprintf("abci:kinds_checked_through:v%d:checks%d", CurrentExecutionRulesVersion, CommittedHistoryCheckVersion)), nil); err != nil {
 			t.Fatal(err)
 		}
 		v13 := make([]byte, 8)
@@ -208,7 +208,7 @@ func anchorSetRehearsal(t *testing.T, spine bool) {
 			results: sm.NewStore(n.dbs["state"], sm.StoreOptions{})}); err != nil {
 			t.Fatalf("%s: the v14 boot history check refused the v13 chain: %v", n.name, err)
 		}
-		if through, err := app.ledgerStore.KindsCheckedThrough(executionRulesV14, CommittedHistoryCheckVersion); err != nil || through != at {
+		if through, err := app.ledgerStore.KindsCheckedThrough(CurrentExecutionRulesVersion, CommittedHistoryCheckVersion); err != nil || through != at {
 			t.Fatalf("%s: the boot check covered heights through %d (%v), want %d", n.name, through, err, at)
 		}
 	}
@@ -228,8 +228,8 @@ func anchorSetRehearsal(t *testing.T, spine bool) {
 	everyNode("the upgraded fleet to commit", restartedAt+2)
 	for _, n := range nodes {
 		info, err := n.client.ABCIInfo(context.Background())
-		if err != nil || info.Response.AppVersion != executionRulesV14 {
-			t.Fatalf("%s: app version (%+v, %v), want 14", n.name, info, err)
+		if err != nil || info.Response.AppVersion != CurrentExecutionRulesVersion {
+			t.Fatalf("%s: app version (%+v, %v), want %d", n.name, info, err, CurrentExecutionRulesVersion)
 		}
 		if st, _ := ledger.NewLedgerStore(n.kv).LoadABCIState(); st.ExecutionRulesVersion != wantStamp {
 			t.Fatalf("%s: with no anchor set the state is stamped v%d, want v%d (a rollback stays open)", n.name, st.ExecutionRulesVersion, wantStamp)
@@ -404,7 +404,7 @@ func anchorSetRehearsal(t *testing.T, spine bool) {
 	var first string
 	for i, n := range nodes {
 		info, err := n.client.ABCIInfo(context.Background())
-		if err != nil || info.Response.AppVersion != executionRulesV14 {
+		if err != nil || info.Response.AppVersion != CurrentExecutionRulesVersion {
 			t.Fatalf("%s: app version (%+v, %v)", n.name, info, err)
 		}
 		if st, _ := ledger.NewLedgerStore(n.kv).LoadABCIState(); st.ExecutionRulesVersion != executionRulesV14 {
