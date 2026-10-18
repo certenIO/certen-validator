@@ -71,7 +71,16 @@ func main() {
 	x4 := flag.String("xpartition4", "", "write only the verifier-round suite (executor-override gate, committed anchor partition, sequenced production binding, authority-set semantics; RB9 verifier round VA) into this directory")
 	x5 := flag.String("xpartition5", "", "write only the UpdateAccountAuth suite (operations the verifier models and refuses by name; RB9-K, verifier round VR) into this directory")
 	rb1 := flag.String("robust1", "", "write only the robustness suite (crafted documents refused by name, never a panic; RB9-L) into this directory")
+	c1 := flag.String("certify1", "", "write only the anchored-certify suite (evidence 2.1 links; RB9-F5) into this directory; names.json must exist there")
 	flag.Parse()
+	if *c1 != "" {
+		if err := writeCertify1(*c1); err != nil {
+			fmt.Println("FAIL:", err)
+			os.Exit(1)
+		}
+		fmt.Println("wrote the anchored-certify suite to", *c1)
+		return
+	}
 	if *rb1 != "" {
 		if err := writeRobust1(*rb1); err != nil {
 			fmt.Println("FAIL:", err)

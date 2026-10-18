@@ -82,6 +82,10 @@ type PortableEvidence struct {
 	Votes   []PortableVote            `json:"votes,omitempty"`
 	// Transaction is the governed transaction, binary, hex (see Evidence.Transaction).
 	Transaction string `json:"transaction,omitempty"`
+	// Links (evidence 2.1 only, RB9-F5): the merkle.Receipt of each anchored minor-root item as Accumulate's JSON, certify first and then the
+	// set check's hops. It is held undecoded: a document that claims 2.0 never reads the member, whatever its JSON type, exactly as before it
+	// existed, and only a document that claims 2.1 decodes it (Import).
+	Links json.RawMessage `json:"links,omitempty"`
 
 	Check PortableCheck `json:"check"`
 }
@@ -243,6 +247,17 @@ func ExportDocument(ev *Evidence, in proof.IncarnationInputs, pin [32]byte) (*Po
 			return nil, err
 		}
 		e.Certify = append(e.Certify, j)
+	}
+	if len(ev.Links) > 0 {
+		ls := make([]json.RawMessage, len(ev.Links))
+		for i, h := range ev.Links {
+			if ls[i], err = receiptJSON(h); err != nil {
+				return nil, fmt.Errorf("link %d: %w", i, err)
+			}
+		}
+		if e.Links, err = json.Marshal(ls); err != nil {
+			return nil, err
+		}
 	}
 	raw, err := hex.DecodeString(ev.Anchor.Message)
 	if err != nil {
@@ -559,6 +574,21 @@ func importPortable(p *Portable, section *string) (*Evidence, *Archive, proof.In
 			return fail(err)
 		}
 		ev.Certify = append(ev.Certify, h)
+	}
+	if e.Version == Version21 && len(e.Links) > 0 {
+		*section = "links"
+		var ls []json.RawMessage
+		if err := json.Unmarshal(e.Links, &ls); err != nil {
+			return fail(fmt.Errorf("links: %w", err))
+		}
+		for i, j := range ls {
+			*section = fmt.Sprintf("link %d", i)
+			h, err := receiptHex(j)
+			if err != nil {
+				return fail(err)
+			}
+			ev.Links = append(ev.Links, h)
+		}
 	}
 	*section = "anchor message"
 	seq := new(messaging.SequencedMessage)

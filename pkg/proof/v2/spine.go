@@ -13,7 +13,9 @@ package proofv2
 
 import (
 	"bytes"
+	"encoding/hex"
 	"reflect"
+	"strconv"
 	"strings"
 
 	"gitlab.com/accumulatenetwork/accumulate/pkg/api/v3"
@@ -56,6 +58,10 @@ type Spine struct {
 	// priorNetworkUpdates counts the writes to the network definition applied before this walk started, when it was
 	// restored from a checkpoint (RestoreSpine) rather than walked from genesis.
 	priorNetworkUpdates uint64
+
+	// refuseReplay, set by the evidence 2.1 verifier on the spines it walks, makes a record that applies an update the walk already
+	// applied (the same transaction hash) a refusal, certify_update_replayed. A 2.0 spine never sets it, so 2.0 verdicts do not move.
+	refuseReplay bool
 }
 
 // NetworkUpdates is the number of writes to acc://dn.acme/network the spine has applied since genesis: what the network
@@ -168,9 +174,81 @@ func (s *Spine) AdvanceEpoch(r *api.MinorRootRecord) error {
 
 	err = s.verifyAndCommit(body, r.Anchor, r.Signatures, r.Updates)
 	if err != nil {
+		if cs, ok := err.(*CertifyState); ok {
+			return cs
+		}
 		return errors.UnknownError.WithFormat("block %d: %w", body.MinorBlockIndex, err)
 	}
 	return nil
+}
+
+// AdvanceAnchored verifies an anchored minor-root record (evidence 2.1): a record without a root proof, whose continuity with the
+// previously verified root chain anchor is the O(log n) link instead of the walk of every root chain entry in between. The record's
+// anchor must be a Directory self-anchor of a later minor block; the link must start at the verified root chain anchor, end at the
+// anchor's own, and validate; the updates are applied and the quorum checked exactly as AdvanceEpoch does, and (on a spine the 2.1
+// verifier walks) an update the walk already applied is refused. The refusals are *CertifyState with index 0: the caller, who knows
+// the link's ordinal, renames the index (reindexCertifyState).
+func (s *Spine) AdvanceAnchored(r *api.MinorRootRecord, link *merkle.Receipt) error {
+	if r == nil || r.Anchor == nil {
+		return errors.BadRequest.With("incomplete minor root record")
+	}
+	if r.RootProof != nil {
+		return errors.BadRequest.With("an anchored record carries no root proof")
+	}
+	body, err := checkDirectorySelfAnchor(r.Anchor)
+	if err != nil {
+		return err
+	}
+	if body.MinorBlockIndex <= s.LastMinorBlock {
+		return errors.Conflict.WithFormat("anchor for minor block %d does not advance past %d", body.MinorBlockIndex, s.LastMinorBlock)
+	}
+	if link == nil {
+		return certifyState(StateCertifyLinkMissing, "0")
+	}
+	if !stepsPresent(link) { // a null step, which Accumulate's Validate dereferences
+		return certifyState(StateCertifyLinkInvalid, "0")
+	}
+	if !bytes.Equal(link.Start, s.RootChainAnchor[:]) {
+		return certifyState(StateCertifyLinkStart, "0")
+	}
+	if !bytes.Equal(link.Anchor, body.RootChainAnchor[:]) {
+		return certifyState(StateCertifyLinkEnd, "0")
+	}
+	if !link.Validate(nil) {
+		return certifyState(StateCertifyLinkInvalid, "0")
+	}
+
+	err = s.verifyAndCommit(body, r.Anchor, r.Signatures, r.Updates)
+	if err != nil {
+		if cs, ok := err.(*CertifyState); ok {
+			return cs
+		}
+		return errors.UnknownError.WithFormat("block %d: %w", body.MinorBlockIndex, err)
+	}
+	return nil
+}
+
+// reindexCertifyState names the ordinal (index) a *CertifyState was judged at, for the index-carrying codes the spine produces; any other
+// error is returned as it is.
+func reindexCertifyState(err error, index int) error {
+	cs, ok := err.(*CertifyState)
+	if !ok {
+		return err
+	}
+	switch cs.Code {
+	case StateCertifyLinkMissing, StateCertifyLinkStart, StateCertifyLinkEnd, StateCertifyLinkInvalid:
+		return certifyState(cs.Code, strconv.Itoa(index))
+	}
+	return err
+}
+
+func hasUpdate(list []AppliedUpdate, h [32]byte) bool {
+	for _, a := range list {
+		if a.TxHash == h {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Spine) verifyAndCommit(body *protocol.DirectoryAnchor, anchor *messaging.SequencedMessage, sigs []protocol.KeySignature, updates []*api.NetworkUpdateProof) error {
@@ -182,6 +260,9 @@ func (s *Spine) verifyAndCommit(body *protocol.DirectoryAnchor, anchor *messagin
 			return err
 		}
 		if a != nil {
+			if s.refuseReplay && (hasUpdate(s.Applied, a.TxHash) || hasUpdate(applied, a.TxHash)) {
+				return certifyState(StateCertifyUpdateReplayed, hex.EncodeToString(a.TxHash[:]))
+			}
 			a.AnchorMinorBlock = body.MinorBlockIndex
 			applied = append(applied, *a)
 		}

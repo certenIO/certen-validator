@@ -133,7 +133,7 @@ func TestEveryEvidenceFieldIsClassifiedForThe20View(t *testing.T) {
 		fields       []string
 		kept, only21 []string
 	}{
-		{"Evidence", names(proofv2.Evidence{}), names(evidenceV14{}), []string{"Anchors", "Transaction", "Votes"}},
+		{"Evidence", names(proofv2.Evidence{}), names(evidenceV14{}), []string{"Anchors", "Links", "Transaction", "Votes"}},
 		{"SetCheck", names(proofv2.SetCheck{}), names(setCheckV14{}), []string{"Routing"}},
 		{"PageState", names(proofv2.PageState{}), names(pageStateV14{}), []string{"History", "Partition", "Roles"}},
 	} {

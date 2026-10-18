@@ -68,6 +68,9 @@ type Options struct {
 	// partition, a BlockValidatorAnchor for the Directory): proven into the certified root like any other, refused only by the
 	// per-partition-kind check.
 	SwapAnchorKind int
+	// Chain shapes the minor-root items between the last major block and the certified anchor (RB9-F5, chain.go): continuous or
+	// anchored (with a link). Nil: the one continuous item every earlier suite has.
+	Chain *Chain
 }
 
 // Built is a built world.
@@ -297,6 +300,13 @@ func build(o Options) *Built {
 	a1 := directoryAnchor(100, a32(r1), a32(seed("state 1")))
 	m1 := &api.MajorHeaderRecord{Index: 1, Entry: &protocol.IndexEntry{BlockIndex: 1}, Anchor: a1, Signatures: signAnchor(a1, v[0], v[1], v[2])}
 
+	// The certify chain (RB9-F5): base is the root the closing item starts from. Without Options.Chain it is the major block's root, as always.
+	base := r1
+	var chainRecs, chainLinks []string
+	if o.Chain != nil {
+		chainRecs, chainLinks, base = o.Chain.build(r1, must(genGlob.MarshalBinary()), v)
+	}
+
 	var tw *timelineWorld
 	if o.Timeline != nil {
 		tw = newTimelineWorld(*o.Timeline)
@@ -449,19 +459,19 @@ func build(o Options) *Built {
 	q3 := h2(anchors["d"].rootChain, anchors["d"].tx)
 	q12 := h2(q1, q2)
 	q := h2(q12, q3)
-	certRoot := h2(r1, q)
+	certRoot := h2(base, q)
 	anchorReceipt := func(id string) *merkle.Receipt {
 		a := anchors[id]
 		switch id {
 		case "x":
-			return rcpt(a.tx, step{false, a.rootChain}, step{true, q2}, step{true, q3}, step{false, r1})
+			return rcpt(a.tx, step{false, a.rootChain}, step{true, q2}, step{true, q3}, step{false, base})
 		case "a":
-			return rcpt(a.tx, step{false, a.rootChain}, step{false, q1}, step{true, q3}, step{false, r1})
+			return rcpt(a.tx, step{false, a.rootChain}, step{false, q1}, step{true, q3}, step{false, base})
 		default:
-			return rcpt(a.tx, step{false, a.rootChain}, step{false, q12}, step{false, r1})
+			return rcpt(a.tx, step{false, a.rootChain}, step{false, q12}, step{false, base})
 		}
 	}
-	txReceipt := rcpt(txHash, step{true, seed("tx sibling")}, step{true, anchors["x"].tx}, step{true, q2}, step{true, q3}, step{false, r1})
+	txReceipt := rcpt(txHash, step{true, seed("tx sibling")}, step{true, anchors["x"].tx}, step{true, q2}, step{true, q3}, step{false, base})
 
 	// The network, globals and routing accounts at the certified block, proven into one state tree.
 	netRec := must(genNet.MarshalBinary())
@@ -520,11 +530,19 @@ func build(o Options) *Built {
 	}
 	netProof.StateReceipt.Anchor, globProof.StateReceipt.Anchor, routProof.StateReceipt.Anchor = hexs(bpt), hexs(bpt), hexs(bpt)
 
-	ms := &merkle.State{Count: 1, Pending: [][]byte{r1}}
+	ms := &merkle.State{Count: 1, Pending: [][]byte{base}}
 	cert := directoryAnchor(dnBlockCert, a32(certRoot), a32(bpt))
 	certRecord := &api.MinorRootRecord{
 		Anchor: cert, Signatures: signAnchor(cert, v[0], v[1], v[2]),
-		RootProof: &merkle.ReceiptList{MerkleState: ms, Elements: [][]byte{q}, Receipt: rcpt(q, step{false, r1})},
+		RootProof: &merkle.ReceiptList{MerkleState: ms, Elements: [][]byte{q}, Receipt: rcpt(q, step{false, base})},
+	}
+	certify := []string{hexs(must(certRecord.MarshalBinary()))}
+	if o.Chain != nil {
+		fin, finLink := o.Chain.final(base, q, a32(certRoot), a32(bpt), v)
+		certify = append(chainRecs, fin)
+		if finLink != "" {
+			chainLinks = append(chainLinks, finLink)
+		}
 	}
 
 	// The vote: a member of the principal's signature chain at the transaction's block, produced on BVN2 and sequenced to BVN1;
@@ -557,7 +575,8 @@ func build(o Options) *Built {
 		Version: proofv2.Version21, Account: lay.principal, TxHash: hexs(txHash),
 		Receipt: rcptHex(txReceipt),
 		Majors:  1,
-		Certify: []string{hexs(must(certRecord.MarshalBinary()))},
+		Certify: certify,
+		Links:   chainLinks,
 		Anchor:  proofv2.PartitionAnchor{Message: hexs(must(anchors["x"].msg.MarshalBinary())), Receipt: rcptHex(anchorReceipt("x"))},
 		Anchors: map[string]proofv2.PartitionAnchor{
 			lay.a.src: {Message: hexs(must(anchors["a"].msg.MarshalBinary())), Receipt: rcptHex(anchorReceipt("a"))},
