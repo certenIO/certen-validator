@@ -227,29 +227,20 @@ func (b *Builder) buildBounded(ctx context.Context, maxMajors uint64, account, t
 	}
 	// A minor-root run is bounded, so a long range can take several; walk until the run covers the target block.
 	target := cp.Layer3.DNSelfAnchorRecordedAtMinorBlockIndex
-	var mr *api.MinorRootRecord
-	var runs []string
-	for cert.LastMinorBlock < target {
-		mr, err = b.C.MinorRootRange(ctx, api.MinorRootRangeOptions{Partition: protocol.Directory, Since: cert.LastMinorBlock, Until: target})
-		if err != nil {
-			if strings.Contains(err.Error(), "no anchor at or after") {
-				return nil, nil, fmt.Errorf("DN %d: %w", target, ErrNotYetCertified)
-			}
-			return nil, nil, fmt.Errorf("certify DN %d: %w", target, err)
-		}
-		if err := cert.AdvanceEpoch(mr); err != nil {
-			return nil, nil, certifyError("certify", err)
-		}
-		rb, err := mr.MarshalBinary()
-		if err != nil {
-			return nil, nil, err
-		}
-		runs = append(runs, hex.EncodeToString(rb))
+	anchored := x != nil // evidence 2.1 keeps only the runs that apply an update and the last, joined by links (build_anchored.go)
+	mr, runs, links, err := b.CertifyRuns(ctx, cert, target, anchored)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	// The Directory leg, asked to end at exactly the certified root: ForHeight on a chain-entry receipt is a root
-	// chain height, and the certified anchor's root covers the root chain to the end of its RootProof.
-	height := mr.RootProof.MerkleState.Count + int64(len(mr.RootProof.Elements)) - 1
+	// chain height. The height is the certified anchor's RootChainIndex, which equals the end of its root proof (V-E A9, pinned on every
+	// live fixture) and stays readable when the proof is not carried.
+	certBody, err := checkDirectorySelfAnchor(mr.Anchor)
+	if err != nil {
+		return nil, nil, err
+	}
+	height := int64(certBody.RootChainIndex)
 	q, err := b.C.Query(ctx, protocol.DnUrl().JoinPath(protocol.AnchorPool), &api.ChainQuery{
 		Name: "anchor(directory)-root", Entry: r2.Anchor, IncludeReceipt: &api.ReceiptOptions{ForHeight: uint64(height)}})
 	if err != nil {
@@ -318,7 +309,7 @@ func (b *Builder) buildBounded(ctx context.Context, maxMajors uint64, account, t
 		trimmed = append(trimmed, *t)
 	}
 
-	set, chk, err := b.buildSetCheckAt(ctx, majors, n, cert)
+	set, chk, hopLinks, err := b.buildSetCheckAt(ctx, majors, n, cert, anchored)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -333,6 +324,7 @@ func (b *Builder) buildBounded(ctx context.Context, maxMajors uint64, account, t
 		Anchor: PartitionAnchor{Message: l4.SequencedMessage, Receipt: hex.EncodeToString(arb)},
 		Pages:  trimmed,
 		Check:  *set,
+		Links:  append(links, hopLinks...),
 	}
 
 	if x != nil {
@@ -388,46 +380,58 @@ func (b *Builder) assemble21(ctx context.Context, ev *Evidence, x *Assembly, ar 
 // promptly, so its state is inside the node's retention; when it is not (a proof built later), the set is proven at
 // the newest certified block instead (buildSetCheck). Both are the same guarantee: the set proven at a certified block
 // at or after the certified one.
-func (b *Builder) buildSetCheckAt(ctx context.Context, majors []*Spine, n uint64, cert *Spine) (*SetCheck, *Spine, error) {
+func (b *Builder) buildSetCheckAt(ctx context.Context, majors []*Spine, n uint64, cert *Spine, anchored bool) (*SetCheck, *Spine, []string, error) {
 	set, err := proof.BuildValidatorSetProofAt(ctx, b.Q, b.inc, cert.LastMinorBlock, cert.StateTreeAnchor)
 	if err != nil {
 		if strings.Contains(err.Error(), "retained") {
-			return b.buildSetCheck(ctx, majors, cert.LastMinorBlock)
+			return b.buildSetCheck(ctx, majors, cert.LastMinorBlock, anchored)
 		}
-		return nil, nil, fmt.Errorf("set check: %w", err)
+		return nil, nil, nil, fmt.Errorf("set check: %w", err)
 	}
-	return &SetCheck{Majors: n, Set: *set}, cert, nil
+	return &SetCheck{Majors: n, Set: *set}, cert, nil, nil
 }
 
 // buildSetCheck walks a copy of the spine from the last major block to the newest certified block, keeping every
-// minor-root run, and proves the validator set there. The newest certified block is inside the public node's
-// retention, and its state receipt passes through the state root the anchor certifies whatever later root it ends at.
-func (b *Builder) buildSetCheck(ctx context.Context, majors []*Spine, atLeast uint64) (*SetCheck, *Spine, error) {
+// minor-root run (anchored: the runs that apply an update and the last, with their links), and proves the validator set there. The
+// newest certified block is inside the public node's retention, and its state receipt passes through the state root the anchor
+// certifies whatever later root it ends at.
+func (b *Builder) buildSetCheck(ctx context.Context, majors []*Spine, atLeast uint64, anchored bool) (*SetCheck, *Spine, []string, error) {
 	n := uint64(len(majors))
 	chk := majors[n-1].Clone()
+	startRoot := chk.RootChainAnchor
 	var hops []string
+	var served []servedRun
 	for {
 		mr, err := b.C.MinorRootRange(ctx, api.MinorRootRangeOptions{Partition: protocol.Directory, Since: chk.LastMinorBlock})
 		if err != nil {
 			break
 		}
+		applied := len(chk.Applied)
 		if err := chk.AdvanceEpoch(mr); err != nil {
-			return nil, nil, certifyError("set check", err)
+			return nil, nil, nil, certifyError("set check", err)
 		}
+		served = append(served, servedRun{rec: mr, applied: len(chk.Applied) > applied})
 		hb, err := mr.MarshalBinary()
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		hops = append(hops, hex.EncodeToString(hb))
 	}
 	if len(hops) == 0 || chk.LastMinorBlock < atLeast {
-		return nil, nil, fmt.Errorf("set check: the walk reached DN %d, not the certified DN %d", chk.LastMinorBlock, atLeast)
+		return nil, nil, nil, fmt.Errorf("set check: the walk reached DN %d, not the certified DN %d", chk.LastMinorBlock, atLeast)
+	}
+	var links []string
+	if anchored {
+		var err error
+		if hops, links, err = anchorRuns(ctx, served, startRoot, NewClientLinks(b.C)); err != nil {
+			return nil, nil, nil, err
+		}
 	}
 	set, err := proof.BuildValidatorSetProofAt(ctx, b.Q, b.inc, chk.LastMinorBlock, chk.StateTreeAnchor)
 	if err != nil {
-		return nil, nil, fmt.Errorf("set check: %w", err)
+		return nil, nil, nil, fmt.Errorf("set check: %w", err)
 	}
-	return &SetCheck{Majors: n, Hops: hops, Set: *set}, chk, nil
+	return &SetCheck{Majors: n, Hops: hops, Set: *set}, chk, links, nil
 }
 
 func toMerkle(r chained_proof.Receipt) (*merkle.Receipt, error) {
@@ -447,4 +451,43 @@ func toMerkle(r chained_proof.Receipt) (*merkle.Receipt, error) {
 		out.Entries = append(out.Entries, &merkle.ReceiptEntry{Hash: h, Right: e.Right})
 	}
 	return out, nil
+}
+
+// CertifyRuns walks cert (the spine after the last major block before target) through the Directory's minor-root runs until one covers
+// the block target, and returns them as certify members: every run continuous (anchored false: evidence 2.0), or the runs that apply an
+// update and the last, anchored, with their links (anchored true: evidence 2.1). last is the run that certifies target. cert is advanced.
+// A range the Directory does not serve is certify_range_unavailable{since,until}; a link that cannot be had is certify_link_unavailable.
+func (b *Builder) CertifyRuns(ctx context.Context, cert *Spine, target uint64, anchored bool) (last *api.MinorRootRecord, runs, links []string, err error) {
+	startRoot := cert.RootChainAnchor
+	var served []servedRun
+	for cert.LastMinorBlock < target {
+		since := cert.LastMinorBlock
+		mr, err := b.C.MinorRootRange(ctx, api.MinorRootRangeOptions{Partition: protocol.Directory, Since: since, Until: target})
+		if err != nil {
+			if strings.Contains(err.Error(), "no anchor at or after") {
+				return nil, nil, nil, fmt.Errorf("DN %d: %w", target, ErrNotYetCertified)
+			}
+			return nil, nil, nil, fmt.Errorf("certify DN %d: %w", target, rangeUnavailable(since, target, err))
+		}
+		applied := len(cert.Applied)
+		if err := cert.AdvanceEpoch(mr); err != nil {
+			return nil, nil, nil, certifyError("certify", err)
+		}
+		served = append(served, servedRun{rec: mr, applied: len(cert.Applied) > applied})
+		rb, err := mr.MarshalBinary()
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		runs = append(runs, hex.EncodeToString(rb))
+		last = mr
+	}
+	if last == nil {
+		return nil, nil, nil, fmt.Errorf("certify DN %d: the spine already stands at DN %d", target, cert.LastMinorBlock)
+	}
+	if anchored {
+		if runs, links, err = anchorRuns(ctx, served, startRoot, NewClientLinks(b.C)); err != nil {
+			return nil, nil, nil, err
+		}
+	}
+	return last, runs, links, nil
 }
