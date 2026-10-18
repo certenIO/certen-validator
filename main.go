@@ -582,6 +582,8 @@ func main() {
 	}
 	log.Println("✅ [Phase 5] Connected to PostgreSQL database")
 	healthStatus.SetDatabase("connected")
+	// Pool waits are the client-side half of a database stall (RB8-F): without them a stall is only a timeout in a log.
+	metrics.RegisterDBPool(dbClient.DB().Stats)
 
 	runner := schema.Runner{DB: dbClient.DB()}
 	migrateOnStart, err := envvar.Bool("MIGRATE_ON_START", false)
@@ -2103,6 +2105,14 @@ func startValidator(
 	}
 	intentDiscovery.SetRetryJournal(retryJournal)
 	log.Printf("✅ [DISCOVERY] pending intent retries kept at %s; resumed at start", retryJournal.Path())
+	// Lifecycle row writes that failed are kept here until they succeed and serviced by discovery's loop (RB8-F):
+	// an intent without a row has no proof cycle and no answer at the gateway.
+	lifecycleQueue, lqErr := intent.OpenFileRetryJournal(filepath.Join(nsDataDir, intent.LifecycleQueueFile))
+	if lqErr != nil {
+		return nil, nil, fmt.Errorf("intent discovery: %w", lqErr)
+	}
+	intentDiscovery.SetLifecycleQueue(lifecycleQueue)
+	log.Printf("✅ [DISCOVERY] owed lifecycle row writes kept at %s; serviced every %s", lifecycleQueue.Path(), "15s")
 
 	// This is the critical hook: IntentDiscovery calls the canonical BFT consensus method
 	// BFTValidator.ExecuteCanonicalIntentWithBFTConsensus(ctx, certenIntent, certenProof, blockHeight)

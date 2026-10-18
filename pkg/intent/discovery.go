@@ -249,6 +249,20 @@ type IntentDiscovery struct {
 	// failureWriter records an intent's terminal failure; nil is the lifecycle repository (tests replace it).
 	failureWriter lifecycleStatusWriter
 
+	// The lifecycle row of a discovered intent (lifecycle_upsert.go, RB8-F): lifecycleRows is the writer (nil is the
+	// lifecycle repository; tests replace it), lifecyclePolicy bounds one write's retries, lifecycleQueue keeps the
+	// writes that failed until they succeed, lifecycleOwed holds them in memory with their intents.
+	lifecycleRows   lifecycleRowWriter
+	lifecyclePolicy lifecycleRetryPolicy
+	lifecycleQueue  RetryJournal
+	lifecycleMu     sync.Mutex
+	lifecycleOwed   map[string]*owedLifecycle
+
+	// blockSearchTimeout bounds a block's search only; zero is defaultBlockSearchTimeout. blockProcess runs one
+	// intent of a block; nil is processIntent (tests replace it).
+	blockSearchTimeout time.Duration
+	blockProcess       func(intent *CertenIntent, blockHeight uint64) (consensus.TargetChainOutcome, error)
+
 	// unsearched keeps blocks whose search failed until they are searched (RB3-F125, unsearched_blocks.go).
 	unsearched UnsearchedBlockStore
 
@@ -453,6 +467,7 @@ func (id *IntentDiscovery) StartMonitoring() {
 	// an earlier run left unfinished (RB6-F12).
 	go id.retryWorker()
 	go id.resumeRetriesLoop()
+	go id.lifecycleQueueLoop()
 
 	// Start main monitoring loop
 	go id.monitoringLoop()
@@ -1046,12 +1061,19 @@ func (id *IntentDiscovery) advanceWatermark(height uint64) {
 
 // processBlock processes a single block looking for Certen intents using comprehensive v3 API search
 func (id *IntentDiscovery) processBlock(job *BlockProcessJob, workerID string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	// This context is for the SEARCH. It used to live to the end of the function and be reused for the lifecycle write
+	// of every intent of the block; the first intent's processing takes minutes, so every later intent's write ran on
+	// an expired context (RB8-F, production 2026-10-18). Nothing after the search borrows it.
+	searchTimeout := id.blockSearchTimeout
+	if searchTimeout <= 0 {
+		searchTimeout = defaultBlockSearchTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), searchTimeout)
 
 	foundIntents := 0
 
 	certenTransactions, err := id.client.SearchCertenTransactions(ctx, int64(job.BlockHeight))
+	cancel()
 	if err != nil {
 		return err
 	}
@@ -1072,58 +1094,11 @@ func (id *IntentDiscovery) processBlock(job *BlockProcessJob, workerID string) e
 			continue
 		}
 
-		// Intent lifecycle: record discovery as authorized (validator only sees delivered intents)
-		if id.repos != nil && id.repos.IntentLifecycle != nil {
-			targetChain := ""
-			if tc, _, tcErr := intent.GetTargetChain(); tcErr == nil {
-				targetChain = tc
-			}
-
-			// Multi-leg intents are recorded with their SHAPE — leg count, every target chain,
-			// and execution mode. UpsertOnDiscoveryMultiLeg existed to do exactly this and had
-			// no callers, so every intent went through the single-leg upsert and left
-			// leg_count at its schema default of 1 and target_chains NULL. A multi-leg intent
-			// was therefore indistinguishable from a single-leg one in the durable record,
-			// which is why every analysis of this table concluded multi-leg had never run.
-			recorded := false
-			if isMulti, miErr := intent.IsMultiLeg(); miErr == nil && isMulti {
-				legCount, lcErr := intent.GetLegCount()
-				if lcErr == nil && legCount > 0 {
-					execMode, emErr := intent.GetExecutionMode()
-					if emErr != nil {
-						execMode = "sequential" // the router's own default
-					}
-					var chains []string
-					if grouped, gErr := intent.GetLegsGroupedByChain(); gErr == nil {
-						for chainKey := range grouped {
-							chains = append(chains, chainKey)
-						}
-						sort.Strings(chains) // stable across nodes; the map order is not
-					}
-					if mlErr := id.repos.IntentLifecycle.UpsertOnDiscoveryMultiLeg(
-						ctx, intent.IntentID, intent.TransactionHash,
-						int64(job.BlockHeight), intent.BlockTime, intent.UserID, intent.ProofClass, targetChain,
-						chains, legCount, execMode,
-					); mlErr != nil {
-						id.logger.Printf("⚠️ [LIFECYCLE] Failed to upsert multi-leg lifecycle for %s: %v",
-							intent.IntentID, mlErr)
-					} else {
-						recorded = true
-					}
-				}
-			}
-
-			// Single-leg, or a multi-leg intent whose shape could not be read. Recording it as
-			// single-leg is better than not recording it: the row still carries the identifiers
-			// cost attribution and settlement join on.
-			if !recorded {
-				if lcErr := id.repos.IntentLifecycle.UpsertOnDiscovery(
-					ctx, intent.IntentID, intent.TransactionHash,
-					int64(job.BlockHeight), intent.BlockTime, intent.UserID, intent.ProofClass, targetChain,
-				); lcErr != nil {
-					id.logger.Printf("⚠️ [LIFECYCLE] Failed to upsert lifecycle for %s: %v", intent.IntentID, lcErr)
-				}
-			}
+		// Intent lifecycle: record discovery as authorized (validator only sees delivered intents). The write is
+		// retried on a context of its own per attempt and, if it still fails, owed on a queue discovery services
+		// (lifecycle_upsert.go): the row is never left to a log line.
+		if err := id.recordDiscoveryLifecycle(intent, job.BlockHeight); err != nil {
+			id.logger.Printf("🚨 [LIFECYCLE] intent %s: %v", intent.IntentID, err)
 		}
 
 		// E.4 remediation: Two-phase marking to handle processing failures
@@ -1142,7 +1117,11 @@ func (id *IntentDiscovery) processBlock(job *BlockProcessJob, workerID string) e
 		id.logger.Printf("   Intent Data: %+v", certenTx.IntentData)
 
 		// Process the intent through consensus
-		if outcome, err := id.processIntent(intent, job.BlockHeight); err != nil {
+		runIntent := id.blockProcess
+		if runIntent == nil {
+			runIntent = id.processIntent
+		}
+		if outcome, err := runIntent(intent, job.BlockHeight); err != nil {
 			id.logger.Printf("❌ Failed to process intent %s: %v", intent.IntentID, err)
 			// E.4 remediation: Phase 2 (failure) - Mark as failed (allows re-acquire on retry),
 			// unless the failure is structural and therefore final.
