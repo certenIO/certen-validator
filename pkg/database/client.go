@@ -104,6 +104,11 @@ func NewClient(cfg *config.Config, opts ...ClientOption) (*Client, error) {
 // numbers; it never stops the start (the pools and the limit are the operator's). A limit that cannot be read is said so,
 // never assumed.
 func (c *Client) reportPoolBudget(ctx context.Context) {
+	if c.config.DatabaseMaxConns <= 0 {
+		// database/sql treats 0 as no limit at all; there is no pool to budget, and saying so is the honest line.
+		c.logger.Printf("⚠️ [DB-POOL] DATABASE_MAX_CONNS is %d, which database/sql reads as no limit; the pool budget is not checked", c.config.DatabaseMaxConns)
+		return
+	}
 	var raw string
 	if err := c.db.QueryRowContext(ctx, `SHOW max_connections`).Scan(&raw); err != nil {
 		c.logger.Printf("⚠️ [DB-POOL] the server's max_connections could not be read (%v); the pool budget of %d connection(s) per validator is not checked",
