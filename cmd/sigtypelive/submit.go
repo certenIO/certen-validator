@@ -22,8 +22,9 @@ import (
 )
 
 type liveConfig struct {
-	Chain, Account, RPC, Out, Cases, Base, SSH, Verify string
-	Wait                                               time.Duration
+	Chain, RPC, Out, Cases, Base, SSH, Verify string
+	Accounts                                  map[string]string // case tag -> the CertenAccount whose governing book is that case's key book
+	Wait                                      time.Duration
 }
 
 // capture is what one case leaves in captures/<tag>/capture.json.
@@ -106,7 +107,11 @@ func (a *app) submitOne(ctx context.Context, c liveCase, l liveConfig) (*capture
 	if err != nil {
 		return nil, err
 	}
-	blobs, err := buildIntent(a.adi, c, l.Account)
+	from, err := l.accountFor(a.adi, c)
+	if err != nil {
+		return nil, err
+	}
+	blobs, err := buildIntent(a.adi, c, from)
 	if err != nil {
 		return nil, err
 	}
@@ -203,8 +208,10 @@ func (a *app) submit(ctx context.Context, l liveConfig) ([]*capture, error) {
 	if err != nil {
 		return nil, err
 	}
-	if l.Account == "" {
-		return nil, fmt.Errorf("-account is required: the CertenAccount of %s on %s (the leg's `from`)", a.adi, l.Chain)
+	for _, c := range cases { // every case needs its own account before anything is written to the network
+		if _, err := l.accountFor(a.adi, c); err != nil {
+			return nil, err
+		}
 	}
 	var out []*capture
 	for _, c := range cases {

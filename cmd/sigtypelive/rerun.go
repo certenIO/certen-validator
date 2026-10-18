@@ -3,7 +3,7 @@ package main
 // rerun: the post-deploy mode. After the RB8 deploy (all seven validators at once), every case is submitted again and
 // each must be authorised, settle, and verify offline. Nothing is assumed: each stage reads a record.
 //
-//	sigtypelive rerun -n 1 -account 0x<CertenAccount of acc://pv2-sig-1.acme on Base Sepolia> \
+//	sigtypelive rerun -n 1 -accounts captures/accounts.json  (tag -> the CertenAccount of that case's key book; see accounts.go) \
 //	    -base https://<validator API base> \
 //	    -verify 'proofverify --offline --governance --l5 --proof-id {proof}' [-ssh claude@116.202.214.38]
 //
