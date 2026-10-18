@@ -164,12 +164,25 @@ func callOut(ctx context.Context, c *ethclient.Client, to common.Address, a abi.
 }
 
 func (a *app) accounts(ctx context.Context, l liveConfig, o accountsOpts) error {
-	if l.RPC == "" {
-		return fmt.Errorf("accounts needs -rpc (the target chain's JSON-RPC URL)")
-	}
 	cases, err := l.selected()
 	if err != nil {
 		return err
+	}
+	var targets []acctTarget
+	for _, cs := range cases {
+		targets = append(targets, acctTarget{Name: cs.Name, Tag: cs.Tag, ADI: a.adi, Book: cs.authorityBook(a.adi)})
+	}
+	return accountsOf(ctx, l, o, targets)
+}
+
+// acctTarget is one CertenAccount to deploy and check: the account of ADI whose governing book is Book (a canonical book of ADI).
+type acctTarget struct{ Name, Tag, ADI, Book string }
+
+// accountsOf deploys (with -create), funds (with -fund) and checks the accounts of targets on the target chain. The accounts of the
+// signature-type run (one ADI, one book per case) and of the RB9-E scenarios (one ADI per scenario, its own `/book`) share it.
+func accountsOf(ctx context.Context, l liveConfig, o accountsOpts, targets []acctTarget) error {
+	if l.RPC == "" {
+		return fmt.Errorf("accounts needs -rpc (the target chain's JSON-RPC URL)")
 	}
 	c, err := ethclient.DialContext(ctx, l.RPC)
 	if err != nil {
@@ -215,15 +228,15 @@ func (a *app) accounts(ctx context.Context, l liveConfig, o accountsOpts) error 
 		}
 	}
 
-	salt := canonicalSalt(a.adi)
 	states := make(map[string]string)
 	var rows []accountState
-	for _, cs := range cases {
-		book := cs.authorityBook(a.adi)
-		if !isCanonicalBookOf(a.adi, book) {
-			return fmt.Errorf("%s is not a canonical key book of %s", book, a.adi)
+	for _, cs := range targets {
+		book, adi := cs.Book, cs.ADI
+		salt := canonicalSalt(adi)
+		if !isCanonicalBookOf(adi, book) {
+			return fmt.Errorf("%s is not a canonical key book of %s", book, adi)
 		}
-		r, err := callOut(ctx, c, factory, factoryABIv11, "getAddressForADI", a.adi, book, salt)
+		r, err := callOut(ctx, c, factory, factoryABIv11, "getAddressForADI", adi, book, salt)
 		if err != nil {
 			return err
 		}
@@ -239,7 +252,7 @@ func (a *app) accounts(ctx context.Context, l liveConfig, o accountsOpts) error 
 			}
 			auth.Context, auth.Value, auth.Nonce = ctx, fee, new(big.Int).SetUint64(nonce)
 			bc := bind.NewBoundContract(factory, factoryABIv11, c, c, c)
-			tx, err := bc.Transact(auth, "createAccountForADI", a.adi, book, salt)
+			tx, err := bc.Transact(auth, "createAccountForADI", adi, book, salt)
 			if err != nil {
 				return fmt.Errorf("createAccountForADI(%s): %w", book, err)
 			}
@@ -261,7 +274,7 @@ func (a *app) accounts(ctx context.Context, l liveConfig, o accountsOpts) error 
 		}
 		st := accountState{Tag: cs.Tag, Book: book, Address: addr.Hex(), Deployed: len(code) > 0}
 		if st.Deployed {
-			st.Binding = checkBinding(ctx, c, addr, a.adi, book, pinned)
+			st.Binding = checkBinding(ctx, c, addr, adi, book, pinned)
 			if o.FundWei != nil && o.FundWei.Sign() > 0 {
 				bal, _ := c.BalanceAt(ctx, addr, nil)
 				if bal.Cmp(o.FundWei) < 0 {
