@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 
@@ -22,6 +23,24 @@ import (
 // ErrNotYetCertified means the Directory has not yet emitted an anchor at or after the block the proof needs
 // certified; on a quiet network that can take minutes. Retry Build later with the same captured pages.
 var ErrNotYetCertified = errors.New("the Directory has not yet emitted an anchor certifying this block")
+
+// noSignaturesYet matches exactly the quorum failure of a minor-root record that carries NO validator signature: verifyQuorum counts
+// the distinct, verified, active Directory validators that signed and reports "quorum not met: <count> of <threshold> validator
+// signatures", and a signature that is invalid or from a non-validator is refused by its own error before the count. A count of zero
+// is therefore a record with no signature at all.
+var noSignaturesYet = regexp.MustCompile(`quorum not met: 0 of [0-9]+ validator signatures`)
+
+// certifyError is the error of advancing the walk over a freshly served minor-root record (RB9-C1b-2-B1). The Directory serves the
+// record before its validator signatures arrive, so "quorum not met: 0 of N" is a record that is not yet certified, not a refusal: it
+// is ErrNotYetCertified (the callers retry it under the bound they already use for that error), with the original text kept. A record
+// with some signatures but too few, an invalid signature or any other failure is a hard failure exactly as before. Only the BUILDER
+// maps: the verifiers (Verify, Verify21FromGenesis, VerifyFromSpine) are untouched, so no verdict on any document changes.
+func certifyError(what string, err error) error {
+	if noSignaturesYet.MatchString(err.Error()) {
+		return fmt.Errorf("%s: %w: %w", what, ErrNotYetCertified, err)
+	}
+	return fmt.Errorf("%s: %w", what, err)
+}
 
 // Builder builds v2 Accumulate evidence from a live network.
 type Builder struct {
@@ -219,7 +238,7 @@ func (b *Builder) buildBounded(ctx context.Context, maxMajors uint64, account, t
 			return nil, nil, fmt.Errorf("certify DN %d: %w", target, err)
 		}
 		if err := cert.AdvanceEpoch(mr); err != nil {
-			return nil, nil, fmt.Errorf("certify: %w", err)
+			return nil, nil, certifyError("certify", err)
 		}
 		rb, err := mr.MarshalBinary()
 		if err != nil {
@@ -393,7 +412,7 @@ func (b *Builder) buildSetCheck(ctx context.Context, majors []*Spine, atLeast ui
 			break
 		}
 		if err := chk.AdvanceEpoch(mr); err != nil {
-			return nil, nil, fmt.Errorf("set check: %w", err)
+			return nil, nil, certifyError("set check", err)
 		}
 		hb, err := mr.MarshalBinary()
 		if err != nil {
