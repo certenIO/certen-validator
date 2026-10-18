@@ -122,6 +122,59 @@ func (r *IntentLifecycleRepository) UpsertOnDiscovery(
 	return nil
 }
 
+// EnsureOnProofCycle creates the lifecycle row of an intent whose proof cycle has started without one (RB8-F, defect
+// D4: discovery's write had failed). It writes what the proof cycle's own request carries and nothing it does not:
+// the Accumulate transaction hash is required (the column is NOT NULL and a hash is never invented), the DN block
+// height is stored only when the request knows it (NULL, not 0, otherwise), and authorized_at is NULL because the
+// partition block's time is not in the request. It is idempotent (ON CONFLICT DO NOTHING) and reports whether this
+// call created the row.
+func (r *IntentLifecycleRepository) EnsureOnProofCycle(
+	ctx context.Context,
+	intentID string,
+	txHash string,
+	userID string,
+	proofClass string,
+	targetChain string,
+	blockHeight int64,
+) (bool, error) {
+	if intentID == "" {
+		return false, fmt.Errorf("ensure intent lifecycle: no intent id")
+	}
+	if txHash == "" {
+		return false, fmt.Errorf("ensure intent lifecycle: intent %s: the proof cycle names no Accumulate transaction, so its row cannot be created without inventing one", intentID)
+	}
+	now := time.Now().UTC()
+	var userIDPtr, proofClassPtr, targetChainPtr *string
+	if userID != "" {
+		userIDPtr = &userID
+	}
+	if proofClass != "" {
+		proofClassPtr = &proofClass
+	}
+	if targetChain != "" {
+		targetChainPtr = &targetChain
+	}
+	var heightPtr *int64
+	if blockHeight > 0 {
+		heightPtr = &blockHeight
+	}
+	res, err := r.client.db.ExecContext(ctx, `
+		INSERT INTO intent_lifecycle (
+			intent_id, accum_tx_hash, block_height, user_id, proof_class, target_chain,
+			status, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		ON CONFLICT (intent_id) DO NOTHING
+	`, intentID, txHash, heightPtr, userIDPtr, proofClassPtr, targetChainPtr, string(IntentLifecycleAuthorized), now, now)
+	if err != nil {
+		return false, fmt.Errorf("ensure intent lifecycle: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("ensure intent lifecycle: %w", err)
+	}
+	return n == 1, nil
+}
+
 // UpdateStatus transitions an intent to a new lifecycle status.
 // Guards against overwriting terminal states (complete, failed).
 func (r *IntentLifecycleRepository) UpdateStatus(
