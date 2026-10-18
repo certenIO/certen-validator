@@ -52,3 +52,23 @@ func TestSigningKeyPage_ATwoHopDelegationNamesEachDelegatingPage(t *testing.T) {
 		}
 	}
 }
+
+// A delegating page is a fallback for a book none of whose pages filed a vote of its own: it never displaces a page that
+// signed directly, so an intent that resolved before this change resolves to the same page.
+func TestSigningKeyPage_ADelegatingPageNeverDisplacesADirectVote(t *testing.T) {
+	body := `{"result":{"signatures":{"records":[
+	  {"account":{"type":"keyPage","url":"acc://pv2-sig-1.acme/book-a/1","version":1,"keys":[]},"signatures":{"records":[]}},
+	  {"account":{"type":"keyPage","url":"acc://pv2-sig-1.acme/book-a/2","version":1,"keys":[]},"signatures":{"records":[{"message":{"type":"signature",
+	    "txID":"acc://` + delegTx + `@pv2-sig-1.acme/data","signature":{"type":"eth","publicKey":"04ab","signer":"acc://pv2-sig-1.acme/book-a/2","signerVersion":1}}}]}},
+	  {"account":{"type":"keyPage","url":"acc://pv2-sig-1.acme/book-c/1","version":1,"keys":[]},"signatures":{"records":[{"message":{"type":"signature",
+	    "txID":"acc://` + delegTx + `@pv2-sig-1.acme/data","signature":{"type":"delegated","signature":{"type":"ed25519","publicKey":"00","signature":"00","signer":"acc://pv2-sig-1.acme/book-c/1","signerVersion":1},"delegator":"acc://pv2-sig-1.acme/book-a/1"}}}]}}
+	]}}}`
+	var q signingKeyPageQuery
+	if err := json.Unmarshal([]byte(body), &q); err != nil {
+		t.Fatal(err)
+	}
+	page, _, err := selectSigningKeyPage("acc://pv2-sig-1.acme/book-a", "", delegTx, q.Result.Signatures.Records)
+	if err != nil || page != "acc://pv2-sig-1.acme/book-a/2" {
+		t.Fatalf("got %q, %v; the page that filed its own vote must stay the signing page", page, err)
+	}
+}

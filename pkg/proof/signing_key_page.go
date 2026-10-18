@@ -242,7 +242,7 @@ func selectSigningKeyPage(
 		named string // as the network spells it, which is what is hashed into the govRoot
 		index uint64
 	}
-	var candidates []candidate
+	var candidates, viaDelegation []candidate
 	seen := map[string]bool{}
 
 	// A delegated vote is filed by the network under the DELEGATE's page (type "delegated", the delegating page in `delegator`),
@@ -315,17 +315,24 @@ func selectSigningKeyPage(
 					"not on the page at the version it signed with; not counted", page, sig.Type))
 			}
 		}
-		if from, ok := delegating[page]; ok && !signed {
-			notes = append(notes, fmt.Sprintf("%s carries a delegated vote cast from %s; its delegate's key is verified by G1, "+
-				"not by this read", page, from))
-			signed = true
-		}
 		if signed {
 			seen[page] = true
 			candidates = append(candidates, candidate{url: page, named: strings.TrimSuffix(strings.TrimSpace(set.Account.URL), "/"), index: idx})
+		} else if from, ok := delegating[page]; ok {
+			// Only when no page of the book filed a vote of its own (below): a delegating page never displaces a page that
+			// resolved before this was read.
+			viaDelegation = append(viaDelegation, candidate{url: page, named: strings.TrimSuffix(strings.TrimSpace(set.Account.URL), "/"), index: idx})
+			notes = append(notes, fmt.Sprintf("%s carries a delegated vote cast from %s; its delegate's key is verified by G1, "+
+				"not by this read", page, from))
 		}
 	}
 
+	if len(candidates) == 0 {
+		for _, c := range viaDelegation {
+			seen[c.url] = true
+		}
+		candidates = viaDelegation
+	}
 	if len(candidates) == 0 {
 		return "", notes, fmt.Errorf("no page of key book %s carries a key signature over this "+
 			"transaction; the governance proof has no signing page to name", book)
