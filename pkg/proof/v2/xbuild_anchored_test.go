@@ -310,3 +310,79 @@ func reportJSON(t *testing.T, r *proofv2.Report) string {
 	}
 	return string(b)
 }
+
+// synthLinks serves the links of the synthetic chains of a world from their continuous records: a link from a root to the root at a height
+// is the run of single elements between them. Both sequences (certify and the set check's hops) start at the same checkpoint root.
+type synthLinks struct {
+	start []byte
+	seqs  [][]*api.MinorRootRecord
+}
+
+func (s synthLinks) Link(_ context.Context, prev [32]byte, height uint64) (*merkle.Receipt, error) {
+	for _, seq := range s.seqs {
+		roots := [][]byte{s.start}
+		var heights []uint64
+		for _, r := range seq {
+			body := r.Anchor.Message.(*messaging.TransactionMessage).Transaction.Body.(*protocol.DirectoryAnchor)
+			roots = append(roots, body.RootChainAnchor[:])
+			heights = append(heights, body.RootChainIndex)
+		}
+		from, to := -1, -1
+		for i, root := range roots {
+			if string(root) == string(prev[:]) {
+				from = i
+			}
+		}
+		for i, h := range heights {
+			if h == height {
+				to = i + 1
+			}
+		}
+		if from < 0 || to <= from {
+			continue
+		}
+		link := &merkle.Receipt{Start: prev[:], Anchor: roots[to]}
+		for k := from; k < to; k++ {
+			link.Entries = append(link.Entries, &merkle.ReceiptEntry{Right: true, Hash: seq[k].RootProof.Elements[0]})
+		}
+		return link, nil
+	}
+	return nil, fmt.Errorf("no link from %x at height %d", prev, height)
+}
+
+// AnchorEvidence selects by effect, not by the updates member (V-F routing note): a run that carries only an oracle write, which the walk
+// does not apply, is dropped like a run without updates, and the set check's hops are anchored by the same rule, their links following the
+// certify links in the document.
+func TestAnchorEvidenceSelectsAppliedUpdatesAndAnchorsTheHops(t *testing.T) {
+	world := buildChain(t, &xworld.Chain{
+		Items: []xworld.ChainItem{orc(false), eff(false)}, Final: xworld.ChainItem{},
+		Hops: []xworld.ChainItem{eff(false), plain()}})
+	sp, certRecs, _ := spineAt1(t, world)
+	want, err := proofv2.Verify21FromGenesis(world.Evidence, world.Archive, world.Inputs, world.Pin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := synthLinks{start: sp.RootChainAnchor[:], seqs: [][]*api.MinorRootRecord{certRecs, decodeRuns(t, world.Evidence.Check.Hops)}}
+	anchored, err := proofv2.AnchorEvidence(context.Background(), world.Evidence, world.Archive, world.Inputs, src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(world.Evidence.Certify) != 3 || len(anchored.Certify) != 2 || len(world.Evidence.Check.Hops) != 2 || len(anchored.Check.Hops) != 2 || len(anchored.Links) != 4 {
+		t.Fatalf("certify %d -> %d (want 3 -> 2: the oracle-only run is dropped), hops %d -> %d (want 2 -> 2), %d links (want 4)",
+			len(world.Evidence.Certify), len(anchored.Certify), len(world.Evidence.Check.Hops), len(anchored.Check.Hops), len(anchored.Links))
+	}
+	got, err := proofv2.Verify21FromGenesis(anchored, world.Archive, world.Inputs, world.Pin)
+	if err != nil {
+		t.Fatalf("the anchored document does not verify: %v", err)
+	}
+	if reportJSON(t, got) != reportJSON(t, want) {
+		t.Fatalf("the reports differ:\n%+v\n%+v", got, want)
+	}
+	// the continuous input is not changed, and an anchored document is refused as input
+	if len(world.Evidence.Links) != 0 || len(world.Evidence.Certify) != 3 {
+		t.Fatal("AnchorEvidence changed its input")
+	}
+	if _, err := proofv2.AnchorEvidence(context.Background(), anchored, world.Archive, world.Inputs, src); err == nil {
+		t.Fatal("an already anchored document was anchored again")
+	}
+}
