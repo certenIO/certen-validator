@@ -39,17 +39,19 @@ import (
 //     history-check v5 - and the fleet starts again: app version 15, state still stamped v14 (a rollback stays open), the same
 //     app hash on every node. `history-check --rules 15` passes on the live chain; `g1-activate status` says the activation is
 //     not committed; blocks are decided as before (code 17 for a retired anchor, accepted for the committed ones).
-//  3. The activation, through the tool: propose (first admin), a NO-GO preflight with one approval, sign (second admin), a GO
+//  3. The activation, through the tool: propose (first admin), a NO-GO preflight with one approval, sign (second admin), a NO-GO
+//     preflight while the chain has no spine (proof v3 not required, F8), the registry and the spine through the v13 tools, a GO
 //     preflight against every node, submit - every node records it at the same height, and the state is stamped v15.
 //  4. From the next height: the activation cannot be submitted again (NO-GO by name, refused by `propose --rpc`), blocks
-//     are decided as before (an uncertified ValidatorBlock carries no proof v2, so nothing of evidence 2.1 reaches it; the
+//     are decided as before (an uncertified ValidatorBlock carries no proof v2 and is refused by the certificate rule, as under v14, so nothing of evidence 2.1 reaches it; the
 //     certificate rule itself - a 2.0 certificate refused at H+1, a 2.1 one accepted, the same blocks at H and below decided as
 //     v14 decided them - is TestAppJudgesTheCertificateByTheActivationInForceAtItsHeight and
 //     TestACertificateOverEvidence21IsAcceptedFromTheNextHeight), and `history-check --rules 15` passes with the activation
 //     found in its record.
 //  5. The whole fleet restarts: one chain, stamped v15, app version 15, every node answering the activation log identically.
 func TestRulesV15UpgradeAndG1ActivationRehearsalOnALiveNetwork(t *testing.T) {
-	f := newRotationFixture()
+	fx := newSpineFixture(t) // the rotation fixture, a BLS registry and Kermit's real genesis and major blocks (RB9-VB, F8)
+	f := fx.rotationFixture
 	var adminEnv []string
 	for _, id := range []string{"ops-1", "ops-2", "ops-3"} {
 		adminEnv = append(adminEnv, id+":"+f.policy.AdminKeys[id])
@@ -241,6 +243,39 @@ func TestRulesV15UpgradeAndG1ActivationRehearsalOnALiveNetwork(t *testing.T) {
 		t.Fatalf("preflight with one approval: %v\n%s", err, out)
 	}
 	mustRun("g1-activate", "sign", "--tx", req, "--admin-key-id", "ops-2", "--admin-secret", secret["ops-2"])
+	// F8: a fully signed activation on a chain that does not require proof v3 yet (no registry, no spine) is a NO-GO naming it.
+	if out, err := run("g1-activate", "preflight", "--tx", req, "--rpc", all); err == nil || strings.Count(out, "does not require proof v3") != size {
+		t.Fatalf("preflight on a chain with no spine: %v\n%s", err, out)
+	}
+	// The chain then requires proof v3 by the v13 procedure of TestTheSpineOnALiveNetwork: the admins commit the BLS registry under Kermit's
+	// incarnation, then the spine genesis through the tool, and the archive's major blocks extend the spine. From the registry on, a
+	// ValidatorBlock without an intent certificate is refused by the certificate rule (code 10), as v14 refuses it.
+	evidence := "../proof/testdata/incarnation/kermit.json"
+	spineReq := filepath.Join(dir, "spine-genesis.json")
+	mustRun("spine-genesis", "propose", "--chain-id", rotChain, "--evidence", evidence, "--incarnation", "0x"+kermitIncarnationHex,
+		"--admin-key-id", "ops-1", "--admin-secret", secret["ops-1"], "--out", spineReq)
+	if code, log, _ := submit(nodes[1], rotJSON(t, fx.registry(1, "ops-1", "ops-2"))); code != 0 {
+		t.Fatalf("the BLS registry: %d %s", code, log)
+	}
+	mustRun("spine-genesis", "sign", "--tx", spineReq, "--admin-key-id", "ops-2", "--admin-secret", secret["ops-2"])
+	mustRun("spine-genesis", "preflight", "--tx", spineReq, "--rpc", all)
+	if out := mustRun("spine-genesis", "submit", "--tx", spineReq, "--rpc", all); !strings.Contains(out, "ACCEPTED at height") {
+		t.Fatalf("the spine genesis: %s", out)
+	}
+	lastSpine := int64(0)
+	for i, first := 0, 1; first <= len(fx.records); i, first = i+1, first+maxSpineExtensionRecords {
+		end := min(first+maxSpineExtensionRecords-1, len(fx.records))
+		code, log, h := submit(nodes[1+i%3], fx.extend(t, first, end))
+		if code != 0 {
+			t.Fatalf("major blocks %d-%d: %d %s", first, end, code, log)
+		}
+		lastSpine = h
+	}
+	tick(nodes[0], 2)
+	everyNode("every node to commit past the spine", lastSpine+2)
+	if code, log, _ := submit(nodes[2], vbWith(committedTargets()...)); code != codeIntentCertificateRefused {
+		t.Fatalf("an uncertified block with the registry in force: %d %s", code, log)
+	}
 	mustRun("g1-activate", "preflight", "--tx", req, "--rpc", all)
 	out = mustRun("g1-activate", "submit", "--tx", req, "--rpc", all)
 	m := regexp.MustCompile(`ACCEPTED at height (\d+)`).FindStringSubmatch(out)
@@ -284,7 +319,11 @@ func TestRulesV15UpgradeAndG1ActivationRehearsalOnALiveNetwork(t *testing.T) {
 	if code, log, _ := submit(nodes[2], rotJSON(t, liveG1Activation(f, "ops-1", "ops-3"))); code != codeG1ActivationRefused {
 		t.Fatalf("the same activation again, by other admins, in a later block: %d %s", code, log)
 	}
-	decidedAsV14("the fleet after the activation (uncertified blocks)", nodes[3])
+	// Blocks are decided as before: with the registry in force an uncertified block is refused by the certificate rule exactly as v14 refuses it
+	// (the refusal does not mention evidence 2.1: nothing of it reaches a block with no certificate).
+	if code, log, _ := submit(nodes[3], vbWith(committedTargets()...)); code != codeIntentCertificateRefused || strings.Contains(log, "2.1") {
+		t.Fatalf("the fleet after the activation, an uncertified block: %d %s", code, log)
+	}
 	out = mustRun("history-check", "--rules", "15", "--rpc", rpcs[1])
 	if !strings.Contains(out, "v15 continues this chain's history exactly") || !strings.Contains(out, G1ActivationKind) {
 		t.Fatalf("history-check after the activation: %s", out)
