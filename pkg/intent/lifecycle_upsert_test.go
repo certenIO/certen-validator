@@ -137,6 +137,9 @@ func TestEveryIntentOfABlockGetsItsRowAfterAnEarlierOneRanLong(t *testing.T) {
 	rows := &rowLog{}
 	id := lifecycleDiscovery(&blockClient{txs: []*accumulate.CertenTransaction{first, second}}, rows, nil)
 	id.blockSearchTimeout = 40 * time.Millisecond
+	// The block job hands its intents to the intent workers (RB8-H); the rows are written by the block job before it does.
+	id.retries = openJournal(t, filepath.Join(t.TempDir(), "intent_retries.json"))
+	startIntentWorkers(t, id, 2)
 	id.blockProcess = func(ci *CertenIntent, _ uint64) (consensus.TargetChainOutcome, error) {
 		if ci.TransactionHash == first.Hash {
 			time.Sleep(150 * time.Millisecond) // far longer than the search context lives
