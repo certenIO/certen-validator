@@ -571,7 +571,13 @@ func (o *UnifiedOrchestrator) StartProofCycle(ctx context.Context, req *UnifiedP
 		o.mu.Lock()
 		delete(o.activeCycles, req.CycleID)
 		o.mu.Unlock()
-		return nil, err
+		cancel()
+		// A cycle that cannot be marked in_process did not start: its member's outcome is recorded like every other start
+		// failure above (RB8-F-F1). It used to return the error and record nothing, so the member had no outcome for
+		// `repair member-proof-cycle` to build on (its precondition 2) and the intent stayed unexplained.
+		result.Error = err.Error()
+		o.recordStartFailure(ctx, req, result, err)
+		return result, err
 	}
 
 	defer func() {
