@@ -25,10 +25,13 @@ import (
 func startIntentWorkers(t *testing.T, id *IntentDiscovery, n int) {
 	t.Helper()
 	id.intentCh = make(chan *intentRetryJob, intentQueueDepth)
-	for i := 0; i < n; i++ {
-		go id.intentWorker(fmt.Sprintf("test-intent-worker-%d", i+1))
-	}
-	t.Cleanup(func() { close(id.stopCh) })
+	id.startIntentWorkers(n)
+	// Stopped and WAITED FOR before the test's temp directory is removed (cleanups run last-in first, and the journal sits in
+	// that directory): a worker finishing its job wrote the journal while RemoveAll ran (V-A defect 2).
+	t.Cleanup(func() {
+		close(id.stopCh)
+		id.WaitIntentWorkers()
+	})
 }
 
 func waitUntil(t *testing.T, what string, within time.Duration, ok func() bool) {

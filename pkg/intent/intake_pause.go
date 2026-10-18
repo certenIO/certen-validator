@@ -84,13 +84,20 @@ func (id *IntentDiscovery) waitWhilePaused() bool {
 	}
 }
 
-// inProgress is the number of intents this validator is processing now.
-func (id *IntentDiscovery) inProgress() int {
+// inProgress is the number of intents this validator is processing now: a worker has started each. An intent handed off and
+// not yet started is queued (queued), not in progress - while intake is paused a worker will not start it, and the
+// maintenance procedures (docs/runbooks/bls-key-rotation.md 4.1) read zero here as "nothing is running".
+func (id *IntentDiscovery) inProgress() int { return id.countStatus(IntentStatusInProgress) }
+
+// queued is the number of intents handed to the intent workers that none has started yet (what a paused intake holds back).
+func (id *IntentDiscovery) queued() int { return id.countStatus(IntentStatusQueued) }
+
+func (id *IntentDiscovery) countStatus(want IntentStatus) int {
 	id.mu.Lock()
 	defer id.mu.Unlock()
 	n := 0
 	for _, s := range id.intentStatus {
-		if s == IntentStatusInProgress {
+		if s == want {
 			n++
 		}
 	}

@@ -107,6 +107,7 @@ type HealthStatus struct {
 	DiscoveryUnsearched          int   `json:"discovery_unsearched_blocks"`
 	DiscoveryUnsearchedOldestAge int64 `json:"discovery_unsearched_oldest_seconds"`
 	DiscoveryInProgress          int   `json:"discovery_intents_in_progress"` // zero while "paused" = nothing in flight (RB3-F8)
+	DiscoveryQueued              int   `json:"discovery_intents_queued"`      // handed to the intent workers, none has started them
 	startTime                    time.Time
 	mu                           sync.RWMutex
 }
@@ -155,11 +156,12 @@ func (h *HealthStatus) SetDiscovery(status string, lagBlocks uint64, secondsSinc
 	h.updateOverallStatus()
 }
 
-// SetDiscoveryInProgress records how many intents are being processed now.
-func (h *HealthStatus) SetDiscoveryInProgress(n int) {
+// SetDiscoveryInProgress records how many intents are being processed now, and how many are queued for the intent workers.
+func (h *HealthStatus) SetDiscoveryInProgress(n, queued int) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.DiscoveryInProgress = n
+	h.DiscoveryQueued = queued
 }
 
 // SetDiscoveryUnsearched records the blocks waiting to be searched again.
@@ -427,7 +429,7 @@ func watchDiscoveryLiveness(d *intent.IntentDiscovery) {
 		}
 		healthStatus.SetDiscovery(state, st.LagBlocks, int64(st.SecondsSinceAdvance))
 		healthStatus.SetDiscoveryUnsearched(st.Unsearched, int64(st.OldestUnsearchedSeconds))
-		healthStatus.SetDiscoveryInProgress(st.InProgress)
+		healthStatus.SetDiscoveryInProgress(st.InProgress, st.Queued)
 		if st.UnsearchedError != "" {
 			log.Printf("🚨 [DISCOVERY] the unsearched-block store cannot be read: %s", st.UnsearchedError)
 		} else if st.Unsearched > 0 && st.OldestUnsearchedSeconds > 600 {

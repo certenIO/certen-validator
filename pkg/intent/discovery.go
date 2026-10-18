@@ -181,6 +181,10 @@ const (
 	// structural defect in bytes that are already final on Accumulate.
 	// Terminal: never reprocessed.
 	IntentStatusFailedPermanent
+	// IntentStatusQueued: handed to the intent workers (handOffIntent) and not started by any. It holds the intent against
+	// being handed off twice, exactly as InProgress does, but it is NOT in progress: nothing is running for it, so it is not
+	// counted as in flight (the pause and key-rotation procedures read "in progress 0" as "nothing is running").
+	IntentStatusQueued
 )
 
 func (s IntentStatus) String() string {
@@ -195,6 +199,8 @@ func (s IntentStatus) String() string {
 		return "failed"
 	case IntentStatusFailedPermanent:
 		return "failed_permanent"
+	case IntentStatusQueued:
+		return "queued"
 	default:
 		return "unknown"
 	}
@@ -262,6 +268,8 @@ type IntentDiscovery struct {
 	// workers (intentWorker). It is what lets a block job end when its intents are found and recorded, not when the
 	// slowest of them is processed (handOffIntent).
 	intentCh chan *intentRetryJob
+	// intentWG counts the running intent workers, so a stop can be waited for (startIntentWorkers, WaitIntentWorkers).
+	intentWG sync.WaitGroup
 
 	// retries keeps every queued retry until it ends (retry_journal.go, RB6-F12).
 	retries RetryJournal
@@ -515,13 +523,7 @@ func (id *IntentDiscovery) StartMonitoring() {
 	// Start the decoupled on_demand consensus-bound proof retry worker, and put back on its queue every retry
 	// an earlier run left unfinished (RB6-F12).
 	go id.retryWorker()
-	intentWorkers := id.config.IntentWorkers
-	if intentWorkers <= 0 {
-		intentWorkers = DefaultIntentWorkers
-	}
-	for i := 0; i < intentWorkers; i++ {
-		go id.intentWorker(fmt.Sprintf("intent-worker-%d", i+1))
-	}
+	intentWorkers := id.startIntentWorkers(id.config.IntentWorkers)
 	id.logger.Printf("   - Intent workers: %d (a block job hands its intents to them and ends; it no longer waits for the slowest)", intentWorkers)
 	go id.resumeRetriesLoop()
 	go id.lifecycleQueueLoop()
@@ -996,6 +998,9 @@ type DiscoveryStatus struct {
 	// being processed - zero is "nothing in flight".
 	IntakePaused bool
 	InProgress   int
+	// Queued is how many intents have been handed to the intent workers and not started by any. A paused intake leaves them
+	// queued; they are not in flight, which is why they are not in InProgress.
+	Queued int
 }
 
 // StallLagFloor is how far behind the head a node must be before a still watermark counts as a
@@ -1039,6 +1044,7 @@ func (s DiscoveryStatus) Stalled(threshold time.Duration) bool {
 // Status returns the current discovery health. Safe to call from any goroutine.
 func (id *IntentDiscovery) Status() DiscoveryStatus {
 	inProgress := id.inProgress() // before watermarkMu: the two locks are never held together
+	queued := id.queued()
 	id.watermarkMu.Lock()
 	defer id.watermarkMu.Unlock()
 
@@ -1049,6 +1055,7 @@ func (id *IntentDiscovery) Status() DiscoveryStatus {
 		Started:       !id.lastAdvanceAt.IsZero(),
 		IntakePaused:  id.paused,
 		InProgress:    inProgress,
+		Queued:        queued,
 	}
 	if id.unsearched != nil {
 		if kept, err := id.unsearched.List(); err != nil {
@@ -1160,7 +1167,7 @@ func (id *IntentDiscovery) processBlock(job *BlockProcessJob, workerID string) e
 
 		// E.4 remediation: Two-phase marking to handle processing failures
 		// Phase 1: Mark as in_progress - prevents concurrent processing
-		if !id.markInProgress(intent.IntentID) {
+		if !id.markQueued(intent.IntentID) {
 			status := id.getIntentStatus(intent.IntentID)
 			id.logger.Printf("⚠️ Intent %s already %s, skipping", intent.IntentID, status.String())
 			continue
@@ -1241,8 +1248,26 @@ func (id *IntentDiscovery) requeueHandOff(job *intentRetryJob) error {
 	}
 }
 
+// startIntentWorkers starts n intent workers (zero: DefaultIntentWorkers) on id.intentCh and returns how many it started.
+// They are counted, so a stop can be waited for.
+func (id *IntentDiscovery) startIntentWorkers(n int) int {
+	if n <= 0 {
+		n = DefaultIntentWorkers
+	}
+	for i := 0; i < n; i++ {
+		id.intentWG.Add(1)
+		go id.intentWorker(fmt.Sprintf("intent-worker-%d", i+1))
+	}
+	return n
+}
+
+// WaitIntentWorkers returns when every intent worker has exited (after StopMonitoring: each finishes the intent it is
+// running first, and processing an intent is not interruptible, so this can take as long as that intent).
+func (id *IntentDiscovery) WaitIntentWorkers() { id.intentWG.Wait() }
+
 // intentWorker processes the intents block jobs hand off, one at a time per worker.
 func (id *IntentDiscovery) intentWorker(workerID string) {
+	defer id.intentWG.Done()
 	defer func() {
 		if r := recover(); r != nil {
 			id.logger.Printf("🚨 PANIC in intent worker %s: %v", workerID, r)
@@ -1254,9 +1279,22 @@ func (id *IntentDiscovery) intentWorker(workerID string) {
 		case <-id.stopCh:
 			return
 		case job := <-id.intentCh:
-			id.runHandedOffIntent(job, workerID)
+			id.serveHandedOffIntent(job, workerID)
 		}
 	}
+}
+
+// serveHandedOffIntent runs one job so that a panic anywhere in it - the processing, the lifecycle write, the journal - is that
+// job failing and not one worker fewer: the intent is released for the next search of its block, its journal entry stays kept
+// for the next start, and the worker goes on to the next job (as a block search did for a panic, RB3-F151).
+func (id *IntentDiscovery) serveHandedOffIntent(job *intentRetryJob, workerID string) {
+	defer func() {
+		if r := recover(); r != nil {
+			id.logger.Printf("🚨 PANIC handling intent %s in worker %s: %v\n%s", job.intent.IntentID, workerID, r, debug.Stack())
+			id.markFailed(job.intent.IntentID)
+		}
+	}()
+	id.runHandedOffIntent(job, workerID)
 }
 
 // runHandedOffIntent processes one handed-off intent and ends it the way a block job used to: marked completed, or
@@ -1269,6 +1307,9 @@ func (id *IntentDiscovery) runHandedOffIntent(job *intentRetryJob, workerID stri
 	if !id.waitWhilePaused() {
 		return
 	}
+	// From here the intent is in progress: a worker has started it. Until now it was only queued, and a paused intake
+	// leaves it queued (RB3-F8: "in progress 0" means nothing is running).
+	id.markStarted(intent.IntentID)
 	id.logger.Printf("📦 Intent worker %s processing intent %s (block %d)", workerID, intent.IntentID, job.blockHeight)
 	outcome, err := id.processHandedOff(job)
 	if err != nil {
@@ -1784,7 +1825,7 @@ func (id *IntentDiscovery) resumeRetriesOnce(resumed map[string]bool) bool {
 				// A hand-off that never ran (handOffIntent): not a retry, so it goes back to the intent workers and not behind a
 				// retry's backoff. This process has not marked it, so it does; an intent a block search handed off already in
 				// this run owns its own journal entry and is not queued twice.
-				if !id.markInProgress(r.IntentID) {
+				if !id.markQueued(r.IntentID) {
 					id.logger.Printf("[HANDOFF] kept hand-off of intent %s (block %d) is already being handled by this run", r.IntentID, r.BlockHeight)
 					continue
 				}
@@ -1982,9 +2023,9 @@ func (id *IntentDiscovery) ReprocessIntent(ctx context.Context, dnBlock uint64, 
 		}
 		id.mu.Lock()
 		switch id.intentStatus[intentID] {
-		case IntentStatusInProgress:
+		case IntentStatusInProgress, IntentStatusQueued:
 			id.mu.Unlock()
-			return fmt.Errorf("intent %s is being processed now; not processed twice", intentID)
+			return fmt.Errorf("intent %s is being processed now (or queued for it); not processed twice", intentID)
 		case IntentStatusFailedPermanent:
 			id.mu.Unlock()
 			return fmt.Errorf("intent %s is permanently invalid; it is not processed again", intentID)
@@ -2352,25 +2393,44 @@ func (id *IntentDiscovery) isCertenIntent(tx *accumulate.Transaction) bool {
 // E.4 remediation: Two-phase marking to handle processing failures
 // Returns true if the intent was newly marked as in_progress, false if already processing/completed
 func (id *IntentDiscovery) markInProgress(intentID string) bool {
+	return id.acquire(intentID, IntentStatusInProgress)
+}
+
+// markQueued claims an intent for the intent workers exactly as markInProgress claims it for processing - the same intent is
+// never handed off twice - but marks it queued, not in progress: no worker has started it (markStarted does that).
+func (id *IntentDiscovery) markQueued(intentID string) bool {
+	return id.acquire(intentID, IntentStatusQueued)
+}
+
+// markStarted moves a queued intent to in progress when a worker starts it.
+func (id *IntentDiscovery) markStarted(intentID string) {
+	id.mu.Lock()
+	defer id.mu.Unlock()
+	id.intentStatus[intentID] = IntentStatusInProgress
+}
+
+// acquire claims an intent in the given status; false when it is already queued, in progress, completed or unfixable.
+func (id *IntentDiscovery) acquire(intentID string, to IntentStatus) bool {
 	id.mu.Lock()
 	defer id.mu.Unlock()
 
 	status, exists := id.intentStatus[intentID]
 	if exists {
-		// Only allow processing if not already in_progress or completed.
+		// Only allow processing if not already queued, in_progress or completed.
 		// Failed intents CAN be retried — EXCEPT permanently invalid ones,
 		// which no retry can fix and which would otherwise be rediscovered and
 		// re-refused on every poll for the life of the process.
 		if status == IntentStatusInProgress ||
+			status == IntentStatusQueued ||
 			status == IntentStatusCompleted ||
 			status == IntentStatusFailedPermanent {
 			return false // Already being processed, completed, or unfixable
 		}
 	}
 
-	id.intentStatus[intentID] = IntentStatusInProgress
+	id.intentStatus[intentID] = to
 	id.intentCount++
-	return true // Newly marked as in_progress
+	return true
 }
 
 // markCompleted marks an intent as successfully completed
@@ -2428,7 +2488,7 @@ func (id *IntentDiscovery) isIntentProcessed(intentID string) bool {
 	id.mu.RLock()
 	defer id.mu.RUnlock()
 	status := id.intentStatus[intentID]
-	return status == IntentStatusCompleted || status == IntentStatusInProgress
+	return status == IntentStatusCompleted || status == IntentStatusInProgress || status == IntentStatusQueued
 }
 
 // DEPRECATED: Use markCompleted instead
