@@ -412,17 +412,15 @@ func Run(tree any, muts []Mutation, judge Judge, workers int) []Outcome {
 	return out
 }
 
-// pruneZero drops what encoding/json would leave at its zero value: null, "", 0, false, and an array or object left empty.
+// pruneZero drops what a decoded value does not tell apart: null, and an array or object left empty (a nil slice, map or pointer and an
+// empty one). A string, number or bool is kept as it is: a decoded value encodes its zero the same whether the member was empty or absent,
+// and a pointer to a zero (which the verifier can tell from nil) must stay distinct from null.
 func pruneZero(v any) (any, bool) {
 	switch t := v.(type) {
 	case nil:
 		return nil, false
-	case string:
-		return t, t != ""
-	case bool:
-		return t, t
-	case json.Number:
-		return t, t.String() != "0"
+	case string, bool, json.Number:
+		return t, true
 	case []any:
 		out := make([]any, len(t))
 		for i, e := range t {
@@ -441,8 +439,9 @@ func pruneZero(v any) (any, bool) {
 	return v, true
 }
 
-// Canonical is a value as one string that does not tell null, empty, zero and absent apart: the verifier is given decoded values, and a
-// member that is null, empty, zero or absent is the same input to it. "" when the value does not encode.
+// Canonical is the encoding of a decoded value (Go structs, not a JSON document) as one string that does not tell null, empty and absent
+// apart: the verifier is given decoded values, and a member that is null, empty or absent decodes to the same value. "" when the value
+// does not encode.
 func Canonical(v any) string {
 	raw, err := json.Marshal(v)
 	if err != nil {
