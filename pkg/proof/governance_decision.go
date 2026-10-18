@@ -24,6 +24,7 @@ package proof
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -280,7 +281,7 @@ func (w *gdrWriter) page(p AuthorizationPage, depth int) error {
 		w.uint(uint64(c.Block))
 		switch {
 		case strings.HasPrefix(c.Entry, "key:"):
-			if len(c.Entry) != len("key:")+64 {
+			if !isKeyHashEntry(c.Entry) {
 				return fmt.Errorf("page %s counts %q, which is not a key hash", p.Page, c.Entry)
 			}
 		case strings.HasPrefix(c.Entry, "delegate:"):
@@ -309,4 +310,17 @@ func identityOfAccount(account string) string {
 		s = s[:i]
 	}
 	return s
+}
+
+// isKeyHashEntry reports whether a counted entry is "key:" and a key-page entry hash in hexadecimal. The hash is the type's
+// own protocol.PublicKeyHash, so its width is the type's: 32 bytes (64 characters) for ed25519, legacyED25519, rcd1,
+// rsaSha256 and ecdsaSha256, and 20 bytes (40 characters) for btc, btclegacy, eth and typedData. The entry is committed as
+// the string it is; only a string that cannot be a key-page entry hash is refused (RB8-E).
+func isKeyHashEntry(entry string) bool {
+	h := strings.TrimPrefix(entry, "key:")
+	if len(h) != 64 && len(h) != 40 {
+		return false
+	}
+	_, err := hex.DecodeString(h)
+	return err == nil
 }

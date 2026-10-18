@@ -44,8 +44,10 @@
 package proof
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -69,6 +71,74 @@ type signingKeyPageQuery struct {
 	} `json:"result"`
 }
 
+// signingKeySig is the part of a signature record this layer reads. A delegated signature carries the delegating page in
+// `delegator` and its inner signature under `signature` (an object, where a key signature carries its signature bytes there
+// as a string); an `authority` record carries `delegator` as a list.
+type signingKeySig struct {
+	Type          string            `json:"type"`
+	PublicKey     string            `json:"publicKey"`
+	Signer        string            `json:"signer"`
+	SignerVersion uint64            `json:"signerVersion"`
+	Delegator     signingDelegators `json:"delegator"`
+	Inner         json.RawMessage   `json:"signature"`
+}
+
+// signingDelegators is a `delegator` field: one URL, or a list of them.
+type signingDelegators []string
+
+// UnmarshalJSON reads the two shapes the network writes, a URL and a list of URLs. Any other shape is NO delegator - never
+// an error: this field is one of many in a response this layer reads narrowly, and a shape it does not know must not fail the
+// decode of the whole response (RB8-G). A delegator that is not understood names no page, so it can never make one the signer.
+func (d *signingDelegators) UnmarshalJSON(b []byte) error {
+	*d = nil
+	var one string
+	if err := json.Unmarshal(b, &one); err == nil {
+		if one != "" {
+			*d = signingDelegators{one}
+		}
+		return nil
+	}
+	var many []string
+	if err := json.Unmarshal(b, &many); err != nil {
+		return nil // an unknown shape: no delegator
+	}
+	*d = many
+	return nil
+}
+
+// delegatingPages returns the pages a delegated signature was cast through, outermost first: its own delegator and, when its
+// inner signature is itself delegated, that one's, down to Accumulate's delegation depth. A signature that is not delegated
+// delegates through nothing.
+func (s signingKeySig) delegatingPages() []string {
+	if c := classOf(s.Type); c != govsig.ClassDelegated {
+		return nil
+	}
+	var out []string
+	cur := s
+	for depth := 0; depth <= maxDecisionDepth; depth++ {
+		for _, d := range cur.Delegator {
+			if p := normalizeAccountURL(d); p != "" {
+				out = append(out, p)
+			}
+		}
+		inner := bytes.TrimSpace(cur.Inner)
+		if len(inner) == 0 || inner[0] != '{' {
+			break
+		}
+		var next signingKeySig
+		if json.Unmarshal(inner, &next) != nil || classOf(next.Type) != govsig.ClassDelegated {
+			break
+		}
+		cur = next
+	}
+	return out
+}
+
+func classOf(sigType string) govsig.Class {
+	_, c := govsig.Classify(sigType)
+	return c
+}
+
 type signingKeyPageSet struct {
 	Account struct {
 		Type    string `json:"type"`
@@ -81,17 +151,35 @@ type signingKeyPageSet struct {
 	Signatures struct {
 		Records []struct {
 			Message struct {
-				Type      string `json:"type"`
-				TxID      string `json:"txID"`
-				Signature struct {
-					Type          string `json:"type"`
-					PublicKey     string `json:"publicKey"`
-					Signer        string `json:"signer"`
-					SignerVersion uint64 `json:"signerVersion"`
-				} `json:"signature"`
+				Type      string        `json:"type"`
+				TxID      string        `json:"txID"`
+				Signature signingKeySig `json:"signature"`
 			} `json:"message"`
 		} `json:"records"`
 	} `json:"signatures"`
+}
+
+// holdsAuthorityRecord reports whether this page's OWN signature set holds the chain-created evidence that the page counted
+// a delegated vote: a record of type `authority`, over txHash (every transaction when txHash is empty), whose delegator list
+// contains the page. The network files such a record under the delegating page when - and only when - a delegate's vote was
+// cast through it (testdata/kermit_delegated_ecdsa_signing_sets.json); a delegated vote that merely names a page as its
+// delegator does not make that page the signer (RB8-G).
+func (s signingKeyPageSet) holdsAuthorityRecord(page, txHash string) bool {
+	for _, rec := range s.Signatures.Records {
+		if txHash != "" && hashOfTxID(rec.Message.TxID) != txHash {
+			continue
+		}
+		sig := rec.Message.Signature
+		if !strings.EqualFold(strings.TrimSpace(sig.Type), "authority") {
+			continue
+		}
+		for _, d := range sig.Delegator {
+			if normalizeAccountURL(d) == page {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // ChainKeyPageResolver resolves the signing key page against an Accumulate v3
@@ -181,8 +269,26 @@ func selectSigningKeyPage(
 		named string // as the network spells it, which is what is hashed into the govRoot
 		index uint64
 	}
-	var candidates []candidate
+	var candidates, viaDelegation []candidate
 	seen := map[string]bool{}
+
+	// A delegated vote is filed by the network under the DELEGATE's page (type "delegated", the delegating page in `delegator`),
+	// and only an `authority` record lands under the delegating page. The page that counted the vote for the principal's authority
+	// is the delegating one, so every page named as a delegator of a delegated signature over THIS transaction, at any
+	// depth, is a page that signed by delegation (RB8-E). Which key stands behind it is G1's to verify.
+	delegating := map[string]string{}
+	for _, set := range sets {
+		for _, rec := range set.Signatures.Records {
+			if txHash != "" && hashOfTxID(rec.Message.TxID) != txHash {
+				continue
+			}
+			for _, p := range rec.Message.Signature.delegatingPages() {
+				if _, ok := delegating[p]; !ok {
+					delegating[p] = normalizeAccountURL(set.Account.URL)
+				}
+			}
+		}
+	}
 
 	for _, set := range sets {
 		if !strings.EqualFold(set.Account.Type, "keyPage") {
@@ -239,9 +345,28 @@ func selectSigningKeyPage(
 		if signed {
 			seen[page] = true
 			candidates = append(candidates, candidate{url: page, named: strings.TrimSuffix(strings.TrimSpace(set.Account.URL), "/"), index: idx})
+		} else if from, ok := delegating[page]; ok {
+			// A delegated vote that names this page is not enough: the page's own signature set must hold the authority
+			// record the network created when the page counted it (RB8-G).
+			if !set.holdsAuthorityRecord(page, txHash) {
+				notes = append(notes, fmt.Sprintf("%s is named as the delegator of a delegated vote cast from %s, but its own "+
+					"signature set holds no authority record over this transaction naming it; not counted", page, from))
+				continue
+			}
+			// Only when no page of the book filed a vote of its own (below): a delegating page never displaces a page that
+			// resolved before this was read.
+			viaDelegation = append(viaDelegation, candidate{url: page, named: strings.TrimSuffix(strings.TrimSpace(set.Account.URL), "/"), index: idx})
+			notes = append(notes, fmt.Sprintf("%s carries a delegated vote cast from %s; its delegate's key is verified by G1, "+
+				"not by this read", page, from))
 		}
 	}
 
+	if len(candidates) == 0 {
+		for _, c := range viaDelegation {
+			seen[c.url] = true
+		}
+		candidates = viaDelegation
+	}
 	if len(candidates) == 0 {
 		return "", notes, fmt.Errorf("no page of key book %s carries a key signature over this "+
 			"transaction; the governance proof has no signing page to name", book)

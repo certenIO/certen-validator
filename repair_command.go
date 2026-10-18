@@ -20,7 +20,7 @@ import (
 	"github.com/certen/independant-validator/pkg/execution"
 )
 
-const repairUsage = "usage: certen-validator repair anchor-blocks [--apply] [--min-depth N] | repair projections [--apply] | repair consensus-records --rpc ADDR [--apply] | repair member-proof-cycle --intent ID --chain CHAIN_ID --tx SETTLEMENT_TX [--apply] [--wait DURATION] | repair outcome-trees [--apply] [--recorded] | repair member-proof-unavailable --intent ID --chain CHAIN_ID --tx SETTLEMENT_TX --operator NAME --evidence TEXT [--apply] | repair stale-lifecycle [--apply] [--older-than DURATION] [--by NAME]"
+const repairUsage = "usage: certen-validator repair anchor-blocks [--apply] [--min-depth N] | repair projections [--apply] | repair consensus-records --rpc ADDR [--apply] | repair member-proof-cycle --intent ID --chain CHAIN_ID --tx SETTLEMENT_TX [--apply] [--wait DURATION] | repair outcome-trees [--apply] [--recorded] | repair member-proof-unavailable --intent ID --chain CHAIN_ID --tx SETTLEMENT_TX --operator NAME --evidence TEXT [--apply] | repair stale-lifecycle [--apply] [--older-than DURATION] [--by NAME] | repair lifecycle-rows --block N --intent ID [--intent ID ...] [--apply]"
 
 // runRepairCommand runs `validator repair anchor-blocks`: it reads every canonical anchor's verify and
 // create transactions back from their chain - locating the create transaction where the row does not name
@@ -50,6 +50,10 @@ func runRepairCommand(args []string) int {
 	// RB6-F12: resolve intents left authorized with nothing executed (stale_lifecycle_command.go).
 	if len(args) > 0 && args[0] == "stale-lifecycle" {
 		return runStaleLifecycleCommand(args[1:])
+	}
+	// RB8-F: owe the lifecycle row of intents discovery never wrote one for (lifecycle_rows_command.go).
+	if len(args) > 0 && args[0] == "lifecycle-rows" {
+		return runLifecycleRowsCommand(args[1:])
 	}
 	// Into this validator's own kept-tree store (outcome_repair_command.go).
 	if len(args) > 0 && args[0] == "outcome-trees" {

@@ -142,3 +142,6 @@ __pycache__/
 *.pyc
 /keys/
 /captures/
+
+# sigtypelive per-identity capture directories (-out captures-<n>)
+/captures-*/

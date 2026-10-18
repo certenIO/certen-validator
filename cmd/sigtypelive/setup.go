@@ -62,7 +62,17 @@ func liveCases() []liveCase {
 
 func (c liveCase) book(adi string) string { return adi + "/book-" + c.Tag }
 func (c liveCase) page(adi string) string { return c.book(adi) + "/1" }
+
+// dataAtRoot puts the intent on the ADI's own `/data` account (`-data-root`). CERTEN reads an intent's ADI as its principal with the
+// trailing `/data` removed (pkg/intent/discovery.go) and looks the principal up again as `<adi>/data` (outcome backfill), so only an
+// intent written to `<adi>/data` binds to the ADI's CertenAccount. The per-type data accounts of the first run (`/data-<tag>`)
+// made the ADI "acc://pv2-sig-1.acme/data-<tag>" and every case was refused "account is bound to a different ADI" (RB8-E).
+var dataAtRoot bool
+
 func (c liveCase) data(adi string) string {
+	if dataAtRoot {
+		return adi + "/data"
+	}
 	if c.DataTag != "" {
 		return adi + "/data-" + c.DataTag
 	}
@@ -260,8 +270,15 @@ func (a *app) ensureCredits(ctx context.Context, page string, min uint64, acmeSt
 	return fmt.Errorf("%s could not be brought to %d credits", page, min)
 }
 
-func (a *app) setup(ctx context.Context) error {
-	var err error
+func (a *app) setup(ctx context.Context, l liveConfig) error {
+	sel, err := l.selected()
+	if err != nil {
+		return err
+	}
+	needDeleg := false
+	for _, c := range sel {
+		needDeleg = needDeleg || c.Delegated
+	}
 	if a.lite, err = a.ks.loadOrCreate("lite", protocol.SignatureTypeED25519); err != nil {
 		return err
 	}
@@ -305,27 +322,29 @@ func (a *app) setup(ctx context.Context) error {
 		return err
 	}
 
-	// 2. the inner key of the delegated case, its book, and the delegating book.
-	dinner, err := a.ks.loadOrCreate("dinner", protocol.SignatureTypeEcdsaSha256)
-	if err != nil {
-		return err
-	}
-	if err := a.ensureBook(ctx, root, innerBook(a.adi), dinner); err != nil {
-		return err
-	}
-	deleg, err := a.ks.loadOrCreate("deleg-admin", protocol.SignatureTypeED25519)
-	if err != nil {
-		return err
-	}
-	if err := a.ensureBook(ctx, root, liveCases()[len(liveCases())-1].book(a.adi), deleg); err != nil {
-		return err
-	}
-	if err := a.ensureDelegate(ctx, deleg, dinner); err != nil {
-		return err
+	// 2. the inner key of the delegated case, its book, and the delegating book (only when that case is selected).
+	var dinner sigfixture.Key
+	if needDeleg {
+		if dinner, err = a.ks.loadOrCreate("dinner", protocol.SignatureTypeEcdsaSha256); err != nil {
+			return err
+		}
+		if err := a.ensureBook(ctx, root, innerBook(a.adi), dinner); err != nil {
+			return err
+		}
+		deleg, err := a.ks.loadOrCreate("deleg-admin", protocol.SignatureTypeED25519)
+		if err != nil {
+			return err
+		}
+		if err := a.ensureBook(ctx, root, liveCases()[len(liveCases())-1].book(a.adi), deleg); err != nil {
+			return err
+		}
+		if err := a.ensureDelegate(ctx, deleg, dinner); err != nil {
+			return err
+		}
 	}
 
-	// 3. a book and a data account per type.
-	for _, c := range liveCases() {
+	// 3. a book and a data account per selected type.
+	for _, c := range sel {
 		var key sigfixture.Key
 		if c.Delegated {
 			key = dinner
@@ -479,6 +498,9 @@ func (a *app) ensureData(ctx context.Context, root sigfixture.Key, c liveCase, s
 	txn := new(protocol.Transaction)
 	txn.Header.Principal = mustURL(a.adi)
 	txn.Body = &protocol.CreateDataAccount{Url: mustURL(c.data(a.adi)), Authorities: []*url.URL{mustURL(c.book(a.adi))}}
+	if err := createDataBodyLength(c, a.adi); err != nil {
+		return err
+	}
 	rs, err := a.pageSigner(ctx, root, rootPage(a.adi), true)
 	if err != nil {
 		return err
@@ -492,4 +514,19 @@ func (a *app) ensureData(ctx context.Context, root sigfixture.Key, c liveCase, s
 		return err
 	}
 	return a.run(ctx, "create "+shortURL(c.data(a.adi)), txn, env)
+}
+
+// createDataBodyLength refuses a data-account creation Accumulate would refuse ("body is 64 bytes long": a 32- or 64-byte
+// body is indistinguishable from a transaction hash). The length follows the two URLs, so another identity number or tag
+// length changes it; the error names the case so the run fails before anything is written.
+func createDataBodyLength(c liveCase, adi string) error {
+	b, err := (&protocol.CreateDataAccount{Url: mustURL(c.data(adi)), Authorities: []*url.URL{mustURL(c.book(adi))}}).MarshalBinary()
+	if err != nil {
+		return err
+	}
+	if len(b) == 32 || len(b) == 64 {
+		return fmt.Errorf("%s: creating %s with authority %s is a %d-byte body, which Accumulate refuses; use another identity number (-n)",
+			c.Name, c.data(adi), c.book(adi), len(b))
+	}
+	return nil
 }

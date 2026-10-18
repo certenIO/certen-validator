@@ -42,6 +42,7 @@ import (
 	"github.com/certen/independant-validator/pkg/database"
 	"github.com/certen/independant-validator/pkg/ethproof"
 	"github.com/certen/independant-validator/pkg/ethrpc"
+	"github.com/certen/independant-validator/pkg/metrics"
 	"github.com/certen/independant-validator/pkg/proof"
 	"github.com/certen/independant-validator/pkg/strategy"
 	"github.com/certen/independant-validator/pkg/supportedchains"
@@ -566,7 +567,7 @@ func (o *UnifiedOrchestrator) StartProofCycle(ctx context.Context, req *UnifiedP
 	o.mu.Unlock()
 
 	// Intent lifecycle: mark as in_process
-	if err := o.updateLifecycleInProcess(ctx, req.IntentID, req.CycleID); err != nil {
+	if err := o.updateLifecycleInProcessFor(ctx, req, req.CycleID); err != nil {
 		o.mu.Lock()
 		delete(o.activeCycles, req.CycleID)
 		o.mu.Unlock()
@@ -661,16 +662,63 @@ func (o *UnifiedOrchestrator) StartProofCycle(ctx context.Context, req *UnifiedP
 // =============================================================================
 
 // updateLifecycleInProcess marks an intent as in_process in the lifecycle table. A status the lifecycle
-// could not record is an error: the gateway reads the intent's state from it (RB3-F73).
+// could not record is an error: the gateway reads the intent's state from it (RB3-F73). An intent with no row yet
+// has its row created from the cycle's own request (ensureLifecycleInProcess, RB8-F) - never refused for want of one.
 func (o *UnifiedOrchestrator) updateLifecycleInProcess(ctx context.Context, intentID, cycleID string) error {
-	if o.config.Repos == nil || o.config.Repos.IntentLifecycle == nil || intentID == "" {
+	return o.updateLifecycleInProcessFor(ctx, &UnifiedProofCycleRequest{IntentID: intentID}, cycleID)
+}
+
+// updateLifecycleInProcessFor is updateLifecycleInProcess for a cycle that can create the row it finds missing from
+// its own request.
+func (o *UnifiedOrchestrator) updateLifecycleInProcessFor(ctx context.Context, req *UnifiedProofCycleRequest, cycleID string) error {
+	if o.config.Repos == nil || o.config.Repos.IntentLifecycle == nil || req.IntentID == "" {
 		return nil
 	}
-	if err := o.config.Repos.IntentLifecycle.UpdateStatus(ctx, intentID,
-		database.IntentLifecycleInProcess,
-		database.WithCycleID(cycleID),
-	); err != nil {
+	return ensureLifecycleInProcess(ctx, o.config.Repos.IntentLifecycle, req, cycleID)
+}
+
+// lifecycleStarter is the part of the lifecycle repository the start of a proof cycle needs.
+type lifecycleStarter interface {
+	UpdateStatus(ctx context.Context, intentID string, newStatus database.IntentLifecycleStatus, opts ...database.UpdateOption) error
+	EnsureOnProofCycle(ctx context.Context, intentID, txHash, userID, proofClass, targetChain string, blockHeight int64) (bool, error)
+}
+
+// ensureLifecycleInProcess moves the intent to in_process. When the intent has no lifecycle row - discovery's write
+// failed or is still queued (RB8-F, defect D4: a settled intent's proof cycle died "intent lifecycle not found" and it
+// never got a proof) - the row is created from the request's own data, idempotently, and the move retried once. What the
+// request does not know is left unknown (NULL, single-leg shape), and discovery's own write for the same intent - queued or
+// retried, it may land after this one - FILLS exactly those unknowns and nothing else (RB8-G, UpsertOnDiscovery*).
+func ensureLifecycleInProcess(ctx context.Context, store lifecycleStarter, req *UnifiedProofCycleRequest, cycleID string) error {
+	intentID := req.IntentID
+	move := func() error {
+		return store.UpdateStatus(ctx, intentID, database.IntentLifecycleInProcess, database.WithCycleID(cycleID))
+	}
+	err := move()
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, database.ErrIntentLifecycleNotFound) {
 		return fmt.Errorf("lifecycle: mark %s in_process: %w", intentID, err)
+	}
+	// The Accumulate TRANSACTION hash and nothing else: the request's AccumulateHash is the Accumulate BLOCK hash, which is
+	// not a transaction hash and is never stood in for one (RB8-G). A request that names no transaction creates no row;
+	// EnsureOnProofCycle refuses it, and the cycle fails with the not-found it started from.
+	txHash := req.AccumulateTxHash
+	userID := ""
+	if req.UserID != nil {
+		userID = *req.UserID
+	}
+	created, cErr := store.EnsureOnProofCycle(ctx, intentID, txHash, userID, req.ProofClass, req.TargetChain, req.AccumulateHeight)
+	if cErr != nil {
+		return fmt.Errorf("lifecycle: mark %s in_process: %w, and creating its row from the proof cycle's request failed: %v", intentID, err, cErr)
+	}
+	if created {
+		metrics.RecordLifecycleCreatedByProofCycle()
+		fmt.Printf("🚨 [LIFECYCLE] intent %s had no lifecycle row when its proof cycle %s started (discovery's write had not landed); the row was created from the cycle's request (tx %s, block height %d)\n",
+			intentID, cycleID, txHash, req.AccumulateHeight)
+	}
+	if err := move(); err != nil {
+		return fmt.Errorf("lifecycle: mark %s in_process after creating its row: %w", intentID, err)
 	}
 	return nil
 }
