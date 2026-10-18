@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/certen/independant-validator/pkg/ledger"
+	"strconv"
 	"strings"
 
 	"github.com/certen/independant-validator/pkg/accumulateset"
@@ -69,6 +70,11 @@ type Evidence struct {
 	// Transaction is the governed transaction, binary, hex (2.1 timeline): its type decides the page blacklist and which authorities must vote,
 	// and its hash must be TxHash. Absent, the votes are not re-evaluated (named in the report).
 	Transaction string `json:"transaction,omitempty"`
+	// Links (evidence 2.1 only; RB9-F5 section 1) are the continuity of the anchored minor-root items, binary merkle.Receipt, hex: one per
+	// anchored item (a minor-root record without a rootProof) of Certify in order, then one per anchored item of Check.Hops in order. The
+	// link of an anchored item starts at the previously verified root chain anchor and ends at the item's own. Absent when empty; in a
+	// document that claims 2.0 the member is not read.
+	Links []string `json:"links,omitempty"`
 
 	// Check proves the validator set in force at a certified block at or after the certified one.
 	Check SetCheck `json:"check"`
@@ -303,14 +309,20 @@ func verifyFrom(ev *Evidence, rep *Report, at map[uint64]*Spine, pinned [32]byte
 	if len(ev.Certify) == 0 {
 		return nil, fmt.Errorf("certify: no minor-root run")
 	}
-	for i, h := range ev.Certify {
-		mr, err := decodeMinorRoot(h)
-		if err != nil {
-			return nil, fmt.Errorf("certify run %d: %w", i, err)
+	var links []*merkle.Receipt // evidence 2.1: the links of the anchored items, certify first and then the set check's hops
+	if is21 {
+		cert.refuseReplay = true
+		for i, h := range ev.Links {
+			l, err := decodeReceipt(h)
+			if err != nil {
+				return nil, certifyState(StateCertifyLinkInvalid, strconv.Itoa(i))
+			}
+			links = append(links, l)
 		}
-		if err := cert.AdvanceEpoch(mr); err != nil {
-			return nil, fmt.Errorf("certify run %d: %w", i, err)
-		}
+	}
+	used := 0
+	if err := walkRuns(cert, ev.Certify, "certify run", is21, links, &used, 0); err != nil {
+		return nil, err
 	}
 	r, err := decodeReceipt(ev.Receipt)
 	if err != nil {
@@ -383,14 +395,14 @@ func verifyFrom(ev *Evidence, rep *Report, at map[uint64]*Spine, pinned [32]byte
 	} else {
 		chk = at[ev.Check.Majors].Clone()
 	}
-	for i, h := range ev.Check.Hops {
-		mr, err := decodeMinorRoot(h)
-		if err != nil {
-			return nil, fmt.Errorf("set check hop %d: %w", i, err)
-		}
-		if err := chk.AdvanceEpoch(mr); err != nil {
-			return nil, fmt.Errorf("set check hop %d: %w", i, err)
-		}
+	if is21 {
+		chk.refuseReplay = true
+	}
+	if err := walkRuns(chk, ev.Check.Hops, "set check hop", is21, links, &used, len(ev.Certify)); err != nil {
+		return nil, err
+	}
+	if used != len(links) { // a link no anchored item takes: the same bytes would otherwise carry two encodings
+		return nil, certifyState(StateCertifyLinkInvalid, strconv.Itoa(used))
 	}
 	if chk.LastMinorBlock < cert.LastMinorBlock {
 		return nil, fmt.Errorf("the set is checked at DN %d, before the certified DN %d: updates between are unaccounted", chk.LastMinorBlock, cert.LastMinorBlock)
@@ -442,6 +454,52 @@ func verifyFrom(ev *Evidence, rep *Report, at map[uint64]*Spine, pinned [32]byte
 		}
 	}
 	return rep, nil
+}
+
+// walkRuns advances sp through the minor-root records of one sequence (certify, or the set check's hops), each given as hex. In evidence 2.0
+// a record is always a continuous item (AdvanceEpoch, which refuses one without a root proof as it always has). In evidence 2.1 a record
+// without a root proof is an anchored item: it takes the next link (used counts the links taken so far, across both sequences) and is
+// advanced by AdvanceAnchored, and an anchored item that has no effect (it carries no update, or none that the walk applies) is refused
+// unless it is the last of its sequence (the canonical form: an item with no effect on the set is only the final one). first is the position of runs[0] in certify followed by hops. A refusal
+// that is a *CertifyState is returned as it is; any other is wrapped with the run it was found in, as it always has been.
+func walkRuns(sp *Spine, runs []string, label string, is21 bool, links []*merkle.Receipt, used *int, first int) error {
+	for i, h := range runs {
+		mr, err := decodeMinorRoot(h)
+		if err != nil {
+			return fmt.Errorf("%s %d: %w", label, i, err)
+		}
+		if is21 && mr.RootProof == nil {
+			if body, err := checkDirectorySelfAnchor(mr.Anchor); err == nil && len(mr.Updates) == 0 && i != len(runs)-1 {
+				return certifyState(StateCertifyItemWithoutEffect, strconv.Itoa(first+i), strconv.FormatUint(body.MinorBlockIndex, 10))
+			}
+			var link *merkle.Receipt
+			if *used < len(links) {
+				link = links[*used]
+			}
+			applied := len(sp.Applied)
+			err := sp.AdvanceAnchored(mr, link)
+			if cs, ok := err.(*CertifyState); ok {
+				return reindexCertifyState(cs, *used)
+			}
+			if err != nil {
+				return fmt.Errorf("%s %d: %w", label, i, err)
+			}
+			*used++
+			// The canonical form is about effect, not about the updates member: an update the walk does not apply (a transaction that is
+			// not a write to the network or globals account) changes nothing, so an item that carries only such updates is one without effect.
+			if len(sp.Applied) == applied && i != len(runs)-1 {
+				return certifyState(StateCertifyItemWithoutEffect, strconv.Itoa(first+i), strconv.FormatUint(sp.LastMinorBlock, 10))
+			}
+			continue
+		}
+		if err := sp.AdvanceEpoch(mr); err != nil {
+			if cs, ok := err.(*CertifyState); ok {
+				return cs
+			}
+			return fmt.Errorf("%s %d: %w", label, i, err)
+		}
+	}
+	return nil
 }
 
 func genesisValues(networkRecord, globalsRecord []byte) (*network.GlobalValues, error) {
