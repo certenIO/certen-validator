@@ -1,0 +1,501 @@
+{
+  "format": "certen-xpartition3b-conformance/1",
+  "domain": "certen:g1:v4",
+  "portableFormat": "certen-proof-v2-accumulate-portable/1",
+  "cases": [
+    {
+      "name": "roles-header-authority-derived",
+      "description": "the transaction's header names the authority book that voted: its book and both pages are header-authority pages, derived from the carried transaction and equal to the recorded roles (proven, not declared)",
+      "file": "roles-header-authority-derived.json",
+      "sha256": "a2d9c4a51340df49a04bafc063b972db35b561f9f7ef43591e709d684b25099a",
+      "expect": "verified",
+      "report": {
+        "version": "2.1",
+        "tag": "certen:g1:v4",
+        "partition": "acc://bvn-BVN1.acme",
+        "anchorBlock": 50,
+        "certifiedRoot": "da76f8b221ba3abbb91620192a1c2a62470dc8001137fff2bf9c3c10fff3fe6e",
+        "checkBlock": 300,
+        "setVerdict": "verified",
+        "routingHeight": 1,
+        "proven": [
+          {
+            "url": "acc://pv2-cust-5.acme/data",
+            "partition": "acc://bvn-BVN1.acme",
+            "block": 50,
+            "roles": [
+              "principal-chain"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-book",
+              "header-authority"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/1",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page",
+              "header-authority",
+              "voter"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/2",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page",
+              "header-authority"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book/1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-page"
+            ]
+          }
+        ],
+        "pagesBound": 6,
+        "unproven": [
+          "g1_vote_held"
+        ],
+        "authorizationMode": "authorities_required",
+        "arrivals": [
+          {
+            "kind": "signature",
+            "account": "acc://pv2-bank-5.acme/book/1",
+            "block": 65
+          }
+        ]
+      }
+    },
+    {
+      "name": "roles-header-authority-not-recorded",
+      "description": "the header names the authority book but the document does not record header-authority on its pages: justified by the carried transaction, not recorded",
+      "file": "roles-header-authority-not-recorded.json",
+      "sha256": "b226de188914fd5c453523e6422ce2a1df6d476614d85dc38f4959fa9a2fb004",
+      "expect": "refused",
+      "state": "g1_role_mismatch",
+      "partition": "BVN2",
+      "block": 70
+    },
+    {
+      "name": "roles-header-authority-claimed",
+      "description": "the carried transaction names no header authority but a page records header-authority: claimed, not justified (a declared role before C1b-2)",
+      "file": "roles-header-authority-claimed.json",
+      "sha256": "a4a7c20229aeeaaf81f383b58e1b008ec1ed055029bede87472c18a27aac5411",
+      "expect": "refused",
+      "state": "g1_role_mismatch",
+      "partition": "BVN2",
+      "block": 70
+    },
+    {
+      "name": "roles-header-authority-without-pages",
+      "description": "the header names an authority whose pages are not among the proven pages",
+      "file": "roles-header-authority-without-pages.json",
+      "sha256": "07da15f1345c8dae1ac789c2e11cd72a62604355870f965ecc7b40f4f4ef2bfa",
+      "expect": "refused",
+      "state": "g1_header_authority_missing",
+      "partition": "BVN1",
+      "block": 50
+    },
+    {
+      "name": "roles-initiator-derived",
+      "description": "the last carried key signature initiated the transaction (Header.Initiator is its metadata hash): its signer page is an initiator-signer, derived and equal to the recorded role",
+      "file": "roles-initiator-derived.json",
+      "sha256": "08e26e0b052cb235e1f8adb3e3773aaaa8ef6f93ae6349be0c438a891e2a46e7",
+      "expect": "verified",
+      "report": {
+        "version": "2.1",
+        "tag": "certen:g1:v4",
+        "partition": "acc://bvn-BVN1.acme",
+        "anchorBlock": 50,
+        "certifiedRoot": "95d09f5e2df0ee4ca94159dbb5f18b232cb1de803a68d7f70a8fa557a651df80",
+        "checkBlock": 300,
+        "setVerdict": "verified",
+        "routingHeight": 1,
+        "proven": [
+          {
+            "url": "acc://pv2-cust-5.acme/data",
+            "partition": "acc://bvn-BVN1.acme",
+            "block": 50,
+            "roles": [
+              "principal-chain"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/1",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page",
+              "voter",
+              "initiator-signer"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/2",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book/1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-page"
+            ]
+          }
+        ],
+        "pagesBound": 6,
+        "unproven": [
+          "g1_vote_held"
+        ],
+        "authorizationMode": "authorities_required",
+        "arrivals": [
+          {
+            "kind": "signature",
+            "account": "acc://pv2-bank-5.acme/book/1",
+            "block": 65
+          }
+        ]
+      }
+    },
+    {
+      "name": "roles-initiator-not-recorded",
+      "description": "the carried signature initiated the transaction but its page does not record initiator-signer",
+      "file": "roles-initiator-not-recorded.json",
+      "sha256": "e69d62271efaf4345bcc2a10f9f351194ea401bafcab6fc9b3ec55f9d00dec6c",
+      "expect": "refused",
+      "state": "g1_role_mismatch",
+      "partition": "BVN2",
+      "block": 70
+    },
+    {
+      "name": "roles-initiator-claimed-elsewhere",
+      "description": "the carried signature initiated the transaction on BankPage1, and BankPage2 also records initiator-signer: claimed, not justified",
+      "file": "roles-initiator-claimed-elsewhere.json",
+      "sha256": "c5470be27a7ed196109f67e9522da62af42d78e4db8832aef8955a657852d951",
+      "expect": "refused",
+      "state": "g1_role_mismatch",
+      "partition": "BVN2",
+      "block": 70
+    },
+    {
+      "name": "roles-initiator-signature-altered",
+      "description": "the signature that initiated the transaction is not the message its signature-chain entry holds",
+      "file": "roles-initiator-signature-altered.json",
+      "sha256": "93a5eaf09dac3bc0c4cc506dee341f691cf5c952821cdaeddf6d8e1c0299c232",
+      "expect": "refused",
+      "state": "g1_signature_invalid",
+      "partition": "BVN2",
+      "block": 70
+    },
+    {
+      "name": "roles-initiator-signature-not-carried",
+      "description": "a page records initiator-signer but the evidence carries no signature that initiated the transaction (the payer may be a page that signed nothing a vote needed): a declared role, named in the report, never a proven one",
+      "file": "roles-initiator-signature-not-carried.json",
+      "sha256": "1915408159842a2a01eb605b468692fb13296484e11fb8b593e205fa3a497345",
+      "expect": "verified",
+      "report": {
+        "version": "2.1",
+        "tag": "certen:g1:v4",
+        "partition": "acc://bvn-BVN1.acme",
+        "anchorBlock": 50,
+        "certifiedRoot": "5983a1024d00d2664e8f9c61fdac3ccef7e93250992cf00ff2f0edf056e6ef12",
+        "checkBlock": 300,
+        "setVerdict": "verified",
+        "routingHeight": 1,
+        "proven": [
+          {
+            "url": "acc://pv2-cust-5.acme/data",
+            "partition": "acc://bvn-BVN1.acme",
+            "block": 50,
+            "roles": [
+              "principal-chain"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/1",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page",
+              "voter"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/2",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page"
+            ],
+            "declared": [
+              "initiator-signer"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book/1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-page"
+            ]
+          }
+        ],
+        "pagesBound": 6,
+        "unproven": [
+          "g1_initiator_signature_not_carried",
+          "g1_vote_held"
+        ],
+        "authorizationMode": "authorities_required",
+        "arrivals": [
+          {
+            "kind": "signature",
+            "account": "acc://pv2-bank-5.acme/book/1",
+            "block": 65
+          }
+        ]
+      }
+    },
+    {
+      "name": "executor-version-baikonur-proven",
+      "description": "the transaction partition's system ledger is proven at its block and holds executor version 6 (Baikonur): the version the re-evaluation's rules are for is proven, not assumed",
+      "file": "executor-version-baikonur-proven.json",
+      "sha256": "5ae2aa904f86ce3280dc16daeef026f9cccc59fb2f5bf47205b6408437df3450",
+      "expect": "verified",
+      "report": {
+        "version": "2.1",
+        "tag": "certen:g1:v4",
+        "partition": "acc://bvn-BVN1.acme",
+        "anchorBlock": 50,
+        "certifiedRoot": "ce040aa45fd94e9e280c3729d4d0b954e3239e23af38ebd92a8550dc8ef35cb3",
+        "checkBlock": 300,
+        "setVerdict": "verified",
+        "routingHeight": 1,
+        "proven": [
+          {
+            "url": "acc://pv2-cust-5.acme/data",
+            "partition": "acc://bvn-BVN1.acme",
+            "block": 50,
+            "roles": [
+              "principal-chain"
+            ]
+          },
+          {
+            "url": "acc://bvn-BVN1.acme/ledger",
+            "partition": "acc://bvn-BVN1.acme",
+            "block": 50,
+            "roles": [
+              "system-ledger"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/1",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page",
+              "voter"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/2",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book/1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-page"
+            ]
+          }
+        ],
+        "pagesBound": 7,
+        "unproven": [
+          "g1_vote_held"
+        ],
+        "authorizationMode": "authorities_required",
+        "arrivals": [
+          {
+            "kind": "signature",
+            "account": "acc://pv2-bank-5.acme/book/1",
+            "block": 65
+          }
+        ]
+      }
+    },
+    {
+      "name": "executor-version-kourou-proven",
+      "description": "executor version 9 (Kourou), a later version than the rules need",
+      "file": "executor-version-kourou-proven.json",
+      "sha256": "cbb23bcedf69064c98b67380ad05d650e8f537294b2397dab0264bbf19ded518",
+      "expect": "verified",
+      "report": {
+        "version": "2.1",
+        "tag": "certen:g1:v4",
+        "partition": "acc://bvn-BVN1.acme",
+        "anchorBlock": 50,
+        "certifiedRoot": "7cf85c8a721205a23e7761eeb4d09b2475294179cf86e26ae6753e41b02a3321",
+        "checkBlock": 300,
+        "setVerdict": "verified",
+        "routingHeight": 1,
+        "proven": [
+          {
+            "url": "acc://pv2-cust-5.acme/data",
+            "partition": "acc://bvn-BVN1.acme",
+            "block": 50,
+            "roles": [
+              "principal-chain"
+            ]
+          },
+          {
+            "url": "acc://bvn-BVN1.acme/ledger",
+            "partition": "acc://bvn-BVN1.acme",
+            "block": 50,
+            "roles": [
+              "system-ledger"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/1",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page",
+              "voter"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/2",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book/1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-page"
+            ]
+          }
+        ],
+        "pagesBound": 7,
+        "unproven": [
+          "g1_vote_held"
+        ],
+        "authorizationMode": "authorities_required",
+        "arrivals": [
+          {
+            "kind": "signature",
+            "account": "acc://pv2-bank-5.acme/book/1",
+            "block": 65
+          }
+        ]
+      }
+    },
+    {
+      "name": "executor-version-before-baikonur",
+      "description": "the proven system ledger holds executor version 5 (V2, before Baikonur): authority sets were copied at creation and the delegation path differs, so the document is refused by name",
+      "file": "executor-version-before-baikonur.json",
+      "sha256": "36d46a85d6a6436ed7cb37085620b9c4fea34e4abe84a666bb58a50121a68736",
+      "expect": "refused",
+      "state": "g1_executor_version_unsupported",
+      "partition": "BVN1",
+      "block": 50
+    }
+  ]
+}
