@@ -197,6 +197,14 @@ func TestJudgeProofV2RefusesEveryCraftedMemberOfARealCertificate(t *testing.T) {
 		}
 		t.Errorf("%s\n   %d mutation(s), e.g.\n   %s", k, len(byClass[k]), strings.Join(show, "\n   "))
 	}
+	keys := make([]string, 0, len(unread))
+	for k := range unread {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		t.Logf("not read: %s (e.g. %s)", k, unread[k])
+	}
 	checkCraftedUnread(t, unread)
 }
 
@@ -226,7 +234,9 @@ var craftedUnread = unreadTable(
 		"the authorities and the extra authorities, each signature's bytes, signer and block, and each vote's authority, origin and block; it "+
 		"checks them against the proven pages. The version, the vote values, the ids and a fact whose page is not among the proven pages "+
 		"(a block comparison with nothing to compare) are not read here, and every fact is re-derived from the evidence by verifyIntentProof "+
-		"(govvote.Evidence), which runs after judgeProofV2 and refuses the record the evidence does not reach",
+		"(govvote.Evidence), which runs after judgeProofV2 and refuses the record the evidence does not reach; "+
+		"a signature given as well-formed with its TransactionHash absent (the hollow-signature mutation) is accepted because the hash is not "+
+		"among the signature's fields the binding reads",
 		"certificate/vote_evidence/authorities", "certificate/vote_evidence/authorities/*", "certificate/vote_evidence/authoritySet",
 		"certificate/vote_evidence/signatures/*/fact",
 		"certificate/vote_evidence/signatures/*/fact/Block", "certificate/vote_evidence/signatures/*/fact/Signer",
