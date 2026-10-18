@@ -32,6 +32,7 @@ one block. Like the v14 anchor set, the switch is a **committed fact**, not a da
 | A second activation, or one after the first, is refused by name | 18 | The activation cannot be replayed, moved or undone. |
 | Recorded append-only at its height H (`/certen/g1_activation`), in force from block H+1 | - | A block is judged identically however often it is executed. |
 | Blocks at height > H must carry evidence 2.1; a 2.0 certificate is refused (`ErrIntentProofV21Missing`) | 10 (intent certificate refused) | After H, every intent is bound by govRoot v4. |
+| Blocks at height > H read a published cost basis of zero (base, or per-leg on a multi-leg chain) as no bound: the chain is unpriced, `ENTITLEMENT_UNPRICED` (PV2-F3, with an anchor set in force) | 4 | A zero sums to nothing and passes every ceiling; v14 counted a listed zero as a price and keeps doing so until H, so the change forks nothing. Every validator must run this binary before the activation is signed. |
 | Blocks at height <= H are decided exactly as rules v14 decide them; a certificate carrying 2.1 is refused (`ErrIntentProofV21NotInForce`, beside `ErrIntentProofV3NotInForce`) | 10 | Before H nothing changes, so v15 continues v14 history without a reset. |
 
 The accepted activation's id (`g1-activation:<hex SigningBytes>`) goes into the app hash. `IndexCommittedHistory`

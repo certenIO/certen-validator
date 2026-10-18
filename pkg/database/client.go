@@ -10,6 +10,8 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"strconv"
+	"strings"
 	"time"
 
 	_ "github.com/lib/pq" // PostgreSQL driver
@@ -88,11 +90,47 @@ func NewClient(cfg *config.Config, opts ...ClientOption) (*Client, error) {
 
 	client.logger.Printf("Connected to database (max_conns=%d, min_conns=%d, max_lifetime=%s, max_idle=%s)",
 		cfg.DatabaseMaxConns, cfg.DatabaseMinConns, lifetime, idleTime)
+	client.reportPoolBudget(ctx)
 
 	client.stopCh = make(chan struct{})
 	go client.connectionHealthMonitor()
 
 	return client, nil
+}
+
+// reportPoolBudget says, once at start, whether the fleet's pools fit the server's max_connections. The fleet is the
+// configured validator count (ATTESTATION_PEERS plus this one) and the pool is DATABASE_MAX_CONNS; the server's limit is
+// read with SHOW max_connections. A fleet that can ask for more than the server allows is warned about loudly, naming both
+// numbers; it never stops the start (the pools and the limit are the operator's). A limit that cannot be read is said so,
+// never assumed.
+func (c *Client) reportPoolBudget(ctx context.Context) {
+	if c.config.DatabaseMaxConns <= 0 {
+		// database/sql treats 0 as no limit at all; there is no pool to budget, and saying so is the honest line.
+		c.logger.Printf("⚠️ [DB-POOL] DATABASE_MAX_CONNS is %d, which database/sql reads as no limit; the pool budget is not checked", c.config.DatabaseMaxConns)
+		return
+	}
+	var raw string
+	if err := c.db.QueryRowContext(ctx, `SHOW max_connections`).Scan(&raw); err != nil {
+		c.logger.Printf("⚠️ [DB-POOL] the server's max_connections could not be read (%v); the pool budget of %d connection(s) per validator is not checked",
+			err, c.config.DatabaseMaxConns)
+		return
+	}
+	serverMax, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil {
+		c.logger.Printf("⚠️ [DB-POOL] the server reports max_connections=%q, which is not a number; the pool budget is not checked", raw)
+		return
+	}
+	budget := config.PoolBudget{
+		PerValidator: c.config.DatabaseMaxConns,
+		Validators:   config.ConfiguredValidatorCount(c.config.AttestationPeers),
+		ServerMax:    serverMax,
+	}
+	if w := budget.Warning(); w != "" {
+		c.logger.Print(w)
+		return
+	}
+	c.logger.Printf("[DB-POOL] %d connection(s) x %d validator(s) = %d fits the server's max_connections of %d",
+		budget.PerValidator, budget.Validators, budget.Demand(), budget.ServerMax)
 }
 
 // connectionHealthMonitor periodically pings the DB and forces pool reset on failure.

@@ -74,18 +74,51 @@ func sortedChains(perChain map[int64]int64) []int64 {
 	return ids
 }
 
-// UnpricedChains is the chains a block settles on for which the header publishes no cost basis, ascending.
+// basisBounds says whether a published basis is a bound for a chain a block settles `legs` legs on. A basis is a bound only
+// if it is positive where the block multiplies it: the base always (every block that touches the chain pays it once), the
+// per-leg figure when there is more than one leg (it is what each further leg adds). A zero there is not a cheap price, it is
+// no price - the cost sums to nothing and the chain passes any ceiling - which is what an unpriced chain does and what the
+// binding ceiling exists to stop (PV2-F3: the live epoch listed Telcoin Adiri at 0/0). A per-leg figure of zero on a
+// single-leg block is not multiplied by anything, so it does not make that block unbounded.
+//
+// This is a rule of execution rules v15 (a block decided from the height after the cross-partition activation). Rules v14
+// was already deciding blocks when the zero entry was found, and it counted a listed zero as a price; changing that
+// verdict inside v14 would decide the same bytes two ways on a chain whose history holds such a block, so the v14 reading
+// is kept exactly (requireBound false) until the governed activation moves the chain to v15.
+//
+// A negative basis is not judged here: the cost functions report it as invalid, before this is asked.
+func basisBounds(b entitlement.ChainCostBasis, legs int64) bool {
+	if b.BaseMicroUSD <= 0 {
+		return false
+	}
+	return legs <= 1 || b.PerLegMicroUSD > 0
+}
+
+// UnpricedChains is the chains a block settles on for which the header publishes no cost basis, ascending - rules v14's
+// reading, in which a listed basis of zero is a price.
 func UnpricedChains(vb *ValidatorBlock, h entitlement.Header) []int64 {
+	return unpricedChains(vb, h, false)
+}
+
+// UnpricedChainsBounded is UnpricedChains under rules v15: a published basis that is not a bound (basisBounds) is unpriced
+// too.
+func UnpricedChainsBounded(vb *ValidatorBlock, h entitlement.Header) []int64 {
+	return unpricedChains(vb, h, true)
+}
+
+func unpricedChains(vb *ValidatorBlock, h entitlement.Header, requireBound bool) []int64 {
 	var out []int64
-	for _, id := range sortedChains(legsPerChain(vb)) {
-		if _, found := h.CostBasisFor(id); !found {
+	perChain := legsPerChain(vb)
+	for _, id := range sortedChains(perChain) {
+		basis, found := h.CostBasisFor(id)
+		if !found || (requireBound && basis.BaseMicroUSD >= 0 && basis.PerLegMicroUSD >= 0 && !basisBounds(basis, perChain[id])) {
 			out = append(out, id)
 		}
 	}
 	return out
 }
 
-// WorstCaseCostMicroUSD bounds what executing this block can cost, in micro-USD.
+// WorstCaseCostMicroUSD bounds what executing this block can cost, in micro-USD - rules v14's reading.
 //
 // Returns ok=false when no basis was published for a chain the block touches,
 // and an error when a published basis is negative or the bound overflows int64.
@@ -94,8 +127,19 @@ func UnpricedChains(vb *ValidatorBlock, h entitlement.Header) []int64 {
 // unpriced chain admitted would spend without a ceiling, and admitting it as
 // zero would let it bypass the ceiling entirely. Before v14 the caller skipped
 // the ceiling, and keeps doing so for blocks below the v14 activation, so
-// committed history replays exactly.
+// committed history replays exactly. A listed basis of zero is a price here, as it
+// was when v14 began deciding blocks; WorstCaseCostMicroUSDBounded is the v15 reading.
 func WorstCaseCostMicroUSD(vb *ValidatorBlock, h entitlement.Header) (total int64, ok bool, err error) {
+	return worstCaseCost(vb, h, false)
+}
+
+// WorstCaseCostMicroUSDBounded is WorstCaseCostMicroUSD under rules v15 (PV2-F3): it also reports ok=false when a published
+// basis is not a bound - zero where the block multiplies it (basisBounds) - because that sums to nothing and passes any ceiling.
+func WorstCaseCostMicroUSDBounded(vb *ValidatorBlock, h entitlement.Header) (total int64, ok bool, err error) {
+	return worstCaseCost(vb, h, true)
+}
+
+func worstCaseCost(vb *ValidatorBlock, h entitlement.Header, requireBound bool) (total int64, ok bool, err error) {
 	perChain := legsPerChain(vb)
 	if len(perChain) == 0 {
 		// No chain targets: nothing will execute on any chain, so the bound is
@@ -111,6 +155,9 @@ func WorstCaseCostMicroUSD(vb *ValidatorBlock, h entitlement.Header) (total int6
 		}
 		if basis.BaseMicroUSD < 0 || basis.PerLegMicroUSD < 0 {
 			return 0, false, fmt.Errorf("negative cost basis for chain %d", chainID)
+		}
+		if requireBound && !basisBounds(basis, legs) {
+			return 0, false, nil
 		}
 
 		// base + perLeg * (legs - 1). Legs beyond the first cost their MARGINAL

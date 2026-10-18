@@ -143,7 +143,7 @@ func loadConfig() (*Config, error) {
 
 		// Database Configuration - REQUIRED, no default for security
 		DatabaseURL:         getEnv("DATABASE_URL", ""),
-		DatabaseMaxConns:    getEnvInt("DATABASE_MAX_CONNS", 25),
+		DatabaseMaxConns:    getEnvInt("DATABASE_MAX_CONNS", DefaultDatabaseMaxConns), // 12: seven validators fit one server (db_pool_budget.go)
 		DatabaseMinConns:    getEnvInt("DATABASE_MIN_CONNS", 5),
 		DatabaseMaxIdleTime: getEnvInt("DATABASE_MAX_IDLE_TIME", 300), // 5 minutes
 		DatabaseMaxLifetime: getEnvInt("DATABASE_MAX_LIFETIME", 3600), // 1 hour
@@ -155,7 +155,7 @@ func loadConfig() (*Config, error) {
 		DBPassword:        getEnv("DB_PASSWORD", ""),
 		DBName:            getEnv("DB_NAME", "certen_validator"),
 		DBSSLMode:         getEnv("DB_SSL_MODE", "require"),
-		DBMaxOpenConns:    getEnvInt("DB_MAX_OPEN_CONNS", 25),
+		DBMaxOpenConns:    getEnvInt("DB_MAX_OPEN_CONNS", DefaultDatabaseMaxConns),
 		DBMaxIdleConns:    getEnvInt("DB_MAX_IDLE_CONNS", 5),
 		DBConnMaxLifetime: getEnvDuration("DB_CONN_MAX_LIFETIME", time.Hour),
 
