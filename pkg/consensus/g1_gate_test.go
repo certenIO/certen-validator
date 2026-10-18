@@ -1,6 +1,8 @@
 package consensus
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -206,14 +208,15 @@ func TestAppJudgesTheCertificateByTheActivationInForceAtItsHeight(t *testing.T) 
 	}
 }
 
-// as21Verifier is the proof verifier of the 2.1 acceptance tests, and the one thing in them that is not the production
-// path. Evidence 2.1's document verifier is delivered by RB9-C1 (pkg/proof/v2), not by this change, so a real 2.1 document
-// cannot yet be built here. This verifier runs the REAL VerifyFromSpine on the production proof (the 2.0 form of the same
-// document: S1-S2, the receipt, the spine, the pages) and presents the report it gives as that of a 2.1 document:
-// every page is listed as proven on the transaction's partition at its anchor block, with every role. It therefore tests
-// what this change adds - the activation gate, BindProofV21 over the intent's own vote evidence, govRoot v4 and the
-// message - and nothing of 2.1's own verification. The integrated test over a real 2.1 document
-// (TestRulesV15AcceptsAVerifiedEvidence21, to be added when RB9-C1 merges) is the merge condition recorded in the PR.
+// as21Verifier is the proof verifier of the GATE tests of this file, a test seam for the one thing they cannot build: a 2.1 document
+// for the production fixture's intent (that intent's pages are not captured in the 2.1 form, and Kermit no longer serves them). It
+// runs the REAL VerifyFromSpine on the production proof (the 2.0 form of the same document: S1-S2, the receipt, the spine, the pages;
+// the 2.1 members the gate tests add - votes, partitions, roles - are removed first because the 2.0 entry point refuses them) and
+// presents the report it gives as that of a 2.1 document: every page is listed as proven on the transaction's partition at its
+// anchor block, with every role. These tests therefore pin what the gate adds - the activation, BindProofV21 over the intent's own
+// vote evidence, govRoot v4 and the message - and nothing of 2.1's own verification. That is TestRulesV15AcceptsAVerifiedEvidence21
+// (g1_real21_test.go), which runs the real VerifyEvidence21FromSpine over the real stored 2.1 document; production never names a
+// verifier (defaultProofV2Verifier).
 func as21Verifier(t *testing.T) proofV2Verifier {
 	t.Helper()
 	return func(ev *proofv2.Evidence, l *ledger.AccumulateSpineLog, pinned [32]byte) (*proofv2.Report, error) {
@@ -222,6 +225,11 @@ func as21Verifier(t *testing.T) proofV2Verifier {
 		}
 		twoZero := *ev
 		twoZero.Version = proofv2.Version
+		twoZero.Votes = nil
+		twoZero.Pages = append([]proofv2.PageState(nil), ev.Pages...)
+		for i := range twoZero.Pages {
+			twoZero.Pages[i].Partition, twoZero.Pages[i].Roles = "", nil
+		}
 		rep, err := proofv2.VerifyFromSpine(&twoZero, l, pinned)
 		if err != nil {
 			return nil, err
@@ -268,7 +276,7 @@ func evidence21(t *testing.T, f *intentFixtureV3, spine *ledger.AccumulateSpineL
 	}
 	for _, v := range gev.Votes {
 		ev.Votes = append(ev.Votes, proofv2.Vote{Authority: v.Fact.Authority, Origin: v.Fact.Origin, Vote: v.Fact.Vote.String(),
-			Transport: proofv2.VoteTransport{Kind: proofv2.TransportInline}, Message: v.Fact.ID})
+			Transport: proofv2.VoteTransport{Kind: proofv2.TransportInline}, Message: voteMessageOf(v.Fact.ID)})
 	}
 	return ev
 }
@@ -344,4 +352,12 @@ func TestACertificateOverEvidence21IsAcceptedFromTheNextHeight(t *testing.T) {
 	if _, err := verifyIntentCertificate(vb, intentChain, reg, spine, g1Active, short); !errors.Is(err, ErrIntentProofV2Invalid) {
 		t.Fatalf("a 2.1 report whose pages lack their roles: %v", err)
 	}
+}
+
+// voteMessageOf is the vote's entry hash in the principal's signature chain as a 2.1 document records it (hex32). The gate tests'
+// documents are built from the production vote evidence, which names the vote by its transaction id; govRoot v4 commits the message as
+// bytes, so the stand-in document gives it the hash of that id.
+func voteMessageOf(id string) string {
+	h := sha256.Sum256([]byte(id))
+	return hex.EncodeToString(h[:])
 }
