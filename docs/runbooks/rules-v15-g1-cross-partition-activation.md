@@ -42,8 +42,10 @@ ValidatorBlock's code, or an acceptance with no activation recorded for it).
 
 **Chosen behaviour, as for the v14 anchor set: the first committed activation is the v15 switch height.** Before it:
 
-- every block is decided exactly as v14 decided it (proved by the existing consensus test suite, the committed-history
-  replay in the v14 -> v15 rehearsal, and the rehearsal's step 2: 2.0 intents are still decided as before);
+- every block is decided exactly as v14 decided it. Proved three ways: the existing consensus test suite; the app hashes
+  and result codes of a fixed pre-activation history, measured at the rules v14 head (d20f693) and asserted by the v15
+  binary (`TestRulesV15PreActivationDecisionsAreV14s`); and the rehearsal's step 2 (the v14 chain's committed history
+  re-checked under the v15 binary, uncertified blocks decided as before);
 - a certificate carrying evidence 2.1 is refused by name;
 - proposers still build 2.0 certificates, so **no intent is held** by the deploy (unlike v14, which held intents until its
   anchor set existed).
@@ -143,8 +145,11 @@ certified under weaker evidence** - which is why the shadow run must exercise th
   proven page as `(partition, block, role)`, and verifies offline with `proofverify` and `@certen/proof-verify`. A
   validator log line `[INTENT-CERT] REJECTED ... ErrIntentProofV21Missing` means a proposer built a 2.0 certificate after H
   (a node still on the v14 build); the block is refused by every node and the intent retried.
-- A certificate with evidence 2.0 at height H+1 is refused with `ErrIntentProofV21Missing` and one with 2.1 is accepted
-  (`TestRulesV15UpgradeAndG1ActivationRehearsalOnALiveNetwork` step 4 pins both on every node).
+- A certificate with evidence 2.0 at height H+1 is refused with `ErrIntentProofV21Missing` and one with 2.1 is accepted;
+  the same blocks at H and below are decided as v14 decided them (`TestAppJudgesTheCertificateByTheActivationInForceAtItsHeight`,
+  `TestACertificateOverEvidence21IsAcceptedFromTheNextHeight`, `TestTheCertificateGateFollowsTheActivation`; the
+  2.1 acceptance test uses the real binding and govRoot v4 over the production proof and a stand-in verifier for 2.1
+  documents until RB9-C1's verifier is merged - see the pull request).
 - Restart the **whole fleet**: it comes back on one chain, stamped v15, app version 15, equal app hashes, and every node
   answering `g1-activate status` with the same H.
 
@@ -164,20 +169,35 @@ certified under weaker evidence** - which is why the shadow run must exercise th
 `ValidatorApp`, driven with the `validator-rotate` binary built from the tree over each node's RPC, with throwaway admin
 keys (2 of 3):
 
-1. The chain as v14 left it (the anchor set committed, state stamped v14) and a 2.0 intent decided.
-2. The upgrade: each ledger put back as the v14 binary wrote it, the fleet stopped, every node runs the v15 boot history
-   check over its own block and state stores, the fleet restarts: app version 15, stamp v14, `history-check --rules 15`
-   exits 0, `g1-activate status` reports none in force, and 2.0 intents are still decided exactly as before.
+1. The chain as v14 leaves it: a refused admin rotation, a block naming a retired anchor accepted (v13's verdict), the
+   anchor set committed through the tool (v14's activation, state stamped v14), then a retired anchor refused with code 17
+   and the committed anchors accepted.
+2. The upgrade: each ledger put back as the v14 binary wrote it (v14's history-check watermark), the fleet stopped, every
+   node runs the v15 boot history check over its own block and state stores, the fleet restarts: app version 15, stamp
+   still v14, `history-check --rules 15` exits 0, `g1-activate status` reports not yet activated, and blocks are decided
+   as before.
 3. The activation through the tool: propose, a NO-GO preflight with one approval, sign, a GO preflight, submit. Every node
-   records it at the same height H.
-4. From H+1: a 2.0 certificate is refused (`ErrIntentProofV21Missing`) on every node and a 2.1 certificate is accepted.
-5. `history-check --rules 15` passes with the activation found in its record; a whole-fleet restart comes back on one chain,
-   stamped v15, equal app hashes.
+   records it at the same height H, state stamped v15, in force at H+1 and not at H.
+4. After H: a second submit is NO-GO by name, a second proposal is refused ("activates once"), the same activation signed by
+   other admins is refused in a later block (code 18), blocks are decided as before, `history-check --rules 15` passes with
+   the activation found in its record. (The network's blocks are uncertified - no BLS registry - so the certificate rule
+   itself is pinned by the app-level tests above, not by the network.)
+5. A whole-fleet restart comes back on one chain, stamped v15, app version 15, equal app hashes, every node answering
+   `/certen/g1_activation` identically.
 
 `validator-rotate`'s own tests (`TestG1Activate...`) pin the tool: it builds an activation the chain's rule accepts with 2
 of 3 admins; preflight is NO-GO for a node on app version 14, for nodes that disagree, for an activation that already
 exists and for fewer than the threshold; submit refuses on a NO-GO and commits nothing; `status` prints none, then H; and
 `history-check --rules 15` finds an accepted activation without its record.
+
+## Known limits at this change (carried to the pull request)
+
+- Discovery (`pkg/intent`, the proof v2 gate) still builds evidence 2.0; the builder of 2.1 documents and the verification
+  of 2.1 (`pkg/proof/v2`) are RB9-C1 and RB9-E. Activating before they are deployed on all 7 would hold every intent
+  (retried, never certified under weaker evidence). Hence: deploy this branch only after RB9-B and RB9-C1 are merged and
+  deployed, and sign the activation only after the shadow exit.
+- govRoot v4 exists in Go only (`pkg/intentcert`, `pkg/execution/contracts`); a Solidity recomputation of the root, if the
+  anchor contract has one, has no v4 domain. The certificate is checked by consensus and by `execution.CheckIntentCertificate`.
 
 ## Related
 
