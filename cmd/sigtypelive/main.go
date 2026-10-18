@@ -23,6 +23,7 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -46,7 +47,7 @@ func main() {
 		dataRoot = fs.Bool("data-root", false, "write each intent to <adi>/data (the one principal CERTEN binds to the ADI's account); needs one ADI per case: -n <k> -cases <case>")
 		fund     = fs.String("fund", "0", "accounts: fund each deployed account up to this many wei (sender key from ETH_PRIVATE_KEY)")
 		rpc      = fs.String("rpc", "", "JSON-RPC URL of the target chain (accounts)")
-		wait     = fs.Duration("wait", 5*time.Minute, "how long to wait for each transaction")
+		wait     = fs.Duration("wait", 0, "how long to wait for each transaction (0: the command's default - rerun 60m, the rest 5m)")
 		base     = fs.String("base", "", "rerun: the proofs service / gateway base URL to read settlement and proofs from")
 		ssh      = fs.String("ssh", "", "rerun: read-only ssh target (user@host) for settlement and offline verification")
 		verify   = fs.String("verify", "", "rerun: offline verification command, with {proof} and {tx}, e.g. 'proofverify --offline --governance --l5 --proof-id {proof}'")
@@ -55,7 +56,8 @@ func main() {
 	_ = fs.Parse(os.Args[2:])
 	dataAtRoot = *dataRoot
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Minute)
+	*wait = resolveWait(cmd, *wait)
+	ctx, cancel := context.WithTimeout(context.Background(), overallTimeout(cmd, *wait, *cases))
 	defer cancel()
 	a := &app{
 		k:   newKermit(*endpoint),
@@ -95,6 +97,37 @@ func main() {
 	if err != nil {
 		fatal("%v", err)
 	}
+}
+
+// Waits (RB8-E): a rerun waits for the lifecycle to be `complete`, which takes about 6 minutes for the Accumulate
+// certificate and about 20 for the target chain's finality before the proof forms (more on a slow chain), so its default
+// is 60 minutes; the 25 it used to wait ended runs that were still healthy. A submit only waits for delivery.
+const (
+	rerunWait   = 60 * time.Minute
+	defaultWait = 5 * time.Minute
+)
+
+// resolveWait is the per-transaction wait: the one given, else the command's own default.
+func resolveWait(cmd string, given time.Duration) time.Duration {
+	if given > 0 {
+		return given
+	}
+	if cmd == "rerun" {
+		return rerunWait
+	}
+	return defaultWait
+}
+
+// overallTimeout bounds the whole command: a rerun waits up to `wait` for each of its cases in turn.
+func overallTimeout(cmd string, wait time.Duration, cases string) time.Duration {
+	if cmd != "rerun" {
+		return 60 * time.Minute
+	}
+	n := 10 // all the cases
+	if strings.TrimSpace(cases) != "" {
+		n = strings.Count(cases, ",") + 1
+	}
+	return wait*time.Duration(n) + 30*time.Minute
 }
 
 func usage() {
