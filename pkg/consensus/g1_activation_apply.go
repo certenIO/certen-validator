@@ -94,6 +94,17 @@ func (app *ValidatorApp) g1ActivationInForce(h int64) *ledger.G1ActivationRecord
 	return G1ActivationAt(log, h)
 }
 
+// G1CrossPartitionRequired implements intent.ProofV2G1Gate: whether the next block requires evidence 2.1 in every v3 certificate, read
+// from the same committed state as G1ActivationContext. The intent discovery asks it per intent, so it builds 2.1 exactly when the
+// activation is in force and otherwise behaves as before.
+func (app *ValidatorApp) G1CrossPartitionRequired() (bool, error) {
+	g, err := app.G1ActivationContext()
+	if err != nil {
+		return false, err
+	}
+	return G1CrossPartitionRequired(g), nil
+}
+
 // G1ActivationContext is the activation in force for the next block, nil when none is recorded - read from the same
 // committed state FinalizeBlock judges by. A proposer builds intent certificates against it (BuildIntentCertificate).
 func (app *ValidatorApp) G1ActivationContext() (*ledger.G1ActivationRecord, error) {

@@ -48,11 +48,6 @@ type Shadow struct {
 	builds chan job
 	stored int // major records already stored
 	mu     sync.Mutex
-
-	// Allow21 lets Prove return evidence 2.1 for an intent's certificate. It is false until the rules that accept 2.1 are in force (design
-	// D7, RB9 Phase C2): the shadow always builds and verifies 2.1 for a capture that holds pages on other partitions, but a certificate
-	// never carries a document consensus refuses.
-	Allow21 bool
 }
 
 type job struct{ intentID, account, tx, bvn string }
@@ -223,7 +218,7 @@ func (s *Shadow) buildLoop() {
 func (s *Shadow) build(j job) {
 	ctx, cancel := context.WithTimeout(context.Background(), certifyWait+10*time.Minute)
 	defer cancel()
-	ev, rep, err := s.buildOne(ctx, j, 0, false)
+	ev, rep, err := s.buildOne(ctx, j, 0, false, false)
 	s.record(ctx, j, ev, rep, err)
 }
 
@@ -269,8 +264,23 @@ func (s *Shadow) storePortable(ctx context.Context, intentID string, ev *proofv2
 
 // Prove builds an intent's v2 evidence now, for its intent certificate (docs/proof/GOVROOT_V3.md): from the pages
 // captured at discovery - waiting for that capture to be recorded - on no more than maxMajors major blocks, the
-// checkpoints the chain has verified. The result is also stored, as a shadow build's is.
+// checkpoints the chain has verified. The result is also stored, as a shadow build's is. It is the certificate of a chain on which the rules
+// v15 cross-partition activation is NOT in force: an intent whose governing pages are on other partitions is answered
+// g1_evidence_21_not_in_force and retried (ProveG1 builds it once the activation is in force).
 func (s *Shadow) Prove(ctx context.Context, intentID, account, tx, bvn string, maxMajors uint64) (*proofv2.Evidence, error) {
+	return s.prove(ctx, intentID, account, tx, bvn, maxMajors, false)
+}
+
+// ProveG1 is Prove for a chain on which the rules v15 activation is in force when g1InForce is true: from the block after the
+// activation consensus requires evidence 2.1 in every v3 certificate (a 2.0 certificate is refused, ErrIntentProofV21Missing), so the
+// intent is proven as 2.1 whether its governing pages are on one partition or several. With g1InForce false it is Prove. The activation
+// is the proposer's own view (consensus G1ActivationContext), read per intent: no setting of the shadow can say whether a governed
+// activation has happened.
+func (s *Shadow) ProveG1(ctx context.Context, intentID, account, tx, bvn string, maxMajors uint64, g1InForce bool) (*proofv2.Evidence, error) {
+	return s.prove(ctx, intentID, account, tx, bvn, maxMajors, g1InForce)
+}
+
+func (s *Shadow) prove(ctx context.Context, intentID, account, tx, bvn string, maxMajors uint64, g1InForce bool) (*proofv2.Evidence, error) {
 	if maxMajors == 0 {
 		return nil, fmt.Errorf("proof v2: the chain has verified no major block to start from")
 	}
@@ -292,7 +302,7 @@ func (s *Shadow) Prove(ctx context.Context, intentID, account, tx, bvn string, m
 		}
 	}
 	j := job{intentID, account, tx, bvn}
-	ev, rep, err := s.buildOne(ctx, j, maxMajors, true)
+	ev, rep, err := s.buildOne(ctx, j, maxMajors, true, g1InForce)
 	s.record(ctx, j, ev, rep, err)
 	if err != nil {
 		return nil, fmt.Errorf("proof v2: %w", err)
@@ -307,11 +317,17 @@ type buildPlan struct {
 }
 
 // planBuild decides the document for a capture. A capture with pages on other partitions needs 2.1. A proof for an intent's certificate
-// (prove) may carry 2.1 only when allow21: until the rules switch (design D7) consensus refuses it, so the certificate path is given the
-// named state g1_evidence_21_not_in_force, never a document that fails later. The shadow (not prove) builds and verifies it either way.
+// (prove) may carry 2.1 only when allow21, which is the proposer's view that the rules v15 activation is in force for the next block (design
+// D7): until then consensus refuses 2.1, so the certificate path is given the named state g1_evidence_21_not_in_force, never a document that
+// fails later. From the block after the activation consensus REFUSES a 2.0 certificate (ErrIntentProofV21Missing), so with allow21 a
+// certificate proof is 2.1 for every capture, one partition or several; the activation is read per intent, never configured. The shadow
+// (not prove) builds and verifies 2.1 for a foreign capture either way.
 func planBuild(cp *Capture, prove, allow21 bool) (*buildPlan, error) {
 	if cp == nil {
 		return &buildPlan{}, nil
+	}
+	if prove && allow21 {
+		return &buildPlan{is21: true}, nil
 	}
 	if cp.HasForeignPages() {
 		if prove && !allow21 {
@@ -327,7 +343,7 @@ func planBuild(cp *Capture, prove, allow21 bool) (*buildPlan, error) {
 	return &buildPlan{pages: pages}, nil
 }
 
-func (s *Shadow) buildOne(ctx context.Context, j job, maxMajors uint64, prove bool) (*proofv2.Evidence, *proofv2.Report, error) {
+func (s *Shadow) buildOne(ctx context.Context, j job, maxMajors uint64, prove, allow21 bool) (*proofv2.Evidence, *proofv2.Report, error) {
 	raw, ok, err := s.repo.Captured(ctx, j.intentID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("load captured pages: %w", err)
@@ -339,7 +355,7 @@ func (s *Shadow) buildOne(ctx context.Context, j job, maxMajors uint64, prove bo
 			return nil, nil, fmt.Errorf("decode captured pages: %w", err)
 		}
 	}
-	if plan, err = planBuild(cp, prove, s.Allow21); err != nil {
+	if plan, err = planBuild(cp, prove, allow21); err != nil {
 		return nil, nil, err
 	}
 	pages := plan.pages
@@ -367,6 +383,12 @@ func (s *Shadow) buildOne(ctx context.Context, j job, maxMajors uint64, prove bo
 				case <-time.After(15 * time.Second):
 				}
 				continue
+			}
+			// A certificate's proof is never a document the binding will refuse: a report that left anything unproven (the votes not
+			// re-evaluated, a vote held, ...) is not a verified S3, so the intent is held with the state that says what is missing.
+			if err == nil && prove && rep != nil && len(rep.Unproven) > 0 {
+				u := rep.Unproven[0]
+				return nil, rep, &u
 			}
 			return ev, rep, err
 		}
@@ -447,6 +469,15 @@ func (l *Lazy) Build(intentID, account, tx, bvn string) {
 func (l *Lazy) Prove(ctx context.Context, intentID, account, tx, bvn string, maxMajors uint64) (*proofv2.Evidence, error) {
 	if s := l.p.Load(); s != nil {
 		return s.Prove(ctx, intentID, account, tx, bvn, maxMajors)
+	}
+	return nil, fmt.Errorf("proof_v2_not_ready: the spine walk from the pinned incarnation's genesis has not finished")
+}
+
+// ProveG1 implements intent.ProofV2G1Prover: Prove for a chain on which the rules v15 activation is in force. Before the spine walk
+// finishes there is nothing to prove from, by name.
+func (l *Lazy) ProveG1(ctx context.Context, intentID, account, tx, bvn string, maxMajors uint64, g1InForce bool) (*proofv2.Evidence, error) {
+	if s := l.p.Load(); s != nil {
+		return s.ProveG1(ctx, intentID, account, tx, bvn, maxMajors, g1InForce)
 	}
 	return nil, fmt.Errorf("proof_v2_not_ready: the spine walk from the pinned incarnation's genesis has not finished")
 }

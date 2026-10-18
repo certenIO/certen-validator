@@ -390,6 +390,20 @@ type ProofV2Gate interface {
 // SetProofV2Gate installs the gate; without one, no intent is proven for a v3 certificate.
 func (id *IntentDiscovery) SetProofV2Gate(g ProofV2Gate) { id.v2Gate = g }
 
+// ProofV2G1Gate is implemented by a gate that also knows the rules v15 cross-partition activation: whether the NEXT block requires
+// evidence 2.1 in every v3 certificate (read from the same committed state the proposer builds certificates against, consensus
+// G1ActivationContext). A gate without it (rules before v15) never asks for 2.1.
+type ProofV2G1Gate interface {
+	G1CrossPartitionRequired() (bool, error)
+}
+
+// ProofV2G1Prover is implemented by a shadow that can build evidence 2.1 for an intent's certificate. It is called, instead of Prove, only
+// while the activation is in force (g1InForce is then true); an intent whose 2.1 evidence cannot be built is answered by a named state and
+// retried, never certified under 2.0 or a weaker binding.
+type ProofV2G1Prover interface {
+	ProveG1(ctx context.Context, intentID, account, tx, bvn string, maxMajors uint64, g1InForce bool) (*proofv2.Evidence, error)
+}
+
 func (id *IntentDiscovery) SetRepositories(repos *database.Repositories) {
 	id.repos = repos
 	if repos != nil {
@@ -1420,7 +1434,26 @@ func (id *IntentDiscovery) proveV2(ctx context.Context, intentID, accountURL, tx
 	case required && id.v2Shadow == nil:
 		return fmt.Errorf("intent %s: %w: the chain requires proof v2 and no prover is configured", intentID, errChainedProofTerminal)
 	case required:
-		ev, err := id.v2Shadow.Prove(ctx, intentID, accountURL, txHash, partition, maxMajors)
+		// From the block after the rules v15 activation every v3 certificate must carry evidence 2.1; until then the certificate is built
+		// exactly as before. An unreadable activation, or a prover that cannot build 2.1 while it is in force, retries the intent: it is
+		// never proven under the other form.
+		g1InForce := false
+		if gg, ok := id.v2Gate.(ProofV2G1Gate); ok {
+			var err error
+			if g1InForce, err = gg.G1CrossPartitionRequired(); err != nil {
+				return fmt.Errorf("intent %s: %w: whether evidence 2.1 is required: %v", intentID, errChainedProofUnavailable, err)
+			}
+		}
+		var ev *proofv2.Evidence
+		var err error
+		switch p, can := id.v2Shadow.(ProofV2G1Prover); {
+		case g1InForce && !can:
+			return fmt.Errorf("intent %s: %w: evidence 2.1 is required and the prover cannot build it", intentID, errChainedProofUnavailable)
+		case g1InForce:
+			ev, err = p.ProveG1(ctx, intentID, accountURL, txHash, partition, maxMajors, true)
+		default:
+			ev, err = id.v2Shadow.Prove(ctx, intentID, accountURL, txHash, partition, maxMajors)
+		}
 		if err != nil {
 			return fmt.Errorf("intent %s: %w: %v", intentID, errChainedProofUnavailable, err)
 		}
