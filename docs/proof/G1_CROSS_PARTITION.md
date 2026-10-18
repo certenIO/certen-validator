@@ -116,7 +116,7 @@ the evidence budget = consensus block size), `g1_completeness_unproven`. DISCLOS
 block is the Y block that released it, proven by the receipt of its SequencedMessage in Y's synthetic chain. The re-evaluation covers WriteData to a
 non-lite data account (default rules, `chain/write_data.go:35-67`) and to a lite data account (any one vote); a body type with another executor override
 (`chain/update_key.go:48`, `chain/utils.go:16-68`) is `g1_executor_override_unsupported`, never judged by the default rule. Open item for the owner (queued):
-ask the Accumulate operators for a longer `bpt-history-depth` on Kermit.
+ask the Accumulate operators for a longer `bpt-history-depth` on Kermit. Added 2026-10-18 (RB9-C1a-F5, implemented in C1a): `g1_role_mismatch{partition,block}` (a page recorded roles differ from the roles re-derived from the proven states) and `g1_routing_mismatch{partition,block}` (the proven routing table, unchanged since genesis, sends a page to a partition other than the one its anchor names) are refusals of the same kind as the states above; the C1b-1 names are in section 5.
 
 **D7 — Consensus switch (rules v15, stacked on v14).** Mechanics on top of `pv2/rb12-a-rules-v14` (d20f693; `origin/pv2/rb12-a-rules-v14:pkg/consensus/execution_rules.go`:
 `CurrentExecutionRulesVersion = executionRulesV14` at :240, `compatibleContinuations` :258-264, `checkExecutionRulesVersion` :305-312): add `executionRulesV15 = 15`; set
@@ -144,3 +144,75 @@ or reported by name.
 
 ## 4. Acceptance (verifier)
 Every D-statement cites code or a primary source; every unavailable case is a named state; nothing lowers PROOF_V2.md §3 S3.
+
+## 5. Revision 2026-10-18 (RB9 Phase C1b-1: the certified timeline). Added; nothing above is changed.
+
+**What C1a left, and what this delivers.** C1a proved each page against its own partition's anchor and that every counted signature is a member of its page's
+signature chain at B_Y (so arrival <= B_Y), but did not judge a signature against the page as it stood when it arrived. PROOF_V2.md 5.2 steps 2-5 (the
+certified timeline) did not exist in `pkg/proof/v2` at all, for 2.0 either (only step 1, the chain binding). They exist now for 2.1, as follows. Evidence 2.0
+and its goldens are untouched.
+
+**New evidence members (all `omitempty`, 2.1 only; a 2.0 document that carries a 2.1 member is refused as before).**
+- `PageState.History` (`PageHistory`): the page's main chain from entry 0 to its height at B_Y (each entry a binary transaction; an UpdateKey also carries its
+  initiating signature) and its `main-index` chain in full. The verifier folds the entry hashes with `merkle.State` to the `main` chain root bound in
+  `PageState.Chains` and the index entries to the `main-index` root (equal height AND equal pending hashes): an entry inserted, omitted, changed or reordered
+  is `g1_history_fold_mismatch`. The block of main entry j is the first `main-index` entry whose `Source` reaches j (the index must be strictly increasing and
+  end at the last entry). The entries are replayed from the page's genesis transaction with the executor's rules (`govvote.GenesisPage`, `govvote.Replay`: one
+  replay, shared with v1); the replay must end in the proven page in everything that decides who may sign (version, thresholds, blacklist, each entry's key hash
+  and delegate), otherwise `g1_history_head_mismatch`; an entry the replay cannot apply as the executor did is `g1_history_unreplayable` (the replay declining
+  to guess, not a fact about the page).
+- `VoteHop.Arrival` (`Arrival`): the exact arrival block is DERIVED, never claimed (RB9-C1a-F1). The position p of the hop's message in the page's `signature`
+  chain is fixed by its receipt: for a chain of n entries the sequence of Right flags of the receipt of entry p is determined (the bits of p inside its perfect
+  subtree, one Right step for the smaller peaks combined, one non-Right step per larger peak, as `merkle.State.Anchor` combines them), and exactly one p < n has
+  the receipt's shape (unit-tested against an independent step-by-step construction for every chain up to 70 entries). Two ADJACENT `signature-index` entries,
+  each a member of the bound `signature-index` chain at its own derived position, bracket it: the previous entry's `Source` < p <= this entry's `Source`, and this
+  entry's `BlockIndex` is the arrival block (`internal/core/execute/v2/block/utils.go` `addChainAnchor`). A claimed `Block` that differs, a missing previous entry
+  (unless this is index entry 0), non-adjacent entries, or entries that do not bracket p is `g1_arrival_unproven`.
+- `Vote.Counted`: the other signatures the pages on the cause chain counted (a threshold above 1), recorded like hops, with the arrival derived the same way.
+- `Vote.Produced` (`Production`): the block that PRODUCED the vote, for HoldUntil (D6). A sequenced vote: the `SequencedMessage`'s entry in the source
+  partition's synthetic ledger (`acc://bvn-Y.acme/synthetic`, a proven page with the new role `synthetic-chain`) `main` chain, its block derived as above; an
+  inline vote: the vote's own entry in the principal's `signature` chain. A vote produced before the signature that caused it arrived is
+  `g1_block_before_signature`. A vote with no production proof is reported as `g1_vote_held{partition,B_Y}` in `Report.Unproven` (the block that produced it - a
+  HoldUntil release - is not established); a vote WITH the proof is a supported vote judged at its release block, not a disclosure.
+- `Evidence.Transaction`: the governed transaction (binary), whose hash must be `TxHash` and whose principal the evidence's account (`g1_transaction_mismatch`). Its
+  type decides the page blacklist and whether disabled authorities are required (UpdateAccountAuth); its header and body name the extra required authorities
+  (`g1_header_authority_missing` if one has no proven pages). Every carried signature is bound to its chain entry (the `SignatureMessage` hash equals the entry) and
+  a key signature must sign the transaction (`g1_signature_invalid`).
+
+**The re-evaluation (step 5).** The vote model of v1 (`govvote`: the blacklist for the key page and each delegating page, version equality for the key signature
+and not for delegated hops, replacement of the active set by a newer version, Accept/Reject/Response thresholds, Abstain, per-path groups, the first ready page
+of the book, the recorded page checked against the replay) runs on the certified timelines with the derived arrival blocks as its facts. The verifier requires
+its result to equal every recorded vote's Origin and Vote (`g1_vote_not_reproduced`, which also carries the model's own refusal when a recorded fact cannot be
+reconciled with the certified history), and readiness: every required authority (enabled listed authorities, all listed when the type requires authorization,
+plus header and body authorities) voted accept (`g1_authority_not_ready`). With every listed authority disabled and a type that does not require authorization the
+report states `AuthorizationMode = all_authorities_disabled`: readiness is one recorded vote (of any value), exactly what the executor required, and a voter
+outside the list is the disclosure `g1_authority_voter_outside_list`. Otherwise the mode is `authorities_required` and a vote by an authority outside the
+principal's set is refused.
+
+**When the evidence is silent.** Without the transaction, a history for every page a counted signature was recorded on, or the arrival proof of every counted
+signature, the votes are NOT re-evaluated and the report says so by name (`g1_completeness_unproven`, with the missing member in its detail): never a verified S3.
+A carried history is always verified, whatever else is missing.
+
+**What the re-evaluation proves, precisely (RB9-C1b-1-F1).** It proves SUFFICIENCY: the recorded vote is derivable from signatures that were valid when they
+arrived, on pages as they then stood. It does not enumerate every signature recorded on a page for the transaction (the per-transaction signature set is not
+committed by the state tree; the `signature` chain holds the messages of every transaction), so that no other signature - on a lower page of the book or another
+delegation path - would have decided differently is established by the executor's own recorded Origin (the first ready page decided), not re-derived. This is
+stated here and not hidden.
+
+**RB9-C1a-F3 (recorded).** The upper limit of D2 ("the latest Y block whose BlockValidatorAnchor the DN executed at or before the DN block that executed X's anchor
+for B") is not re-checkable by a verifier: the DN execution blocks are not in the evidence. Soundness needs only B_Y >= every counted production and arrival
+block, which the verifier establishes directly: every counted signature and vote is a member of a chain bound at B_Y, and its derived block is not after B_Y. The
+capture keeps the upper limit as a rule it follows, not a fact the verifier relies on.
+
+**RB9-C1a-F5 (done).** `g1_role_mismatch` and `g1_routing_mismatch` are added to D6 (above). New in C1b-1: `g1_history_fold_mismatch`, `g1_history_head_mismatch`,
+`g1_history_unreplayable`, `g1_arrival_unproven`, `g1_vote_not_reproduced`, `g1_authority_not_ready`, `g1_transaction_mismatch`, `g1_signature_invalid`; each carries the
+partition and block it was judged at (the page's partition and B_Y for a history or an arrival, the transaction's for a vote or readiness).
+
+**Evidence 2.0 lacks the fold (finding, 2.0 NOT altered).** `Verify` for 2.0 binds a page's chains at the anchor block (step 1) and nothing more: a 2.0 page is "as of
+the transaction's block", never the timeline that judged a signature, and it carries no history. To establish the fold, 2.0 would need the named state
+`g1_history_unproven{partition,block}` for every page, which its verdict does not carry; 2.0 verdicts stay byte for byte (stop-the-line).
+
+**Not in C1b-1 (next: RB9-C1b-2).** Build/Prove assembling a full 2.1 document from a capture (the capture does not yet record page histories, signature-index
+receipts or the transaction), the Directory cases D2b/D2c, `g1_executor_version_unsupported`, `g1_closure_exceeds_budget`. Open (RB9-C1b-1-F2): a held vote is
+judged at its release block for its production, but the model re-asks the page at the signature's arrival, while the executor re-asks `AuthorityWillVote` at the
+release; the header/initiator/certified-page roles remain `Declared` (the transaction is now carried, so C1b-2 can derive them).
