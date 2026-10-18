@@ -32,7 +32,7 @@ thin view over it (the same rows through the same function, `govsig.ExecutorFloo
 | BVN3 | v2-kourou (9) | 12,491,127 |
 
 Each partition has exactly two entries on its partition ADI main chain: `systemGenesis` and one `activateProtocolVersion`. A block **after** a
-partition's activation block is proven to have been executed by that version or later. A block at or below it (or a partition not in the table)
+partition's activation block is established by the pin. A block at or below it (or a partition not in the table)
 is **not established**: the verifier does not assume the genesis version (the public API's BPT history retention is about 710 blocks, so it cannot be
 read), and says so by name: `g1_executor_version_unsupported` / `g1_executor_version_unproven{partition,block}`.
 

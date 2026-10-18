@@ -69,7 +69,16 @@ func main() {
 	x3 := flag.String("xpartition3", "", "write only the three-way partition suite (the Directory as a partition, D2a-D2c) into this directory")
 	x3b := flag.String("xpartition3b", "", "write only the roles / executor-version / budget suite (the timeline world, RB9 Phase C1b-2) into this directory")
 	x4 := flag.String("xpartition4", "", "write only the verifier-round suite (executor-override gate, committed anchor partition, sequenced production binding, authority-set semantics; RB9 verifier round VA) into this directory")
+	x5 := flag.String("xpartition5", "", "write only the UpdateAccountAuth suite (operations the verifier models and refuses by name; RB9-K, verifier round VR) into this directory")
 	flag.Parse()
+	if *x5 != "" {
+		if err := writeXPartition5(*x5); err != nil {
+			fmt.Println("FAIL:", err)
+			os.Exit(1)
+		}
+		fmt.Println("wrote the UpdateAccountAuth suite to", *x5)
+		return
+	}
 	if *x4 != "" {
 		if err := writeXPartition4(*x4); err != nil {
 			fmt.Println("FAIL:", err)

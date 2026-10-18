@@ -173,3 +173,15 @@ func Cases4() []Case {
 			}},
 	}
 }
+
+// SetAuthorityRoles records a book and its first page as authority pages of the governing set (the roles a document lists when the
+// principal lists the book), for a test that lists a book the default world does not.
+func SetAuthorityRoles(ev *proofv2.Evidence, book, page string) {
+	setRoles(ev, book, proofv2.RoleAuthorityBook)
+	setRoles(ev, page, proofv2.RoleAuthorityPage)
+}
+
+// SetRoles replaces the recorded roles of a page (canonical order); the exported form of the helper the suites use.
+func SetRoles(ev *proofv2.Evidence, page string, roles ...proofv2.PageRole) {
+	setRoles(ev, page, roles...)
+}

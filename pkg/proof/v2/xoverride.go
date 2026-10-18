@@ -32,9 +32,27 @@
 //	                       authority for a lite data account, which is the all-authorities-disabled rule the verifier implements (any one
 //	                       vote), and a non-lite WriteData falls back to the default rule.
 //	UpdateAccountAuth      update_account_auth.go:26-50   additionalAuthorities(the authorities the operations add), then the default rule.
-//	                       NOT an override here: that is exactly Transaction.GetAdditionalAuthorities (protocol/transaction.go), which the verifier
+//	                       NOT an override by TYPE: that is exactly Transaction.GetAdditionalAuthorities (protocol/transaction.go), which the verifier
 //	                       evaluates as required voters, and RequireAuthorization (protocol/access_control.go) is the only type for which it is true,
-//	                       which the verifier implements (an authority listed as disabled still has to accept).
+//	                       which the verifier implements (an authority listed as disabled still has to accept). But it is the one modelled type
+//	                       whose body REWRITES the set the verifier reads: the executor required the principal's authority set BEFORE the
+//	                       transaction (the signatures were admitted, and the transaction found ready, against it), whereas the verifier reads the
+//	                       principal from the account proven at the anchor block, which is the set AFTER it executed (RB9-K, verifier round VR).
+//	                       What is modelled and what is refused, by operation kind (update_account_auth.go Execute; protocol.AccountAuthOperation
+//	                       has exactly these four kinds):
+//	                         AddAccountAuthority     MODELLED. The authority is new (a duplicate fails the transaction), so the set before is the
+//	                                                 set after without it, and the requirement (before-set plus the added authorities) equals the
+//	                                                 after-set the verifier reads. One case cannot be derived: when the before-set is EMPTY the
+//	                                                 principal inherited its parent's authorities, which the document does not carry (the after-set
+//	                                                 is exactly the added authorities): refused by name (refuseUpdateAccountAuthInherited).
+//	                         EnableAccountAuthority  MODELLED. They change only the authority's Disabled flag. RequireAuthorization is true for this
+//	                         DisableAccountAuthority type, so the executor (transaction.go ignoreDisabled) and the verifier (xtimeline.go require) both
+//	                                                 require every listed authority, disabled or not: the flag is not read, and the all-disabled
+//	                                                 mode never applies, so before and after give one requirement.
+//	                         RemoveAccountAuthority  REFUSED by name. The authority was required before and is gone after, and its entry (and so
+//	                                                 the pages the document would have to carry for it) cannot be recovered from the body;
+//	                                                 removing the last authority also makes the principal inherit. refuseExecutorOverride.
+//	                         any other kind          REFUSED by name (a kind the executor adds later is not modelled until it is audited).
 //
 // CreateKeyBook, CreateTokenAccount, CreateDataAccount and CreateToken are the same additionalAuthorities extension as UpdateAccountAuth;
 // they stay refused by name, exactly as the capture has refused them since RB9-B, until their documents are modelled (finding
@@ -75,9 +93,52 @@ func ExecutorOverrideTypes() []protocol.TransactionType {
 // refuseExecutorOverride is the verifier's gate (D6): a carried transaction of an override type is refused before the vote is
 // re-evaluated, with the partition and block of the transaction.
 func refuseExecutorOverride(txn *protocol.Transaction, x xAnchor) error {
-	if txn == nil || txn.Body == nil || !executorOverrides[txn.Body.Type()] {
+	if txn == nil || txn.Body == nil {
 		return nil
 	}
+	if executorOverrides[txn.Body.Type()] {
+		return refusal21(StateExecutorOverrideUnsupported, x.id, x.block,
+			"%v has an executor override of who may sign; the default rule is not what judged it (see xoverride.go)", txn.Body.Type())
+	}
+	// UpdateAccountAuth rewrites the authority set the verifier reads: only the operations that can be inverted from the body are modelled.
+	if body, ok := txn.Body.(*protocol.UpdateAccountAuth); ok {
+		for _, op := range body.Operations {
+			switch op.(type) {
+			case *protocol.AddAccountAuthorityOperation, *protocol.EnableAccountAuthOperation, *protocol.DisableAccountAuthOperation:
+			default:
+				return refusal21(StateExecutorOverrideUnsupported, x.id, x.block,
+					"UpdateAccountAuth operation %v rewrites the principal's authority set in the transaction, and the set the executor required (before it) cannot be derived from the set proven at the anchor block (see xoverride.go)", op.Type())
+			}
+		}
+	}
+	return nil
+}
+
+// refuseUpdateAccountAuthInherited is the one case of a modelled UpdateAccountAuth the proven principal cannot give the requirement of: the
+// principal's own authority list, as proven after the transaction, holds only authorities the transaction added. It listed none before, so
+// the executor required the authorities it inherited from its parent (internal/core/block/shared), which the document does not carry.
+func refuseUpdateAccountAuthInherited(txn *protocol.Transaction, own []protocol.AuthorityEntry, x xAnchor) error {
+	if txn == nil {
+		return nil
+	}
+	body, ok := txn.Body.(*protocol.UpdateAccountAuth)
+	if !ok {
+		return nil
+	}
+	added := map[string]bool{}
+	for _, op := range body.Operations {
+		if a, ok := op.(*protocol.AddAccountAuthorityOperation); ok && a.Authority != nil {
+			added[lk(a.Authority)] = true
+		}
+	}
+	if len(added) == 0 || len(own) == 0 {
+		return nil
+	}
+	for _, e := range own {
+		if !added[lk(e.Url)] {
+			return nil
+		}
+	}
 	return refusal21(StateExecutorOverrideUnsupported, x.id, x.block,
-		"%v has an executor override of who may sign; the default rule is not what judged it (see xoverride.go)", txn.Body.Type())
+		"UpdateAccountAuth adds the first authorities of an account that listed none: the executor required the authorities it inherited from its parent, which the document does not carry (see xoverride.go)")
 }

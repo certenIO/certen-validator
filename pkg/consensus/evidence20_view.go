@@ -20,6 +20,11 @@ import (
 // TestEveryEvidenceFieldIsClassifiedForThe20View fails until it is placed in one list. The view copies the slices a caller could write
 // through (Certify, Hops, Pages); the page chain roots and the validator set proof are shared and only read. It is used by the offline check of a stored certificate (execution.CheckIntentCertificate) as well, so the two cannot judge a 2.0
 // document differently.
+//
+// RB9-K: this view is for a document that is already in memory. A certificate that arrives as JSON is decoded by
+// proofv2.UnmarshalCertifiedEvidence (evidence_decode.go), which decodes a document that does not claim 2.1 into v14's member set only, so a
+// key evidence 2.1 added is ignored whatever its JSON type exactly as v14's decode ignored it (a full decode followed by this view failed on
+// a wrongly typed one: code 1 / REJECT where v14 gave 0 / ACCEPT).
 func Evidence20View(ev *proofv2.Evidence) *proofv2.Evidence {
 	if ev == nil {
 		return nil

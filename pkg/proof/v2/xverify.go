@@ -228,6 +228,20 @@ func verify21(ev *Evidence, rep *Report, in xIn) error {
 		rep.PageChains = append(rep.PageChains, pc)
 	}
 
+	// The principal was read after the transaction executed; an UpdateAccountAuth that gave an account its first authorities cannot be
+	// judged against the set the executor required (xoverride.go).
+	if txn, terr := carriedTransaction(ev, in.x); terr == nil && txn != nil {
+		if u, perr := url.Parse(ev.Account); perr == nil {
+			if pa, ok := byURL[lk(u)]; ok {
+				if fa, ok := pa.acct.(protocol.FullAccount); ok {
+					if err := refuseUpdateAccountAuthInherited(txn, fa.GetAuth().Authorities, in.x); err != nil {
+						return err
+					}
+				}
+			}
+		}
+	}
+
 	// 4. The governing set, re-derived from the proven states - and from every state a page with a certified history passed through, so a
 	// delegate entry removed after a counted signature arrived still puts its book in the set; the recorded roles must equal it.
 	if err := checkExecutorVersion(byURL); err != nil {
