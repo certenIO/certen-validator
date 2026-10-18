@@ -166,7 +166,7 @@ The included `docker-compose.yml` deploys a complete testnet:
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `DATABASE_URL` | Yes | - | PostgreSQL connection string |
-| `DATABASE_MAX_CONNS` | No | 25 | Maximum connection pool size |
+| `DATABASE_MAX_CONNS` | No | 12 | Maximum connection pool size per validator. The validators share one PostgreSQL: the fleet (`ATTESTATION_PEERS` plus this one) times this must fit the server's `max_connections` (100 by default); a validator reads `SHOW max_connections` at start and logs one `[DB-POOL]` warning, naming both numbers, if it does not |
 | `DATABASE_REQUIRED` | No | — | Only `true` is accepted; any other value is refused. A validator never starts without its database |
 
 #### Accumulate Integration
