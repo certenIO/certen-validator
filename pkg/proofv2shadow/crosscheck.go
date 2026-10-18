@@ -156,6 +156,10 @@ func (s *Shadow) reportCrossCheck(intentID string, res *CrossCheckResult, err er
 	case err != nil:
 		shadowResults.WithLabelValues("crosscheck", "unavailable").Inc()
 		s.logf("[PROOF-V2-SHADOW] cross-check %s unavailable: %v", intentID, err)
+	case res.OK() && res.Compared == 0:
+		// v1 and the capture share no page: "0 pages compared, agree" would be agreement by vacuity, which the shadow-exit rule must never count
+		shadowResults.WithLabelValues("crosscheck", "unavailable").Inc()
+		s.logf("[PROOF-V2-SHADOW] cross-check %s unavailable: nothing was compared (v1 and the capture share no page)", intentID)
 	case !res.OK():
 		shadowResults.WithLabelValues("crosscheck", "disagree").Inc()
 		s.logf("[PROOF-V2-SHADOW] CROSS-CHECK DISAGREEMENT (stop the line) %s: %s", intentID, res)

@@ -3,6 +3,7 @@
 package proofv2shadow
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"database/sql/driver"
@@ -10,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -234,6 +236,17 @@ func TestCrossCheckContainsAPanicInsideTheComparison(t *testing.T) {
 // The cross-check's series are exported at 0 from the start: an operator reading the metric sees "wired, nothing found" as 0, never as no
 // series at all, which is also what a build without the cross-check shows.
 func TestCrossCheckSeriesAreExportedFromStart(t *testing.T) {
+	// Judged in a fresh process: an earlier test that counts an outcome creates its series, so inside the suite this would pass whether
+	// or not init() exports them.
+	if os.Getenv("CERTEN_CC_SERIES_CHILD") != "1" {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestCrossCheckSeriesAreExportedFromStart$", "-test.v")
+		cmd.Env = append(os.Environ(), "CERTEN_CC_SERIES_CHILD=1")
+		out, err := cmd.CombinedOutput()
+		if err != nil || !bytes.Contains(out, []byte("--- PASS: TestCrossCheckSeriesAreExportedFromStart")) {
+			t.Fatalf("in a fresh process the series are not exported at start: %v\n%s", err, out)
+		}
+		return
+	}
 	families, err := prometheus.DefaultGatherer.Gather()
 	if err != nil {
 		t.Fatal(err)
@@ -257,5 +270,30 @@ func TestCrossCheckSeriesAreExportedFromStart(t *testing.T) {
 		if !seen[r] {
 			t.Errorf("certen_proof_v2_shadow_results_total{stage=\"crosscheck\",result=%q} is not exported until the first cross-check", r)
 		}
+	}
+}
+
+// A comparison in which nothing was compared is not agreement: v1 and the capture sharing no page is counted unavailable, by name.
+func TestCrossCheckThatComparedNothingIsUnavailableNotAgreement(t *testing.T) {
+	sink := make(logSink, 4)
+	s := &Shadow{logf: sink.logf}
+	agree, unavailable := crossCount("agree"), crossCount("unavailable")
+	s.reportCrossCheck("intent-empty", &CrossCheckResult{}, nil)
+	line := sink.next(t)
+	if line != "[PROOF-V2-SHADOW] cross-check intent-empty unavailable: nothing was compared (v1 and the capture share no page)" {
+		t.Fatalf("logged %q", line)
+	}
+	if got := crossCount("agree") - agree; got != 0 {
+		t.Fatalf("a comparison of nothing was counted as agreement (%v)", got)
+	}
+	if got := crossCount("unavailable") - unavailable; got != 1 {
+		t.Fatalf("the unavailable count moved by %v", got)
+	}
+	// and a comparison that did compare a page and found no difference is still agreement
+	agree = crossCount("agree")
+	s.reportCrossCheck("intent-one", &CrossCheckResult{Compared: 1}, nil)
+	sink.next(t)
+	if got := crossCount("agree") - agree; got != 1 {
+		t.Fatalf("an agreeing comparison of one page was not counted as agreement (%v)", got)
 	}
 }
