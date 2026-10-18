@@ -64,7 +64,16 @@ func main() {
 	inc := flag.String("incarnation-evidence", "pkg/proof/testdata/incarnation/kermit.json", "incarnation evidence")
 	evidence := flag.String("evidence", "evidence_3cfb04cf.json.gz", "the live evidence, in -testdata")
 	out := flag.String("out", "pkg/proof/v2/testdata/conformance", "output directory")
+	x2 := flag.String("xpartition2", "", "write only the evidence 2.1 (cross-partition) suite into this directory; the 2.0 suite is not touched")
 	flag.Parse()
+	if *x2 != "" {
+		if err := writeXPartition2(*x2); err != nil {
+			fmt.Println("FAIL:", err)
+			os.Exit(1)
+		}
+		fmt.Println("wrote the evidence 2.1 suite to", *x2)
+		return
+	}
 	if err := run(*src, *inc, *evidence, *out); err != nil {
 		fmt.Println("FAIL:", err)
 		os.Exit(1)
