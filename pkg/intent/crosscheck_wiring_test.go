@@ -16,7 +16,13 @@ import (
 	"github.com/certen/independant-validator/pkg/consensus"
 	"github.com/certen/independant-validator/pkg/proof"
 	proofv2 "github.com/certen/independant-validator/pkg/proof/v2"
+	"github.com/certen/independant-validator/pkg/proofv2shadow"
 )
+
+// The shadow main.go installs (Lazy) is the cross-checker discovery asks for. crossCheckV1Pages finds it by a type assertion, which is
+// false and silent for a type that drifts from the interface: this makes the drift a compile error.
+var _ ProofV2CrossChecker = (*proofv2shadow.Lazy)(nil)
+var _ ProofV2CrossChecker = (*proofv2shadow.Shadow)(nil)
 
 // C5-D2: the proof v2 shadow's page cross-check (v1's replayed pages against v2's captured pages) is the instrument of the owner's
 // shadow-exit rule (PROOF_V2 section 11: zero v1/v2 page disagreements). It needs v1's vote evidence, and that evidence is first set on
