@@ -450,11 +450,15 @@ func Import(p *Portable) (*Evidence, *Archive, proof.IncarnationInputs, [32]byte
 	return ev, ar, in, pin, nil
 }
 
-// VerifyPortable verifies a portable proof, as a verifier in another language reads it.
+// VerifyPortable verifies a portable proof, as a verifier in another language reads it: evidence 2.0 exactly as before, evidence
+// 2.1 (pages on more than one partition) with Verify21FromGenesis.
 func VerifyPortable(p *Portable) (*Report, error) {
 	ev, ar, in, pin, err := Import(p)
 	if err != nil {
 		return nil, err
+	}
+	if ev.Version == Version21 {
+		return Verify21FromGenesis(ev, ar, in, pin)
 	}
 	return VerifyFromGenesis(ev, ar, in, pin)
 }

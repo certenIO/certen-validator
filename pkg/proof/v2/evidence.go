@@ -134,7 +134,7 @@ type Archive struct {
 // set check's verdict is reported as is: validator_set_asserted (the set changed after genesis and its history is not
 // yet accounted for) is a named state, not success.
 func Verify(ev *Evidence, ar *Archive, inc *proof.IncarnationEvidence, pinned [32]byte) (*Report, error) {
-	if ev == nil || !supported(ev.Version) {
+	if ev == nil || ev.Version != Version {
 		return nil, fmt.Errorf("not a v2 Accumulate proof")
 	}
 	// The trust base: the genesis network values of the pinned incarnation.
@@ -151,9 +151,25 @@ func Verify(ev *Evidence, ar *Archive, inc *proof.IncarnationEvidence, pinned [3
 // is the binding the spine needs; the full evidence additionally proves the genesis anchor's quorum and the records'
 // chain history.
 func VerifyFromGenesis(ev *Evidence, ar *Archive, in proof.IncarnationInputs, pinned [32]byte) (*Report, error) {
-	if ev == nil || !supported(ev.Version) {
+	if ev == nil || ev.Version != Version {
 		return nil, fmt.Errorf("not a v2 Accumulate proof")
 	}
+	return verifyFromGenesis(ev, ar, in, pinned)
+}
+
+// Verify21FromGenesis verifies evidence 2.1 (docs/proof/G1_CROSS_PARTITION.md; pages on more than one partition) from the
+// incarnation's genesis. It is a separate entry point on purpose: Verify, VerifyFromGenesis and VerifyFromSpine - the ones
+// consensus and the execution check call - refuse 2.1 by version exactly as before, so no 2.1 document is accepted anywhere
+// until the rules switch that activates it (design D7, RB9 Phase C2). The report it returns carries Unproven: a report with an
+// entry is not a verified S3.
+func Verify21FromGenesis(ev *Evidence, ar *Archive, in proof.IncarnationInputs, pinned [32]byte) (*Report, error) {
+	if ev == nil || ev.Version != Version21 {
+		return nil, fmt.Errorf("not a v2.1 Accumulate proof")
+	}
+	return verifyFromGenesis(ev, ar, in, pinned)
+}
+
+func verifyFromGenesis(ev *Evidence, ar *Archive, in proof.IncarnationInputs, pinned [32]byte) (*Report, error) {
 	rep := &Report{}
 	id, err := proof.ComputeIncarnation(in)
 	if err != nil {
@@ -195,7 +211,7 @@ func VerifyFromGenesis(ev *Evidence, ar *Archive, in proof.IncarnationInputs, pi
 // every validator judging the same block reaches the same verdict with no I/O. The log's genesis must be the pinned
 // incarnation's.
 func VerifyFromSpine(ev *Evidence, l *ledger.AccumulateSpineLog, pinned [32]byte) (*Report, error) {
-	if ev == nil || !supported(ev.Version) {
+	if ev == nil || ev.Version != Version {
 		return nil, fmt.Errorf("not a v2 Accumulate proof")
 	}
 	if l == nil || l.Genesis == nil {

@@ -27,7 +27,7 @@ func runX(t *testing.T, o xworld.Options, mut func(*proofv2.Evidence)) (*proofv2
 	if mut != nil {
 		mut(b.Evidence)
 	}
-	return proofv2.VerifyFromGenesis(b.Evidence, b.Archive, b.Inputs, b.Pin)
+	return proofv2.Verify21FromGenesis(b.Evidence, b.Archive, b.Inputs, b.Pin)
 }
 
 func named(t *testing.T, err error, code, partition string, block uint64) *proofv2.NamedState {
@@ -284,5 +284,28 @@ func TestX20DocumentWithTwoOneMembersIsRefused(t *testing.T) {
 	b.Evidence.Version = proofv2.Version
 	if _, err := proofv2.VerifyFromGenesis(b.Evidence, b.Archive, b.Inputs, b.Pin); err == nil || !strings.Contains(err.Error(), "2.0") {
 		t.Fatalf("a 2.0 document with 2.1 members: %v", err)
+	}
+}
+
+// Consensus and the execution check call Verify, VerifyFromGenesis and VerifyFromSpine. They refuse 2.1 by version exactly as
+// before, so a 2.1 document is accepted nowhere until the rules switch that activates it: no consensus verdict changes.
+func TestX21IsRefusedByEveryEntryPointConsensusCalls(t *testing.T) {
+	b, err := xworld.Build(xworld.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := proofv2.VerifyFromGenesis(b.Evidence, b.Archive, b.Inputs, b.Pin); err == nil || !strings.Contains(err.Error(), "not a v2 Accumulate proof") {
+		t.Fatalf("VerifyFromGenesis on 2.1: %v", err)
+	}
+	if _, err := proofv2.VerifyFromSpine(b.Evidence, nil, b.Pin); err == nil || !strings.Contains(err.Error(), "not a v2 Accumulate proof") {
+		t.Fatalf("VerifyFromSpine on 2.1: %v", err)
+	}
+	if _, err := proofv2.Verify(b.Evidence, b.Archive, nil, b.Pin); err == nil || !strings.Contains(err.Error(), "not a v2 Accumulate proof") {
+		t.Fatalf("Verify on 2.1: %v", err)
+	}
+	// And the 2.1 entry point refuses a 2.0 document.
+	b.Evidence.Version = proofv2.Version
+	if _, err := proofv2.Verify21FromGenesis(b.Evidence, b.Archive, b.Inputs, b.Pin); err == nil {
+		t.Fatal("Verify21FromGenesis accepted a 2.0 document")
 	}
 }

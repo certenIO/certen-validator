@@ -41,9 +41,6 @@ const (
 
 // ProvenPage and Report carry the 2.1 results (see Report.Proven, Report.Unproven).
 
-// supported reports whether the verifier reaches a verdict for an evidence version.
-func supported(version string) bool { return version == Version || version == Version21 }
-
 // declaredRoles are the roles whose justification is a fact outside the evidence: the transaction's header and the intent
 // certificate. The evidence records them and the report lists them as declared; BindProofV2 (RB9 Phase C2) requires them against
 // the header and the certificate. A role in this set is never what a page is proven to have from its state alone.
