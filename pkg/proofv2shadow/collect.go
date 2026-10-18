@@ -708,8 +708,8 @@ func voteFact(as *protocol.AuthoritySignature, rec *api.MessageRecord[messaging.
 }
 
 // evidencePages are the captured pages a 2.0 evidence document carries: those of the transaction's own partition, as 2.0 holds
-// them. A capture that holds pages of other partitions needs evidence 2.1, which this build does not yet produce or verify
-// (RB9 Phase C); it is refused by name rather than built as a 2.0 document that proves fewer pages than the governing set.
+// them. A capture that holds pages of other partitions needs evidence 2.1, which this build does not yet produce (its verifier
+// exists since RB9 C1a; the build and the vote re-evaluation are RB9 C1b); it is refused by name rather than built as a 2.0 document that proves fewer pages than the governing set.
 func evidencePages(cp *Capture) ([]*proofv2.PageState, error) {
 	own := ""
 	if cp.Partition != "" {
@@ -727,7 +727,7 @@ func evidencePages(cp *Capture) ([]*proofv2.PageState, error) {
 	}
 	if len(foreign) > 0 {
 		return nil, &proofv2.NamedState{Code: proofv2.StateEvidence21Required, Block: cp.Block,
-			Detail: fmt.Sprintf("pages on other partitions are captured (%s) and need evidence 2.1, which is built and verified by RB9 Phase C", strings.Join(foreign, ", "))}
+			Detail: fmt.Sprintf("pages on other partitions are captured (%s) and need evidence 2.1: the verifier verifies it (RB9 C1a) but the build and the vote re-evaluation are RB9 C1b", strings.Join(foreign, ", "))}
 	}
 	return out, nil
 }

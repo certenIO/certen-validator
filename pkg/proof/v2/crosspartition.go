@@ -129,9 +129,12 @@ type VoteHop struct {
 // ProvenPage is one proven page in the report: where it was proven and why it is there.
 type ProvenPage struct {
 	URL       string
-	Partition string // the partition whose anchor the page is proven through, as that anchor's Source names it
-	Block     uint64 // that partition's block B_Y
-	Roles     []PageRole
+	Partition string     // the partition whose anchor the page is proven through, as that anchor's Source names it
+	Block     uint64     // that partition's block B_Y
+	Roles     []PageRole // re-derived from the proven states and equal to the recorded ones
+	// Declared are the recorded roles whose justification is a fact outside the evidence - the transaction's header and the
+	// intent certificate (header-authority, initiator-signer, certified-key-page): listed, not proven here; BindProofV2 requires them.
+	Declared []PageRole
 }
 
 // NamedState is a state the capture or verifier could not establish, with where it was judged. It is the only answer
@@ -217,7 +220,9 @@ const (
 	StateCrossIdentityPending = "g1_cross_identity_pending"
 )
 
-// StateEvidence21Required: pages on partitions other than the transaction's are captured, so the proof needs evidence 2.1
-// (this build captures them; building and verifying 2.1 is RB9 Phase C). A 2.0 document that omitted them would prove less
-// than the governing set, so the build is refused by name.
+// StateEvidence21Required: pages on partitions other than the transaction's are captured, so the proof needs evidence 2.1. KEPT in
+// RB9 Phase C1a: the verifier now verifies 2.1 (pages per partition, anchors, routing, roles; pkg/proof/v2/xverify.go), but a
+// 2.1 report is never a verified S3 until the votes are re-evaluated, and Build does not yet assemble a 2.1 document (anchors,
+// vote receipts, the routing proof): both are RB9 Phase C1b. Until then a 2.0 document that omitted the foreign pages would prove
+// less than the governing set, so the build is refused by name.
 const StateEvidence21Required = "g1_evidence_21_required"

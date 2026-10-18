@@ -99,6 +99,15 @@ type Report struct {
 	Validators int
 	Threshold  uint64
 
+	// Version is the evidence version verified and Tag the domain tag its commitments are made under: empty for 2.0, certen:g1:v4
+	// for 2.1. Unproven lists, for 2.1, every fact the verifier could not establish with the partition and block it was judged at
+	// (design D6): a report with any entry is not a verified S3. RoutingHeight is the main chain height of the proven routing
+	// table (1: never rewritten since genesis; 0: no routing proof carried).
+	Version       string
+	Tag           string
+	Unproven      []NamedState
+	RoutingHeight uint64
+
 	// TxHash is the transaction the receipt starts at; AnchorTxHash the partition anchor transaction proven into the
 	// certified root, and AnchorStateRoot that anchor's StateTreeAnchor: the partition's state root at AnchorBlock,
 	// which every page is proven into. govRoot v3 commits all three (docs/proof/GOVROOT_V3.md L1, L3).
@@ -125,7 +134,7 @@ type Archive struct {
 // set check's verdict is reported as is: validator_set_asserted (the set changed after genesis and its history is not
 // yet accounted for) is a named state, not success.
 func Verify(ev *Evidence, ar *Archive, inc *proof.IncarnationEvidence, pinned [32]byte) (*Report, error) {
-	if ev == nil || ev.Version != Version {
+	if ev == nil || !supported(ev.Version) {
 		return nil, fmt.Errorf("not a v2 Accumulate proof")
 	}
 	// The trust base: the genesis network values of the pinned incarnation.
@@ -142,7 +151,7 @@ func Verify(ev *Evidence, ar *Archive, inc *proof.IncarnationEvidence, pinned [3
 // is the binding the spine needs; the full evidence additionally proves the genesis anchor's quorum and the records'
 // chain history.
 func VerifyFromGenesis(ev *Evidence, ar *Archive, in proof.IncarnationInputs, pinned [32]byte) (*Report, error) {
-	if ev == nil || ev.Version != Version {
+	if ev == nil || !supported(ev.Version) {
 		return nil, fmt.Errorf("not a v2 Accumulate proof")
 	}
 	rep := &Report{}
@@ -186,7 +195,7 @@ func VerifyFromGenesis(ev *Evidence, ar *Archive, in proof.IncarnationInputs, pi
 // every validator judging the same block reaches the same verdict with no I/O. The log's genesis must be the pinned
 // incarnation's.
 func VerifyFromSpine(ev *Evidence, l *ledger.AccumulateSpineLog, pinned [32]byte) (*Report, error) {
-	if ev == nil || ev.Version != Version {
+	if ev == nil || !supported(ev.Version) {
 		return nil, fmt.Errorf("not a v2 Accumulate proof")
 	}
 	if l == nil || l.Genesis == nil {
@@ -217,6 +226,18 @@ func VerifyFromSpine(ev *Evidence, l *ledger.AccumulateSpineLog, pinned [32]byte
 // ev.Check.Majors major blocks.
 func verifyFrom(ev *Evidence, rep *Report, at map[uint64]*Spine, pinned [32]byte) (*Report, error) {
 	var err error
+	is21 := ev.Version == Version21
+	if !is21 {
+		// A 2.0 document carries none of the 2.1 members; one that does would have them silently ignored.
+		if ev.Anchors != nil || ev.Votes != nil || ev.Check.Routing != nil {
+			return nil, fmt.Errorf("evidence 2.0 carries 2.1 members (anchors, votes or a routing proof)")
+		}
+		for _, p := range ev.Pages {
+			if p.Partition != "" || p.Roles != nil {
+				return nil, fmt.Errorf("evidence 2.0 page %s carries a partition or roles", p.URL)
+			}
+		}
+	}
 	// S1-S2: the receipt from the transaction to a certified root.
 	cert := at[ev.Majors].Clone()
 	if len(ev.Certify) == 0 {
@@ -273,7 +294,7 @@ func verifyFrom(ev *Evidence, rep *Report, at map[uint64]*Spine, pinned [32]byte
 	rep.Partition, rep.AnchorBlock = seq.Source.String(), body.MinorBlockIndex
 	copy(rep.AnchorTxHash[:], anchorTx)
 	rep.AnchorStateRoot, rep.AnchorRootChainAnchor = body.StateTreeAnchor, body.RootChainAnchor
-	for i := range ev.Pages {
+	for i := 0; i < len(ev.Pages) && !is21; i++ {
 		acct, pc, err := verifyPage(&ev.Pages[i], body.StateTreeAnchor[:])
 		if err != nil {
 			return nil, fmt.Errorf("page: %w", err)
@@ -281,6 +302,9 @@ func verifyFrom(ev *Evidence, rep *Report, at map[uint64]*Spine, pinned [32]byte
 		rep.Pages = append(rep.Pages, acct)
 		rep.PageChains = append(rep.PageChains, pc)
 	}
+	xin := xIn{certRoot: append([]byte(nil), cert.RootChainAnchor[:]...), setRoot: [32]byte{}}
+	xin.x = xAnchor{source: seq.Source.String(), block: body.MinorBlockIndex, stateRoot: append([]byte(nil), body.StateTreeAnchor[:]...)}
+	xin.x.id, _ = protocol.ParsePartitionUrl(seq.Source)
 
 	// The validator set: walked to a certified block at or after the certified one, proven there, equal to the set
 	// the walk derived. Every write the walk applied must be accounted for by the network account's main chain.
@@ -346,6 +370,12 @@ func verifyFrom(ev *Evidence, rep *Report, at map[uint64]*Spine, pinned [32]byte
 	}
 	rep.Validators = len(chk.Globals().Network.Validators)
 	rep.Threshold = chk.Globals().ValidatorThreshold(protocol.Directory)
+	if is21 {
+		xin.setRoot = chk.StateTreeAnchor
+		if err := verify21(ev, rep, xin); err != nil {
+			return nil, err
+		}
+	}
 	return rep, nil
 }
 
