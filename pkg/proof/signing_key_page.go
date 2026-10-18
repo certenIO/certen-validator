@@ -44,8 +44,10 @@
 package proof
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -69,6 +71,70 @@ type signingKeyPageQuery struct {
 	} `json:"result"`
 }
 
+// signingKeySig is the part of a signature record this layer reads. A delegated signature carries the delegating page in
+// `delegator` and its inner signature under `signature` (an object, where a key signature carries its signature bytes there
+// as a string); an `authority` record carries `delegator` as a list.
+type signingKeySig struct {
+	Type          string            `json:"type"`
+	PublicKey     string            `json:"publicKey"`
+	Signer        string            `json:"signer"`
+	SignerVersion uint64            `json:"signerVersion"`
+	Delegator     signingDelegators `json:"delegator"`
+	Inner         json.RawMessage   `json:"signature"`
+}
+
+// signingDelegators is a `delegator` field: one URL, or a list of them.
+type signingDelegators []string
+
+func (d *signingDelegators) UnmarshalJSON(b []byte) error {
+	var one string
+	if err := json.Unmarshal(b, &one); err == nil {
+		if one != "" {
+			*d = signingDelegators{one}
+		}
+		return nil
+	}
+	var many []string
+	if err := json.Unmarshal(b, &many); err != nil {
+		return fmt.Errorf("delegator is neither a URL nor a list of URLs: %s", string(b))
+	}
+	*d = many
+	return nil
+}
+
+// delegatingPages returns the pages a delegated signature was cast through, outermost first: its own delegator and, when its
+// inner signature is itself delegated, that one's, down to Accumulate's delegation depth. A signature that is not delegated
+// delegates through nothing.
+func (s signingKeySig) delegatingPages() []string {
+	if c := classOf(s.Type); c != govsig.ClassDelegated {
+		return nil
+	}
+	var out []string
+	cur := s
+	for depth := 0; depth <= maxDecisionDepth; depth++ {
+		for _, d := range cur.Delegator {
+			if p := normalizeAccountURL(d); p != "" {
+				out = append(out, p)
+			}
+		}
+		inner := bytes.TrimSpace(cur.Inner)
+		if len(inner) == 0 || inner[0] != '{' {
+			break
+		}
+		var next signingKeySig
+		if json.Unmarshal(inner, &next) != nil || classOf(next.Type) != govsig.ClassDelegated {
+			break
+		}
+		cur = next
+	}
+	return out
+}
+
+func classOf(sigType string) govsig.Class {
+	_, c := govsig.Classify(sigType)
+	return c
+}
+
 type signingKeyPageSet struct {
 	Account struct {
 		Type    string `json:"type"`
@@ -81,14 +147,9 @@ type signingKeyPageSet struct {
 	Signatures struct {
 		Records []struct {
 			Message struct {
-				Type      string `json:"type"`
-				TxID      string `json:"txID"`
-				Signature struct {
-					Type          string `json:"type"`
-					PublicKey     string `json:"publicKey"`
-					Signer        string `json:"signer"`
-					SignerVersion uint64 `json:"signerVersion"`
-				} `json:"signature"`
+				Type      string        `json:"type"`
+				TxID      string        `json:"txID"`
+				Signature signingKeySig `json:"signature"`
 			} `json:"message"`
 		} `json:"records"`
 	} `json:"signatures"`
@@ -184,6 +245,24 @@ func selectSigningKeyPage(
 	var candidates []candidate
 	seen := map[string]bool{}
 
+	// A delegated vote is filed by the network under the DELEGATE's page (type "delegated", the delegating page in `delegator`),
+	// and only an `authority` record lands under the delegating page. The page that counted the vote for the principal's authority
+	// is the delegating one, so every page named as a delegator of a delegated signature over THIS transaction, at any
+	// depth, is a page that signed by delegation (RB8-E). Which key stands behind it is G1's to verify.
+	delegating := map[string]string{}
+	for _, set := range sets {
+		for _, rec := range set.Signatures.Records {
+			if txHash != "" && hashOfTxID(rec.Message.TxID) != txHash {
+				continue
+			}
+			for _, p := range rec.Message.Signature.delegatingPages() {
+				if _, ok := delegating[p]; !ok {
+					delegating[p] = normalizeAccountURL(set.Account.URL)
+				}
+			}
+		}
+	}
+
 	for _, set := range sets {
 		if !strings.EqualFold(set.Account.Type, "keyPage") {
 			continue
@@ -235,6 +314,11 @@ func selectSigningKeyPage(
 				notes = append(notes, fmt.Sprintf("%s carries a %s signature from a key that is "+
 					"not on the page at the version it signed with; not counted", page, sig.Type))
 			}
+		}
+		if from, ok := delegating[page]; ok && !signed {
+			notes = append(notes, fmt.Sprintf("%s carries a delegated vote cast from %s; its delegate's key is verified by G1, "+
+				"not by this read", page, from))
+			signed = true
 		}
 		if signed {
 			seen[page] = true
