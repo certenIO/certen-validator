@@ -98,6 +98,12 @@ func verifyLiteClientBinding(accountURL, txHash string, main, bpt, combined *mer
 		if len(r.r.Start) == 0 || len(r.r.Anchor) == 0 {
 			return fmt.Errorf("lite_client_proof.%s has no start or anchor", r.name)
 		}
+		// A receipt decoded from the block's JSON can hold a null step, and Accumulate's Validate reads the hash of every step (RB9-L).
+		for i, e := range r.r.Entries {
+			if e == nil {
+				return fmt.Errorf("lite_client_proof.%s has no step %d: its entries hold a null", r.name, i)
+			}
+		}
 		if !r.r.Validate(nil) {
 			return fmt.Errorf(
 				"lite_client_proof.%s does not hash from its start to its anchor; "+

@@ -64,6 +64,9 @@ func VerifyVoteEvidence(ctx context.Context, g0 *G0Result, ev *govvote.Evidence,
 	if err := txn.UnmarshalBinary(b); err != nil {
 		return fmt.Errorf("the vote's evidence: the governed transaction does not decode: %w", err)
 	}
+	if txn.Body == nil { // Accumulate's union decoder answers no body and no error for bytes that hold no type (a run of zeros)
+		return fmt.Errorf("the vote's evidence: the governed transaction holds no transaction body")
+	}
 	if !strings.EqualFold(hex.EncodeToString(txn.GetHash()), strings.TrimPrefix(g0.TxHash, "0x")) {
 		return fmt.Errorf("the vote's evidence is about transaction %x, not the executed %s", txn.GetHash(), g0.TxHash)
 	}

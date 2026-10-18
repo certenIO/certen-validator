@@ -1,7 +1,12 @@
 package proof
 
 import (
+	"context"
+	"encoding/hex"
+	"strings"
 	"testing"
+
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/govvote"
 
 	"gitlab.com/accumulatenetwork/accumulate/protocol"
 )
@@ -21,4 +26,43 @@ func TestDataEntryOfRefusesBytesThatHoldNoAccount(t *testing.T) {
 	if err == nil || err.Error() != want {
 		t.Fatalf("got %v, want %q", err, want)
 	}
+}
+
+// RB9-L: the transaction of a block's vote evidence is chosen by its proposer. Accumulate decodes a run of zeros as a transaction with no
+// body and no error, and the declared governance and the vote's hash were then read of that body.
+func TestVoteEvidenceWhoseTransactionHoldsNoBodyIsRefusedNotDereferenced(t *testing.T) {
+	for _, n := range []int{1, 2, 8, 64} {
+		ev := &govvote.Evidence{Version: govvote.EvidenceVersion, Account: "acc://x.acme/data", Transaction: hex.EncodeToString(make([]byte, n))}
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("DeclaredGovernanceOfEvidence(%d zero bytes): PANIC %v", n, r)
+				}
+			}()
+			if d, err := DeclaredGovernanceOfEvidence(ev); err == nil {
+				t.Errorf("DeclaredGovernanceOfEvidence(%d zero bytes) answered %v, no error", n, d)
+			}
+		}()
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("VerifyVoteEvidence(%d zero bytes): PANIC %v", n, r)
+				}
+			}()
+			g0 := &G0Result{TxHash: strings.Repeat("ab", 32)}
+			if err := VerifyVoteEvidence(context.Background(), g0, ev, &AuthorizationRecord{}); err == nil {
+				t.Errorf("VerifyVoteEvidence(%d zero bytes) accepted", n)
+			}
+		}()
+	}
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Errorf("DeclaredGovernanceOf(a transaction with no body): PANIC %v", r)
+			}
+		}()
+		if d, err := DeclaredGovernanceOf(new(protocol.Transaction)); err == nil {
+			t.Errorf("DeclaredGovernanceOf(a transaction with no body) answered %v, no error", d)
+		}
+	}()
 }
