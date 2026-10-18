@@ -78,6 +78,8 @@ type PortableEvidence struct {
 	// Evidence 2.1 only (design D3, D4); absent from a 2.0 document, which therefore re-encodes byte for byte.
 	Anchors map[string]PortableAnchor `json:"anchors,omitempty"`
 	Votes   []PortableVote            `json:"votes,omitempty"`
+	// Transaction is the governed transaction, binary, hex (see Evidence.Transaction).
+	Transaction string `json:"transaction,omitempty"`
 
 	Check PortableCheck `json:"check"`
 }
@@ -98,6 +100,32 @@ type PortableVote struct {
 	Message   string          `json:"message"`
 	Receipt   json.RawMessage `json:"receipt"` // merkle.Receipt
 	Hops      []PortableHop   `json:"hops,omitempty"`
+	Counted   []PortableHop   `json:"counted,omitempty"`
+
+	// Produced is Vote.Produced with its receipts as Accumulate's JSON.
+	Produced *PortableProduction `json:"produced,omitempty"`
+}
+
+// PortableIndexProof is IndexProof with its receipt as Accumulate's JSON.
+type PortableIndexProof struct {
+	Position uint64          `json:"position"`
+	Entry    string          `json:"entry"`
+	Receipt  json.RawMessage `json:"receipt"` // merkle.Receipt
+}
+
+// PortableArrival is Arrival in the portable form.
+type PortableArrival struct {
+	Before *PortableIndexProof `json:"before,omitempty"`
+	At     PortableIndexProof  `json:"at"`
+}
+
+// PortableProduction is Production in the portable form.
+type PortableProduction struct {
+	Account string          `json:"account"`
+	Chain   string          `json:"chain"`
+	Message string          `json:"message"`
+	Receipt json.RawMessage `json:"receipt"` // merkle.Receipt
+	Arrival PortableArrival `json:"arrival"`
 }
 
 // PortableHop is VoteHop with its receipt as Accumulate's JSON.
@@ -107,6 +135,8 @@ type PortableHop struct {
 	Signature string          `json:"signature"`
 	Block     uint64          `json:"block"`
 	Receipt   json.RawMessage `json:"receipt"` // merkle.Receipt
+
+	Arrival *PortableArrival `json:"arrival,omitempty"`
 }
 
 type PortablePage struct {
@@ -118,8 +148,9 @@ type PortablePage struct {
 	ChainError  string            `json:"chainError,omitempty"`
 
 	// Evidence 2.1 only (see PageState).
-	Partition string     `json:"partition,omitempty"`
-	Roles     []PageRole `json:"roles,omitempty"`
+	Partition string       `json:"partition,omitempty"`
+	Roles     []PageRole   `json:"roles,omitempty"`
+	History   *PageHistory `json:"history,omitempty"`
 }
 
 type PortableCheck struct {
@@ -233,8 +264,9 @@ func ExportDocument(ev *Evidence, in proof.IncarnationInputs, pin [32]byte) (*Po
 			return nil, err
 		}
 		e.Pages = append(e.Pages, PortablePage{URL: pg.URL, Account: acct, Receipt: r, Chains: pg.Chains, PendingHash: pg.PendingHash, ChainError: pg.ChainError,
-			Partition: pg.Partition, Roles: pg.Roles})
+			Partition: pg.Partition, Roles: pg.Roles, History: pg.History})
 	}
+	e.Transaction = ev.Transaction
 	if len(ev.Anchors) > 0 {
 		e.Anchors = make(map[string]PortableAnchor, len(ev.Anchors))
 		for k, a := range ev.Anchors {
@@ -252,11 +284,29 @@ func ExportDocument(ev *Evidence, in proof.IncarnationInputs, pin [32]byte) (*Po
 		}
 		pv := PortableVote{Authority: v.Authority, Origin: v.Origin, Vote: v.Vote, Cause: v.Cause, Transport: v.Transport, Message: v.Message, Receipt: r}
 		for _, h := range v.Hops {
-			hr, err := receiptJSON(h.Receipt)
+			ph, err := exportHop(h)
 			if err != nil {
 				return nil, fmt.Errorf("vote of %s, hop %s: %w", v.Authority, h.Page, err)
 			}
-			pv.Hops = append(pv.Hops, PortableHop{Page: h.Page, Message: h.Message, Signature: h.Signature, Block: h.Block, Receipt: hr})
+			pv.Hops = append(pv.Hops, ph)
+		}
+		for _, h := range v.Counted {
+			ph, err := exportHop(h)
+			if err != nil {
+				return nil, fmt.Errorf("vote of %s, counted %s: %w", v.Authority, h.Page, err)
+			}
+			pv.Counted = append(pv.Counted, ph)
+		}
+		if v.Produced != nil {
+			pr, err := receiptJSON(v.Produced.Receipt)
+			if err != nil {
+				return nil, fmt.Errorf("vote of %s, production: %w", v.Authority, err)
+			}
+			a, err := exportArrival(v.Produced.Arrival)
+			if err != nil {
+				return nil, fmt.Errorf("vote of %s, production: %w", v.Authority, err)
+			}
+			pv.Produced = &PortableProduction{Account: v.Produced.Account, Chain: v.Produced.Chain, Message: v.Produced.Message, Receipt: pr, Arrival: a}
 		}
 		e.Votes = append(e.Votes, pv)
 	}
@@ -283,6 +333,80 @@ func ExportDocument(ev *Evidence, in proof.IncarnationInputs, pin [32]byte) (*Po
 		e.Check.Routing = &ra
 	}
 	return p, nil
+}
+
+func exportHop(h VoteHop) (PortableHop, error) {
+	hr, err := receiptJSON(h.Receipt)
+	if err != nil {
+		return PortableHop{}, err
+	}
+	ph := PortableHop{Page: h.Page, Message: h.Message, Signature: h.Signature, Block: h.Block, Receipt: hr}
+	if h.Arrival != nil {
+		a, err := exportArrival(*h.Arrival)
+		if err != nil {
+			return ph, err
+		}
+		ph.Arrival = &a
+	}
+	return ph, nil
+}
+
+func importHop(h PortableHop) (VoteHop, error) {
+	hr, err := receiptHex(h.Receipt)
+	if err != nil {
+		return VoteHop{}, err
+	}
+	hop := VoteHop{Page: h.Page, Message: h.Message, Signature: h.Signature, Block: h.Block, Receipt: hr}
+	if h.Arrival != nil {
+		a, err := importArrival(*h.Arrival)
+		if err != nil {
+			return hop, err
+		}
+		hop.Arrival = &a
+	}
+	return hop, nil
+}
+
+func exportIndexProof(ip IndexProof) (PortableIndexProof, error) {
+	r, err := receiptJSON(ip.Receipt)
+	return PortableIndexProof{Position: ip.Position, Entry: ip.Entry, Receipt: r}, err
+}
+
+func exportArrival(a Arrival) (PortableArrival, error) {
+	var out PortableArrival
+	var err error
+	if out.At, err = exportIndexProof(a.At); err != nil {
+		return out, err
+	}
+	if a.Before != nil {
+		b, err := exportIndexProof(*a.Before)
+		if err != nil {
+			return out, err
+		}
+		out.Before = &b
+	}
+	return out, nil
+}
+
+func importIndexProof(ip PortableIndexProof) (IndexProof, error) {
+	r, err := receiptHex(ip.Receipt)
+	return IndexProof{Position: ip.Position, Entry: ip.Entry, Receipt: r}, err
+}
+
+func importArrival(a PortableArrival) (Arrival, error) {
+	var out Arrival
+	var err error
+	if out.At, err = importIndexProof(a.At); err != nil {
+		return out, err
+	}
+	if a.Before != nil {
+		b, err := importIndexProof(*a.Before)
+		if err != nil {
+			return out, err
+		}
+		out.Before = &b
+	}
+	return out, nil
 }
 
 func exportAnchor(a PartitionAnchor) (PortableAnchor, error) {
@@ -399,8 +523,9 @@ func Import(p *Portable) (*Evidence, *Archive, proof.IncarnationInputs, [32]byte
 			return fail(err)
 		}
 		ev.Pages = append(ev.Pages, PageState{URL: pg.URL, State: hex.EncodeToString(st), Receipt: r, Chains: pg.Chains, PendingHash: pg.PendingHash, ChainError: pg.ChainError,
-			Partition: pg.Partition, Roles: pg.Roles})
+			Partition: pg.Partition, Roles: pg.Roles, History: pg.History})
 	}
+	ev.Transaction = e.Transaction
 	if len(e.Anchors) > 0 {
 		ev.Anchors = make(map[string]PartitionAnchor, len(e.Anchors))
 		for k, a := range e.Anchors {
@@ -418,11 +543,29 @@ func Import(p *Portable) (*Evidence, *Archive, proof.IncarnationInputs, [32]byte
 		}
 		vote := Vote{Authority: v.Authority, Origin: v.Origin, Vote: v.Vote, Cause: v.Cause, Transport: v.Transport, Message: v.Message, Receipt: r}
 		for _, h := range v.Hops {
-			hr, err := receiptHex(h.Receipt)
+			hop, err := importHop(h)
 			if err != nil {
 				return fail(fmt.Errorf("vote of %s, hop %s: %w", v.Authority, h.Page, err))
 			}
-			vote.Hops = append(vote.Hops, VoteHop{Page: h.Page, Message: h.Message, Signature: h.Signature, Block: h.Block, Receipt: hr})
+			vote.Hops = append(vote.Hops, hop)
+		}
+		for _, h := range v.Counted {
+			hop, err := importHop(h)
+			if err != nil {
+				return fail(fmt.Errorf("vote of %s, counted %s: %w", v.Authority, h.Page, err))
+			}
+			vote.Counted = append(vote.Counted, hop)
+		}
+		if v.Produced != nil {
+			pr, err := receiptHex(v.Produced.Receipt)
+			if err != nil {
+				return fail(fmt.Errorf("vote of %s, production: %w", v.Authority, err))
+			}
+			a, err := importArrival(v.Produced.Arrival)
+			if err != nil {
+				return fail(fmt.Errorf("vote of %s, production: %w", v.Authority, err))
+			}
+			vote.Produced = &Production{Account: v.Produced.Account, Chain: v.Produced.Chain, Message: v.Produced.Message, Receipt: pr, Arrival: a}
 		}
 		ev.Votes = append(ev.Votes, vote)
 	}

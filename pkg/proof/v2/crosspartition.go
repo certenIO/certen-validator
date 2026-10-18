@@ -54,11 +54,14 @@ const (
 	// RoleCertifiedKeyPage: the page the intent certificate names as its key page, exactly as ResolveSigningKeyPage resolves it
 	// (D1(f)), whatever other role it has. BindProofV2 requires it among the proven pages.
 	RoleCertifiedKeyPage PageRole = "certified-key-page"
+	// RoleSyntheticChain: the source partition's synthetic ledger, whose main chain records the SequencedMessage that carried a counted vote
+	// (RB9 Phase C1b-1: the block that PRODUCED the vote is read from it, so a vote released by a HoldUntil is judged at its release).
+	RoleSyntheticChain PageRole = "synthetic-chain"
 )
 
 // KnownRoles are the roles evidence 2.1 may carry, in canonical order.
 var KnownRoles = []PageRole{RolePrincipalChain, RoleAuthorityBook, RoleAuthorityPage, RoleHeaderAuthority,
-	RoleDelegateBook, RoleDelegatePage, RoleVoter, RoleInitiatorSigner, RoleCertifiedKeyPage}
+	RoleDelegateBook, RoleDelegatePage, RoleVoter, RoleInitiatorSigner, RoleCertifiedKeyPage, RoleSyntheticChain}
 
 // CanonicalRoles returns roles sorted by KnownRoles' order with duplicates removed, and an error naming an unknown
 // role. A page's roles are encoded in this order so two producers write one document for one set of facts.
@@ -114,6 +117,17 @@ type Vote struct {
 	// page's own signature chain, on that page's partition. The key signature's own Delegator list is the delegation path
 	// (delegators[0] is nearest the key page).
 	Hops []VoteHop `json:"hops,omitempty"`
+
+	// Counted are the other signatures the pages on the cause chain counted for this transaction (a page whose threshold needs more
+	// than the signature that completed it): each recorded in its page's signature chain like a hop, with its arrival derived the same
+	// way. Evidence 2.1 timeline only.
+	Counted []VoteHop `json:"counted,omitempty"`
+
+	// Evidence 2.1 timeline (RB9 Phase C1b-1); omitted when empty. Produced establishes the block that PRODUCED the vote, so a vote
+	// released later by a HoldUntil is judged at the block that released it: for a sequenced vote the SequencedMessage's entry in the
+	// source partition's synthetic ledger main chain, for an inline vote the vote's own entry in the principal's signature chain.
+	// Absent, the production block is not established and the report says g1_vote_held for it.
+	Produced *Production `json:"produced,omitempty"`
 }
 
 // VoteHop is one signature message of a vote's cause chain: an AuthoritySignature a delegating page produced, or the key
@@ -124,6 +138,52 @@ type VoteHop struct {
 	Signature string `json:"signature"` // the signature's binary encoding, hex
 	Block     uint64 `json:"block"`     // the block of Page's partition it arrived in, as claimed; the verifier derives it from Receipt
 	Receipt   string `json:"receipt"`   // from Message to Page's signature chain root as bound at that partition's block (binary merkle.Receipt, hex)
+
+	// Arrival, in evidence 2.1 with a timeline, proves the exact block the signature arrived in from the page's signature-index chain
+	// (Arrival). Block is then DERIVED from it and must equal it; without it Block is a claim the verifier does not rely on.
+	Arrival *Arrival `json:"arrival,omitempty"`
+}
+
+// IndexProof is one entry of a chain's index chain (<chain>-index) with the receipt placing it in that chain as bound at B_Y. An index
+// entry is written at the end of every block that wrote to the chain: Source is the position of the chain's last entry then, BlockIndex
+// the block (protocol.IndexEntry; internal/core/execute/v2/block/utils.go addChainAnchor).
+type IndexProof struct {
+	Position uint64 `json:"position"` // the entry's position in the index chain; checked against what its receipt allows
+	Entry    string `json:"entry"`    // the index chain entry: the IndexEntry's binary encoding padded to 32 bytes, hex
+	Receipt  string `json:"receipt"`  // from Entry to the index chain's root as bound at B_Y (binary merkle.Receipt, hex)
+}
+
+// Arrival derives the block a chain entry at position p was written in: p lies after the previous block's index entry (Before:
+// Source < p) and at or before this block's (At: Source >= p), the two entries adjacent in the index chain.
+type Arrival struct {
+	Before *IndexProof `json:"before,omitempty"` // absent only when At is the index chain's first entry
+	At     IndexProof  `json:"at"`
+}
+
+// Production proves the block that produced a vote (see Vote.Produced). Account is the proven account whose Chain records Message
+// (the source partition's synthetic ledger and "main" for a sequenced vote; the principal and "signature" for an inline one).
+type Production struct {
+	Account string  `json:"account"`
+	Chain   string  `json:"chain"`
+	Message string  `json:"message"` // the entry's hash in Account's Chain, hex32
+	Receipt string  `json:"receipt"` // from Message to Chain's root as bound at B_Y (binary merkle.Receipt, hex)
+	Arrival Arrival `json:"arrival"`
+}
+
+// HistoryEntry is one entry of a key page's main chain: the transaction whose hash the chain holds. Initiator is the initiating
+// signature (binary, hex) of an UpdateKey, which rotates the initiator's own entry.
+type HistoryEntry struct {
+	Transaction string `json:"transaction"`
+	Initiator   string `json:"initiator,omitempty"`
+}
+
+// PageHistory is a key page's main chain from its first entry to its height at B_Y, and its main-index chain in full (PROOF_V2 5.2
+// steps 2-3). The verifier folds the entries' hashes to the main chain root bound in PageState.Chains, and the index entries to the
+// main-index root: no entry inserted, omitted or reordered. Each entry's block is read from the folded index; the replay of the
+// entries must end in the proven state.
+type PageHistory struct {
+	Entries []HistoryEntry `json:"entries"`
+	Index   []string       `json:"index"` // the main-index chain's entries, each as in IndexProof.Entry
 }
 
 // ProvenPage is one proven page in the report: where it was proven and why it is there.

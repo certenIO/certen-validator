@@ -60,6 +60,10 @@ type PageState struct {
 	// verifier re-derives them from the proven states and requires them equal (see PageRole).
 	Partition string     `json:"partition,omitempty"`
 	Roles     []PageRole `json:"roles,omitempty"`
+
+	// History, in evidence 2.1 with a timeline, is the page's main chain from its genesis to its height at the block, which the verifier folds
+	// to the proven chain root and replays (PROOF_V2 5.2 steps 2-3; see PageHistory).
+	History *PageHistory `json:"history,omitempty"`
 }
 
 // PageChain is what the verifier established about one page's chains.
@@ -163,7 +167,7 @@ func trimPage(p *PageState, stateRoot []byte) (*PageState, error) {
 		return nil, err
 	}
 	return &PageState{URL: p.URL, State: p.State, Receipt: hex.EncodeToString(rb), Chains: p.Chains, PendingHash: p.PendingHash, ChainError: p.ChainError,
-		Partition: p.Partition, Roles: p.Roles}, nil
+		Partition: p.Partition, Roles: p.Roles, History: p.History}, nil
 }
 
 // anchorBody decodes a delivered partition anchor and returns its body and transaction hash.

@@ -58,6 +58,9 @@ type Options struct {
 	AltBlockPage string
 	// NoRouting omits the routing proof.
 	NoRouting bool
+	// Timeline, when set, builds the timeline world (timeline.go) instead of the plain one: a real transaction, BankPage1 with a
+	// scripted history and signature chain, and the evidence members of RB9 Phase C1b-1. The plain world is unchanged by it.
+	Timeline *Timeline
 }
 
 // Built is a built world.
@@ -163,6 +166,8 @@ func a32(b []byte) [32]byte {
 type acct struct {
 	a    protocol.Account
 	sigs [][]byte // zero or two entries: the signature chain's two leaves
+	// chains, when set, are the account's whole chain set (name, entries) and replace the plain main/signature chains.
+	chains []namedChain
 }
 
 func (a acct) url() string { return a.a.GetUrl().String() }
@@ -181,6 +186,9 @@ type pageProof struct {
 }
 
 func (a acct) proveLeaf() pageProof {
+	if len(a.chains) > 0 {
+		return a.proveChains()
+	}
 	state := must(a.a.MarshalBinary())
 	mainRoot := seed("main chain of " + a.url())
 	mainHex := hexs(mainRoot)
@@ -278,6 +286,11 @@ func build(o Options) *Built {
 	a1 := directoryAnchor(100, a32(r1), a32(seed("state 1")))
 	m1 := &api.MajorHeaderRecord{Index: 1, Entry: &protocol.IndexEntry{BlockIndex: 1}, Anchor: a1, Signatures: signAnchor(a1, v[0], v[1], v[2])}
 
+	var tw *timelineWorld
+	if o.Timeline != nil {
+		tw = newTimelineWorld(*o.Timeline)
+	}
+
 	// The accounts of each partition. The vote's key signature sits in BankPage1's signature chain, the vote itself in the
 	// principal's.
 	voteMsg := seed("vote message")
@@ -295,6 +308,18 @@ func build(o Options) *Built {
 		{a: &protocol.KeyBook{Url: mustURL(DeleBook), BookType: protocol.BookTypeNormal, PageCount: 1}},
 		{a: page(DelePage1, "")},
 	}
+	bvn2Roles := map[string][]proofv2.PageRole{
+		BankBook:  {proofv2.RoleAuthorityBook},
+		BankPage1: {proofv2.RoleAuthorityPage, proofv2.RoleVoter},
+		BankPage2: {proofv2.RoleAuthorityPage},
+	}
+	if tw != nil {
+		bvn2[1] = tw.pageAcct
+		if tw.synth != nil {
+			bvn2 = append(bvn2, *tw.synth)
+			bvn2Roles[tw.synth.url()] = []proofv2.PageRole{proofv2.RoleSyntheticChain}
+		}
+	}
 
 	type partition struct {
 		src, id string
@@ -304,11 +329,7 @@ func build(o Options) *Built {
 	}
 	parts := []*partition{
 		{PartBVN1, "BVN1", BlockBVN1, bvn1, map[string][]proofv2.PageRole{Principal: {proofv2.RolePrincipalChain}}},
-		{PartBVN2, "BVN2", BlockBVN2, bvn2, map[string][]proofv2.PageRole{
-			BankBook:  {proofv2.RoleAuthorityBook},
-			BankPage1: {proofv2.RoleAuthorityPage, proofv2.RoleVoter},
-			BankPage2: {proofv2.RoleAuthorityPage},
-		}},
+		{PartBVN2, "BVN2", BlockBVN2, bvn2, bvn2Roles},
 		{PartBVN3, "BVN3", BlockBVN3, bvn3, map[string][]proofv2.PageRole{
 			DeleBook:  {proofv2.RoleDelegateBook},
 			DelePage1: {proofv2.RoleDelegatePage},
@@ -316,6 +337,9 @@ func build(o Options) *Built {
 	}
 
 	txHash := seed("transaction")
+	if tw != nil {
+		txHash = tw.txHash
+	}
 	txToPartition := rcpt(txHash, step{true, seed("tx sibling")})
 
 	// Each partition's state root and each page's receipt to it.
@@ -464,6 +488,13 @@ func build(o Options) *Built {
 		}},
 	}
 
+	if tw != nil {
+		hop, counted := tw.hops()
+		vote.Hops = []proofv2.VoteHop{hop}
+		vote.Counted = counted
+		vote.Produced = tw.production()
+	}
+
 	ev := &proofv2.Evidence{
 		Version: proofv2.Version21, Account: Principal, TxHash: hexs(txHash),
 		Receipt: rcptHex(txReceipt),
@@ -480,6 +511,16 @@ func build(o Options) *Built {
 	}
 	if !o.NoRouting {
 		ev.Check.Routing = &routProof
+	}
+	if tw != nil {
+		if !tw.t.OmitTransaction {
+			ev.Transaction = hexs(must(tw.txn.MarshalBinary()))
+		}
+		for i := range ev.Pages {
+			if ev.Pages[i].URL == BankPage1 {
+				ev.Pages[i].History = tw.history
+			}
+		}
 	}
 	return &Built{Evidence: ev, Archive: &proofv2.Archive{Majors: []*api.MajorHeaderRecord{m1}}, Inputs: in, Pin: pin}
 }

@@ -59,6 +59,9 @@ type Evidence struct {
 	Anchors map[string]PartitionAnchor `json:"anchors,omitempty"`
 	// Votes are the authority votes copied from the principal's proven signature chain (D3).
 	Votes []Vote `json:"votes,omitempty"`
+	// Transaction is the governed transaction, binary, hex (2.1 timeline): its type decides the page blacklist and which authorities must vote,
+	// and its hash must be TxHash. Absent, the votes are not re-evaluated (named in the report).
+	Transaction string `json:"transaction,omitempty"`
 
 	// Check proves the validator set in force at a certified block at or after the certified one.
 	Check SetCheck `json:"check"`
@@ -107,6 +110,13 @@ type Report struct {
 	Tag           string
 	Unproven      []NamedState
 	RoutingHeight uint64
+
+	// Timeline results (2.1 with a timeline; zero otherwise). AuthorizationMode is "authorities_required" or "all_authorities_disabled"
+	// (design D3). Disclosures are verified facts that are not refusals (design D6). Arrivals lists, per counted signature, the block it
+	// arrived in as the verifier derived it from the page's signature-index chain.
+	AuthorizationMode string
+	Disclosures       []NamedState
+	Arrivals          []ArrivalReport
 
 	// TxHash is the transaction the receipt starts at; AnchorTxHash the partition anchor transaction proven into the
 	// certified root, and AnchorStateRoot that anchor's StateTreeAnchor: the partition's state root at AnchorBlock,

@@ -267,9 +267,30 @@ func verify21(ev *Evidence, rep *Report, in xIn) error {
 		return err
 	}
 
-	rep.Unproven = append(rep.Unproven, NamedState{Code: StateCompletenessUnproven, Partition: in.x.id, Block: in.x.block,
-		Detail: "the votes are not re-evaluated by this verifier build (readiness, thresholds, per-arrival page states: RB9 Phase C1b): this report proves the pages, not that the transaction was authorized"})
-	return nil
+	// 6. The certified timeline (PROOF_V2 5.2 steps 2-5): every carried history folded to its proven chain root and replayed, then -
+	// when the evidence carries all the votes need - each counted signature's arrival derived and the vote model run on the timeline.
+	tl, err := foldTimelines(ev, byURL)
+	if err != nil {
+		return err
+	}
+	engaged, why := timelineEngaged(ev, tl)
+	if !engaged {
+		detail := "the votes are not re-evaluated (readiness, thresholds, per-arrival page states): this report proves the pages, not that the transaction was authorized"
+		if len(tl) > 0 || ev.Transaction != "" {
+			detail += "; the timeline is not complete: " + why
+		}
+		rep.Unproven = append(rep.Unproven, NamedState{Code: StateCompletenessUnproven, Partition: in.x.id, Block: in.x.block, Detail: detail})
+		return nil
+	}
+	auths, err := principalAuthorities(ev, byURL, nil)
+	if err != nil {
+		return err
+	}
+	ti := timelineIn{ev: ev, rep: rep, x: in, byURL: byURL, auths: auths, anchor: anchors}
+	if err := evaluateTimeline(ti, tl); err != nil {
+		return err
+	}
+	return verifyProductions(ti)
 }
 
 // deriveRoles re-derives, from the proven accounts alone, why each page must be among the proven pages (D1(a), (b), (d), (e)),
@@ -293,45 +314,9 @@ func deriveRoles(ev *Evidence, byURL map[string]*provenAcct, anchors map[string]
 	}
 
 	// (a) The principal and the accounts its authority set is inherited through (internal/core/block/shared, Baikonur and later).
-	principal, err := url.Parse(ev.Account)
+	auths, err := principalAuthorities(ev, byURL, func(u *url.URL) { add(u, RolePrincipalChain) })
 	if err != nil {
-		return nil, fmt.Errorf("evidence account: %w", err)
-	}
-	var auths []protocol.AuthorityEntry
-walk:
-	for cur := principal; ; {
-		pa, err := get(cur, "on the principal's inheritance chain")
-		if err != nil {
-			return nil, err
-		}
-		add(cur, RolePrincipalChain)
-		switch a := pa.acct.(type) {
-		case *protocol.LiteIdentity:
-			auths = []protocol.AuthorityEntry{{Url: a.Url}}
-			break walk
-		case *protocol.LiteTokenAccount:
-			if a.Delegate != nil {
-				auths = []protocol.AuthorityEntry{{Url: a.Delegate}}
-			} else {
-				auths = []protocol.AuthorityEntry{{Url: a.Url.RootIdentity()}}
-			}
-			break walk
-		case *protocol.LiteDataAccount:
-			break walk
-		case protocol.FullAccount:
-			if len(a.GetAuth().Authorities) > 0 {
-				auths = a.GetAuth().Authorities
-				break walk
-			}
-			parent, ok := cur.Parent()
-			if !ok {
-				return nil, refusal21(StateCompletenessUnproven, pa.anchor.id, pa.anchor.block,
-					"root identity %v lists no authority: the executor refuses it, so its governing set cannot be derived", cur)
-			}
-			cur = parent
-		default:
-			return nil, fmt.Errorf("account %v is %T, which is not governed by key books", cur, pa.acct)
-		}
+		return nil, err
 	}
 
 	// (b), (c), (d) The books at level 0: every listed authority (enabled or not), every book a page declares as a header
@@ -458,7 +443,7 @@ walk:
 			}
 			add(origin, RoleVoter)
 		}
-		for _, h := range v.Hops {
+		for _, h := range v.allHops() {
 			hp, err := url.Parse(h.Page)
 			if err != nil {
 				return nil, fmt.Errorf("vote hop page %q: %w", h.Page, err)
@@ -467,6 +452,16 @@ walk:
 				return nil, err
 			}
 			add(hp, RoleVoter)
+		}
+		if v.Produced != nil && !strings.EqualFold(v.Produced.Account, ev.Account) {
+			pu, err := url.Parse(v.Produced.Account)
+			if err != nil {
+				return nil, fmt.Errorf("vote of %s: production account %q: %w", v.Authority, v.Produced.Account, err)
+			}
+			if _, err := get(pu, "named by a counted vote's production proof"); err != nil {
+				return nil, err
+			}
+			add(pu, RoleSyntheticChain)
 		}
 		if len(v.Hops) > 0 {
 			keySig := v.Hops[len(v.Hops)-1]
@@ -585,7 +580,7 @@ func verifyVoteMembership(ev *Evidence, in xIn, byURL map[string]*provenAcct, an
 		if !inChain(v.Receipt, v.Message, root) {
 			return refusal21(StateBlockBeforeArrival, in.x.id, in.x.block, "the vote of %s is not a member of %s's signature chain at the transaction's block", v.Authority, ev.Account)
 		}
-		for _, h := range v.Hops {
+		for _, h := range v.allHops() {
 			hp, err := url.Parse(h.Page)
 			if err != nil {
 				return err
@@ -607,4 +602,45 @@ func verifyVoteMembership(ev *Evidence, in xIn, byURL map[string]*provenAcct, an
 		}
 	}
 	return nil
+}
+
+// principalAuthorities resolves the principal's authority list as the executor does, walking the inheritance chain through the proven
+// accounts; onChain is called for each account on the walk. It requires every account it reads to be among the proven pages.
+func principalAuthorities(ev *Evidence, byURL map[string]*provenAcct, onChain func(*url.URL)) ([]protocol.AuthorityEntry, error) {
+	principal, err := url.Parse(ev.Account)
+	if err != nil {
+		return nil, fmt.Errorf("evidence account: %w", err)
+	}
+	for cur := principal; ; {
+		pa, ok := byURL[lk(cur)]
+		if !ok {
+			return nil, refusal21(StateCompletenessUnproven, "", 0, "%s is on the principal's inheritance chain but is not among the proven pages", cur)
+		}
+		if onChain != nil {
+			onChain(cur)
+		}
+		switch a := pa.acct.(type) {
+		case *protocol.LiteIdentity:
+			return []protocol.AuthorityEntry{{Url: a.Url}}, nil
+		case *protocol.LiteTokenAccount:
+			if a.Delegate != nil {
+				return []protocol.AuthorityEntry{{Url: a.Delegate}}, nil
+			}
+			return []protocol.AuthorityEntry{{Url: a.Url.RootIdentity()}}, nil
+		case *protocol.LiteDataAccount:
+			return nil, nil
+		case protocol.FullAccount:
+			if len(a.GetAuth().Authorities) > 0 {
+				return a.GetAuth().Authorities, nil
+			}
+			parent, ok := cur.Parent()
+			if !ok {
+				return nil, refusal21(StateCompletenessUnproven, pa.anchor.id, pa.anchor.block,
+					"root identity %v lists no authority: the executor refuses it, so its governing set cannot be derived", cur)
+			}
+			cur = parent
+		default:
+			return nil, fmt.Errorf("account %v is %T, which is not governed by key books", cur, pa.acct)
+		}
+	}
 }
