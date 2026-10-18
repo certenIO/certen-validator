@@ -32,6 +32,12 @@ func Cases2() []Case {
 				Sigs: []SigEvent{{Key: "K0", Version: 2, Block: 62}, {Key: "K1", Version: 2, Block: 66}}}}},
 		{Name: "timeline-vote-released-later", Description: "the vote was produced in block 66 (a HoldUntil release after the signature arrived in block 65), established by its SequencedMessage's entry in the synthetic ledger", Expect: verified,
 			Opts: Options{Timeline: &Timeline{ProduceBlock: 66}}},
+		{Name: "timeline-delegated-vote", Description: "the vote is cast through a delegation: the key signature on the delegate book's page (BVN3, block 64), the delegate's authority signature on BankPage2 (BVN2, block 66), which holds the delegate entry; the book's vote is decided by BankPage2", Expect: verified,
+			Unproven: []string{held}, Opts: Options{Timeline: &Timeline{Delegated: true}}},
+		{Name: "timeline-delegated-entry-removed-after-arrival", Description: "the delegating page dropped its delegate entry in block 68, after the delegated vote arrived in block 66: the vote stands, and the delegate book is still in the governing set", Expect: verified,
+			Unproven: []string{held}, Opts: Options{Timeline: &Timeline{Delegated: true, DelegatorEvents: []PageEvent{{Block: 68, Add: []string{"K1"}, RemoveDelegate: true}}}}},
+		{Name: "timeline-delegated-page-version-bumped", Description: "the delegating page became version 2 in block 60: a delegated hop takes the page's then-current version, so it still counts", Expect: verified,
+			Unproven: []string{held}, Opts: Options{Timeline: &Timeline{Delegated: true, DelegatorEvents: []PageEvent{{Block: 60, Add: []string{"K1"}}}}}},
 		{Name: "timeline-without-transaction", Description: "no transaction is carried, so the votes are not re-evaluated: a named state, not a verified S3", Expect: verified,
 			Unproven: []string{c}, Opts: Options{Timeline: &Timeline{OmitTransaction: true}}},
 
@@ -78,6 +84,9 @@ func Cases2() []Case {
 		{Name: "timeline-arrival-previous-index-entry-missing", Description: "the previous signature-index entry is left out, so nothing shows the signature was not in an earlier block", Expect: refused,
 			State: proofv2.StateArrivalUnproven, Partition: "BVN2", Block: BlockBVN2, Opts: Options{Timeline: &Timeline{}},
 			Mutate: func(ev *proofv2.Evidence) { ev.Votes[0].Hops[0].Arrival.Before = nil }},
+		{Name: "timeline-delegated-entry-removed-before-arrival", Description: "the delegating page dropped its delegate entry in block 60: the delegate's vote arriving in block 66 could not have been counted", Expect: refused,
+			State: proofv2.StateVoteNotReproduced, Partition: "BVN1", Block: BlockBVN1,
+			Opts: Options{Timeline: &Timeline{Delegated: true, DelegatorEvents: []PageEvent{{Block: 60, Add: []string{"K1"}, RemoveDelegate: true}}}}},
 		{Name: "timeline-vote-produced-before-its-cause", Description: "the SequencedMessage is in the synthetic ledger in block 64, before the signature that caused the vote arrived in block 65", Expect: refused,
 			State: proofv2.StateBlockBeforeArrival, Partition: "BVN2", Block: BlockBVN2, Opts: Options{Timeline: &Timeline{ProduceBlock: HopBlock - 1}}},
 	}

@@ -500,6 +500,264 @@
       }
     },
     {
+      "name": "timeline-delegated-vote",
+      "description": "the vote is cast through a delegation: the key signature on the delegate book's page (BVN3, block 64), the delegate's authority signature on BankPage2 (BVN2, block 66), which holds the delegate entry; the book's vote is decided by BankPage2",
+      "file": "timeline-delegated-vote.json",
+      "sha256": "62bdb53c2caf2cacbce8d356b8601c6b546dd5edad573c6e296ad3e12d7ef305",
+      "expect": "verified",
+      "report": {
+        "version": "2.1",
+        "tag": "certen:g1:v4",
+        "partition": "acc://bvn-BVN1.acme",
+        "anchorBlock": 50,
+        "certifiedRoot": "dbf21cbe78f06ec5e1c2772796ef772b1d4f6045aeab63610938781b241d1a36",
+        "checkBlock": 300,
+        "setVerdict": "verified",
+        "routingHeight": 1,
+        "proven": [
+          {
+            "url": "acc://pv2-cust-5.acme/data",
+            "partition": "acc://bvn-BVN1.acme",
+            "block": 50,
+            "roles": [
+              "principal-chain"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/1",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/2",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page",
+              "voter"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book/1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-page",
+              "voter"
+            ]
+          }
+        ],
+        "pagesBound": 6,
+        "unproven": [
+          "g1_vote_held"
+        ],
+        "authorizationMode": "authorities_required",
+        "arrivals": [
+          {
+            "kind": "signature",
+            "account": "acc://pv2-bank-5.acme/book/2",
+            "block": 66
+          },
+          {
+            "kind": "signature",
+            "account": "acc://pv2-dele-5.acme/book/1",
+            "block": 64
+          }
+        ]
+      }
+    },
+    {
+      "name": "timeline-delegated-entry-removed-after-arrival",
+      "description": "the delegating page dropped its delegate entry in block 68, after the delegated vote arrived in block 66: the vote stands, and the delegate book is still in the governing set",
+      "file": "timeline-delegated-entry-removed-after-arrival.json",
+      "sha256": "b69cf64133d7a292b90f7ce6e479a9e2bb21bea00b8831f06925b7fdbfaee1df",
+      "expect": "verified",
+      "report": {
+        "version": "2.1",
+        "tag": "certen:g1:v4",
+        "partition": "acc://bvn-BVN1.acme",
+        "anchorBlock": 50,
+        "certifiedRoot": "84e744e0324bcbf911dfd280037334cfd970c6ea39cd6485e58bff2ed9556361",
+        "checkBlock": 300,
+        "setVerdict": "verified",
+        "routingHeight": 1,
+        "proven": [
+          {
+            "url": "acc://pv2-cust-5.acme/data",
+            "partition": "acc://bvn-BVN1.acme",
+            "block": 50,
+            "roles": [
+              "principal-chain"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/1",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/2",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page",
+              "voter"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book/1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-page",
+              "voter"
+            ]
+          }
+        ],
+        "pagesBound": 6,
+        "unproven": [
+          "g1_vote_held"
+        ],
+        "authorizationMode": "authorities_required",
+        "arrivals": [
+          {
+            "kind": "signature",
+            "account": "acc://pv2-bank-5.acme/book/2",
+            "block": 66
+          },
+          {
+            "kind": "signature",
+            "account": "acc://pv2-dele-5.acme/book/1",
+            "block": 64
+          }
+        ]
+      }
+    },
+    {
+      "name": "timeline-delegated-page-version-bumped",
+      "description": "the delegating page became version 2 in block 60: a delegated hop takes the page's then-current version, so it still counts",
+      "file": "timeline-delegated-page-version-bumped.json",
+      "sha256": "39f3a78c33a86581dcfe10c84886eb92ee1de76b12bef8c4dc0e8600e03f766c",
+      "expect": "verified",
+      "report": {
+        "version": "2.1",
+        "tag": "certen:g1:v4",
+        "partition": "acc://bvn-BVN1.acme",
+        "anchorBlock": 50,
+        "certifiedRoot": "4feec2475a1941d98952ad8815b56c6bbddbd0dcbd9e170e62e2c1d66e9573ec",
+        "checkBlock": 300,
+        "setVerdict": "verified",
+        "routingHeight": 1,
+        "proven": [
+          {
+            "url": "acc://pv2-cust-5.acme/data",
+            "partition": "acc://bvn-BVN1.acme",
+            "block": 50,
+            "roles": [
+              "principal-chain"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/1",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/2",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page",
+              "voter"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book/1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-page",
+              "voter"
+            ]
+          }
+        ],
+        "pagesBound": 6,
+        "unproven": [
+          "g1_vote_held"
+        ],
+        "authorizationMode": "authorities_required",
+        "arrivals": [
+          {
+            "kind": "signature",
+            "account": "acc://pv2-bank-5.acme/book/2",
+            "block": 66
+          },
+          {
+            "kind": "signature",
+            "account": "acc://pv2-dele-5.acme/book/1",
+            "block": 64
+          }
+        ]
+      }
+    },
+    {
       "name": "timeline-without-transaction",
       "description": "no transaction is carried, so the votes are not re-evaluated: a named state, not a verified S3",
       "file": "timeline-without-transaction.json",
@@ -690,6 +948,16 @@
       "state": "g1_arrival_unproven",
       "partition": "BVN2",
       "block": 70
+    },
+    {
+      "name": "timeline-delegated-entry-removed-before-arrival",
+      "description": "the delegating page dropped its delegate entry in block 60: the delegate's vote arriving in block 66 could not have been counted",
+      "file": "timeline-delegated-entry-removed-before-arrival.json",
+      "sha256": "b277e42a5fb6ad70764700b2f908522e1f6fb9ba80840c4356ba44bbc4bbdd21",
+      "expect": "refused",
+      "state": "g1_vote_not_reproduced",
+      "partition": "BVN1",
+      "block": 50
     },
     {
       "name": "timeline-vote-produced-before-its-cause",
