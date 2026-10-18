@@ -310,8 +310,23 @@ func TestCheckProofV2StillTakesTheVersion20PathForA20Document(t *testing.T) {
 		t.Fatalf("2.0 document: is21 %v, root %x, govRoot v3 %x", is21, root, want)
 	}
 
-	// A 2.1 document relabelled 2.0 is judged by the 2.0 verifier (which refuses 2.1 members), never by the 2.1 one; an unknown version is
-	// refused by name.
+	// A document that claims 2.0 and carries evidence 2.1 members is judged as consensus judges it before the activation, on its evidence-2.0
+	// view (the members v14's decode dropped cleared): the same verdict and the same govRoot v3 as the document without them.
+	withVotes := new(proofv2.Evidence)
+	rawDoc, _ := json.Marshal(fx.ProofV2)
+	if err := json.Unmarshal(rawDoc, withVotes); err != nil {
+		t.Fatal(err)
+	}
+	withVotes.Votes = []proofv2.Vote{{Authority: "acc://a.acme/book", Vote: "accept"}}
+	withVotes.Transaction = "00"
+	withVotes.Pages[0].Roles = []proofv2.PageRole{proofv2.RoleAuthorityPage}
+	in.ProofV2 = withVotes
+	root2, is21, err := checkProofV2(in, trust, ir.Incarnation, op, rep.AccumulateSetRoot, &g0, &g1, &g2, nil)
+	if err != nil || is21 || root2 != want {
+		t.Fatalf("a 2.0 document with 2.1 members: root %x (want %x), is21 %v, %v", root2, want, is21, err)
+	}
+
+	// A 2.1 document relabelled 2.0 is judged on the 2.0 view, never as 2.1; an unknown version is refused by name.
 	c := loadReal21Case(t)
 	two := new(proofv2.Evidence)
 	raw, _ := json.Marshal(c.ev)
@@ -319,9 +334,8 @@ func TestCheckProofV2StillTakesTheVersion20PathForA20Document(t *testing.T) {
 		t.Fatal(err)
 	}
 	two.Version = proofv2.Version
-	if _, _, err := checkProofV2(c.inputs(two), c.trust, c.inc, c.op, c.rep.AccumulateSetRoot, c.g0, c.g1, c.g2, c.voteEvid); err == nil ||
-		!strings.Contains(err.Error(), "carries 2.1 members") {
-		t.Fatalf("a 2.1 document relabelled 2.0: %v", err)
+	if _, is, _ := checkProofV2(c.inputs(two), c.trust, c.inc, c.op, c.rep.AccumulateSetRoot, c.g0, c.g1, c.g2, c.voteEvid); is {
+		t.Fatal("a document that claims 2.0 was judged as evidence 2.1")
 	}
 	two.Version = "9.9"
 	if _, _, err := checkProofV2(c.inputs(two), c.trust, c.inc, c.op, c.rep.AccumulateSetRoot, c.g0, c.g1, c.g2, c.voteEvid); err == nil {

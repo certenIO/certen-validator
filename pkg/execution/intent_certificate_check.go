@@ -255,14 +255,20 @@ func checkProofV2(in consensus.IntentMessageInputs, trust *ProofV2Trust, inc, op
 	if in.ProofV2.Version == proofv2.Version21 {
 		verify = proofv2.Verify21FromGenesis
 	}
-	rep, err := verify(in.ProofV2, trust.Archive, trust.Inputs, inc)
+	// A document that claims 2.0 is judged on its evidence-2.0 view, as consensus judges it (judgeProofV2, consensus.Evidence20View): a
+	// certificate consensus accepted before the cross-partition activation has the same verdict here.
+	doc := in.ProofV2
+	if doc.Version != proofv2.Version21 {
+		doc = consensus.Evidence20View(doc)
+	}
+	rep, err := verify(doc, trust.Archive, trust.Inputs, inc)
 	if err != nil {
 		return zero, false, fmt.Errorf("the certified proof v2: %w", err)
 	}
 	if rep.AccumulateSetRoot != accRoot {
 		return zero, false, fmt.Errorf("the certified proof v2 derives Accumulate set root %x, the stored Directory leg %x", rep.AccumulateSetRoot, accRoot)
 	}
-	root, is21, err = intentcert.ProofV2Root(rep, in.ProofV2, g0, g1, g2, in.KeyPageURL, in.KeyBookURL, voteEvidence, op)
+	root, is21, err = intentcert.ProofV2Root(rep, doc, g0, g1, g2, in.KeyPageURL, in.KeyBookURL, voteEvidence, op)
 	if err != nil {
 		return zero, is21, fmt.Errorf("the certified proof v2: %w", err)
 	}

@@ -177,7 +177,13 @@ func judgeProofV2(ev *IntentCertificateEvidence, g0 *govproof.G0Result, g1doc *g
 	if verify == nil {
 		verify = defaultProofV2Verifier(is21)
 	}
-	rep, err := verify(ev.ProofV2, spine, incarnation)
+	// A document that claims 2.0 and reaches here is judged with no activation in force (the gate above refused it otherwise): as v14 judged
+	// it, on the members v14's decode kept. See Evidence20View.
+	doc := ev.ProofV2
+	if !is21 {
+		doc = Evidence20View(doc)
+	}
+	rep, err := verify(doc, spine, incarnation)
 	if err != nil {
 		return zero, nil, fmt.Errorf("%w: %v", ErrIntentProofV2Invalid, err)
 	}
@@ -188,7 +194,7 @@ func judgeProofV2(ev *IntentCertificateEvidence, g0 *govproof.G0Result, g1doc *g
 		return zero, nil, fmt.Errorf("%w: the spine derives set root %x, the L4 leg %x", ErrIntentAccumulateSetMismatch, rep.AccumulateSetRoot, accRoot)
 	}
 	// Binding and root together, by the evidence's version.
-	govRoot, _, err := intentcert.ProofV2Root(rep, ev.ProofV2, g0, g1doc, g2, ev.KeyPageURL, ev.KeyBookURL, ev.VoteEvidence, operationID)
+	govRoot, _, err := intentcert.ProofV2Root(rep, doc, g0, g1doc, g2, ev.KeyPageURL, ev.KeyBookURL, ev.VoteEvidence, operationID)
 	if err != nil {
 		if errors.Is(err, intentcert.ErrBind) {
 			return zero, nil, fmt.Errorf("%w: %v", ErrIntentProofV2Invalid, err)
