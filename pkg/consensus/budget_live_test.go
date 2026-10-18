@@ -171,13 +171,13 @@ func TestBudgetLiveAnchoredMeasured(t *testing.T) {
 	// BudgetedValidators instead of the measured validator set, rounded up to 5,000, and no more.
 	derived := maxFixed + maxRecords*proofv2.ValidatorSignatureBytes*(proofv2.BudgetedValidators-proofv2.MeasuredValidators)
 	derived = (derived + 4999) / 5000 * 5000
-	if proofv2.FixedEvidenceBytes < derived || proofv2.FixedEvidenceBytes > derived+5000 {
-		t.Fatalf("FixedEvidenceBytes is %d, the derivation from the anchored fixtures gives %d (max fixed %d incl. the genesis link + %d records x %d x (%d-%d) validators, rounded up to 5,000; the constant may carry at most one more step)",
+	if proofv2.FixedEvidenceBytes != derived {
+		t.Fatalf("FixedEvidenceBytes is %d, the derivation from the anchored fixtures gives exactly %d (max fixed %d incl. the genesis link + %d records x %d x (%d-%d) validators, rounded up to 5,000)",
 			proofv2.FixedEvidenceBytes, derived, maxFixed, maxRecords, proofv2.ValidatorSignatureBytes, proofv2.BudgetedValidators, proofv2.MeasuredValidators)
 	}
 }
 
-// The certificate is judged whole before it is signed: where R is known exactly (the block as it will be broadcast, json.Marshal of the
+// The certificate is judged whole before it is signed: where R is known (the block as it will be broadcast, with the roots and signature filled after the check counted at their final length: json.Marshal of the
 // ValidatorBlock), a block carrying evidence 2.1 that is over the transaction path limit is refused by certificate_budget{size,limit}, with
 // nothing signed and no certificate left on the block.
 func TestBudgetBuildIntentCertificateRefusesAnOversizeBlockBeforeSigning(t *testing.T) {

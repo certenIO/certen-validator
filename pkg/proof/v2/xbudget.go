@@ -23,8 +23,9 @@
 //     holds the minor-root runs since the last major (which are why the real 2.0 evidence of 3cfb04cf held 731,778 bytes, 357,638 of them
 //     runs, and why the old FixedEvidenceBytes was 760,000). FixedEvidenceBytes is that maximum plus the signature entries of the records it
 //     holds at a validator set of BudgetedValidators instead of MeasuredValidators (each record carries ValidatorSignatureBytes per
-//     validator) and the genesis link (V-E A1b, 1,880 bytes measured): 27,626 + 1,880 + 4 records x 165 x (16-3) = 33,796, rounded up to 35,000, plus one
-//     further 5,000 step for the deeper link answers of a major close (2,132 hex characters on record). The test derives it; it is not a guess.
+//     validator) and the genesis link (V-E A1b, 1,880 bytes measured): 27,626 + 1,880 + 4 records x 165 x (16-3) = 27,626 + 1,880 + 8,580 = 38,086
+//     (the test measures the document that already carries the link: 29,507 + 8,580 = 38,087), rounded up to the next 5,000 = 40,000, with no further
+//     step. TestBudgetLiveAnchoredMeasured derives it and requires FixedEvidenceBytes to EQUAL the derived value; it is not a guess.
 //   - pages and votes together cost about 5.0 KB per closure page (cross-505: 25,311 bytes for 5 pages; deleg-532: 226,154 for 45).
 //   - the vote evidence inside R grows with the closure too, up to 7,503 bytes per closure page (same-500; deleg-532: 281,096 for 45 pages =
 //     6,246), and the rest of R without it is 141,464 .. 198,492 bytes on these intents (the production R of 3-page intents, which includes
@@ -72,6 +73,17 @@ const (
 	// RestFlatBytes is the largest R measured in production (258,469): the part of R that does not grow with the closure and, with it, a
 	// 3-page closure's vote evidence.
 	RestFlatBytes = 260_000
+
+	// The evidence 2.0 values. A 2.0 document still holds the minor-root runs since the last major, so its fixed part is the 760,000 the
+	// old constant measured, and it is judged against the 96 KiB reserve it always had: RB9-F5 invariant 2 (nothing on the 2.0 path
+	// tightens or loosens), V-I D2. CheckClosureBudget applies them to a 2.0 capture exactly as it did before F5-4.
+	//
+	// CertificateReserve20 is the reserve evidence 2.0 was judged with.
+	CertificateReserve20 = 96 << 10
+	// MaxEvidenceBytes20 is the evidence 2.0 budget (950,272).
+	MaxEvidenceBytes20 = ConsensusTxLimit - CertificateReserve20
+	// FixedEvidenceBytes20 is the fixed part measured on a real 2.0 evidence (731,778 bytes, rounded up).
+	FixedEvidenceBytes20 = 760_000
 	// VoteEvidenceBytesPerPage is the largest vote evidence per closure page measured on the live intents (7,503), rounded up.
 	VoteEvidenceBytesPerPage = 7_600
 )
@@ -155,11 +167,26 @@ func CheckEvidenceBudget(ev *Evidence, x xAnchor) error {
 	return nil
 }
 
-// CheckClosureBudget is the capture's check, before the evidence exists: the captured pages and votes encoded, plus the fixed part, must
-// fit MaxEvidenceBytes (else g1_closure_exceeds_budget), and the whole certificate they imply - the evidence plus R scaled by the closure's
-// pages - must fit ConsensusTxLimit (else certificate_budget{size,limit}). partition and block are where the capture judged it.
-func CheckClosureBudget(pages []PageState, votes []Vote, partition string, block uint64) error {
-	size := FixedEvidenceBytes
+// CheckClosureBudget is the capture's check, before the evidence exists, for the document form the capture becomes (version: Version for
+// evidence 2.0, Version21 for evidence 2.1; any other value is an error, never a default).
+//
+// Evidence 2.0 is judged exactly as it was before F5-4 (RB9-F5 invariant 2, V-I D2): the captured pages and votes encoded, plus the 2.0 fixed
+// part (FixedEvidenceBytes20), must fit MaxEvidenceBytes20, else g1_closure_exceeds_budget; nothing else is checked.
+//
+// Evidence 2.1: the same with the anchored form's FixedEvidenceBytes and MaxEvidenceBytes (else g1_closure_exceeds_budget), and the whole
+// certificate they imply - the evidence plus R scaled by the closure's pages - must fit ConsensusTxLimit (else certificate_budget{size,limit}).
+// partition and block are where the capture judged it.
+func CheckClosureBudget(version string, pages []PageState, votes []Vote, partition string, block uint64) error {
+	var fixed, limit int
+	switch version {
+	case Version:
+		fixed, limit = FixedEvidenceBytes20, MaxEvidenceBytes20
+	case Version21:
+		fixed, limit = FixedEvidenceBytes, MaxEvidenceBytes
+	default:
+		return fmt.Errorf("closure budget: unknown evidence version %q (judged at %s block %d)", version, partition, block)
+	}
+	size := fixed
 	for i := range pages {
 		raw, err := json.Marshal(&pages[i])
 		if err != nil {
@@ -172,16 +199,19 @@ func CheckClosureBudget(pages []PageState, votes []Vote, partition string, block
 		return err
 	}
 	size += len(raw)
-	if size > MaxEvidenceBytes {
+	if size > limit {
 		return &NamedState{Code: StateClosureExceedsBudget, Partition: partition, Block: block,
 			Detail: fmt.Sprintf("pages=%d limit=%d: the pages and votes encode to %d bytes with the %d-byte fixed part, over the %d bytes the consensus transaction limit (%d) leaves the evidence",
-				len(pages), MaxEvidenceBytes, size, FixedEvidenceBytes, MaxEvidenceBytes, ConsensusTxLimit)}
+				len(pages), limit, size, fixed, limit, ConsensusTxLimit)}
+	}
+	if version == Version {
+		return nil
 	}
 	return CheckCertificateFits(size, len(pages), fmt.Sprintf("%s block %d", partition, block))
 }
 
 // CertificateTooLarge is certificate_budget{size,limit} for a transaction of size bytes that is over ConsensusTxLimit, judged at where. The
-// consensus package uses it where the whole block is known exactly, before the block is signed.
+// consensus package uses it for the whole block as it will be broadcast (the members filled after the check counted at their final length), before the block is signed.
 func CertificateTooLarge(size int, where string) error {
 	return certificateBudget(size, where, "the transaction is %d bytes, %d over the %d the consensus path accepts (tx_too_large)", size, size-ConsensusTxLimit, ConsensusTxLimit)
 }

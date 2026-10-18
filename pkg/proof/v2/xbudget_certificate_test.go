@@ -58,7 +58,7 @@ func TestBudgetClosureChecksTheWholeCertificate(t *testing.T) {
 	for i := range many {
 		many[i] = page
 	}
-	err := CheckClosureBudget(many, nil, "BVN1", 50)
+	err := CheckClosureBudget(Version21, many, nil, "BVN1", 50)
 	code, size, limit := certificateFields(t, err)
 	if code != StateCertificateBudget || size <= limit || limit != ConsensusTxLimit {
 		t.Fatalf("90 pages: %s size=%d limit=%d (%v)", code, size, limit, err)
@@ -70,7 +70,7 @@ func TestBudgetClosureChecksTheWholeCertificate(t *testing.T) {
 	if !strings.Contains(err.Error(), "BVN1") || !strings.Contains(err.Error(), "50") {
 		t.Fatalf("the refusal does not carry the partition and block it was judged at: %v", err)
 	}
-	if err := CheckClosureBudget(many[:10], nil, "BVN1", 50); err != nil {
+	if err := CheckClosureBudget(Version21, many[:10], nil, "BVN1", 50); err != nil {
 		t.Fatalf("10 such pages: %v", err)
 	}
 }

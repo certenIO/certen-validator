@@ -51,12 +51,12 @@ func TestEvidenceBudgetIsExactlyTheConsensusTransactionLimitLessTheReserve(t *te
 // The capture's check, before the evidence exists.
 func TestClosureBudgetRefusesAClosureThatCannotFit(t *testing.T) {
 	small := []PageState{{URL: "acc://a.acme/book", State: strings.Repeat("ab", 600)}}
-	if err := CheckClosureBudget(small, nil, "BVN1", 50); err != nil {
+	if err := CheckClosureBudget(Version21, small, nil, "BVN1", 50); err != nil {
 		t.Fatalf("a small closure: %v", err)
 	}
 	room := MaxEvidenceBytes - FixedEvidenceBytes
 	big := []PageState{{URL: "acc://a.acme/book", State: hex.EncodeToString(make([]byte, room/2))}}
-	err := CheckClosureBudget(big, nil, "BVN1", 50)
+	err := CheckClosureBudget(Version21, big, nil, "BVN1", 50)
 	var ns *NamedState
 	if !errors.As(err, &ns) || ns.Code != StateClosureExceedsBudget || ns.Partition != "BVN1" || ns.Block != 50 || !strings.Contains(ns.Detail, "pages=1 limit=720896") {
 		t.Fatalf("a closure over the budget: %v", err)
