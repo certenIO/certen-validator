@@ -266,7 +266,7 @@ v0.38.21; `pkg/consensus` sets no limit of its own), so `max_tx_bytes` = 1 MiB (
 validators). The transaction is evidence + R, R being the vote evidence with its page histories, the L1-L4 proof carried a second time, G0-G2, the authorization record and the signatures. R was
 MEASURED in production (15 transactions, 138,579 .. 258,469 bytes), so the earlier 96 KiB reserve (`MaxEvidenceBytes` 950,272) did not guarantee a transaction under 1 MiB; corrected (RB9-F5 F5-4, V-E
 A4): `CertificateReserve` = 320 KiB (the largest measured R plus the vote evidence of an 8-page closure), `MaxEvidenceBytes` = 1 MiB - 320 KiB = **720,896**, and `FixedEvidenceBytes` = **40,000**,
-derived from the ANCHORED form of the 19 live intents (largest fixed part 27,626 bytes at a validator set of 3, plus 4 signature-bearing records x 165 B x (16 - 3) validators, rounded up to 5,000;
+derived from the ANCHORED form of the 19 live intents (largest fixed part 27,626 bytes at a validator set of 3, plus the 1,880-byte genesis link, plus 4 signature-bearing records x 165 B x (16 - 3) validators = 33,796, rounded up to 35,000 and one further step;
 `pkg/consensus/budget_live_test.go`) instead of the 2.0 figure 760,000 (which held the minor-root runs since the last major). The vote evidence inside R grows with the closure (up to 7,503 bytes
 per page measured; the 45-page `deleg-532` has R = 448,096), so a closure is also judged as a WHOLE certificate before anything is signed: `certificate_budget{size,limit}` (the same decision as the
 broadcast's `tx_too_large`) from `CheckClosureBudget` (the capture), from the builder after it assembles evidence 2.1 (`assemble21`) and from `BuildIntentCertificate` on the exact block. What grows

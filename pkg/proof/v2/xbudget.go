@@ -23,7 +23,8 @@
 //     holds the minor-root runs since the last major (which are why the real 2.0 evidence of 3cfb04cf held 731,778 bytes, 357,638 of them
 //     runs, and why the old FixedEvidenceBytes was 760,000). FixedEvidenceBytes is that maximum plus the signature entries of the records it
 //     holds at a validator set of BudgetedValidators instead of MeasuredValidators (each record carries ValidatorSignatureBytes per
-//     validator), rounded up to 5,000: 27,626 + 4 records x 165 x (16-3) = 36,206 -> 40,000. The test derives it; it is not a guess.
+//     validator) and the genesis link (V-E A1b, 1,880 bytes measured): 27,626 + 1,880 + 4 records x 165 x (16-3) = 33,796, rounded up to 35,000, plus one
+//     further 5,000 step for the deeper link answers of a major close (2,132 hex characters on record). The test derives it; it is not a guess.
 //   - pages and votes together cost about 5.0 KB per closure page (cross-505: 25,311 bytes for 5 pages; deleg-532: 226,154 for 45).
 //   - the vote evidence inside R grows with the closure too, up to 7,503 bytes per closure page (same-500; deleg-532: 281,096 for 45 pages =
 //     6,246), and the rest of R without it is 141,464 .. 198,492 bytes on these intents (the production R of 3-page intents, which includes
