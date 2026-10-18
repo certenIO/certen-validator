@@ -1,0 +1,211 @@
+{
+  "format": "certen-robust1-conformance/1",
+  "domain": "certen:g1:v4",
+  "portableFormat": "certen-proof-v2-accumulate-portable/1",
+  "cases": [
+    {
+      "name": "set-check-network-account-null",
+      "description": "the network account of the set check is JSON null: no account at all, refused like any account of the wrong kind (it was dereferenced; defect 1 of RB9-D)",
+      "base": "d2b-directory-page-with-a-bvn-anchor",
+      "edit": "evidence/check/network/account = null",
+      "file": "set-check-network-account-null.json",
+      "sha256": "40cf997c85e8793569612f5ad24b9c2f3c14e36d33f2fa2e1ba873da9efe3545",
+      "expect": "refused",
+      "wording": "set check network: acc://dn.acme/network is \u003cnil\u003e, not a one-entry data account",
+      "prefix": "set check network: acc://dn.acme/network is \u003cnil\u003e, not a one-entry data account"
+    },
+    {
+      "name": "set-check-globals-account-null",
+      "description": "the globals account of the set check is JSON null",
+      "base": "d2b-directory-page-with-a-bvn-anchor",
+      "edit": "evidence/check/globals/account = null",
+      "file": "set-check-globals-account-null.json",
+      "sha256": "42cc1fb629d9eedd372affb8d955fdf7dc681c363d12f2f12483b17f622f7e19",
+      "expect": "refused",
+      "wording": "set check globals: acc://dn.acme/globals is \u003cnil\u003e, not a one-entry data account",
+      "prefix": "set check globals: acc://dn.acme/globals is \u003cnil\u003e, not a one-entry data account"
+    },
+    {
+      "name": "set-check-routing-account-null",
+      "description": "the routing account of the set check is JSON null",
+      "base": "d2b-directory-page-with-a-bvn-anchor",
+      "edit": "evidence/check/routing/account = null",
+      "file": "set-check-routing-account-null.json",
+      "sha256": "9ae1b4a1049e3de2af68a708e9bf3e6e728075b88090d56764286099a4bd6966",
+      "expect": "refused",
+      "wording": "set check routing: acc://dn.acme/routing is \u003cnil\u003e, not a one-entry data account",
+      "prefix": "set check routing: acc://dn.acme/routing is \u003cnil\u003e, not a one-entry data account"
+    },
+    {
+      "name": "evidence-majors-zero",
+      "description": "the certification builds on no major block: refused before any spine is built (it dereferenced a spine that was never kept; defect 2 of RB9-D)",
+      "base": "update-account-auth-remove-op-that-leaves-the-voter",
+      "edit": "evidence/majors = 0",
+      "file": "evidence-majors-zero.json",
+      "sha256": "b4441ca949c562add8629d685b27fc36183bc671c777b2b5294f6ef9dd11c71b",
+      "expect": "refused",
+      "wording": "evidence builds on 0 major blocks: the certification needs at least the first",
+      "prefix": "evidence builds on 0 major blocks: the certification needs at least the first"
+    },
+    {
+      "name": "evidence-majors-absent",
+      "description": "the member that says how many major blocks the certification builds on is absent: the same refusal as zero",
+      "base": "update-account-auth-remove-op-that-leaves-the-voter",
+      "edit": "evidence/majors removed",
+      "file": "evidence-majors-absent.json",
+      "sha256": "b09c6fa72dcae9bfa38da933a946c25880774a4f559a1f4cfb613c8248151f1c",
+      "expect": "refused",
+      "wording": "evidence builds on 0 major blocks: the certification needs at least the first",
+      "prefix": "evidence builds on 0 major blocks: the certification needs at least the first"
+    },
+    {
+      "name": "anchors-two-defective-first-in-key-order",
+      "description": "two defective anchors, the BVN2 entry's receipt altered and the BVN4 entry (an anchor of BVN3 under BVN4's key) already refused as g1_foreign_partition_mismatch{BVN3,90}: the anchors are judged in ascending key order, so the named state is BVN2's, every time (it was whichever a map walk met first; defect 3 of RB9-D)",
+      "base": "anchor-wrapper-source-altered",
+      "edit": "evidence/anchors/acc://bvn-BVN2.acme/receipt/entries/1/hash flipped (the document's BVN4 entry is already defective)",
+      "file": "anchors-two-defective-first-in-key-order.json",
+      "sha256": "c133fda93184759ef366203ebd8f4f30b195aadf898efeb49153ea538096e33d",
+      "expect": "refused",
+      "state": "g1_partition_anchor_unavailable",
+      "partition": "BVN2",
+      "block": 70,
+      "wording": "g1_partition_anchor_unavailable{BVN2,70}: the receipt does not prove the anchor transaction into the certified Directory root",
+      "prefix": "g1_partition_anchor_unavailable{BVN2,70}: the receipt does not prove the anchor transaction into the certified Directory root"
+    },
+    {
+      "name": "page-account-null",
+      "description": "a proven page's account is JSON null: no account at all (it was re-encoded to binary)",
+      "base": "d2b-directory-page-with-a-bvn-anchor",
+      "edit": "evidence/pages/0/account = null",
+      "file": "page-account-null.json",
+      "sha256": "a1b0615f6af5e831c33da5616f6c841360b0823a4ccc33b913ac8148df01d84c",
+      "expect": "refused",
+      "wording": "page acc://pv2-cust-5.acme/data is \u003cnil\u003e, not an account",
+      "prefix": "page acc://pv2-cust-5.acme/data is \u003cnil\u003e, not an account"
+    },
+    {
+      "name": "vote-hop-signature-holds-no-signature",
+      "description": "the key signature of a vote's cause chain is a run of zero bytes: Accumulate's decoder answers neither a signature nor an error (the nil was handed on and dereferenced)",
+      "base": "production-sequenced-bound",
+      "edit": "evidence/votes/0/hops/0/signature = zeros",
+      "file": "vote-hop-signature-holds-no-signature.json",
+      "sha256": "ae601034cf2109430b96ef379f56d577008ce6027c87589e915d7427896b1a30",
+      "expect": "refused",
+      "wording": "vote of acc://pv2-bank-5.acme/book: key signature: it holds no signature",
+      "prefix": "vote of acc://pv2-bank-5.acme/book: key signature: it holds no signature"
+    },
+    {
+      "name": "transaction-names-an-authority-with-no-url",
+      "description": "the carried transaction adds an authority that has no URL: it cannot have been executed and cannot be required (it was read as a nil URL)",
+      "base": "update-account-auth-add-op-authority-did-not-vote",
+      "edit": "evidence/transaction: the AddAccountAuthority operation's authority absent",
+      "file": "transaction-names-an-authority-with-no-url.json",
+      "sha256": "427d536d2fea6ecefc721a89b60bf8bb4eaeb520b47aab48bd7eb937a94b7429",
+      "expect": "refused",
+      "state": "g1_transaction_mismatch",
+      "partition": "BVN1",
+      "block": 50,
+      "wording": "g1_transaction_mismatch{BVN1,50}: a transaction names an authority with no URL",
+      "prefix": "g1_transaction_mismatch{BVN1,50}: a transaction names an authority with no URL"
+    },
+    {
+      "name": "anchor-message-carries-no-transaction",
+      "description": "the evidence 2.0 anchor message wraps a transaction message that carries no transaction: the anchor's body type was asked of nothing",
+      "base": "conformance:network-update",
+      "edit": "evidence/anchor/message/message/transaction = null",
+      "file": "anchor-message-carries-no-transaction.json",
+      "sha256": "966ef66fa6d86bbfdc57a82428b1014d72ac20355dd99e823e314ab5d9b31bfc",
+      "expect": "refused",
+      "wording": "partition anchor carries no transaction body",
+      "prefix": "partition anchor carries no transaction body"
+    },
+    {
+      "name": "anchor-message-names-no-source",
+      "description": "the evidence 2.0 anchor message names no source: the partition was read from nothing",
+      "base": "conformance:network-update",
+      "edit": "evidence/anchor/message/source = null",
+      "file": "anchor-message-names-no-source.json",
+      "sha256": "b068492500902a11bcf3622fb90f09ab270185bd53ccb22e089b17e6392f17be",
+      "expect": "refused",
+      "wording": "partition anchor names no source, destination or principal",
+      "prefix": "partition anchor names no source, destination or principal"
+    },
+    {
+      "name": "codec-anchor-body-member-null",
+      "description": "a member of the anchor's body is JSON null: Accumulate's decoder of a BlockValidatorAnchor dereferences it",
+      "base": "d2b-directory-page-with-a-bvn-anchor",
+      "edit": "evidence/anchor/message/message/transaction/body/rootChainAnchor = null",
+      "file": "codec-anchor-body-member-null.json",
+      "sha256": "f5c354b4668908b3a1e9e8653299564b00fffd5525ce56681aca71e2731fc159",
+      "expect": "refused",
+      "wording": "anchor message: a value Accumulate's codec cannot decode (a member it needs is null or absent)",
+      "prefix": "anchor message: a value Accumulate's codec cannot decode (a member it needs is null or absent)"
+    },
+    {
+      "name": "codec-validator-member-null",
+      "description": "a validator of the network record has a null key hash: Accumulate's decoder of a ValidatorInfo dereferences it",
+      "base": "d2b-directory-page-with-a-bvn-anchor",
+      "edit": "evidence/check/network/record/validators/0/publicKeyHash = null",
+      "file": "codec-validator-member-null.json",
+      "sha256": "44f5a7bd3caeea470fbf3fd6a2651f66bc0a1eec13ee6a606603c9abfdf0fa7d",
+      "expect": "refused",
+      "wording": "set check network: a value Accumulate's codec cannot decode (a member it needs is null or absent)",
+      "prefix": "set check network: a value Accumulate's codec cannot decode (a member it needs is null or absent)"
+    },
+    {
+      "name": "codec-major-anchor-body-member-null",
+      "description": "a member of a spine record's DirectoryAnchor body is JSON null: Accumulate's decoder of a DirectoryAnchor dereferences it",
+      "base": "d2b-directory-page-with-a-bvn-anchor",
+      "edit": "majors/0/anchor/message/transaction/body/stateTreeAnchor = null",
+      "file": "codec-major-anchor-body-member-null.json",
+      "sha256": "50314d19f21034b0303a93987b943b262a2f68d46b39bd9fed63d43a126b93b9",
+      "expect": "refused",
+      "wording": "major 1: a value Accumulate's codec cannot decode (a member it needs is null or absent)",
+      "prefix": "major 1: a value Accumulate's codec cannot decode (a member it needs is null or absent)"
+    },
+    {
+      "name": "codec-major-signature-member-null",
+      "description": "a member of a spine record's validator signature is JSON null: Accumulate's decoder of an ED25519Signature dereferences it",
+      "base": "d2b-directory-page-with-a-bvn-anchor",
+      "edit": "majors/0/signatures/0/transactionHash = null",
+      "file": "codec-major-signature-member-null.json",
+      "sha256": "c8393faf4edddfeee27a3d4ddabc04568d68b6ad81c3accb9477952a5b4a266d",
+      "expect": "refused",
+      "wording": "major 1: a value Accumulate's codec cannot decode (a member it needs is null or absent)",
+      "prefix": "major 1: a value Accumulate's codec cannot decode (a member it needs is null or absent)"
+    },
+    {
+      "name": "codec-certify-run-signature-null",
+      "description": "a signature of a minor-root run is JSON null: Accumulate's encoder of a MinorRootRecord dereferences it",
+      "base": "d2b-directory-page-with-a-bvn-anchor",
+      "edit": "evidence/certify/0/signatures/0 = null",
+      "file": "codec-certify-run-signature-null.json",
+      "sha256": "84c2f8a2f65c2a59d3a9107655858964519b20e605f234393e29a7974ce5b3a6",
+      "expect": "refused",
+      "wording": "certify run 0: a value Accumulate's codec cannot decode (a member it needs is null or absent)",
+      "prefix": "certify run 0: a value Accumulate's codec cannot decode (a member it needs is null or absent)"
+    },
+    {
+      "name": "spine-network-update-receipt-step-null",
+      "description": "a network update's receipt in a spine record has a null step: Accumulate's receipt validation reads the hash of every step",
+      "base": "conformance:network-update",
+      "edit": "majors/1/updates/0/receipt/entries/0 = null",
+      "file": "spine-network-update-receipt-step-null.json",
+      "sha256": "b1fc2f85a4f9093fd6fcdcaf3ab44274c8c82f3d7b893653bc09143f9489454c",
+      "expect": "refused",
+      "wording": "spine: major block 2: incomplete network update proof",
+      "prefix": "spine: major block 2: incomplete network update proof"
+    },
+    {
+      "name": "anchors-two-unimportable-first-in-key-order",
+      "description": "two anchors that do not import, the BVN2 and BVN4 entries: the anchors are imported in ascending key order, so the refusal names BVN2's, every time",
+      "base": "anchor-wrapper-source-altered",
+      "edit": "evidence/anchors/{acc://bvn-BVN2.acme,acc://bvn-BVN4.acme}/message = 7",
+      "file": "anchors-two-unimportable-first-in-key-order.json",
+      "sha256": "ebb7998a5eb1e019c28d95085c61c08935e6d971527c8efbfb1c54a2c4029719",
+      "expect": "refused",
+      "wording": "anchor acc://bvn-BVN2.acme: anchor message: json: cannot unmarshal number into Go value of type struct { Type messaging.MessageType \"json:\\\"type\\\"\"; Message *encoding.JsonUnmarshalWith[gitlab.com/accumulatenetwork/accumulate/pkg/types/messaging.Message] \"json:\\\"message,omitempty\\\"\"; Source *url.URL \"json:\\\"source,omitempty\\\"\"; Destination *url.URL \"json:\\\"destination,omitempty\\\"\"; Number uint64 \"json:\\\"number,omitempty\\\"\"; ExtraData *string \"json:\\\"$epilogue,omitempty\\\"\" }",
+      "prefix": "anchor acc://bvn-BVN2.acme: "
+    }
+  ]
+}

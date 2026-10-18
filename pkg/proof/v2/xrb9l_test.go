@@ -145,7 +145,7 @@ func TestRB9LEvidenceThatBuildsOnNoMajorBlockIsRefused(t *testing.T) {
 
 // DEFECT 3 (pkg/proof/v2/xverify.go verify21): the entries of evidence.anchors were judged in the order a Go map is walked, so a document
 // with two defective anchors was refused with a different named state from one run to the next. They are judged in ascending byte order of
-// their keys; in this document BVN2's anchor (its receipt altered) precedes BVN3's (its wrapper's source altered), so the refusal is
+// their keys; in this document the BVN2 entry (its receipt altered) precedes the BVN4 entry (an anchor of BVN3 under BVN4's key), so the refusal is
 // g1_partition_anchor_unavailable{BVN2,70} every time, never g1_foreign_partition_mismatch{BVN3,90}.
 func TestRB9LAnchorsAreJudgedInKeyOrder(t *testing.T) {
 	raw := vectorDoc(t, "xpartition4", "anchor-wrapper-source-altered.json")
@@ -209,7 +209,7 @@ func TestRB9LExecutorVersionRefusalNamesTheFirstLedgerInURLOrder(t *testing.T) {
 func TestRB9LUnimportableAnchorsAreRefusedInKeyOrder(t *testing.T) {
 	raw := vectorDoc(t, "xpartition4", "anchor-wrapper-source-altered.json")
 	var muts []jm.Mutation
-	for _, k := range []string{"acc://bvn-BVN2.acme", "acc://bvn-BVN3.acme"} {
+	for _, k := range []string{"acc://bvn-BVN2.acme", "acc://bvn-BVN4.acme"} {
 		muts = append(muts, jm.Mutation{Path: jm.Path{"evidence", "anchors", k, "message"}, Kind: "wrong-type-number", Val: json.Number("7")})
 	}
 	doc := withMutations(t, raw, muts...)

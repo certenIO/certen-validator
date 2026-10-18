@@ -411,3 +411,48 @@ func Run(tree any, muts []Mutation, judge Judge, workers int) []Outcome {
 	wg.Wait()
 	return out
 }
+
+// pruneZero drops what encoding/json would leave at its zero value: null, "", 0, false, and an array or object left empty.
+func pruneZero(v any) (any, bool) {
+	switch t := v.(type) {
+	case nil:
+		return nil, false
+	case string:
+		return t, t != ""
+	case bool:
+		return t, t
+	case json.Number:
+		return t, t.String() != "0"
+	case []any:
+		out := make([]any, len(t))
+		for i, e := range t {
+			out[i], _ = pruneZero(e)
+		}
+		return out, len(out) > 0
+	case map[string]any:
+		out := map[string]any{}
+		for k, e := range t {
+			if p, keep := pruneZero(e); keep {
+				out[k] = p
+			}
+		}
+		return out, len(out) > 0
+	}
+	return v, true
+}
+
+// Canonical is a value as one string that does not tell null, empty, zero and absent apart: the verifier is given decoded values, and a
+// member that is null, empty, zero or absent is the same input to it. "" when the value does not encode.
+func Canonical(v any) string {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return ""
+	}
+	tree, err := ParseTree(raw)
+	if err != nil {
+		return ""
+	}
+	pruned, _ := pruneZero(tree)
+	out, _ := json.Marshal(pruned)
+	return string(out)
+}
