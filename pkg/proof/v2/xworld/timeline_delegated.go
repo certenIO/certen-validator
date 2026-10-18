@@ -149,7 +149,11 @@ func newDelegatedWorld(t Timeline, txn *protocol.Transaction, txHash []byte) *de
 		Cause: mustURL(DelePage1).WithTxID(keyMsg), Delegator: []*url.URL{mustURL(BankPage2)}}
 	authMsg := (&messaging.SignatureMessage{Signature: auth, TxID: txn.ID()}).Hash()
 
-	d.p3 = scriptPage(DelePage1, DeleBook, []entry{{key: "K2"}}, nil, keyMsg[:], d.keyBlock, "dele")
+	deleEntries := []entry{{key: "K2"}}
+	if t.DelegateCycle {
+		deleEntries = append(deleEntries, entry{delegate: BankBook})
+	}
+	d.p3 = scriptPage(DelePage1, DeleBook, deleEntries, nil, keyMsg[:], d.keyBlock, "dele")
 	d.p2 = scriptPage(BankPage2, BankBook, []entry{{delegate: DeleBook}}, t.DelegatorEvents, authMsg[:], d.authBlock, "bank2")
 	d.hopAuth = d.p2.hop(BankPage2, auth, d.authBlock)
 	d.hopKey = d.p3.hop(DelePage1, keySig, d.keyBlock)

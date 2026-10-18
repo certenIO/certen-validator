@@ -757,6 +757,92 @@
       "state": "g1_delegation_depth_exceeded"
     },
     {
+      "name": "delegation-cycle-between-the-books",
+      "description": "the delegate book's page delegates back to the authority book that delegates to it: the governing set contains a cycle, each book is expanded once and the vote, cast through the first delegation, verifies",
+      "file": "delegation-cycle-between-the-books.json",
+      "sha256": "8b95701b1c6fa1451182bdbd2392e5684b46987b42d5298afd58ca46e4ab9314",
+      "expect": "verified",
+      "report": {
+        "version": "2.1",
+        "tag": "certen:g1:v4",
+        "partition": "acc://bvn-BVN1.acme",
+        "anchorBlock": 50,
+        "certifiedRoot": "256049125aaaa509597e3f991dba3c7667eb19e3fb5da612ffcfd9b0f789be69",
+        "checkBlock": 300,
+        "setVerdict": "verified",
+        "routingHeight": 1,
+        "proven": [
+          {
+            "url": "acc://pv2-cust-5.acme/data",
+            "partition": "acc://bvn-BVN1.acme",
+            "block": 50,
+            "roles": [
+              "principal-chain"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/1",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/2",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page",
+              "voter"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book/1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-page",
+              "voter"
+            ]
+          }
+        ],
+        "pagesBound": 6,
+        "unproven": [
+          "g1_vote_held"
+        ],
+        "authorizationMode": "authorities_required",
+        "arrivals": [
+          {
+            "kind": "signature",
+            "account": "acc://pv2-bank-5.acme/book/2",
+            "block": 66
+          },
+          {
+            "kind": "signature",
+            "account": "acc://pv2-dele-5.acme/book/1",
+            "block": 64
+          }
+        ]
+      }
+    },
+    {
       "name": "transaction-other-than-the-evidence-names",
       "description": "the carried transaction is another transaction than TxHash names",
       "file": "transaction-other-than-the-evidence-names.json",

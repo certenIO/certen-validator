@@ -153,6 +153,8 @@ func Cases4() []Case {
 				}
 				h.Signature = hex.EncodeToString(must(sig.MarshalBinary()))
 			}},
+		{Name: "delegation-cycle-between-the-books", Description: "the delegate book's page delegates back to the authority book that delegates to it: the governing set contains a cycle, each book is expanded once and the vote, cast through the first delegation, verifies", Expect: verified,
+			Unproven: []string{held}, Opts: Options{Timeline: &Timeline{Delegated: true, DelegateCycle: true}}},
 		{Name: "transaction-other-than-the-evidence-names", Description: "the carried transaction is another transaction than TxHash names", Expect: refused,
 			State: proofv2.StateTransactionMismatch, Partition: "BVN1", Block: BlockBVN1, Opts: Options{Timeline: &Timeline{}},
 			Mutate: func(ev *proofv2.Evidence) {

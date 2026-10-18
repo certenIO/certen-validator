@@ -67,6 +67,9 @@ type Timeline struct {
 	// SignatureMessage of an authority signature, the SequencedMessage wrapping it (source the authority's partition, destination the
 	// transaction's, Number voteNumber) is the synthetic ledger's entry, and the production carries the message. Needs ProduceBlock.
 	BindSequenced bool
+	// DelegateCycle (with Delegated) gives the delegate book's page an entry delegating back to the authority book, which delegates to
+	// it: the governing set contains a delegation cycle.
+	DelegateCycle bool
 	// PrincipalAuthorities, when set, replaces the principal's authority list (default: BankBook, enabled): a book and whether it is disabled.
 	PrincipalAuthorities []AuthSpec
 	// HoldUntil, when non-zero, makes the transaction a held one (Header.HoldUntil.MinorBlock).
