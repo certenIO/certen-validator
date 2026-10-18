@@ -21,6 +21,8 @@ func TestAStartFailureNeverReplacesAMemberBeyondStart(t *testing.T) {
 		"settled, proof unavailable":   {Settlement: MemberSettlementSettled, ProofCycle: MemberProofCycleUnavailable, SettlementTx: "0xcc"},
 		"reverted, proof pending":      {Settlement: MemberSettlementReverted, ProofCycle: MemberProofCyclePending, SettlementTx: "0xdd"},
 		"refused, attestation pending": {Settlement: MemberSettlementNone, ProofCycle: MemberProofCycleRefused, Refusal: "not entitled"},
+		// V-G D3: a non-settlement that could not be attested is a recorded fact about the member, not an absence of a cycle.
+		"non-settlement, attestation failed": {Settlement: MemberSettlementNone, ProofCycle: MemberProofCycleFailed, Reason: "non-settlement could not be attested"},
 	}
 	for name, prior := range priors {
 		t.Run(name, func(t *testing.T) {
