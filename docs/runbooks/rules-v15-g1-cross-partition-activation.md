@@ -56,9 +56,14 @@ and committed history holds no activation, so "no activation in force" marks exa
 
 ## Deploy order (coordinated)
 
-Prerequisites, all merged to `main` by the owner, in this order: rules v14 (`pv2/rb12-a-rules-v14`), RB9-B (capture,
-types), RB9-C1 (verification across partitions), then this branch (`pv2/rb9-c2-consensus-v15`). The number is v15 only if
-v14 merged first: this branch takes `CurrentExecutionRulesVersion + 1` of its base.
+Prerequisites, merged to `main` by the owner, in this order: rules v14 (`pv2/rb12-a-rules-v14`), deployed with its anchor set in
+a separate, earlier sitting, then the **one pull request `pv2/rb9-j-consensus`** (compare
+`https://github.com/certenIO/certen-validator/compare/main...pv2/rb9-j-consensus`), which carries the whole RB9 stack: capture
+(RB9-B), verification across partitions (RB9-C1), the consensus rules v15 (RB9-C2), the integration (RB9-I) and the verifier rounds
+VA (proof and capture layer) and VB (consensus layer, this runbook's preflight). Its description is
+`pr/independant_validator-pv2-rb9-integration.md`. The number is v15 only if v14 merged first: this branch takes
+`CurrentExecutionRulesVersion + 1` of its base. The earlier branch names (`pv2/rb9-c2-consensus-v15`, `pv2/rb9-integration`,
+`pv2/rb9-j-proof`) are history: nothing is merged from them.
 
 Apply every env change **before** any rebuild (lesson of 2026-10-03: the NTFY_URL and the D4 outage).
 
@@ -109,6 +114,10 @@ Apply every env change **before** any rebuild (lesson of 2026-10-03: the NTFY_UR
    Preflight is GO only if:
    - every node runs rules v15, all on the same version and chain, and caught up;
    - every node reports the same admin set, and **no node records an activation**, all nodes agreeing on that;
+   - every node **requires proof v3** (a verified Accumulate spine of the registry's incarnation is in force for the next block,
+     `consensus.ProofV3Required`): evidence 2.1 is judged only where the v3 intent certificate is, so an activation on a chain with
+     no spine yet would take effect at a time no one chose (finding F8); the preflight is NO-GO naming the node, and the
+     activation is signed after the spine exists;
    - the chain's own rule (`VerifyG1Activation`) accepts the transaction for the next block: the threshold of distinct
      keys of the admin set in force signed it.
 
@@ -117,6 +126,19 @@ Apply every env change **before** any rebuild (lesson of 2026-10-03: the NTFY_UR
    **Record H.** One bad submission is not harmless: a *refused* activation (code 18) is a v15 verdict that stamps the state
    v15 and closes the v14 rollback, so preflight first.
 6. **Verify (below).**
+
+## Two handling rules for the activation (security)
+
+1. **Sign the activation only at activation time.** A signed, unsubmitted activation has no height and no nonce: nothing in it
+   binds it to a moment, so it is a bearer instrument until the admin set rotates - anyone who holds the file can submit it, at
+   a moment no signer chose. The signers sign after the RB9-E shadow exit, in the sitting in which it is submitted, hand the
+   file only to the person running `submit`, and delete every copy once the chain records the activation. If a signed file
+   has been stored, shared or lost, rotate the admin set (`docs/runbooks/admin-set-rotation.md`) before relying on its absence.
+2. **Keep the validator RPC firewalled.** Any submitter who can reach a validator can send a shape-valid activation-kind
+   transaction. It is refused with code 18, **counted as a v15 verdict and stamps the state v15**, which closes the v14 rollback
+   (the rollback in the section below only exists while the state is stamped v14). This is the same property as the v14
+   anchor-set kind. Validator RPC and P2P ports are reachable only from the operator and the other validators until the
+   activation is committed, and the preflight is run before any submission.
 
 ## Do not activate before the RB9-E shadow exit
 
@@ -187,7 +209,7 @@ keys (2 of 3):
 
 `validator-rotate`'s own tests (`TestG1Activate...`) pin the tool: it builds an activation the chain's rule accepts with 2
 of 3 admins; preflight is NO-GO for a node on app version 14, for nodes that disagree, for an activation that already
-exists and for fewer than the threshold; submit refuses on a NO-GO and commits nothing; `status` prints none, then H; and
+exists, for a chain that does not require proof v3 (no spine; `TestG1ActivatePreflightRefusesWhenProofV3IsNotRequired`) and for fewer than the threshold; submit refuses on a NO-GO and commits nothing; `status` prints none, then H; and
 `history-check --rules 15` finds an accepted activation without its record.
 
 ## Known limits at this change (carried to the pull request)
