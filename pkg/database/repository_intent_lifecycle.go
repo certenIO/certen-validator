@@ -24,6 +24,11 @@ func NewIntentLifecycleRepository(client *Client) *IntentLifecycleRepository {
 	return &IntentLifecycleRepository{client: client}
 }
 
+// lifecycleSettledStatuses are the states a row has reached on its own and that no later writer may alter: the terminal
+// ones, and the ones only member outcomes derive (RB6). It is the set UpdateStatus guards, spelled once more here for the
+// discovery fill (RB8-G); it is a SQL list, so it is a constant.
+const lifecycleSettledStatuses = `('complete', 'failed', 'executed_proof_pending', 'executed_proof_unavailable', 'refused_pending_attestation')`
+
 // UpdateOption is a functional option for UpdateStatus
 type UpdateOption func(*updateOptions)
 
@@ -64,7 +69,9 @@ func WithWriteBackTx(txHash string) UpdateOption {
 }
 
 // UpsertOnDiscovery inserts a new lifecycle record when the validator first discovers an intent.
-// Uses INSERT ON CONFLICT DO NOTHING to be idempotent — if the intent already exists, this is a no-op.
+// Idempotent: when the intent already has a row the write only FILLS what that row does not know (RB8-G) - a row the
+// proof cycle created (EnsureOnProofCycle) has NULL block_height and authorized_at because its request could not say - and
+// changes nothing else: never the status, never a row that has reached a state of its own (lifecycleSettledStatuses).
 // Sets status=authorized since the validator only sees intents after Accumulate delivery (statusNo=201).
 //
 // executedBy is the consensus time of the partition block the intent executed in (discovery's BlockTime, RB4-F74). It
@@ -87,7 +94,13 @@ func (r *IntentLifecycleRepository) UpsertOnDiscovery(
 			intent_id, accum_tx_hash, block_height, user_id, proof_class, target_chain,
 			status, submitted_at, authorized_at, created_at, updated_at
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-		ON CONFLICT (intent_id) DO NOTHING
+		ON CONFLICT (intent_id) DO UPDATE SET
+		    block_height  = COALESCE(intent_lifecycle.block_height, NULLIF(EXCLUDED.block_height, 0)),
+		    authorized_at = COALESCE(intent_lifecycle.authorized_at, EXCLUDED.authorized_at),
+		    updated_at    = EXCLUDED.updated_at
+		WHERE intent_lifecycle.status NOT IN ` + lifecycleSettledStatuses + `
+		  AND ((intent_lifecycle.block_height IS NULL AND NULLIF(EXCLUDED.block_height, 0) IS NOT NULL)
+		    OR (intent_lifecycle.authorized_at IS NULL AND EXCLUDED.authorized_at IS NOT NULL))
 	`
 
 	var userIDPtr *string
@@ -126,8 +139,9 @@ func (r *IntentLifecycleRepository) UpsertOnDiscovery(
 // D4: discovery's write had failed). It writes what the proof cycle's own request carries and nothing it does not:
 // the Accumulate transaction hash is required (the column is NOT NULL and a hash is never invented), the DN block
 // height is stored only when the request knows it (NULL, not 0, otherwise), and authorized_at is NULL because the
-// partition block's time is not in the request. It is idempotent (ON CONFLICT DO NOTHING) and reports whether this
-// call created the row.
+// partition block's time is not in the request; the row is single-leg shaped (leg_count 1, no target_chains) because the
+// request does not say otherwise. It is idempotent (ON CONFLICT DO NOTHING: a row discovery wrote is never altered by it)
+// and reports whether this call created the row. Discovery's later write fills the unknowns (UpsertOnDiscovery*, RB8-G).
 func (r *IntentLifecycleRepository) EnsureOnProofCycle(
 	ctx context.Context,
 	intentID string,
@@ -541,7 +555,10 @@ func (r *IntentLifecycleRepository) scanRows(ctx context.Context, query string, 
 }
 
 // UpsertOnDiscoveryMultiLeg inserts a new lifecycle record for a multi-leg intent.
-// Like UpsertOnDiscovery, it uses INSERT ON CONFLICT DO NOTHING for idempotency.
+// Like UpsertOnDiscovery it is idempotent and, on an existing row, only fills (RB8-G): block_height and authorized_at when
+// the row has none, and the multi-leg shape (target_chains, leg_count, execution_mode) only when the row is still in the
+// single-leg shape the proof cycle gives the row it creates (target_chains NULL and leg_count 1). A shape discovery already
+// wrote is never replaced, and neither is the status or any settled row.
 // The targetChains slice and legCount capture multi-chain routing information.
 func (r *IntentLifecycleRepository) UpsertOnDiscoveryMultiLeg(
 	ctx context.Context,
@@ -564,7 +581,21 @@ func (r *IntentLifecycleRepository) UpsertOnDiscoveryMultiLeg(
 			target_chains, leg_count, execution_mode, legs_completed, legs_failed,
 			status, submitted_at, authorized_at, created_at, updated_at
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
-		ON CONFLICT (intent_id) DO NOTHING
+		ON CONFLICT (intent_id) DO UPDATE SET
+		    block_height   = COALESCE(intent_lifecycle.block_height, NULLIF(EXCLUDED.block_height, 0)),
+		    authorized_at  = COALESCE(intent_lifecycle.authorized_at, EXCLUDED.authorized_at),
+		    target_chains  = CASE WHEN intent_lifecycle.target_chains IS NULL AND COALESCE(intent_lifecycle.leg_count, 1) = 1
+		                          THEN EXCLUDED.target_chains ELSE intent_lifecycle.target_chains END,
+		    leg_count      = CASE WHEN intent_lifecycle.target_chains IS NULL AND COALESCE(intent_lifecycle.leg_count, 1) = 1
+		                          THEN EXCLUDED.leg_count ELSE intent_lifecycle.leg_count END,
+		    execution_mode = CASE WHEN intent_lifecycle.target_chains IS NULL AND COALESCE(intent_lifecycle.leg_count, 1) = 1
+		                          THEN EXCLUDED.execution_mode ELSE intent_lifecycle.execution_mode END,
+		    updated_at     = EXCLUDED.updated_at
+		WHERE intent_lifecycle.status NOT IN ` + lifecycleSettledStatuses + `
+		  AND ((intent_lifecycle.block_height IS NULL AND NULLIF(EXCLUDED.block_height, 0) IS NOT NULL)
+		    OR (intent_lifecycle.authorized_at IS NULL AND EXCLUDED.authorized_at IS NOT NULL)
+		    OR (intent_lifecycle.target_chains IS NULL AND COALESCE(intent_lifecycle.leg_count, 1) = 1
+		        AND EXCLUDED.target_chains IS NOT NULL))
 	`
 
 	var userIDPtr *string
