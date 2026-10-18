@@ -125,9 +125,20 @@ func g1Fleet(t *testing.T, policy *ledger.EntitlementPolicyState, n int) []g1Act
 		for j := 0; j < n; j++ {
 			v.set[hex.EncodeToString(pubOf(byte(0x20+j)))] = 10
 		}
-		out = append(out, g1ActivateNode{nodeView: v, admin: consensus.NewAdminSetView(policy, 100), activations: &ledger.G1ActivationLog{}})
+		spine, registry := proofV3Logs(50)
+		out = append(out, g1ActivateNode{nodeView: v, admin: consensus.NewAdminSetView(policy, 100), activations: &ledger.G1ActivationLog{},
+			spine: spine, registry: registry})
 	}
 	return out
+}
+
+// proofV3Logs are a spine with one verified checkpoint and the registry in force from the given height, both of one Accumulate incarnation:
+// the chain requires the v3 intent certificate (consensus.ProofV3Required).
+func proofV3Logs(registryHeight int64) (*ledger.AccumulateSpineLog, *ledger.BLSRegistryLog) {
+	const inc = "0x" + "cac6698ed49a286ad8a3de94540a3354dfe964f366a439f4fdfb34533059fda0"
+	return &ledger.AccumulateSpineLog{Genesis: &ledger.AccumulateSpineGenesis{Incarnation: inc, Height: registryHeight},
+			Checkpoints: []ledger.AccumulateSpineCheckpoint{{Major: 1, Height: registryHeight + 1}}},
+		&ledger.BLSRegistryLog{Versions: []ledger.BLSRegistryRecord{{Version: 1, Height: registryHeight, AccumulateIncarnation: inc}}}
 }
 
 func signedG1Activation(t *testing.T, admins map[string]string, ids ...string) *consensus.G1ActivationTx {
@@ -223,12 +234,16 @@ type g1Node struct {
 	commitAt    int64
 	broadcasts  int
 	srv         *httptest.Server
+	spine       ledger.AccumulateSpineLog
+	registry    ledger.BLSRegistryLog
 	historyTxs  map[int64]string // height -> base64 tx, for the history check
 	historyCode map[int64]uint32
 }
 
 func newG1Node(t *testing.T, admin *consensus.AdminSetView, appVersion string) *g1Node {
 	n := &g1Node{appVersion: appVersion, height: 60, admin: admin, servesLog: true, commitAt: 70}
+	sp, rg := proofV3Logs(10)
+	n.spine, n.registry = *sp, *rg
 	n.srv = httptest.NewServer(http.HandlerFunc(n.serve))
 	t.Cleanup(n.srv.Close)
 	return n
@@ -272,9 +287,9 @@ func (n *g1Node) serve(w http.ResponseWriter, r *http.Request) {
 		case "/certen/admin_set":
 			query(0, "", n.admin)
 		case "/certen/bls_registry":
-			query(0, "", ledger.BLSRegistryLog{})
+			query(0, "", n.registry)
 		case "/certen/accumulate_spine":
-			query(0, "", ledger.AccumulateSpineLog{})
+			query(0, "", n.spine)
 		case "/certen/anchor_set":
 			query(0, "", ledger.AnchorSetLog{})
 		case "/certen/g1_activation":
@@ -390,6 +405,21 @@ func TestG1ActivateStatusPreflightAndSubmitAgainstNodes(t *testing.T) {
 	}
 	nodes[1].appVersion = "15"
 
+	// A chain that does not require proof v3 (a node reporting no spine) is a NO-GO naming it; nothing is broadcast.
+	savedSpine := nodes[2].spine
+	nodes[2].spine = ledger.AccumulateSpineLog{}
+	out.Reset()
+	if err := g1ActivateSubmit(&out, []string{"--tx", goodPath, "--rpc", all}, c, "submit"); err == nil ||
+		!strings.Contains(out.String(), "NO-GO: "+nodes[2].srv.URL+" does not require proof v3") {
+		t.Fatalf("submit with a node that requires no proof v3: %v\n%s", err, out.String())
+	}
+	for i, n := range nodes {
+		if n.broadcasts != 0 {
+			t.Fatalf("node %d was sent a transaction after a NO-GO (no proof v3)", i)
+		}
+	}
+	nodes[2].spine = savedSpine
+
 	// A GO as a dry run commits nothing.
 	out.Reset()
 	if err := g1ActivateSubmit(&out, []string{"--tx", goodPath, "--rpc", all, "--dry-run"}, c, "preflight"); err != nil ||
@@ -486,5 +516,40 @@ func TestG1ActivateHistoryCheckFindsAnActivationWithoutItsRecord(t *testing.T) {
 	n.historyCode[2] = 2
 	if ce, ok := historyCheckRules(n.srv.URL, http.DefaultClient, 15).(*checkExit); !ok || ce.code != exitHistoryFound {
 		t.Fatal("an activation decided with a ValidatorBlock's code was not FOUND")
+	}
+}
+
+// F8: an activation accepted on a chain that does not require the v3 intent certificate yet (no verified Accumulate spine of the registry's
+// incarnation) would record a height at which nothing is judged and would be effective only once a spine appears, at a time no one chose.
+// The preflight refuses it on every node that reports it: NO-GO naming proof v3.
+func TestG1ActivatePreflightRefusesWhenProofV3IsNotRequired(t *testing.T) {
+	_, admins, policy := g1Admins(t)
+	tx := signedG1Activation(t, admins, "ops-1", "ops-2")
+	if nogo := g1ActivatePreflight(tx, g1Fleet(t, policy, 7)); len(nogo) != 0 {
+		t.Fatalf("a fleet that requires proof v3: %v", nogo)
+	}
+	otherInc := "0x" + strings.Repeat("ab", 32)
+	for name, mutate := range map[string]func(n *g1ActivateNode){
+		"no spine at all":                     func(n *g1ActivateNode) { n.spine = &ledger.AccumulateSpineLog{} },
+		"a nil spine":                         func(n *g1ActivateNode) { n.spine = nil },
+		"a spine with no verified checkpoint": func(n *g1ActivateNode) { n.spine.Checkpoints = nil },
+		"a spine of another incarnation than the registry's": func(n *g1ActivateNode) {
+			g := *n.spine.Genesis
+			g.Incarnation = otherInc
+			n.spine.Genesis = &g
+		},
+		"no registry": func(n *g1ActivateNode) { n.registry = &ledger.BLSRegistryLog{} },
+		"a registry that starts above the next block": func(n *g1ActivateNode) { n.registry.Versions[0].Height = n.height + 1 },
+	} {
+		nodes := g1Fleet(t, policy, 7)
+		mutate(&nodes[3])
+		nogo := g1ActivatePreflight(tx, nodes)
+		if len(nogo) == 0 {
+			t.Errorf("%s: preflight said GO", name)
+			continue
+		}
+		if joined := strings.Join(nogo, "\n"); !strings.Contains(joined, nodes[3].rpc+" does not require proof v3") {
+			t.Errorf("%s: NO-GO did not name the node and proof v3: %v", name, nogo)
+		}
 	}
 }

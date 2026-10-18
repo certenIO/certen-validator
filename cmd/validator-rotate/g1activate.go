@@ -263,6 +263,10 @@ type g1ActivateNode struct {
 	*nodeView
 	admin       *consensus.AdminSetView
 	activations *ledger.G1ActivationLog
+	// spine and registry are the node's committed Accumulate spine and BLS registry logs: whether the chain requires the v3 intent
+	// certificate (consensus.ProofV3Required) is derived from them exactly as the chain derives it.
+	spine    *ledger.AccumulateSpineLog
+	registry *ledger.BLSRegistryLog
 }
 
 // g1ActivatePreflight lists why the activation must not be submitted to this fleet; none means GO.
@@ -292,6 +296,14 @@ func g1ActivatePreflight(tx *consensus.G1ActivationTx, nodes []g1ActivateNode) [
 		if n.admin.InForceSetID != first.admin.InForceSetID {
 			problems = append(problems, fmt.Sprintf("%s reports admin set %s, %s reports %s: the fleet disagrees about its admins",
 				n.rpc, n.admin.InForceSetID, first.rpc, first.admin.InForceSetID))
+		}
+		// Evidence 2.1 is judged where the v3 intent certificate is. On a chain that does not require it yet (no verified Accumulate spine
+		// of the registry's incarnation) an activation would record a height at which nothing is judged and would take effect only once
+		// a spine appears, at a time no one chose (F8): it is signed and submitted after the spine exists.
+		if !consensus.ProofV3Required(n.spine, consensus.RegistryAt(n.registry, n.height+1)) {
+			problems = append(problems, fmt.Sprintf("%s does not require proof v3 (no verified Accumulate spine of the registry's incarnation in force "+
+				"for the next block): evidence 2.1 is judged only where the v3 intent certificate is required, so the activation would take effect "+
+				"at a time no one chose; activate after the spine exists", n.rpc))
 		}
 		if len(n.activations.Activations) > 0 {
 			problems = append(problems, fmt.Sprintf("%s already records the cross-partition activation (%s): the chain activates once",
@@ -341,9 +353,17 @@ func g1ActivateSubmit(w io.Writer, args []string, c rpcDoer, name string) error 
 		if err != nil {
 			return fmt.Errorf("NO-GO: %w", err)
 		}
-		fmt.Fprintf(w, "%s: chain %s height %d rules v%d, admin set %s…, cross-partition activation: %s\n", base, v.chainID, v.height,
-			v.appVersion, a.InForceSetID[:16], g1ActivationLine(l))
-		nodes = append(nodes, g1ActivateNode{nodeView: v, admin: a, activations: l})
+		sp, err := readAccumulateSpineLog(c, base)
+		if err != nil {
+			return fmt.Errorf("NO-GO: %w", err)
+		}
+		rg, err := readBLSRegistryLog(c, base)
+		if err != nil {
+			return fmt.Errorf("NO-GO: %w", err)
+		}
+		fmt.Fprintf(w, "%s: chain %s height %d rules v%d, admin set %s…, cross-partition activation: %s, proof v3 required: %t\n", base, v.chainID, v.height,
+			v.appVersion, a.InForceSetID[:16], g1ActivationLine(l), consensus.ProofV3Required(sp, consensus.RegistryAt(rg, v.height+1)))
+		nodes = append(nodes, g1ActivateNode{nodeView: v, admin: a, activations: l, spine: sp, registry: rg})
 	}
 	problems := g1ActivatePreflight(tx, nodes)
 	if len(problems) > 0 {
@@ -352,7 +372,7 @@ func g1ActivateSubmit(w io.Writer, args []string, c rpcDoer, name string) error 
 		}
 		return fmt.Errorf("NO-GO (%d problem(s))", len(problems))
 	}
-	fmt.Fprintf(w, "GO: every validator runs rules v%d on %s and reports the same admin set and no activation; signed by the "+
+	fmt.Fprintf(w, "GO: every validator runs rules v%d on %s, requires proof v3 and reports the same admin set and no activation; signed by the "+
 		"threshold of distinct admins in force\n", nodes[0].appVersion, tx.ChainID)
 	if *dryRun {
 		fmt.Fprintf(w, "dry run: would commit the cross-partition activation %s…\n", tx.ActivationID()[:32])
