@@ -118,8 +118,13 @@ non-conforming.
 These are stated as errors and MUST NOT be reported as governance rejections,
 threshold shortfalls, or refusals:
 
-* A signature type CERTEN does not verify (only `ed25519` and `delegated` are
-  verified).
+* A signature whose type Accumulate defines no key signature for. **RB8-B (2026-10-17) supersedes "only `ed25519` and
+  `delegated` are verified":** every key-signature type Accumulate's executor accepts on a key page is verified from its
+  bytes, directly or as the innermost signature of a delegation chain of at most 20 layers (`legacyED25519`, `ed25519`, `rcd1`, `btc`, `btclegacy`, `eth`, `rsaSha256`, `ecdsaSha256` and `typedData`); see
+  research R8 and `govsig`. What remains a capability limit is a type Accumulate itself does not accept, and the named
+  states that say a signature could not be judged: `g1_executor_version_unproven{type,partition,block}`,
+  `transaction_unavailable_for_typed_data`, `network_name_unproven`, `signature_bytes_absent`,
+  `signature_undecodable`, `signature_fields_disagree`.
 * A transaction that has **not executed** — pending, or absent — which has no
   authority set to evaluate against.
 * An authority, page or signature that could not be READ. An authority that
@@ -331,10 +336,12 @@ Any governance message asserted as part of execution MUST satisfy:
 
 ### 7.1 Required Page Signature (MUST)
 
-At least one Ed25519 signature message `S_page` MUST exist such that:
+At least one key signature message `S_page` MUST exist such that (RB8-B: of ANY of the nine key-signature types
+Accumulate's executor accepts, not only Ed25519 - the text below says "ed25519" where it was written for the only type
+then verified; read it as "the innermost key signature's type is one of `legacyED25519`, `ed25519`, `rcd1`, `btc`, `btclegacy`, `eth`, `rsaSha256`, `ecdsaSha256` and `typedData`"):
 
 * Located on `P#signature`
-* `signature.type == "ed25519"`
+* the innermost `signature.type` is one of the accepted key-signature types (was: `== "ed25519"`)
 * `signature.transactionHash == TX_HASH`
 * `signature.signer == P`
 * `receipt.localBlock_int <= EXEC_MBI`
@@ -671,7 +678,7 @@ Verifier MUST enforce:
 * Response contains exactly one message record
 * `message.id == acc://<H>@<SCOPE>` (exact MSGID match)
 * `message.type == "signature"`
-* `signature.type == "ed25519"` for counted signatures
+* the innermost `signature.type` is an accepted key-signature type for counted signatures (RB8-B; was `== "ed25519"`)
 * `receipt.start == <H>`
 * `receipt.localBlock_int <= EXEC_MBI` for counted signatures
 

@@ -1,0 +1,27 @@
+{
+ "format": "certen:sigtypes-manifest:v1",
+ "files": [
+  {
+   "name": "valid.json",
+   "sha256": "459a05eb32fc7febd4edca609bb8b049b4279d8b1a926a2c273d03bbd4161c77",
+   "vectors": 65
+  },
+  {
+   "name": "adversarial.json",
+   "sha256": "f01250d8b47541c09f475ac0f1cf6eb33225e2122fd44f3eae0853cc5ee1b8f8",
+   "vectors": 85
+  },
+  {
+   "name": "kermit.json",
+   "sha256": "dea4082bd496dbd683bd682a58e505eff7720f354bf81ea57fbea468a681d169",
+   "vectors": 4
+  }
+ ],
+ "manifestHash": "032b15bd27254856c05ca104d1aa16e73eb0fcb8b1136abf98bbe0ab5f80579c",
+ "sources": {
+  "kermit-delivered": 4,
+  "locally-generated": 150
+ },
+ "vectors": 154,
+ "note": "Written by cmd/sigtypevectors. Source 'kermit-delivered' = real signatures delivered by Kermit (btc: corpus case K; ecdsaSha256: tcl1 tx d2338dac...), carried as the JSON the network served with the binary encoding derived by Accumulate's own marshaller. Source 'locally-generated' = made with Accumulate's own signing code with keys generated for these vectors. Every verdict was produced by Accumulate's own Verify (protocol.VerifyUserSignature) through govsig.Verify. The TypeScript verifier must reach the same verdict, key hash and digest form on every vector."
+}

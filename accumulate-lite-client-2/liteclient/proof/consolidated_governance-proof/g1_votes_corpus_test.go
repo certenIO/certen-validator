@@ -229,17 +229,31 @@ func TestCorpusVotes_DepthIsRefusedAtExtraction(t *testing.T) {
 	t.Fatal("case G is not in the corpus")
 }
 
-// Case K: a btc signature Kermit delivered is refused as unsupported, never as
-// a threshold reason.
-func TestCorpusVotes_UnsupportedTypeIsRefusedAtExtraction(t *testing.T) {
+// Case K: a btc signature Kermit delivered.
+//
+// SUPERSEDES TestCorpusVotes_UnsupportedTypeIsRefusedAtExtraction (RB8-B, 2026-10-17, research R8, gap G-42). That
+// test pinned "a btc signature is refused as unsupported", which was the rule at the time case K was captured. btc is a
+// key signature Accumulate's executor accepts on a key page - this one was DELIVERED, and protocol.VerifyUserSignature
+// verifies it (R8 M3) - so the rule it pinned was wrong, not the signature. The case stays in the corpus, recaptured by RB8-D as
+// the authorised btc case (docs/l4/phase7_corpus/traces.json; the superseded refusal capture, tx 06195913..., is kept as the
+// shared vector btc/kermit/case-k); the test now pins what is true:
+// the signature is extracted with its binary encoding carried, and it verifies from its bytes. It cannot be the
+// threshold reason it used to be avoided for.
+func TestCorpusVotes_CaseKBtcIsExtractedAndVerifiedFromItsBytes(t *testing.T) {
 	cf := loadCorpus(t)
 	for _, tr := range cf.Traces {
 		if tr.Case != "K" {
 			continue
 		}
-		_, err := (&SignatureVerifier{}).ExtractSignatureFromMessageResult(messageResultFor(tr))
-		if _, ok := IsUnsupportedSignatureType(err); !ok {
-			t.Fatalf("a btc signature was not refused as unsupported: %v", err)
+		sd, err := (&SignatureVerifier{}).ExtractSignatureFromMessageResult(messageResultFor(tr))
+		if err != nil {
+			t.Fatalf("the btc signature Kermit delivered was refused: %v", err)
+		}
+		if sd.Type != "btc" || sd.Raw == "" {
+			t.Fatalf("type %q, raw carried: %v; a non-ed25519 key signature carries Accumulate's encoding", sd.Type, sd.Raw != "")
+		}
+		if _, err := rb8Verify(t, rb8Verifier(t), sd, tr.TransactionHash); err != nil {
+			t.Fatalf("the btc signature Kermit delivered does not verify from its bytes: %v", err)
 		}
 		return
 	}

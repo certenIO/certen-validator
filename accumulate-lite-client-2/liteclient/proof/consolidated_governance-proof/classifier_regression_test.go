@@ -92,13 +92,19 @@ func TestRegression_NonSignatureMessagesClassifyAsRejected(t *testing.T) {
 // institution did not authorize this". A false governance rejection is worse
 // than an error, so an unsupported key type is now an OUTAGE, and no threshold
 // may be computed while one is outstanding.
+//
+// SUPERSEDED IN PART BY RB8-B (2026-10-17, research R8, gap G-42). rcd1, btc and eth are key signatures Accumulate's
+// executor accepts on a key page, so G1 now VERIFIES them from their bytes instead of refusing them (TestRB8_*, which
+// were written to fail on 979a03c and do). What this test pins is the other half of the same rule, unchanged: a
+// signature type Accumulate defines no key signature for is still UnsupportedSignatureType - an outage with its own
+// reason, never a routine non-signature entry - so the table now lists those.
 func TestPhase7_UnsupportedKeyTypesAreOutagesNotRejections(t *testing.T) {
 	sv := NewSignatureVerifier("")
 
 	for _, tc := range []struct{ name, sigType string }{
-		{"rcd1 signature", "rcd1"},
-		{"btc signature", "btc"},
-		{"eth signature", "eth"},
+		{"type 0 (unknown)", "unknown"},
+		{"a name Accumulate defines no signature type for", "blsSignature"},
+		{"another undefined name", "dsa"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := sv.ExtractSignatureFromMessageResult(buildMsgResult(

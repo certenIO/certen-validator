@@ -65,10 +65,27 @@ type ExecutionContext struct {
 // Signature and Authorization Types
 // =============================================================================
 
-// SignatureData represents Ed25519 signature information with enhanced cryptographic security
+// SignatureData represents a key signature - of ANY of the nine types Accumulate's executor accepts on a key page
+// (govsig.AcceptedKeyTypes) - with enhanced cryptographic security.
 // Contains all signature fields from v3 message result plus security enhancements
 type SignatureData struct {
-	Type string `json:"type"` // "ed25519" or "delegated"
+	// Type is the signature's type name, lower-cased: one of ed25519, legacyed25519, rcd1, btc, btclegacy, eth,
+	// rsasha256, ecdsasha256, typeddata; or "delegated" when the key signature is wrapped in a delegation chain (the
+	// outermost type is what Accumulate calls the signature, and the one whose metadata is hashed).
+	Type string `json:"type"`
+
+	// InnerType is the key signature's own type when Type is "delegated" and the key is not ed25519. Empty for every
+	// direct signature and for a delegated ed25519 one, so every record that existed before RB8-B keeps its bytes.
+	InnerType string `json:"innerType,omitempty"`
+
+	// Raw is the signature in Accumulate's own binary encoding (hex), the outermost value as the network delivered it.
+	// It is carried exactly when the other fields cannot rebuild the signature faithfully: every non-ed25519 key type,
+	// and an ed25519 signature carrying memo or data (both are inside the signed metadata hash). Empty for every
+	// signature the fields below describe completely, which is every record that existed before RB8-B - the hashed
+	// shape of those is byte-identical. When present it is the ONE source the verification rebuilds the signature from
+	// (protocol.UnmarshalSignature) and every field here is checked against it, so it is never a second, unchecked
+	// source.
+	Raw string `json:"raw,omitempty"`
 
 	// Chain is the delegation path, OUTERMOST FIRST, and it is part of the
 	// signature rather than context about it: DelegatedSignature.Metadata()
@@ -86,8 +103,8 @@ type SignatureData struct {
 	// Vote is the vote the key cast: accept, reject, abstain or suggest.
 	Vote string `json:"vote,omitempty"`
 
-	PublicKey       string    `json:"publicKey"`       // 32-byte hex
-	Signature       string    `json:"signature"`       // 64-byte hex
+	PublicKey       string    `json:"publicKey"`       // hex; 32 bytes for ed25519, legacyed25519 and rcd1, the type's own encoding otherwise
+	Signature       string    `json:"signature"`       // hex; 64 bytes for ed25519, legacyed25519 and rcd1, the type's own encoding otherwise
 	Signer          string    `json:"signer"`          // acc://...
 	SignerVersion   int64     `json:"signerVersion"`   // Key page version
 	Timestamp       *int64    `json:"timestamp"`       // Optional signature timestamp

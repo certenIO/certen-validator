@@ -24,6 +24,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/govsig"
 	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/govvote"
 	"strings"
 	"sync"
@@ -102,6 +103,19 @@ func (a *g1Authorization) Evaluate(ctx context.Context, sigs []ValidatedSignatur
 			return nil, err
 		}
 		if isVote {
+			// A signature whose acceptance depends on the executor version at its block carries the partition it was
+			// judged on, so the offline evaluation can apply the same gate (govsig.CheckExecutorGate).
+			if gated, gerr := signatureIsGated(v.Signature); gerr != nil {
+				return nil, gerr
+			} else if gated {
+				part, perr := a.g1.partitionOf(v.Signature.Signer)
+				if perr != nil {
+					return nil, &SignatureEvidenceIncomplete{Route: "authority-vote", Requested: len(sigs),
+						Unavailable: []UnavailableSignature{{MessageID: v.MessageID, Stage: RoutingUnavailable{}.Reason(),
+							Err: perr.Error() + ". This is NOT a governance rejection"}}}
+				}
+				f.Partition = part
+			}
 			facts.Sigs = append(facts.Sigs, f)
 		}
 	}
@@ -126,6 +140,29 @@ func (a *g1Authorization) Evaluate(ctx context.Context, sigs []ValidatedSignatur
 	return vote, nil
 }
 
+// signatureIsGated reports whether the signature's type is one whose acceptance depends on the executor version in
+// force at its block: rsaSha256, ecdsaSha256, typedData, and eth (whose raw r||s rule starts at v2-baikonur).
+func signatureIsGated(s SignatureData) (bool, error) {
+	outer, err := buildProtocolSignature(s)
+	if err != nil {
+		return false, err
+	}
+	key := innermostKeySignature(outer)
+	if key == nil {
+		return false, NotAKeySignature{Type: s.Type}
+	}
+	return govsig.RequiredVersion(key.Type(), govsig.EthRuleV2RSV) != 0, nil
+}
+
+// partitionOf is the partition the network routes an account to (lower case), from the network's own routing table.
+func (g1 *G1Layer) partitionOf(account string) (string, error) {
+	n, err := g1.networkInfo()
+	if err != nil {
+		return "", err
+	}
+	return n.Partition(account)
+}
+
 // sigFactOf turns a validated signature into the fact the model reads. A
 // suggestion is recorded on the chain but is not a vote (sig_user.go: added to
 // the chain only), and is reported as not one.
@@ -145,8 +182,10 @@ func sigFactOf(v ValidatedSignature) (sigFact, bool, error) {
 	if v.Receipt.LocalBlock <= 0 {
 		return sigFact{}, false, fmt.Errorf("signature %s has no recorded block", SafeTruncate(v.MessageID, 24))
 	}
+	// The key hash is the one the signature's TYPE gives (protocol.PublicKeyHash), which is what the key page
+	// stores: sha256(key) for ed25519, legacyED25519, rsaSha256 and ecdsaSha256, a different hash for the other five.
 	sv := SignatureVerifier{}
-	kh, err := sv.ComputeKeyHash(s.PublicKey)
+	kh, err := sv.KeyHashOf(s)
 	if err != nil {
 		return sigFact{}, false, fmt.Errorf("signature %s: key hash: %w", SafeTruncate(v.MessageID, 24), err)
 	}

@@ -8,10 +8,14 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/govsig"
 	"gitlab.com/accumulatenetwork/accumulate/protocol"
 )
 
@@ -33,6 +37,10 @@ type G1Layer struct {
 	queryBuilder          QueryBuilder
 	cryptographicVerifier *CryptographicVerifier
 	bundleIntegrityMgr    *BundleIntegrityManager
+
+	// network is the network's name and routing table (networkInfo), read at most once successfully per proof.
+	networkMu sync.Mutex
+	network   *govsig.Network
 }
 
 // NewG1Layer creates a new G1 proof layer with enhanced cryptographic capabilities
@@ -49,7 +57,7 @@ func NewG1Layer(client RPCClientInterface, artifactManager *ArtifactManager, sig
 	cryptographicVerifier := artifactManager.GetCryptographicVerifier()
 	bundleIntegrityMgr := artifactManager.GetBundleIntegrityManager()
 
-	return &G1Layer{
+	g1 := &G1Layer{
 		g0Layer:               g0Layer,
 		authorityBuilder:      authorityBuilder,
 		signatureVerifier:     signatureVerifier,
@@ -59,6 +67,55 @@ func NewG1Layer(client RPCClientInterface, artifactManager *ArtifactManager, sig
 		cryptographicVerifier: cryptographicVerifier,
 		bundleIntegrityMgr:    bundleIntegrityMgr,
 	}
+	// The environment some key types need (RB8-B): typedData signs the EIP-712 encoding of the whole governed
+	// transaction under the network's chain id, and the executor-version gate is judged at the partition and block a
+	// signature was recorded in.
+	signatureVerifier.governed = g1.governedTransactionFor
+	signatureVerifier.network = g1.networkInfo
+	return g1
+}
+
+// governedTransactionFor is the transaction G0 carried forward, decoded with Accumulate's types and bound to txHash.
+func (g1 *G1Layer) governedTransactionFor(txHash string) (*protocol.Transaction, error) {
+	if g1 == nil || g1.g0Layer == nil {
+		return nil, fmt.Errorf("no G0 layer to take the governed transaction from")
+	}
+	raw := g1.g0Layer.Transaction()
+	if raw == nil {
+		return nil, fmt.Errorf("G0 did not carry the transaction forward")
+	}
+	b, err := json.Marshal(raw)
+	if err != nil {
+		return nil, err
+	}
+	txn := new(protocol.Transaction)
+	if err := txn.UnmarshalJSON(b); err != nil {
+		return nil, fmt.Errorf("the transaction does not decode with Accumulate's types: %w", err)
+	}
+	if !strings.EqualFold(hex.EncodeToString(txn.GetHash()), txHash) {
+		return nil, fmt.Errorf("the transaction G0 carried hashes to %x, not to the executed %s", txn.GetHash(),
+			SafeTruncate(txHash, 16))
+	}
+	return txn, nil
+}
+
+// networkInfo reads the network's name and routing table once per proof, from the endpoint the proof reads. A failure
+// is not remembered: the next signature that needs it asks again.
+func (g1 *G1Layer) networkInfo() (*govsig.Network, error) {
+	g1.networkMu.Lock()
+	defer g1.networkMu.Unlock()
+	if g1.network != nil {
+		return g1.network, nil
+	}
+	if g1.client == nil {
+		return nil, fmt.Errorf("no RPC client to read network-status with")
+	}
+	n, err := govsig.FetchNetwork(context.Background(), g1.client.GetEndpoint())
+	if err != nil {
+		return nil, err
+	}
+	g1.network = n
+	return n, nil
 }
 
 // ProveG1 generates G1 proof for governance correctness

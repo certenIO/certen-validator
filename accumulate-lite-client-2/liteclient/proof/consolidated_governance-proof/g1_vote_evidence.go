@@ -74,23 +74,7 @@ func transactionBytes(txn *protocol.Transaction) (string, error) {
 // governedTransaction is the transaction G0 carried forward, decoded with Accumulate's types and bound to the hash
 // G0 proved executed.
 func (a *g1Authorization) governedTransaction() (*protocol.Transaction, error) {
-	raw := a.g1.g0Layer.Transaction()
-	if raw == nil {
-		return nil, fmt.Errorf("G0 did not carry the transaction forward")
-	}
-	b, err := json.Marshal(raw)
-	if err != nil {
-		return nil, err
-	}
-	txn := new(protocol.Transaction)
-	if err := txn.UnmarshalJSON(b); err != nil {
-		return nil, fmt.Errorf("the transaction does not decode with Accumulate's types: %w", err)
-	}
-	if !strings.EqualFold(hex.EncodeToString(txn.GetHash()), a.txHash) {
-		return nil, fmt.Errorf("the transaction G0 carried hashes to %x, not to the executed %s", txn.GetHash(),
-			SafeTruncate(a.txHash, 16))
-	}
-	return txn, nil
+	return a.g1.governedTransactionFor(a.txHash)
 }
 
 // buildVoteEvidence assembles what the vote read, verifies it by the offline evaluation, and requires that
@@ -109,6 +93,23 @@ func (a *g1Authorization) buildVoteEvidence(ctx context.Context, facts voteFacts
 	}
 	ev := &govvote.Evidence{Version: govvote.EvidenceVersion, Account: normalizeAccURL(a.principal),
 		Transaction: txBytes, Authorities: authorities, Extra: extra.URLs, IgnoreDisabled: extra.IgnoreDisabled}
+
+	// A typedData signature's chain id is the network's, derived from its name: the evidence carries the name so the
+	// offline evaluation can apply the executor's chain-id check (RB8-B).
+	for _, v := range sigs {
+		outer, err := buildProtocolSignature(v.Signature)
+		if err != nil {
+			return nil, fmt.Errorf("the vote's evidence: signature %s: %w", SafeTruncate(v.MessageID, 24), err)
+		}
+		if key := innermostKeySignature(outer); key != nil && key.Type() == protocol.SignatureTypeTypedData {
+			n, err := a.g1.networkInfo()
+			if err != nil {
+				return nil, fmt.Errorf("the vote's evidence: the network's name for a typedData signature: %w", err)
+			}
+			ev.NetworkName = n.Name
+			break
+		}
+	}
 
 	byID := map[string]ValidatedSignature{}
 	for _, v := range sigs {
