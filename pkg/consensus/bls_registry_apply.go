@@ -7,7 +7,6 @@ import (
 	abcitypes "github.com/cometbft/cometbft/abci/types"
 
 	"github.com/certen/independant-validator/pkg/ledger"
-	proofv2 "github.com/certen/independant-validator/pkg/proof/v2"
 )
 
 // processBLSRegistry validates and records a BLS registry transaction carried by block height. Like a
@@ -129,11 +128,8 @@ func (app *ValidatorApp) judgeIntentCertificate(vb *ValidatorBlock) *abcitypes.E
 	// The cross-partition activation as this block sees it (rules v15): accepted below this height. Nil until the admin
 	// quorum activates it, and then every v3 certificate is judged exactly as v14 judged it.
 	g1 := app.g1ActivationInForce(int64(app.currentBlockHeight))
-	verify := app.proofVerifier
-	if verify == nil {
-		verify = proofv2.VerifyFromSpine
-	}
-	if _, err := verifyIntentCertificate(vb, app.cometChainID, reg, spine, g1, verify); err != nil {
+	// app.proofVerifier is nil in production: the verifier is then chosen by the certificate's evidence version (defaultProofV2Verifier).
+	if _, err := verifyIntentCertificate(vb, app.cometChainID, reg, spine, g1, app.proofVerifier); err != nil {
 		// A refusal only v15 reaches: before the activation the v14 verdict of the same block has the same result code,
 		// so nothing is recorded. From the activation on, v14 would have accepted a 2.0 certificate that v15 refuses.
 		if g1 != nil && errors.Is(err, ErrIntentProofV21Missing) {

@@ -108,11 +108,22 @@ func (f *intentFacts) message() ([32]byte, error) {
 	return intentcert.Message(f.in)
 }
 
-// proofV2Verifier judges a proof v2 document against the chain's spine, pinned to the registry's incarnation. Production
-// is always proofv2.VerifyFromSpine (ValidatorApp.proofVerifier is nil outside tests); the type exists so a test of the
-// activation gate can drive the 2.1 branch of consensus with a verifier that returns a report it builds, before the
-// document builder of evidence 2.1 (pkg/proof/v2, RB9-C1) is merged. It is never configuration.
+// proofV2Verifier judges a proof v2 document against the chain's spine, pinned to the registry's incarnation. Production never
+// names one (ValidatorApp.proofVerifier is nil outside tests): intentInputs then judges a 2.0 document with proofv2.VerifyFromSpine
+// and a 2.1 document - reached only when the rules v15 activation is in force at the block - with proofv2.VerifyEvidence21FromSpine,
+// the real verifier of evidence 2.1. The type remains only so a test of the activation gate can drive the 2.1 branch of consensus
+// with a report it builds; TestRulesV15AcceptsAVerifiedEvidence21 runs the real one over the real stored 2.1 document. It is never
+// configuration.
 type proofV2Verifier func(ev *proofv2.Evidence, l *ledger.AccumulateSpineLog, pinned [32]byte) (*proofv2.Report, error)
+
+// defaultProofV2Verifier is the production verifier for a document of this version. The 2.0 entry points refuse 2.1 and the 2.1
+// entry point refuses 2.0, so neither can be reached with the other's document.
+func defaultProofV2Verifier(is21 bool) proofV2Verifier {
+	if is21 {
+		return proofv2.VerifyEvidence21FromSpine
+	}
+	return proofv2.VerifyFromSpine
+}
 
 // intentInputs recomputes every input of the block's intent message from the block and the registry. g1 is the
 // cross-partition activation in force for the block's height (G1ActivationAt), nil before it: from the height after the
@@ -128,40 +139,63 @@ func intentInputs(vb *ValidatorBlock, chainID string, reg *ledger.BLSRegistryRec
 		return &intentFacts{in: in, govRoot: govRoot, accRoot: accRoot}, nil
 	}
 	ev, gp := vb.IntentCertificate, &vb.GovernanceProof
-	if ev.ProofV2 == nil {
-		return nil, ErrIntentProofV2Missing
-	}
-	is21 := ev.ProofV2.Version == proofv2.Version21
-	switch {
-	case is21 && !G1CrossPartitionRequired(g1):
-		return nil, ErrIntentProofV21NotInForce
-	case !is21 && G1CrossPartitionRequired(g1):
-		return nil, fmt.Errorf("%w (proof version %q)", ErrIntentProofV21Missing, ev.ProofV2.Version)
-	}
-	rep, err := verify(ev.ProofV2, spine, in.Incarnation)
+	govRoot3, rep, err := judgeProofV2(ev, gp.G0Proof, gp.G1Proof, gp.G2Proof, in.Incarnation, in.OperationID, accRoot, spine, g1, verify)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrIntentProofV2Invalid, err)
-	}
-	// One anchor commits one Accumulate set root: the set the spine derived must be the set the L4 leg was verified
-	// against, or the two proofs describe different validator sets and the intent is refused rather than certified
-	// under either.
-	if rep.AccumulateSetRoot != accRoot {
-		return nil, fmt.Errorf("%w: the spine derives set root %x, the L4 leg %x", ErrIntentAccumulateSetMismatch, rep.AccumulateSetRoot, accRoot)
-	}
-	// Binding and root together, by the evidence's version: BindProofV2 and govRoot v3 for 2.0, the strengthened
-	// BindProofV21 over the intent's own vote evidence and govRoot v4 for 2.1 (intentcert.ProofV2Root).
-	govRoot3, _, err := intentcert.ProofV2Root(rep, ev.ProofV2, gp.G0Proof, gp.G1Proof, gp.G2Proof, ev.KeyPageURL, ev.KeyBookURL,
-		ev.VoteEvidence, in.OperationID)
-	if err != nil {
-		if errors.Is(err, intentcert.ErrBind) {
-			return nil, fmt.Errorf("%w: %v", ErrIntentProofV2Invalid, err)
-		}
-		return nil, fmt.Errorf("%w: %v", ErrIntentGovRootMismatch, err)
+		return nil, err
 	}
 	return &intentFacts{v3: true, in: in, govRoot: govRoot3, accRoot: rep.AccumulateSetRoot,
 		in3: intentcert.MessageInputsV3{CertenChainID: in.CertenChainID, OperationID: in.OperationID, GovRootV3: govRoot3,
 			AccumulateSetRoot: rep.AccumulateSetRoot, Incarnation: in.Incarnation, GovernanceCommitment: in.GovernanceCommitment,
 			CertenSetRoot: in.CertenSetRoot}}, nil
+}
+
+// judgeProofV2 is the part of intentInputs that judges a v3 certificate's proof v2, in the order consensus judges it, and returns the
+// govRoot (v3 over evidence 2.0, v4 over evidence 2.1) the message commits:
+//
+//  1. the evidence's version against the activation in force: 2.1 before it, or 2.0 after it, is refused by name;
+//  2. the document, by the real verifier of its version (verify nil in production: defaultProofV2Verifier) against the chain's spine
+//     and the registry's incarnation;
+//  3. one validator set: the set root the spine derived must be the one the L4 leg was verified against (accRoot);
+//  4. the binding and the root together (intentcert.ProofV2Root): BindProofV2 and govRoot v3 for 2.0, BindProofV21 over the intent's own
+//     vote evidence and govRoot v4 for 2.1.
+//
+// TestRulesV15AcceptsAVerifiedEvidence21 calls it over the real stored 2.1 document.
+func judgeProofV2(ev *IntentCertificateEvidence, g0 *govproof.G0Result, g1doc *govproof.G1Result, g2 *govproof.G2Result,
+	incarnation [32]byte, operationID [32]byte, accRoot [32]byte, spine *ledger.AccumulateSpineLog, g1 *ledger.G1ActivationRecord,
+	verify proofV2Verifier) ([32]byte, *proofv2.Report, error) {
+	var zero [32]byte
+	if ev.ProofV2 == nil {
+		return zero, nil, ErrIntentProofV2Missing
+	}
+	is21 := ev.ProofV2.Version == proofv2.Version21
+	switch {
+	case is21 && !G1CrossPartitionRequired(g1):
+		return zero, nil, ErrIntentProofV21NotInForce
+	case !is21 && G1CrossPartitionRequired(g1):
+		return zero, nil, fmt.Errorf("%w (proof version %q)", ErrIntentProofV21Missing, ev.ProofV2.Version)
+	}
+	if verify == nil {
+		verify = defaultProofV2Verifier(is21)
+	}
+	rep, err := verify(ev.ProofV2, spine, incarnation)
+	if err != nil {
+		return zero, nil, fmt.Errorf("%w: %v", ErrIntentProofV2Invalid, err)
+	}
+	// One anchor commits one Accumulate set root: the set the spine derived must be the set the L4 leg was verified
+	// against, or the two proofs describe different validator sets and the intent is refused rather than certified
+	// under either.
+	if rep.AccumulateSetRoot != accRoot {
+		return zero, nil, fmt.Errorf("%w: the spine derives set root %x, the L4 leg %x", ErrIntentAccumulateSetMismatch, rep.AccumulateSetRoot, accRoot)
+	}
+	// Binding and root together, by the evidence's version.
+	govRoot, _, err := intentcert.ProofV2Root(rep, ev.ProofV2, g0, g1doc, g2, ev.KeyPageURL, ev.KeyBookURL, ev.VoteEvidence, operationID)
+	if err != nil {
+		if errors.Is(err, intentcert.ErrBind) {
+			return zero, nil, fmt.Errorf("%w: %v", ErrIntentProofV2Invalid, err)
+		}
+		return zero, nil, fmt.Errorf("%w: %v", ErrIntentGovRootMismatch, err)
+	}
+	return govRoot, rep, nil
 }
 
 // intentInputsV2 recomputes the v2 message's inputs: govRoot v2 over the L1-L4 proof and G0-G2, and the set root of
@@ -226,7 +260,7 @@ func registryMember(reg *ledger.BLSRegistryRecord, validatorID string) *ledger.B
 // force for that height (nil before rules v15's activation): it decides whether the proof v2 must be evidence 2.1.
 func VerifyIntentCertificate(vb *ValidatorBlock, chainID string, reg *ledger.BLSRegistryRecord, spine *ledger.AccumulateSpineLog,
 	g1 *ledger.G1ActivationRecord) ([32]byte, error) {
-	return verifyIntentCertificate(vb, chainID, reg, spine, g1, proofv2.VerifyFromSpine)
+	return verifyIntentCertificate(vb, chainID, reg, spine, g1, nil)
 }
 
 // verifyIntentCertificate is VerifyIntentCertificate with the proof verifier named (see proofV2Verifier).
@@ -300,8 +334,7 @@ func verifyIntentCertificate(vb *ValidatorBlock, chainID string, reg *ledger.BLS
 func BuildIntentCertificate(vb *ValidatorBlock, chainID string, reg *ledger.BLSRegistryRecord, sk *bls.PrivateKey,
 	keyPageURL, keyBookURL string, authorization *govproof.AuthorizationRecord, voteEvidence json.RawMessage,
 	cp *chained_proof.ChainedProof, spine *ledger.AccumulateSpineLog, g1 *ledger.G1ActivationRecord, pv2 *proofv2.Evidence) error {
-	return buildIntentCertificate(vb, chainID, reg, sk, keyPageURL, keyBookURL, authorization, voteEvidence, cp, spine, g1, pv2,
-		proofv2.VerifyFromSpine)
+	return buildIntentCertificate(vb, chainID, reg, sk, keyPageURL, keyBookURL, authorization, voteEvidence, cp, spine, g1, pv2, nil)
 }
 
 // buildIntentCertificate is BuildIntentCertificate with the proof verifier named (see proofV2Verifier).

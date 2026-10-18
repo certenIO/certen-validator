@@ -224,6 +224,25 @@ func VerifyFromSpine(ev *Evidence, l *ledger.AccumulateSpineLog, pinned [32]byte
 	if ev == nil || ev.Version != Version {
 		return nil, fmt.Errorf("not a v2 Accumulate proof")
 	}
+	return verifyFromSpine(ev, l, pinned)
+}
+
+// VerifyEvidence21FromSpine is VerifyFromSpine for evidence 2.1 (docs/proof/G1_CROSS_PARTITION.md; pages on more than one
+// partition): the entry point consensus calls for a 2.1 certificate, with the starting checkpoints taken from the chain's spine log
+// and no I/O, so every validator judging the same block reaches the same verdict. It is a separate function on purpose:
+// VerifyFromSpine (like Verify and VerifyFromGenesis) refuses 2.1 by version exactly as before, so a 2.0 call site can never accept a
+// 2.1 document; pkg/consensus reaches this function only for a certificate that carries 2.1 AND only when the rules v15 activation is
+// in force at the block (intentInputs checks that first and refuses a 2.1 certificate before it by name). The report it returns
+// carries Unproven: BindProofV21 refuses a report that is not complete for the intent's governing set.
+func VerifyEvidence21FromSpine(ev *Evidence, l *ledger.AccumulateSpineLog, pinned [32]byte) (*Report, error) {
+	if ev == nil || ev.Version != Version21 {
+		return nil, fmt.Errorf("not a v2.1 Accumulate proof")
+	}
+	return verifyFromSpine(ev, l, pinned)
+}
+
+// verifyFromSpine is the spine walk the 2.0 and 2.1 entry points share, each of which has checked its own version.
+func verifyFromSpine(ev *Evidence, l *ledger.AccumulateSpineLog, pinned [32]byte) (*Report, error) {
 	if l == nil || l.Genesis == nil {
 		return nil, fmt.Errorf("the chain has no Accumulate spine")
 	}

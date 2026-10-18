@@ -147,9 +147,9 @@ certified under weaker evidence** - which is why the shadow run must exercise th
   (a node still on the v14 build); the block is refused by every node and the intent retried.
 - A certificate with evidence 2.0 at height H+1 is refused with `ErrIntentProofV21Missing` and one with 2.1 is accepted;
   the same blocks at H and below are decided as v14 decided them (`TestAppJudgesTheCertificateByTheActivationInForceAtItsHeight`,
-  `TestACertificateOverEvidence21IsAcceptedFromTheNextHeight`, `TestTheCertificateGateFollowsTheActivation`; the
-  2.1 acceptance test uses the real binding and govRoot v4 over the production proof and a stand-in verifier for 2.1
-  documents until RB9-C1's verifier is merged - see the pull request).
+  `TestACertificateOverEvidence21IsAcceptedFromTheNextHeight`, `TestTheCertificateGateFollowsTheActivation` - the gate tests
+  drive consensus with a report they build; `TestRulesV15AcceptsAVerifiedEvidence21` runs the REAL verifier
+  (`VerifyEvidence21FromSpine`), the real `BindProofV21` and the real govRoot v4 over the real stored 2.1 document).
 - Restart the **whole fleet**: it comes back on one chain, stamped v15, app version 15, equal app hashes, and every node
   answering `g1-activate status` with the same H.
 
@@ -192,10 +192,12 @@ exists and for fewer than the threshold; submit refuses on a NO-GO and commits n
 
 ## Known limits at this change (carried to the pull request)
 
-- Discovery (`pkg/intent`, the proof v2 gate) still builds evidence 2.0; the builder of 2.1 documents and the verification
-  of 2.1 (`pkg/proof/v2`) are RB9-C1 and RB9-E. Activating before they are deployed on all 7 would hold every intent
-  (retried, never certified under weaker evidence). Hence: deploy this branch only after RB9-B and RB9-C1 are merged and
-  deployed, and sign the activation only after the shadow exit.
+- Discovery builds evidence 2.1 exactly when the activation is in force for the next block (RB9-I: the proposer asks
+  `G1CrossPartitionRequired` per intent and calls `Shadow.ProveG1`; before the activation it behaves as before). An intent
+  whose 2.1 evidence cannot be built or is not complete is held (retried), never certified under 2.0 or a weaker binding. An
+  intent captured by a build that did not record the transaction and the page histories (made before this change) cannot be
+  re-evaluated and is held until it is re-captured. Deploy all 7, then sign the activation only after the shadow exit
+  (RB9-E): zero disagreements over a live run.
 - govRoot v4 exists in Go only (`pkg/intentcert`, `pkg/execution/contracts`); a Solidity recomputation of the root, if the
   anchor contract has one, has no v4 domain. The certificate is checked by consensus and by `execution.CheckIntentCertificate`.
 

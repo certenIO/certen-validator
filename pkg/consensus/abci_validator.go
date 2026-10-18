@@ -144,7 +144,8 @@ type ValidatorApp struct {
 	blockAnchorSetRecords []ledger.AnchorSetRecord
 	// The cross-partition activation THIS execution of the block accepted (rules v15), judged like the anchor set's.
 	blockG1ActivationRecords []ledger.G1ActivationRecord
-	// proofVerifier is nil in production (proofv2.VerifyFromSpine); see proofV2Verifier.
+	// proofVerifier is nil in production (the verifier is chosen by the evidence version: proofv2.VerifyFromSpine for 2.0,
+	// proofv2.VerifyEvidence21FromSpine for 2.1); see proofV2Verifier.
 	proofVerifier proofV2Verifier
 }
 
