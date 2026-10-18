@@ -162,8 +162,8 @@ func TestGovRootV4_IndependentRecomputation(t *testing.T) {
 		uh, sh := sha256.Sum256([]byte(u)), sha256.Sum256(state)
 		ph := sha256.Sum256([]byte(strings.ToLower(rep.Proven[i].Partition)))
 		var rs []string
-		for _, r := range rep.Proven[i].Roles {
-			rs = append(rs, string(r))
+		for _, r := range append(append([]proofv2.PageRole(nil), rep.Proven[i].Roles...), rep.Proven[i].Declared...) {
+			rs = append(rs, string(r)) // the recorded roles: proven and declared (certified-key-page)
 		}
 		// The fixture lists its roles in canonical order already; sort them as the design's order to be explicit.
 		order := map[string]int{"principal-chain": 0, "authority-book": 1, "authority-page": 2, "header-authority": 3, "delegate-book": 4,
@@ -196,12 +196,12 @@ func TestGovRootV4_IndependentRecomputation(t *testing.T) {
 	var pagesRoot [32]byte
 	copy(pagesRoot[:], ph.MerkleHash())
 
-	// Votes: sha256(json of each vote) (one vote in the fixture), merkle.
-	vb, _ := json.Marshal(ev.Votes[0])
-	var vh merkle.Hasher
-	vh.AddHash2(sha256.Sum256(vb))
+	// Votes: sha256("certen:g1:v4:vote:" ‖ the explicit field layout, written out below) of each vote (one in the fixture), merkle.
+	vh := rawVoteLeaf(ev.Votes[0])
+	var vm merkle.Hasher
+	vm.AddHash2(vh)
 	var votesRoot [32]byte
-	copy(votesRoot[:], vh.MerkleHash())
+	copy(votesRoot[:], vm.MerkleHash())
 
 	l1 := k256([]byte("certen:l1:v3:"), rep.TxHash[:], rep.AnchorTxHash[:], u64(rep.AnchorBlock))
 	l2 := k256([]byte("certen:l2:v3:"), rep.CertifiedRoot[:], u64(rep.CertifiedBlock))

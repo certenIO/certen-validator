@@ -44,7 +44,7 @@ func ProofV2Root(rep *proofv2.Report, ev *proofv2.Evidence, g0 *proof.G0Result, 
 		if err != nil {
 			return root, true, fmt.Errorf("%w: %w", ErrBind, err)
 		}
-		if err = BindProofV21(rep, g0, g1, keyPageURL, facts); err != nil {
+		if err = BindProofV21(rep, g0, g1, keyPageURL, keyBookURL, facts); err != nil {
 			return root, true, fmt.Errorf("%w: %w", ErrBind, err)
 		}
 		root, _, err = GovRootV4(GovRootV4Inputs{Report: rep, Evidence: ev, G0: g0, G1: g1, G2: g2, KeyPageURL: keyPageURL,

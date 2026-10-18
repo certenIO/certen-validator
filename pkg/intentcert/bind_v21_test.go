@@ -18,7 +18,7 @@ func bind21(t *testing.T, f *x21) error {
 	t.Helper()
 	rep, g0, g1, kp := f.report()
 	facts := f.facts
-	return BindProofV21(rep, g0, g1, kp, &facts)
+	return BindProofV21(rep, g0, g1, kp, xERPBook, &facts)
 }
 
 func wantState(t *testing.T, name string, err error, code string) {
@@ -46,10 +46,10 @@ func TestBindProofV21AcceptsTheCompleteGoverningSet(t *testing.T) {
 func TestBindProofV21HarborMfgCertifiedPageIsAnotherIdentitysInitiator(t *testing.T) {
 	// Not proven at all: the certified-key-page rule, now satisfied only through the proven set.
 	wantState(t, "initiator page not proven", bind21(t, newX21().drop(xERP)), proofv2.StateCertifiedPageUnproven)
-	// Proven as the certified key page only: the initiator page is not proven as the initiator.
-	wantState(t, "certified but not as initiator", bind21(t, newX21().roles(xERP, proofv2.RoleCertifiedKeyPage)), proofv2.StateInitiatorPageUnproven)
-	// Proven as the initiator only: the certified-key-page rule is not met.
-	wantState(t, "initiator but not certified", bind21(t, newX21().roles(xERP, proofv2.RoleInitiatorSigner)), proofv2.StateCertifiedPageUnproven)
+	// Declared as the certified key page and proven a voter, but not proven as the initiator: the initiator page is not proven as the initiator.
+	wantState(t, "certified but not as initiator", bind21(t, newX21().roles(xERP, proofv2.RoleVoter)), proofv2.StateInitiatorPageUnproven)
+	// Proven as the initiator only, with no declared certified-key-page: the certified-key-page rule is not met.
+	wantState(t, "initiator but not certified", bind21(t, newX21().declare(xERP)), proofv2.StateCertifiedPageUnproven)
 	// Both roles: accepted.
 	if err := bind21(t, newX21()); err != nil {
 		t.Fatalf("proven as the initiator and the certified key page: %v", err)
@@ -59,11 +59,11 @@ func TestBindProofV21HarborMfgCertifiedPageIsAnotherIdentitysInitiator(t *testin
 	rep, g0, g1, kp := f.report()
 	for i := range rep.Proven {
 		if canon(rep.Proven[i].URL) == canon(xERP) {
-			rep.Proven[i].Roles = []proofv2.PageRole{proofv2.RoleInitiatorSigner}
+			rep.Proven[i].Roles, rep.Proven[i].Declared = []proofv2.PageRole{proofv2.RoleInitiatorSigner}, nil
 		}
 	}
 	facts := f.facts
-	wantState(t, "in the pages list only", BindProofV21(rep, g0, g1, kp, &facts), proofv2.StateCertifiedPageUnproven)
+	wantState(t, "in the pages list only", BindProofV21(rep, g0, g1, kp, xERPBook, &facts), proofv2.StateCertifiedPageUnproven)
 }
 
 // Each class of D1(a)-(f) that is missing is refused, by the named state of its class.
@@ -89,7 +89,7 @@ func TestBindProofV21RefusesEachMissingClass(t *testing.T) {
 		{"delegate book without its role", newX21().roles(xDelBook, proofv2.RoleAuthorityBook), proofv2.StateDelegateEntryAbsent},
 		{"voter page without the voter role", newX21().roles(xBook2, proofv2.RoleAuthorityPage), proofv2.StateCompletenessUnproven},
 		{"delegated vote's origin without the voter role", newX21().roles(xDelPage, proofv2.RoleDelegatePage), proofv2.StateCompletenessUnproven},
-		{"initiator page without its role", newX21().roles(xERP, proofv2.RoleCertifiedKeyPage), proofv2.StateInitiatorPageUnproven},
+		{"initiator page without its role", newX21().roles(xERP, proofv2.RoleVoter), proofv2.StateInitiatorPageUnproven},
 		{"initiating signature's delegator not proven", newX21().drop(xERPDeleg), proofv2.StateInitiatorPageUnproven},
 		{"certified key page not proven", newX21().drop(xERP), proofv2.StateCertifiedPageUnproven},
 		{"page with no partition", newX21().place(xBook1, "", blkY2), proofv2.StateForeignPartitionMismatch},
@@ -141,17 +141,17 @@ func TestBindProofV21AppliesTheG0AndG1Bindings(t *testing.T) {
 	rep, g0, g1, kp := newX21().report()
 	facts := newX21().facts
 	g0.ExecMBI++
-	if err := BindProofV21(rep, g0, g1, kp, &facts); err == nil || !strings.Contains(err.Error(), "execution block") {
+	if err := BindProofV21(rep, g0, g1, kp, xERPBook, &facts); err == nil || !strings.Contains(err.Error(), "execution block") {
 		t.Errorf("G0 block: %v", err)
 	}
 	rep, g0, g1, kp = newX21().report()
 	g1.AuthoritySnapshot.Page = "acc://other.acme/book/1"
-	if err := BindProofV21(rep, g0, g1, kp, &facts); err == nil || !strings.Contains(err.Error(), "not the page G1 validated against") {
+	if err := BindProofV21(rep, g0, g1, kp, xERPBook, &facts); err == nil || !strings.Contains(err.Error(), "not the page G1 validated against") {
 		t.Errorf("G1 page: %v", err)
 	}
 	rep, g0, g1, kp = newX21().report()
 	rep.Proven = rep.Proven[:2]
-	if err := BindProofV21(rep, g0, g1, kp, &facts); err == nil {
+	if err := BindProofV21(rep, g0, g1, kp, xERPBook, &facts); err == nil {
 		t.Error("proven records that do not describe the pages were accepted")
 	}
 }
@@ -239,6 +239,9 @@ func TestGoverningFactsFromVoteEvidence(t *testing.T) {
 	if got.Principal != canon(xPrincipal) || got.Type != protocol.TransactionTypeSendTokens {
 		t.Errorf("principal/type: %+v", got)
 	}
+	if string(got.TxHash[:]) != string(txn.GetHash()) || got.TxHash == [32]byte{} {
+		t.Errorf("the facts' transaction hash %x is not the transaction's %x", got.TxHash, txn.GetHash())
+	}
 	if want := []string{canon(xHdrBook), "acc://extra.acme/book"}; strings.Join(got.HeaderAuthorities, ",") != strings.Join(want, ",") {
 		t.Errorf("header authorities %v, want %v", got.HeaderAuthorities, want)
 	}
@@ -285,7 +288,7 @@ func TestBindProofV21RefusesAReportWithOnlyTheCertifiedPage(t *testing.T) {
 	}
 	rep, g0, g1, kp := f.report()
 	facts := f.facts
-	err := BindProofV21(rep, g0, g1, kp, &facts)
+	err := BindProofV21(rep, g0, g1, kp, xERPBook, &facts)
 	wantState(t, "only the certified page", err, proofv2.StateCompletenessUnproven)
 	if err := BindProofV2(rep, g0, g1, kp); err == nil {
 		t.Fatal("BindProofV2 bound a 2.1 report")

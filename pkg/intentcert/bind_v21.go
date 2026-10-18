@@ -3,6 +3,7 @@ package intentcert
 import (
 	"encoding/hex"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/govvote"
@@ -41,6 +42,9 @@ type ArrivalRef struct {
 type GoverningFacts struct {
 	Principal string
 	Type      protocol.TransactionType
+	// TxHash is the hash of the transaction the vote evidence carries (txn.GetHash()): the binding requires it to be the transaction the
+	// report proved, so the facts and the proof are about one transaction.
+	TxHash [32]byte
 	// Authorities are the principal's resolved authority set as the intent was judged against it, enabled and disabled.
 	Authorities []govvote.AccountAuthority
 	// HeaderAuthorities are the books the header and the body name (Header.Authorities, GetAdditionalAuthorities, the
@@ -88,6 +92,7 @@ func GoverningFactsFromVoteEvidence(ev *govvote.Evidence) (*GoverningFacts, erro
 		return nil, fmt.Errorf("proof v2 binding: the vote evidence is for %s, its transaction's principal is %s", ev.Account, txn.Header.Principal)
 	}
 	f := &GoverningFacts{Principal: canon(ev.Account), Type: txn.Body.Type(), Authorities: append([]govvote.AccountAuthority(nil), ev.Authorities...)}
+	copy(f.TxHash[:], txn.GetHash())
 	for i := range f.Authorities {
 		f.Authorities[i].URL = canon(f.Authorities[i].URL)
 	}
@@ -165,6 +170,7 @@ type provenPage struct {
 	proof proofv2.ProvenPage
 }
 
+// has says whether the page PROVES role r (rep.Proven[i].Roles: re-derived from the proven states by the verifier).
 func (p *provenPage) has(r proofv2.PageRole) bool {
 	for _, x := range p.proof.Roles {
 		if x == r {
@@ -172,6 +178,26 @@ func (p *provenPage) has(r proofv2.PageRole) bool {
 		}
 	}
 	return false
+}
+
+// declared says whether the page records role r without the verifier having proven it (rep.Proven[i].Declared): a recorded fact whose
+// justification is outside the document - the intent certificate (certified-key-page), or the transaction or initiating signature when the
+// document does not carry them.
+func (p *provenPage) declared(r proofv2.PageRole) bool {
+	for _, x := range p.proof.Declared {
+		if x == r {
+			return true
+		}
+	}
+	return false
+}
+
+// missing is the detail of a role the page does not prove: when the page records it only as declared, it says so.
+func (p *provenPage) missing(r proofv2.PageRole) string {
+	if p.declared(r) {
+		return fmt.Sprintf("is recorded as %s but only declared, not proven (the document does not carry what justifies it)", r)
+	}
+	return fmt.Sprintf("is proven (roles %v) but not as %s", p.proof.Roles, r)
 }
 
 type binder struct {
@@ -184,9 +210,9 @@ func ns(code, partition string, block uint64, format string, a ...any) error {
 	return &proofv2.NamedState{Code: code, Partition: partition, Block: block, Detail: fmt.Sprintf(format, a...)}
 }
 
-// BindProofV21 is BindProofV2 for a report of evidence 2.1: the G0/G1 binding and the certified-key-page rule of BindProofV2,
-// with the key page satisfied ONLY through the report's proven pages (rep.Proven, at its own partition and block, carrying
-// the certified-key-page role), and every page of the governing set of D1(a)-(f) required among them with its recorded role:
+// BindProofV21 is BindProofV2 for a report of evidence 2.1: the G0/G1 binding of BindProofV2, a report with nothing unproven, the
+// certified key page justified against the certificate's declared book, and every page of the governing set of D1(a)-(f) required among
+// the report's proven pages (rep.Proven, each at its own partition and block) with its recorded role:
 //
 //	(a) the principal and the accounts its authority set is inherited through (role principal-chain), walked over the proven
 //	    states exactly as the executor resolves an authority set (the verifier re-derives the same set; this binds the intent
@@ -201,16 +227,34 @@ func ns(code, partition string, block uint64, format string, a ...any) error {
 //	(f) the initiator and payer pages and the initiating signature's delegators (initiator-signer), and the certified key page
 //	    (certified-key-page).
 //
+// Roles the verifier proves (rep.Proven[i].Roles) are the only ones that satisfy (a)-(e) and the initiator part of (f): a role a page
+// records only as Declared (the transaction or initiating signature was not carried) is refused as "declared, not proven". The certified
+// key page is the one role the verifier can only declare, because it depends on the intent certificate; THIS binding justifies it: the
+// page is G1's page, is a proven page of the governing set (it proves at least one other role), is recorded as certified-key-page, and is
+// a page of keyBookURL, the book the certificate declares. The facts' transaction must be the transaction the report proved. A report
+// with any Unproven entry is not a verified S3 and is refused by that entry. The executor version in force at every (partition, block)
+// the report is judged at is derived from the pinned activation table (proofv2.ExecutorFloorAt): the system-ledger page is not required
+// (live Kermit serves no historical receipt for it), and when a document carries one it must agree.
+//
 // Each missing class is refused by the named state of pkg/proof/v2 crosspartition.go. Every proven page must also carry its
 // partition and a block; a page on the transaction's partition is proven at the report's anchor block; a counted signature or
 // delegated arrival must not be later than the block its page is proven at (on that page's own partition), nor a recorded vote
 // later than the principal's anchor block.
-func BindProofV21(rep *proofv2.Report, g0 *proof.G0Result, g1 *proof.G1Result, keyPageURL string, facts *GoverningFacts) error {
+func BindProofV21(rep *proofv2.Report, g0 *proof.G0Result, g1 *proof.G1Result, keyPageURL, keyBookURL string, facts *GoverningFacts) error {
 	if rep == nil || g0 == nil || g1 == nil || facts == nil {
 		return fmt.Errorf("proof v2 binding: the report, G0, G1 and the governing facts are all required")
 	}
+	// A report that names anything it could not establish is not a verified S3: its own first named state is the refusal.
+	if len(rep.Unproven) > 0 {
+		first := rep.Unproven[0]
+		return &first
+	}
 	if err := bindG0(rep, g0); err != nil {
 		return err
+	}
+	if facts.TxHash != rep.TxHash {
+		return ns(proofv2.StateTransactionMismatch, rep.Partition, rep.AnchorBlock,
+			"the governing facts are read from a transaction hashing to %x, the report proved %x", facts.TxHash[:8], rep.TxHash[:8])
 	}
 	page := govvote.CanonicalAccSpelling(keyPageURL)
 	if page == "" || page != govvote.CanonicalAccSpelling(g1.AuthoritySnapshot.Page) {
@@ -220,7 +264,10 @@ func BindProofV21(rep *proofv2.Report, g0 *proof.G0Result, g1 *proof.G1Result, k
 	if err := b.index(); err != nil {
 		return err
 	}
-	if err := b.needRole(page, proofv2.RoleCertifiedKeyPage, proofv2.StateCertifiedPageUnproven, "the certified key page"); err != nil {
+	if err := b.executorVersions(); err != nil {
+		return err
+	}
+	if err := b.certifiedPage(page, keyBookURL); err != nil {
 		return err
 	}
 	if err := b.checkBlocks(); err != nil {
@@ -247,6 +294,104 @@ func BindProofV21(rep *proofv2.Report, g0 *proof.G0Result, g1 *proof.G1Result, k
 		}
 	}
 	return b.arrivalBlocks()
+}
+
+// certifiedPage justifies the role the verifier can only declare. The certified key page (G1's page) must be proven, recorded as
+// certified-key-page, a page of the book the certificate declares, and a page of the governing set: it proves at least one other role
+// (authority page, voter, delegate page, header authority page or initiator-signer - the harbor-mfg page is the initiator of an unrelated
+// identity and proves only that), so the certificate cannot name a proven page that has nothing to do with the intent.
+func (b *binder) certifiedPage(page, keyBookURL string) error {
+	p, ok := b.pages[page]
+	if !ok {
+		return ns(proofv2.StateCertifiedPageUnproven, "", 0, "the certified key page %s is not among the pages the report proved", page)
+	}
+	if !p.has(proofv2.RoleCertifiedKeyPage) && !p.declared(proofv2.RoleCertifiedKeyPage) {
+		return ns(proofv2.StateCertifiedPageUnproven, p.proof.Partition, p.proof.Block,
+			"the certified key page %s is proven (roles %v, declared %v) but not recorded as %s", page, p.proof.Roles, p.proof.Declared, proofv2.RoleCertifiedKeyPage)
+	}
+	book := canon(keyBookURL)
+	if book == "" {
+		return ns(proofv2.StateCertifiedPageUnproven, p.proof.Partition, p.proof.Block, "the certificate declares no key book for the certified key page %s", page)
+	}
+	var own string
+	switch p.acct.(type) {
+	case *protocol.KeyPage:
+		pu, err := url.Parse(page)
+		if err != nil {
+			return fmt.Errorf("proof v2 binding: the certified key page %q: %w", page, err)
+		}
+		parent, ok := pu.Parent()
+		if !ok {
+			return ns(proofv2.StateCertifiedPageUnproven, p.proof.Partition, p.proof.Block, "the certified key page %s has no book", page)
+		}
+		own = canon(parent.String())
+	case *protocol.LiteIdentity:
+		own = page // a lite identity is its own book and page
+	default:
+		return ns(proofv2.StateCertifiedPageUnproven, p.proof.Partition, p.proof.Block, "the certified key page %s is %T, not a key page", page, p.acct)
+	}
+	if own != book {
+		return ns(proofv2.StateCertifiedPageUnproven, p.proof.Partition, p.proof.Block,
+			"the certified key page %s is a page of %s, the certificate declares the book %s", page, own, book)
+	}
+	for _, r := range p.proof.Roles {
+		if r != proofv2.RoleCertifiedKeyPage {
+			return nil
+		}
+	}
+	return ns(proofv2.StateCertifiedPageUnproven, p.proof.Partition, p.proof.Block,
+		"the certified key page %s proves no role of the governing set (roles %v): it is not a page the intent depends on", page, p.proof.Roles)
+}
+
+// executorVersions derives g1_executor_version_unsupported from the pinned activation table (proofv2.ExecutorFloorAt) for the
+// transaction's (partition, block) and for every (partition, block) a proven page was judged at: a version Baikonur or later must be
+// proven to govern it. A system-ledger page, when the document carries one, must not contradict the table.
+func (b *binder) executorVersions() error {
+	type where struct {
+		partition string
+		block     uint64
+	}
+	seen := map[where]bool{}
+	check := func(partition string, block uint64, what string) error {
+		w := where{proofv2.NormalizeExecutorPartition(partition), block}
+		if seen[w] {
+			return nil
+		}
+		seen[w] = true
+		floor, ok := proofv2.ExecutorFloorAt(partition, block)
+		if !ok {
+			return ns(proofv2.StateExecutorVersionUnsupported, partition, block,
+				"%s: the executor version governing block %d of %s is not established by the pinned activation table (an unknown partition, or a block at or before its activation)", what, block, partition)
+		}
+		if !floor.V2BaikonurEnabled() {
+			return ns(proofv2.StateExecutorVersionUnsupported, partition, block,
+				"%s: the pinned table proves executor version %d on %s, before Baikonur (%d)", what, floor, partition, protocol.ExecutorVersionV2Baikonur)
+		}
+		return nil
+	}
+	if err := check(b.rep.Partition, b.rep.AnchorBlock, "the transaction"); err != nil {
+		return err
+	}
+	keys := make([]string, 0, len(b.pages))
+	for k := range b.pages {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, u := range keys {
+		p := b.pages[u]
+		if err := check(p.proof.Partition, p.proof.Block, u); err != nil {
+			return err
+		}
+		if l, ok := p.acct.(*protocol.SystemLedger); ok {
+			floor, _ := proofv2.ExecutorFloorAt(p.proof.Partition, p.proof.Block)
+			if l.ExecutorVersion < floor {
+				return ns(proofv2.StateExecutorVersionUnsupported, p.proof.Partition, p.proof.Block,
+					"%s proves executor version %d at block %d of %s, the pinned table proves at least %d: the ledger page disagrees with the pinned table",
+					u, l.ExecutorVersion, p.proof.Block, p.proof.Partition, floor)
+			}
+		}
+	}
+	return nil
 }
 
 // index builds the proven-page table, requiring rep.Proven to describe exactly rep.Pages, each page once, with a partition, a
@@ -306,7 +451,7 @@ func (b *binder) needRole(u string, role proofv2.PageRole, code, what string) er
 		return ns(code, "", 0, "%s %s is not among the pages the report proved", what, u)
 	}
 	if !p.has(role) {
-		return ns(code, p.proof.Partition, p.proof.Block, "%s %s is proven (roles %v) but not as %s", what, u, p.proof.Roles, role)
+		return ns(code, p.proof.Partition, p.proof.Block, "%s %s %s", what, u, p.missing(role))
 	}
 	return nil
 }
@@ -451,12 +596,12 @@ func (b *binder) book(u string, level int, bookRole, pageRole proofv2.PageRole, 
 		return nil, ns(missing, "", 0, "the book %s (delegation level %d) is not among the pages the report proved", u, level)
 	}
 	if !p.has(bookRole) {
-		return nil, ns(missing, p.proof.Partition, p.proof.Block, "the book %s is proven (roles %v) but not as %s", u, p.proof.Roles, bookRole)
+		return nil, ns(missing, p.proof.Partition, p.proof.Block, "the book %s %s", u, p.missing(bookRole))
 	}
 	switch bk := p.acct.(type) {
 	case *protocol.LiteIdentity:
 		if !p.has(pageRole) {
-			return nil, ns(missing, p.proof.Partition, p.proof.Block, "%s is its own page and is proven (roles %v) but not as %s", u, p.proof.Roles, pageRole)
+			return nil, ns(missing, p.proof.Partition, p.proof.Block, "%s is its own page and %s", u, p.missing(pageRole))
 		}
 		return nil, nil
 	case *protocol.KeyBook:
@@ -474,8 +619,7 @@ func (b *binder) book(u string, level int, bookRole, pageRole proofv2.PageRole, 
 					"page %d of %d of %s (%s) is not among the pages the report proved", i+1, bk.PageCount, u, pu)
 			}
 			if !pg.has(pageRole) {
-				return nil, ns(pageCode, pg.proof.Partition, pg.proof.Block,
-					"%s is proven (roles %v) but not as %s", pu, pg.proof.Roles, pageRole)
+				return nil, ns(pageCode, pg.proof.Partition, pg.proof.Block, "%s %s", pu, pg.missing(pageRole))
 			}
 			kp, ok := pg.acct.(*protocol.KeyPage)
 			if !ok {

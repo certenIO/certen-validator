@@ -30,12 +30,15 @@ const (
 	xDelPage   = "acc://deleg.acme/book/1"
 	xERP       = "acc://erp.acme/book/1"
 	xERPDeleg  = "acc://erpdel.acme/book/1"
+	xERPBook   = "acc://erp.acme/book" // the key book the certificate declares: the certified page's book
 )
 
+// Blocks are above each partition's executor-version activation block (the pinned table of pkg/proof/v2/xexecutor_table.go: BVN1 12491272,
+// BVN2 12492057, BVN3 12491127), so the executor version governing them is proven; the fixture's earlier blocks (100, 250, 310) were not.
 const (
-	blkX  = 100 // the transaction's anchor block on BVN1
-	blkY2 = 250
-	blkY3 = 310
+	blkX  = 12_600_000 // the transaction's anchor block on BVN1
+	blkY2 = 12_600_250
+	blkY3 = 12_600_310
 )
 
 type x21 struct {
@@ -56,6 +59,15 @@ func (f *x21) add(a protocol.Account, partition string, block uint64, roles ...p
 	f.prov[k] = proofv2.ProvenPage{URL: a.GetUrl().String(), Partition: partition, Block: block, Roles: roles}
 }
 
+// declare sets the roles the page records but the verifier cannot prove (ProvenPage.Declared); none clears them.
+func (f *x21) declare(u string, roles ...proofv2.PageRole) *x21 {
+	k := canon(u)
+	p := f.prov[k]
+	p.Declared = roles
+	f.prov[k] = p
+	return f
+}
+
 func (f *x21) clone() *x21 {
 	c := &x21{accts: map[string]protocol.Account{}, prov: map[string]proofv2.ProvenPage{}, facts: f.facts}
 	c.order = append(c.order, f.order...)
@@ -65,6 +77,7 @@ func (f *x21) clone() *x21 {
 	for k, v := range f.prov {
 		p := v
 		p.Roles = append([]proofv2.PageRole(nil), v.Roles...)
+		p.Declared = append([]proofv2.PageRole(nil), v.Declared...)
 		c.prov[k] = p
 	}
 	c.facts.Votes = append([]VoteRef(nil), f.facts.Votes...)
@@ -146,11 +159,14 @@ func newX21() *x21 {
 	f.add(page(xHdrPage), partBVN2, blkY2, proofv2.RoleHeaderAuthority)
 	f.add(book(xDelBook, 1), partBVN3, blkY3, proofv2.RoleDelegateBook)
 	f.add(page(xDelPage), partBVN3, blkY3, proofv2.RoleDelegatePage, proofv2.RoleVoter)
-	f.add(page(xERP), partBVN3, blkY3, proofv2.RoleInitiatorSigner, proofv2.RoleCertifiedKeyPage)
+	// The verifier proves initiator-signer from the carried transaction and can only declare certified-key-page (xverify.go).
+	f.add(page(xERP), partBVN3, blkY3, proofv2.RoleInitiatorSigner)
+	f.declare(xERP, proofv2.RoleCertifiedKeyPage)
 	f.add(page(xERPDeleg), partBVN3, blkY3, proofv2.RoleInitiatorSigner)
 	f.facts = GoverningFacts{
 		Principal:         canon(xPrincipal),
 		Type:              protocol.TransactionTypeSendTokens,
+		TxHash:            h32(3),
 		Authorities:       []govvote.AccountAuthority{{URL: canon(xBook)}},
 		HeaderAuthorities: []string{canon(xHdrBook)},
 		Initiators:        []string{canon(xERP)},
@@ -204,14 +220,36 @@ func (f *x21) evidence(rep *proofv2.Report) *proofv2.Evidence {
 		if err != nil {
 			panic(fmt.Sprintf("marshal %s: %v", a.GetUrl(), err))
 		}
+		// The recorded roles are the proven ones and the declared ones (what the verifier checked the recorded set against).
+		recorded, err := proofv2.CanonicalRoles(append(append([]proofv2.PageRole(nil), rep.Proven[i].Roles...), rep.Proven[i].Declared...))
+		if err != nil {
+			panic(err)
+		}
 		ev.Pages = append(ev.Pages, proofv2.PageState{URL: a.GetUrl().String(), State: hex.EncodeToString(st),
-			Partition: rep.Proven[i].Partition, Roles: rep.Proven[i].Roles})
+			Partition: rep.Proven[i].Partition, Roles: recorded})
 	}
-	ev.Votes = []proofv2.Vote{{
+	ev.Votes = []proofv2.Vote{x21Vote()}
+	return ev
+}
+
+// x21Vote is a vote with every member of the final shape populated: a sequenced transport, a hop and a counted signature each with an
+// arrival (a before and an at index entry), and a production with its own arrival - so the votes root commits all of it.
+func x21Vote() proofv2.Vote {
+	idx := func(pos uint64, b byte) proofv2.IndexProof {
+		return proofv2.IndexProof{Position: pos, Entry: hx32(b), Receipt: "0f" + fmt.Sprintf("%02x", b)}
+	}
+	before, at := idx(4, 20), idx(5, 21)
+	before2, at2 := idx(8, 22), idx(9, 23)
+	prodAt := idx(2, 24)
+	return proofv2.Vote{
 		Authority: xBook, Origin: xBook2, Vote: "accept", Cause: "acc://" + hx32(9) + "@bank.acme/book/2",
 		Transport: proofv2.VoteTransport{Kind: proofv2.TransportSequenced, Source: partBVN2, Destination: partBVN1, Number: 7},
 		Message:   hx32(10), Receipt: "0a0b",
-		Hops: []proofv2.VoteHop{{Page: xBook2, Message: hx32(11), Signature: "0c", Block: blkY2 - 6, Receipt: "0d"}},
-	}}
-	return ev
+		Hops: []proofv2.VoteHop{{Page: xBook2, Message: hx32(11), Signature: "0c", Block: blkY2 - 6, Receipt: "0d",
+			Arrival: &proofv2.Arrival{Before: &before, At: at}}},
+		Counted: []proofv2.VoteHop{{Page: xBook1, Message: hx32(12), Signature: "0e", Block: blkY2 - 7, Receipt: "0f",
+			Arrival: &proofv2.Arrival{Before: &before2, At: at2}}},
+		Produced: &proofv2.Production{Account: xPrincipal, Chain: "signature", Message: hx32(10), Receipt: "1011",
+			Arrival: proofv2.Arrival{At: prodAt}},
+	}
 }

@@ -280,3 +280,31 @@ sentence in section 5 and in the C1b-1 report saying that the executor re-asks `
 **Not done in C1b-2 (explicit).** TypeScript consumption of xpartition3 and xpartition3b (Go writes, TS consumes byte-identical copies with the manifest hash; the TS verifier must learn the
 roles `synthetic-chain` and `system-ledger`); a live D2c capture (needs a recent transaction whose principal is on the Directory); xworld vectors for the held-vote rule, an over-budget
 document and a ledger proven through another partition's anchor; BindProofV2 / govRoot v4 / rules v15 (RB9-C2 and the integration step).
+
+**D6, the executor version is a pinned trust input of the binding (RB9 Phase I, resolves RB9-C1b-2-B2; added, nothing above is changed).** Live Kermit serves no historical receipt for
+`<partition>/ledger`, so a real 2.1 document carries no ledger page and the version cannot be proven from the document. `BindProofV21` therefore does NOT require the ledger page. It
+derives `g1_executor_version_unsupported{partition,block}` from a table pinned in `pkg/proof/v2/xexecutor_table.go` (`ExecutorFloorAt`, `KermitExecutorActivations`): for the
+transaction's `(partition, block)` and for every `(partition, block)` a proven page is judged at, the table must prove an executor version from Baikonur on. What the table pins: each of the
+Directory and BVN1-3 activated `v2-kourou` (9, above Baikonur 6) at one block - `directory` 9,538,105, `bvn1` 12,491,272, `bvn2` 12,492,057, `bvn3` 12,491,127 (research R8 M5, read from
+Kermit's own system ledgers 2026-10-17) - so the version is proven for blocks AFTER the activation block only; at or before it, or on a partition the table does not name, it is NOT established
+and the binding refuses by name (never assumed). The table is the same one RB8's signature-type gate pins (`govsig/gate.go`, branch `pv2/rb8-b-every-key-signature-type`, 71fd45a), copied value
+for value because govsig is not in the RB9 stack's base; `TestExecutorTableIsPinned` pins the values, and when the RB8 branch merges one follow-up makes govsig the single source. It is a
+TRUST INPUT in the sense of PROOF_V2 s1: a later activation on any partition needs a new row here (and a library bump), exactly as `protocol.ExecutorVersionLatest` does; a block the table
+does not cover is refused, so a stale table fails closed. A ledger page, when a document does carry one, is evidence that must AGREE: its `ExecutorVersion` must be at least the table's
+floor for its `(partition, block)`, otherwise the binding refuses with `g1_executor_version_unsupported` ("the ledger page disagrees with the pinned table"); the verifier's own pre-Baikonur
+refusal for a ledger page is unchanged.
+
+**The binding justifies the Declared roles (RB9 Phase I).** `certified-key-page` is the one role the verifier can only declare. `BindProofV21(rep, g0, g1, keyPageURL, keyBookURL, facts)`
+requires the certified key page (G1's page) to be a proven page, recorded as `certified-key-page` (in `Declared`, or in `Roles`), a page of the book the certificate DECLARES (`keyBookURL`;
+the page's URL parent, a lite identity being its own book), and a page of the governing set (it proves at least one other role - the harbor-mfg page is an unrelated identity's initiator and
+proves only that, so the declared book is not itself required among the proven pages). `header-authority` and `initiator-signer` are satisfied by PROVEN roles only: a page that records
+them only as `Declared` (the transaction or the initiating signature was not carried) is refused as "declared, not proven". The governing facts' transaction (`GoverningFacts.TxHash`) must be
+the transaction the report proved (`g1_transaction_mismatch`), and a report with any `Unproven` entry is refused by that entry (it is not a verified S3). govRoot v4 commits the page's
+recorded roles (proven and declared).
+
+**govRoot v4 vote encoding (RB9-C2-F3, resolved).** The votes root no longer commits `json.Marshal(proofv2.Vote)`. Each leaf is `sha256("certen:g1:v4:vote:" ‖ EncodeVoteV4(vote))`, an explicit
+layout over the final `Vote`/`VoteHop`/`Arrival`/`IndexProof`/`Production` shape, in a fixed field order: strings and bytes length-prefixed (4-byte big-endian), integers 8 bytes big-endian,
+hex members as the bytes they encode, URLs lower-cased without a trailing slash, an absent optional member its flag 0 (never omitted); the layout is in the comment of `EncodeVoteV4`
+(`pkg/intentcert/govroot_v4.go`), recomputed byte by byte in `TestVotesRootV4_IndependentRecomputation`, and `TestVoteEncodingV4CoversEveryField` fails when a member is added to any of the
+structs until the encoding is extended under a new tag. The v4 golden was unreleased and was regenerated once for this encoding (and for the executor-valid blocks of its fixture); the v3
+goldens are untouched.

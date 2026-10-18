@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -163,7 +162,9 @@ func PagesRootV4(rep *proofv2.Report, ev *proofv2.Evidence) ([32]byte, error) {
 		if pp.Block == 0 {
 			return zero, fmt.Errorf("govRoot v4: %s: %s: the page is proven with no block", u, proofv2.StatePageBlockMismatch)
 		}
-		roles, err := proofv2.CanonicalRoles(pp.Roles)
+		// The roles recorded for the page: those the verifier proved and those it could only declare (certified-key-page, which BindProofV21
+		// justifies against the certificate; a declared role of any other class is refused by the binding before a root is computed).
+		roles, err := proofv2.CanonicalRoles(append(append([]proofv2.PageRole(nil), pp.Roles...), pp.Declared...))
 		if err != nil {
 			return zero, fmt.Errorf("govRoot v4: %s: %w", u, err)
 		}
@@ -237,10 +238,17 @@ func rolesEqual(a, b []proofv2.PageRole) bool {
 	return true
 }
 
+// VoteRecordTagV4 is the domain every committed vote record starts with. The encoding below is versioned by it: a different field order
+// or set is a different tag (and a new golden), never an edit of this layout.
+const VoteRecordTagV4 = "certen:g1:v4:vote:"
+
 // VotesRootV4 commits the authority votes copied from the principal's proven signature chain (design D3): the merkle hash
-// (merkle.Hasher) of the sha256 of each vote's encoding/json form (the struct's field order is fixed, so the bytes are), the
-// votes sorted by (authority, origin, message) in canonical spelling. An intent with no recorded vote was authorized by
-// nothing, and is refused by name; so is one vote recorded twice.
+// (merkle.Hasher) of the leaves sha256(VoteRecordTagV4 ‖ EncodeVoteV4(vote)), the votes sorted by (authority, origin, message, leaf) in
+// canonical spelling. An intent with no recorded vote was authorized by nothing, and is refused by name; so is one vote recorded twice.
+//
+// The leaf commits an explicit field encoding, not a serialisation of the Go struct (RB9-C2-F3): a later change to the JSON form of
+// proofv2.Vote, VoteHop or their members can no longer move a root, and a member added to one of them cannot be dropped from the commitment
+// unnoticed (TestVoteEncodingV4CoversEveryField fails until the encoding is extended under a new tag).
 func VotesRootV4(votes []proofv2.Vote) ([32]byte, error) {
 	var zero [32]byte
 	if len(votes) == 0 {
@@ -251,12 +259,14 @@ func VotesRootV4(votes []proofv2.Vote) ([32]byte, error) {
 		h                          [32]byte
 	}
 	leaves := make([]leaf, len(votes))
-	for i, v := range votes {
-		b, err := json.Marshal(v)
+	for i := range votes {
+		v := &votes[i]
+		enc, err := EncodeVoteV4(v)
 		if err != nil {
 			return zero, fmt.Errorf("govRoot v4: vote %d: %w", i, err)
 		}
-		leaves[i] = leaf{govvote.CanonicalAccSpelling(v.Authority), govvote.CanonicalAccSpelling(v.Origin), strings.ToLower(v.Message), sha256.Sum256(b)}
+		leaves[i] = leaf{govvote.CanonicalAccSpelling(v.Authority), govvote.CanonicalAccSpelling(v.Origin), strings.ToLower(v.Message),
+			sha256.Sum256(append([]byte(VoteRecordTagV4), enc...))}
 	}
 	sort.SliceStable(leaves, func(i, j int) bool {
 		a, b := leaves[i], leaves[j]
@@ -266,7 +276,10 @@ func VotesRootV4(votes []proofv2.Vote) ([32]byte, error) {
 		if a.origin != b.origin {
 			return a.origin < b.origin
 		}
-		return a.message < b.message
+		if a.message != b.message {
+			return a.message < b.message
+		}
+		return string(a.h[:]) < string(b.h[:])
 	})
 	for i := 1; i < len(leaves); i++ {
 		if leaves[i].h == leaves[i-1].h {
@@ -280,4 +293,113 @@ func VotesRootV4(votes []proofv2.Vote) ([32]byte, error) {
 	var out [32]byte
 	copy(out[:], h.MerkleHash())
 	return out, nil
+}
+
+// voteWriter writes the fields of a vote record in the layout of EncodeVoteV4.
+type voteWriter struct {
+	b   []byte
+	err error
+}
+
+func (w *voteWriter) u64(v uint64) { w.b = binary.BigEndian.AppendUint64(w.b, v) }
+func (w *voteWriter) u32(v int)    { w.b = binary.BigEndian.AppendUint32(w.b, uint32(v)) }
+func (w *voteWriter) flag(v bool) {
+	if v {
+		w.b = append(w.b, 1)
+		return
+	}
+	w.b = append(w.b, 0)
+}
+
+// str writes a length-prefixed string exactly as recorded.
+func (w *voteWriter) str(s string) {
+	w.u32(len(s))
+	w.b = append(w.b, s...)
+}
+
+// url writes a length-prefixed URL in canonical spelling (lower case, no trailing slash).
+func (w *voteWriter) url(s string) { w.str(govvote.CanonicalAccSpelling(s)) }
+
+// hex writes the bytes a hex member encodes, length-prefixed; an empty member is the zero-length field, a member that is not hex is an
+// error (the record is not committed, never committed as something else).
+func (w *voteWriter) hex(name, s string) {
+	raw, err := hex.DecodeString(s)
+	if err != nil && w.err == nil {
+		w.err = fmt.Errorf("%s is not hex: %w", name, err)
+	}
+	w.u32(len(raw))
+	w.b = append(w.b, raw...)
+}
+
+func (w *voteWriter) indexProof(name string, p *proofv2.IndexProof) {
+	w.u64(p.Position)
+	w.hex(name+".entry", p.Entry)
+	w.hex(name+".receipt", p.Receipt)
+}
+
+func (w *voteWriter) arrival(name string, a *proofv2.Arrival) {
+	w.flag(a.Before != nil)
+	if a.Before != nil {
+		w.indexProof(name+".before", a.Before)
+	}
+	w.indexProof(name+".at", &a.At)
+}
+
+func (w *voteWriter) hops(name string, hops []proofv2.VoteHop) {
+	w.u32(len(hops))
+	for i := range hops {
+		h := &hops[i]
+		n := fmt.Sprintf("%s[%d]", name, i)
+		w.url(h.Page)
+		w.hex(n+".message", h.Message)
+		w.hex(n+".signature", h.Signature)
+		w.u64(h.Block)
+		w.hex(n+".receipt", h.Receipt)
+		w.flag(h.Arrival != nil)
+		if h.Arrival != nil {
+			w.arrival(n+".arrival", h.Arrival)
+		}
+	}
+}
+
+// EncodeVoteV4 is the canonical encoding of one vote record that govRoot v4 commits (under VoteRecordTagV4). Fixed order, every field:
+//
+//	url(authority) ‖ url(origin) ‖ str(vote) ‖ url(cause)
+//	‖ str(transport.kind) ‖ url(transport.source) ‖ url(transport.destination) ‖ u64(transport.number)
+//	‖ hex(message) ‖ hex(receipt)
+//	‖ u32(len hops)    ‖ hop*       ‖ u32(len counted) ‖ hop*
+//	‖ flag(produced)   ‖ [url(account) ‖ str(chain) ‖ hex(message) ‖ hex(receipt) ‖ arrival]
+//
+//	hop     = url(page) ‖ hex(message) ‖ hex(signature) ‖ u64(block) ‖ hex(receipt) ‖ flag(arrival) ‖ [arrival]
+//	arrival = flag(before) ‖ [indexproof] ‖ indexproof        indexproof = u64(position) ‖ hex(entry) ‖ hex(receipt)
+//
+// u64 is 8 bytes big-endian, u32 and the flag (1 byte, 0 or 1) as named; str and hex are a u32 big-endian length and the bytes (hex members
+// are committed as the bytes they encode, so the spelling of the hex does not matter); url is str of the lower-case spelling without a
+// trailing slash. An absent optional member is its flag 0 or the zero-length field - never omitted.
+func EncodeVoteV4(v *proofv2.Vote) ([]byte, error) {
+	w := &voteWriter{}
+	w.url(v.Authority)
+	w.url(v.Origin)
+	w.str(v.Vote)
+	w.url(v.Cause)
+	w.str(v.Transport.Kind)
+	w.url(v.Transport.Source)
+	w.url(v.Transport.Destination)
+	w.u64(v.Transport.Number)
+	w.hex("message", v.Message)
+	w.hex("receipt", v.Receipt)
+	w.hops("hops", v.Hops)
+	w.hops("counted", v.Counted)
+	w.flag(v.Produced != nil)
+	if p := v.Produced; p != nil {
+		w.url(p.Account)
+		w.str(p.Chain)
+		w.hex("produced.message", p.Message)
+		w.hex("produced.receipt", p.Receipt)
+		w.arrival("produced.arrival", &p.Arrival)
+	}
+	if w.err != nil {
+		return nil, w.err
+	}
+	return w.b, nil
 }
