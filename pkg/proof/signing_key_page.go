@@ -86,7 +86,11 @@ type signingKeySig struct {
 // signingDelegators is a `delegator` field: one URL, or a list of them.
 type signingDelegators []string
 
+// UnmarshalJSON reads the two shapes the network writes, a URL and a list of URLs. Any other shape is NO delegator - never
+// an error: this field is one of many in a response this layer reads narrowly, and a shape it does not know must not fail the
+// decode of the whole response (RB8-G). A delegator that is not understood names no page, so it can never make one the signer.
 func (d *signingDelegators) UnmarshalJSON(b []byte) error {
+	*d = nil
 	var one string
 	if err := json.Unmarshal(b, &one); err == nil {
 		if one != "" {
@@ -96,7 +100,7 @@ func (d *signingDelegators) UnmarshalJSON(b []byte) error {
 	}
 	var many []string
 	if err := json.Unmarshal(b, &many); err != nil {
-		return fmt.Errorf("delegator is neither a URL nor a list of URLs: %s", string(b))
+		return nil // an unknown shape: no delegator
 	}
 	*d = many
 	return nil
@@ -153,6 +157,29 @@ type signingKeyPageSet struct {
 			} `json:"message"`
 		} `json:"records"`
 	} `json:"signatures"`
+}
+
+// holdsAuthorityRecord reports whether this page's OWN signature set holds the chain-created evidence that the page counted
+// a delegated vote: a record of type `authority`, over txHash (every transaction when txHash is empty), whose delegator list
+// contains the page. The network files such a record under the delegating page when - and only when - a delegate's vote was
+// cast through it (testdata/kermit_delegated_ecdsa_signing_sets.json); a delegated vote that merely names a page as its
+// delegator does not make that page the signer (RB8-G).
+func (s signingKeyPageSet) holdsAuthorityRecord(page, txHash string) bool {
+	for _, rec := range s.Signatures.Records {
+		if txHash != "" && hashOfTxID(rec.Message.TxID) != txHash {
+			continue
+		}
+		sig := rec.Message.Signature
+		if !strings.EqualFold(strings.TrimSpace(sig.Type), "authority") {
+			continue
+		}
+		for _, d := range sig.Delegator {
+			if normalizeAccountURL(d) == page {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // ChainKeyPageResolver resolves the signing key page against an Accumulate v3
@@ -319,6 +346,13 @@ func selectSigningKeyPage(
 			seen[page] = true
 			candidates = append(candidates, candidate{url: page, named: strings.TrimSuffix(strings.TrimSpace(set.Account.URL), "/"), index: idx})
 		} else if from, ok := delegating[page]; ok {
+			// A delegated vote that names this page is not enough: the page's own signature set must hold the authority
+			// record the network created when the page counted it (RB8-G).
+			if !set.holdsAuthorityRecord(page, txHash) {
+				notes = append(notes, fmt.Sprintf("%s is named as the delegator of a delegated vote cast from %s, but its own "+
+					"signature set holds no authority record over this transaction naming it; not counted", page, from))
+				continue
+			}
 			// Only when no page of the book filed a vote of its own (below): a delegating page never displaces a page that
 			// resolved before this was read.
 			viaDelegation = append(viaDelegation, candidate{url: page, named: strings.TrimSuffix(strings.TrimSpace(set.Account.URL), "/"), index: idx})

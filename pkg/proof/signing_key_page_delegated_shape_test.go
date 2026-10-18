@@ -5,6 +5,12 @@ import (
 	"testing"
 )
 
+// authorityRecord is the record the network files under a delegating page's own signature set when that page counted a
+// delegated vote over the transaction (RB8-G: the evidence a delegating page is the signer; see the live fixture).
+func authorityRecord(page string) string {
+	return `{"message":{"type":"signature","txID":"acc://` + delegTx + `@pv2-sig-1.acme/data","signature":{"type":"authority","txID":"acc://` + delegTx + `@pv2-sig-1.acme/data","delegator":["` + page + `"]}}}`
+}
+
 // A delegation names a page only through its `delegator`: a delegated signature whose delegator is some other page does
 // not make the delegating book's page a signer.
 func TestSigningKeyPage_OnlyTheNamedDelegatorIsCounted(t *testing.T) {
@@ -21,7 +27,7 @@ func TestSigningKeyPage_OnlyTheNamedDelegatorIsCounted(t *testing.T) {
 		t.Fatal("the delegating book was named although the delegation names another page")
 	}
 	var elsewhere signingKeyPageSet
-	if err := json.Unmarshal([]byte(`{"account":{"type":"keyPage","url":"acc://pv2-sig-1.acme/book-elsewhere/1","version":1,"keys":[]},"signatures":{"records":[]}}`), &elsewhere); err != nil {
+	if err := json.Unmarshal([]byte(`{"account":{"type":"keyPage","url":"acc://pv2-sig-1.acme/book-elsewhere/1","version":1,"keys":[]},"signatures":{"records":[`+authorityRecord("acc://pv2-sig-1.acme/book-elsewhere/1")+`]}}`), &elsewhere); err != nil {
 		t.Fatal(err)
 	}
 	sets = append(sets, elsewhere)
@@ -35,8 +41,8 @@ func TestSigningKeyPage_OnlyTheNamedDelegatorIsCounted(t *testing.T) {
 func TestSigningKeyPage_ATwoHopDelegationNamesEachDelegatingPage(t *testing.T) {
 	const inner = `{"type":"delegated","signature":{"type":"ecdsaSha256","publicKey":"3059","signature":"30","signer":"acc://pv2-sig-1.acme/book-c/1","signerVersion":1},"delegator":"acc://pv2-sig-1.acme/book-b/1"}`
 	body := `{"result":{"signatures":{"records":[
-	  {"account":{"type":"keyPage","url":"acc://pv2-sig-1.acme/book-a/1","version":1,"keys":[]},"signatures":{"records":[]}},
-	  {"account":{"type":"keyPage","url":"acc://pv2-sig-1.acme/book-b/1","version":1,"keys":[]},"signatures":{"records":[]}},
+	  {"account":{"type":"keyPage","url":"acc://pv2-sig-1.acme/book-a/1","version":1,"keys":[]},"signatures":{"records":[` + authorityRecord("acc://pv2-sig-1.acme/book-a/1") + `]}},
+	  {"account":{"type":"keyPage","url":"acc://pv2-sig-1.acme/book-b/1","version":1,"keys":[]},"signatures":{"records":[` + authorityRecord("acc://pv2-sig-1.acme/book-b/1") + `]}},
 	  {"account":{"type":"keyPage","url":"acc://pv2-sig-1.acme/book-c/1","version":1,"keys":[]},"signatures":{"records":[{"message":{"type":"signature",
 	    "txID":"acc://` + delegTx + `@pv2-sig-1.acme/data","signature":{"type":"delegated","signature":` + inner + `,"delegator":"acc://pv2-sig-1.acme/book-a/1"}}}]}}
 	]}}}`
