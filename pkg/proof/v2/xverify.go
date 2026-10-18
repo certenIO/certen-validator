@@ -21,6 +21,8 @@ import (
 	"bytes"
 	"encoding/hex"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/govvote"
@@ -147,9 +149,12 @@ func verify21(ev *Evidence, rep *Report, in xIn) error {
 	}
 
 	// 1. Anchors: the transaction's own, and one per other partition, each proven into the certified root; the partition of each
-	// is derived from the message.
+	// is derived from the message. The entries are judged in ascending byte order of their keys (as the document spells them), so that
+	// when more than one is defective the refusal names the first of them in that order - a function of the document, not of the
+	// order a map happens to be walked in (RB9-L; the keys' order is the order of the UTF-8 bytes, not of UTF-16 code units).
 	anchors := map[string]*xAnchor{strings.ToLower(in.x.source): &in.x}
-	for k, a := range ev.Anchors {
+	for _, k := range slices.Sorted(maps.Keys(ev.Anchors)) {
+		a := ev.Anchors[k]
 		if strings.EqualFold(k, in.x.source) {
 			if a != ev.Anchor {
 				return refusal21(StateForeignPartitionMismatch, in.x.id, in.x.block, "url anchors[%s]: the entry for the transaction's partition differs from its anchor", k)
@@ -547,6 +552,9 @@ func deriveRoles(ev *Evidence, byURL map[string]*provenAcct, anchors map[string]
 			sig, err := protocol.UnmarshalSignature(raw)
 			if err != nil {
 				return nil, fmt.Errorf("vote of %s: key signature: %w", v.Authority, err)
+			}
+			if isNil(sig) { // the union decoder's answer for bytes that hold no type
+				return nil, fmt.Errorf("vote of %s: key signature: it holds no signature", v.Authority)
 			}
 			path := delegatorPages(sig)
 			if len(path) > protocol.DelegationDepthLimit {

@@ -15,6 +15,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"maps"
+	"slices"
 
 	"github.com/certen/independant-validator/pkg/proof"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/api/v3"
@@ -271,8 +273,8 @@ func ExportDocument(ev *Evidence, in proof.IncarnationInputs, pin [32]byte) (*Po
 	e.Transaction = ev.Transaction
 	if len(ev.Anchors) > 0 {
 		e.Anchors = make(map[string]PortableAnchor, len(ev.Anchors))
-		for k, a := range ev.Anchors {
-			pa, err := exportAnchor(a)
+		for _, k := range slices.Sorted(maps.Keys(ev.Anchors)) {
+			pa, err := exportAnchor(ev.Anchors[k])
 			if err != nil {
 				return nil, fmt.Errorf("anchor %s: %w", k, err)
 			}
@@ -475,7 +477,31 @@ func importAnchor(a PortableAnchor) (PartitionAnchor, error) {
 
 // Import reads the portable form back into the evidence, archive and incarnation inputs Verify takes. Every binary
 // value is re-encoded from its JSON, as another language's verifier must do.
-func Import(p *Portable) (*Evidence, *Archive, proof.IncarnationInputs, [32]byte, error) {
+//
+// The JSON of Accumulate's own types (a signature, a validator, an anchor, a minor-root run) is decoded by Accumulate's generated codec,
+// which dereferences a member it needs when the document gives JSON null or none, and so panics on a crafted document (RB9-L). A document
+// that makes it fault is refused here by one sentence naming the value it was decoding, as any other value the codec cannot decode is:
+//
+//	<value>: a value Accumulate's codec cannot decode (a member it needs is null or absent)
+//
+// where <value> is "genesis network", "genesis globals", "major N", "evidence receipt", "certify run N", "anchor message", "page URL",
+// "anchor KEY", "vote of AUTHORITY", "set check hop N", "set check network", "set check globals" or "set check routing" (the value being read
+// when the codec faulted, in the order Import reads them), or "the portable document" for a fault outside them.
+func Import(p *Portable) (ev *Evidence, ar *Archive, in proof.IncarnationInputs, pin [32]byte, err error) {
+	if p == nil {
+		return nil, nil, in, pin, fmt.Errorf("no portable document")
+	}
+	section := "the portable document"
+	defer func() {
+		if recover() != nil {
+			ev, ar, in, pin = nil, nil, proof.IncarnationInputs{}, [32]byte{}
+			err = fmt.Errorf("%s: a value Accumulate's codec cannot decode (a member it needs is null or absent)", section)
+		}
+	}()
+	return importPortable(p, &section)
+}
+
+func importPortable(p *Portable, section *string) (*Evidence, *Archive, proof.IncarnationInputs, [32]byte, error) {
 	var in proof.IncarnationInputs
 	var pin [32]byte
 	fail := func(err error) (*Evidence, *Archive, proof.IncarnationInputs, [32]byte, error) {
@@ -501,15 +527,18 @@ func Import(p *Portable) (*Evidence, *Archive, proof.IncarnationInputs, [32]byte
 	if in.GlobalsRecord, err = hex.DecodeString(p.Genesis.GlobalsRecord); err != nil {
 		return fail(err)
 	}
+	*section = "genesis network"
 	if err := sameEncoding(p.Genesis.Network, new(protocol.NetworkDefinition), in.NetworkRecord); err != nil {
 		return fail(fmt.Errorf("genesis network: %w", err))
 	}
+	*section = "genesis globals"
 	if err := sameEncoding(p.Genesis.Globals, new(protocol.NetworkGlobals), in.GlobalsRecord); err != nil {
 		return fail(fmt.Errorf("genesis globals: %w", err))
 	}
 
 	ar := &Archive{}
 	for i, j := range p.Majors {
+		*section = fmt.Sprintf("major %d", i+1)
 		m := new(api.MajorHeaderRecord)
 		if err := json.Unmarshal(j, m); err != nil {
 			return fail(fmt.Errorf("major %d: %w", i+1, err))
@@ -519,16 +548,19 @@ func Import(p *Portable) (*Evidence, *Archive, proof.IncarnationInputs, [32]byte
 
 	e := &p.Evidence
 	ev := &Evidence{Version: e.Version, Account: e.Account, TxHash: e.TxHash, Majors: e.Majors}
+	*section = "evidence receipt"
 	if ev.Receipt, err = receiptHex(e.Receipt); err != nil {
 		return fail(err)
 	}
-	for _, j := range e.Certify {
+	for i, j := range e.Certify {
+		*section = fmt.Sprintf("certify run %d", i)
 		h, err := minorRootHex(j)
 		if err != nil {
 			return fail(err)
 		}
 		ev.Certify = append(ev.Certify, h)
 	}
+	*section = "anchor message"
 	seq := new(messaging.SequencedMessage)
 	if err := json.Unmarshal(e.Anchor.Message, seq); err != nil {
 		return fail(fmt.Errorf("anchor message: %w", err))
@@ -542,9 +574,14 @@ func Import(p *Portable) (*Evidence, *Archive, proof.IncarnationInputs, [32]byte
 		return fail(err)
 	}
 	for _, pg := range e.Pages {
+		*section = "page " + pg.URL
 		acct, err := protocol.UnmarshalAccountJSON(pg.Account)
 		if err != nil {
 			return fail(fmt.Errorf("page %s: %w", pg.URL, err))
+		}
+		// JSON null (or no member) decodes to no account at all (Accumulate's union decoders return neither an account nor an error).
+		if isNil(acct) {
+			return fail(fmt.Errorf("page %s is %T, not an account", pg.URL, acct))
 		}
 		st, err := acct.MarshalBinary()
 		if err != nil {
@@ -560,8 +597,10 @@ func Import(p *Portable) (*Evidence, *Archive, proof.IncarnationInputs, [32]byte
 	ev.Transaction = e.Transaction
 	if len(e.Anchors) > 0 {
 		ev.Anchors = make(map[string]PartitionAnchor, len(e.Anchors))
-		for k, a := range e.Anchors {
-			pa, err := importAnchor(a)
+		// In ascending byte order of the keys: when more than one anchor does not import, the refusal names the first (RB9-L).
+		for _, k := range slices.Sorted(maps.Keys(e.Anchors)) {
+			*section = "anchor " + k
+			pa, err := importAnchor(e.Anchors[k])
 			if err != nil {
 				return fail(fmt.Errorf("anchor %s: %w", k, err))
 			}
@@ -569,6 +608,7 @@ func Import(p *Portable) (*Evidence, *Archive, proof.IncarnationInputs, [32]byte
 		}
 	}
 	for _, v := range e.Votes {
+		*section = "vote of " + v.Authority
 		r, err := receiptHex(v.Receipt)
 		if err != nil {
 			return fail(fmt.Errorf("vote of %s: %w", v.Authority, err))
@@ -608,20 +648,24 @@ func Import(p *Portable) (*Evidence, *Archive, proof.IncarnationInputs, [32]byte
 	}
 
 	ev.Check.Majors, ev.Check.Set.Incarnation = e.Check.Majors, e.Check.Incarnation
-	for _, j := range e.Check.Hops {
+	for i, j := range e.Check.Hops {
+		*section = fmt.Sprintf("set check hop %d", i)
 		h, err := minorRootHex(j)
 		if err != nil {
 			return fail(err)
 		}
 		ev.Check.Hops = append(ev.Check.Hops, h)
 	}
+	*section = "set check network"
 	if err := importAccount(&e.Check.Network, &ev.Check.Set.Network, new(protocol.NetworkDefinition)); err != nil {
 		return fail(fmt.Errorf("set check network: %w", err))
 	}
+	*section = "set check globals"
 	if err := importAccount(&e.Check.Globals, &ev.Check.Set.Globals, new(protocol.NetworkGlobals)); err != nil {
 		return fail(fmt.Errorf("set check globals: %w", err))
 	}
 	if e.Check.Routing != nil {
+		*section = "set check routing"
 		ev.Check.Routing = new(proof.AccountStateProof)
 		if err := importAccount(e.Check.Routing, ev.Check.Routing, new(protocol.RoutingTable)); err != nil {
 			return fail(fmt.Errorf("set check routing: %w", err))
@@ -692,6 +736,11 @@ func importAccount(pa *PortableAccount, a *proof.AccountStateProof, record binar
 	acct, err := protocol.UnmarshalAccountJSON(pa.Account)
 	if err != nil {
 		return err
+	}
+	// JSON null (or an absent member) decodes to no account at all, which is not a one-entry data account: the same refusal as any other
+	// account of the wrong kind (RB9-L; it used to be dereferenced).
+	if isNil(acct) {
+		return fmt.Errorf("%s is %T, not a one-entry data account", pa.AccountURL, acct)
 	}
 	st, err := acct.MarshalBinary()
 	if err != nil {

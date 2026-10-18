@@ -293,6 +293,9 @@ func (e *IncarnationEvidence) Verify() (*IncarnationReport, error) {
 	if err != nil {
 		return nil, fmt.Errorf("ledger/1: does not decode as an account: %w", err)
 	}
+	if acct == nil { // the union decoder's answer for bytes that hold no type
+		return nil, fmt.Errorf("ledger/1: does not decode as an account: it holds no account")
+	}
 	bl, ok := acct.(*protocol.BlockLedger)
 	if !ok {
 		return nil, fmt.Errorf("ledger/1: expected a blockLedger, got %v", acct.Type())

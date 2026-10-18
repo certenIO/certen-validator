@@ -19,6 +19,8 @@
 package proofv2
 
 import (
+	"maps"
+	"slices"
 	"strings"
 
 	"gitlab.com/accumulatenetwork/accumulate/protocol"
@@ -36,7 +38,10 @@ func ledgerOf(acct protocol.Account, xa *xAnchor) (*protocol.SystemLedger, bool)
 // checkExecutorVersion refuses a document that proves a partition's executor version to be before Baikonur (g1_executor_version_unsupported
 // {partition, block}). A system ledger proven through another partition's anchor than its own is a role mismatch.
 func checkExecutorVersion(byURL map[string]*provenAcct) error {
-	for _, pa := range byURL {
+	// In ascending order of the pages' lower-case URLs: when more than one ledger is refusable the refusal names the first of them in that
+	// order, a function of the document and not of the order a map is walked in (RB9-L).
+	for _, k := range slices.Sorted(maps.Keys(byURL)) {
+		pa := byURL[k]
 		l, isLedger := pa.acct.(*protocol.SystemLedger)
 		if !isLedger {
 			continue

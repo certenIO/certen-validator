@@ -146,6 +146,13 @@ func decodeTxn(h string) (*protocol.Transaction, error) {
 	if txn.Body == nil || txn.Header.Principal == nil {
 		return nil, fmt.Errorf("a transaction has no body or principal")
 	}
+	// An authority the header or the body names with no URL cannot have been executed (the executor refuses it) and cannot be required or
+	// looked up: a decoded transaction that carries one is refused here, so no consumer of a decoded transaction reads a nil URL (RB9-L).
+	for _, a := range append(append([]*url.URL(nil), txn.Header.Authorities...), txn.GetAdditionalAuthorities()...) {
+		if a == nil {
+			return nil, fmt.Errorf("a transaction names an authority with no URL")
+		}
+	}
 	return txn, nil
 }
 
@@ -157,6 +164,11 @@ func decodeSig(h string) (protocol.Signature, error) {
 	sig, err := protocol.UnmarshalSignature(raw)
 	if err != nil {
 		return nil, fmt.Errorf("a signature does not decode: %w", err)
+	}
+	// Accumulate's union decoder returns neither a signature nor an error for bytes that hold no type (a run of zeros): there is no
+	// signature to read (RB9-L; it was handed on and dereferenced).
+	if isNil(sig) {
+		return nil, fmt.Errorf("a signature does not decode: it holds no signature")
 	}
 	return sig, nil
 }

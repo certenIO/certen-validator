@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"gitlab.com/accumulatenetwork/accumulate/pkg/api/v3"
+	"gitlab.com/accumulatenetwork/accumulate/pkg/database/merkle"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/errors"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/types/messaging"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/types/network"
@@ -149,6 +150,10 @@ func (s *Spine) AdvanceEpoch(r *api.MinorRootRecord) error {
 
 	proof := r.RootProof
 	if proof.MerkleState == nil || proof.Receipt == nil {
+		return errors.BadRequest.With("incomplete root proof")
+	}
+	// A record decoded from JSON can hold a null step in either receipt, which Accumulate's Validate dereferences (RB9-L).
+	if !stepsPresent(proof.Receipt) || !stepsPresent(proof.ContinuedReceipt) {
 		return errors.BadRequest.With("incomplete root proof")
 	}
 	if !bytes.Equal(proof.MerkleState.Anchor(), s.RootChainAnchor[:]) {
@@ -292,6 +297,9 @@ func applyProvenUpdate(g *network.GlobalValues, u *api.NetworkUpdateProof, root 
 	if !bytes.Equal(u.Receipt.Anchor, root[:]) {
 		return nil, errors.Unauthenticated.With("network update receipt does not end at the anchor's root")
 	}
+	if !stepsPresent(u.Receipt) { // a null step, which Accumulate's Validate dereferences (RB9-L)
+		return nil, errors.BadRequest.With("incomplete network update proof")
+	}
 	if !u.Receipt.Validate(nil) {
 		return nil, errors.Unauthenticated.With("invalid network update receipt")
 	}
@@ -320,6 +328,20 @@ func applyProvenUpdate(g *network.GlobalValues, u *api.NetworkUpdateProof, root 
 		return &AppliedUpdate{Principal: principal.String(), TxHash: h}, g.ParseGlobals(wd.Entry)
 	}
 	return nil, nil
+}
+
+// stepsPresent reports whether every step of a receipt (nil: none) is present. A receipt decoded from JSON can hold a null step, and
+// Accumulate's Validate reads the hash of every step it is given.
+func stepsPresent(r *merkle.Receipt) bool {
+	if r == nil {
+		return true
+	}
+	for _, e := range r.Entries {
+		if e == nil {
+			return false
+		}
+	}
+	return true
 }
 
 // isNil reports whether v is nil or a nil pointer inside an interface (CERTEN: a decoded record can hold either).
