@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/govvote"
 	"github.com/certen/independant-validator/pkg/proof"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/types/messaging"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/url"
@@ -222,8 +223,13 @@ func verify21(ev *Evidence, rep *Report, in xIn) error {
 		rep.PageChains = append(rep.PageChains, pc)
 	}
 
-	// 4. The governing set, re-derived from the proven states; the recorded roles must equal it.
-	derived, err := deriveRoles(ev, byURL, anchors)
+	// 4. The governing set, re-derived from the proven states - and from every state a page with a certified history passed through, so a
+	// delegate entry removed after a counted signature arrived still puts its book in the set; the recorded roles must equal it.
+	tl, err := foldTimelines(ev, byURL)
+	if err != nil {
+		return err
+	}
+	derived, err := deriveRoles(ev, byURL, anchors, tl)
 	if err != nil {
 		return err
 	}
@@ -267,12 +273,8 @@ func verify21(ev *Evidence, rep *Report, in xIn) error {
 		return err
 	}
 
-	// 6. The certified timeline (PROOF_V2 5.2 steps 2-5): every carried history folded to its proven chain root and replayed, then -
-	// when the evidence carries all the votes need - each counted signature's arrival derived and the vote model run on the timeline.
-	tl, err := foldTimelines(ev, byURL)
-	if err != nil {
-		return err
-	}
+	// 6. The certified timeline (PROOF_V2 5.2 steps 2-5): every carried history was folded to its proven chain root and replayed (step 4
+	// above); when the evidence carries all the votes need, each counted signature's arrival is derived and the vote model run on it.
 	engaged, why := timelineEngaged(ev, tl)
 	if !engaged {
 		detail := "the votes are not re-evaluated (readiness, thresholds, per-arrival page states): this report proves the pages, not that the transaction was authorized"
@@ -297,7 +299,7 @@ func verify21(ev *Evidence, rep *Report, in xIn) error {
 // and requires every page it needs to be present: every page 1..PageCount of every book, every account on the principal's
 // inheritance chain, every delegate book to the depth limit, every page a counted vote names. Roles that depend on facts outside
 // the evidence (declaredRoles) are not derived; the books a header-authority declaration names are expanded as authorities.
-func deriveRoles(ev *Evidence, byURL map[string]*provenAcct, anchors map[string]*xAnchor) (map[string]map[PageRole]bool, error) {
+func deriveRoles(ev *Evidence, byURL map[string]*provenAcct, anchors map[string]*xAnchor, tl states) (map[string]map[PageRole]bool, error) {
 	out := map[string]map[PageRole]bool{}
 	add := func(u *url.URL, r PageRole) {
 		if out[lk(u)] == nil {
@@ -408,6 +410,15 @@ func deriveRoles(ev *Evidence, byURL map[string]*provenAcct, anchors map[string]
 			for _, ks := range kp.Keys {
 				if ks.Delegate != nil && level < protocol.DelegationDepthLimit {
 					queue = append(queue, item{ks.Delegate, level + 1})
+				}
+			}
+			// The delegates the page held at any earlier state of its certified history (the delegation a counted signature went
+			// through may be gone by B_Y).
+			for _, st := range tl[govvote.CanonicalAccSpelling(pu.String())] {
+				for _, ks := range st.Page.Keys {
+					if ks.Delegate != nil && level < protocol.DelegationDepthLimit {
+						queue = append(queue, item{ks.Delegate, level + 1})
+					}
 				}
 			}
 		}

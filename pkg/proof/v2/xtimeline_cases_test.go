@@ -199,3 +199,28 @@ func TestTimelineWithoutTheTransactionNamesWhatIsUnproven(t *testing.T) {
 		t.Fatal("a transaction that is not the one the receipt names was accepted")
 	}
 }
+
+// Delegated hops (design D3): the delegating page is judged at the authority signature's arrival - it must hold the delegate entry
+// THEN (a later removal does not undo the vote; an earlier one means the vote could not have been counted) and, unlike a key
+// signature, the hop takes the page's then-current version, so a version bump before arrival does not refuse it.
+func TestTimelineDelegatedHops(t *testing.T) {
+	rep, err := tl(t, xworld.Timeline{Delegated: true}, nil)
+	if err != nil {
+		t.Fatalf("a delegated vote through a page holding the delegate entry must verify: %v", err)
+	}
+	if len(rep.Arrivals) != 2 || rep.Arrivals[0].Account != xworld.BankPage2 || rep.Arrivals[0].Block != 66 ||
+		rep.Arrivals[1].Account != xworld.DelePage1 || rep.Arrivals[1].Block != 64 {
+		t.Fatalf("arrivals %+v", rep.Arrivals)
+	}
+	if _, err := tl(t, xworld.Timeline{Delegated: true, DelegatorEvents: []xworld.PageEvent{{Block: 68, Add: []string{"K1"}, RemoveDelegate: true}}}, nil); err != nil {
+		t.Fatalf("a delegate entry removed after the delegated vote arrived must not undo it: %v", err)
+	}
+	if _, err := tl(t, xworld.Timeline{Delegated: true, DelegatorEvents: []xworld.PageEvent{{Block: 60, Add: []string{"K1"}}}}, nil); err != nil {
+		t.Fatalf("a delegated hop takes the page's current version; a bump before arrival must not refuse it: %v", err)
+	}
+	_, err = tl(t, xworld.Timeline{Delegated: true, DelegatorEvents: []xworld.PageEvent{{Block: 60, Add: []string{"K1"}, RemoveDelegate: true}}}, nil)
+	refusedWith(t, err, proofv2.StateVoteNotReproduced, "BVN1", xworld.BlockBVN1)
+	if !strings.Contains(err.Error(), "delegating") {
+		t.Fatalf("refused for another reason than the missing delegate entry: %v", err)
+	}
+}

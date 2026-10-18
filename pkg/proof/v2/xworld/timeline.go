@@ -39,6 +39,14 @@ type Timeline struct {
 	ProduceBlock uint64
 	// OmitTransaction carries no transaction in the evidence.
 	OmitTransaction bool
+	// Delegated casts the vote through a delegation (timeline_delegated.go): BankPage2 delegates to the delegate book, the key signature
+	// is recorded on DelePage1 (BVN3, block KeyBlock, default 64) and the delegate's authority signature on BankPage2 (BVN2, block
+	// AuthBlock, default 66). Sigs, Genesis and Events then describe nothing (BankPage1 holds no signature); DelegatorEvents are
+	// BankPage2's transactions after genesis.
+	Delegated       bool
+	DelegatorEvents []PageEvent
+	AuthBlock       uint64
+	KeyBlock        uint64
 	// ProvenHeadKeys, when set, are the key labels the proven page holds although the history says otherwise.
 	ProvenHeadKeys []string
 }
@@ -50,6 +58,8 @@ type PageEvent struct {
 	Remove    []string // key labels removed
 	Threshold uint64   // 0: unchanged
 	Credits   bool     // a BurnCredits (no effect on the authority) instead of an UpdateKeyPage
+
+	RemoveDelegate bool // (delegated world) remove the page's delegate entry
 }
 
 // SigEvent is one key signature recorded on the page's signature chain for the transaction.
@@ -234,6 +244,7 @@ type timelineWorld struct {
 	synthIdx   [][]byte
 	synthBlks  []uint64
 	synthEnt   [][]byte
+	dw         *delegatedWorld
 }
 
 func (t Timeline) withDefaults() Timeline {
@@ -256,6 +267,11 @@ func newTimelineWorld(spec Timeline) *timelineWorld {
 		Body:   &protocol.WriteData{Entry: &protocol.DoubleHashDataEntry{Data: [][]byte{[]byte("timeline world")}}},
 	}
 	w.txHash = w.txn.GetHash()
+	if t.Delegated {
+		w.dw = newDelegatedWorld(t, w.txn, w.txHash)
+		w.addSynth()
+		return w
+	}
 
 	// The page's history and the page it leads to, by the script's own bookkeeping.
 	genKeys := map[string]bool{}
@@ -342,6 +358,13 @@ func newTimelineWorld(spec Timeline) *timelineWorld {
 	}
 	w.pageAcct = acct{a: w.page, chains: w.pageChains}
 
+	w.addSynth()
+	return w
+}
+
+// addSynth adds the synthetic ledger holding the vote's SequencedMessage when the script produces it in a block.
+func (w *timelineWorld) addSynth() {
+	t := w.t
 	if t.ProduceBlock != 0 {
 		w.synthMsg = seed("sequenced vote message")
 		w.synthEnt = [][]byte{seed("earlier synthetic a"), w.synthMsg, seed("later synthetic")}
@@ -352,11 +375,13 @@ func newTimelineWorld(spec Timeline) *timelineWorld {
 		a := acct{a: sl, chains: []namedChain{{"main", w.synthEnt}, {"main-index", w.synthIdx}}}
 		w.synth = &a
 	}
-	return w
 }
 
 // hops returns the vote's cause hop and the other counted signatures.
 func (w *timelineWorld) hops() (hop proofv2.VoteHop, counted []proofv2.VoteHop) {
+	if w.dw != nil {
+		return w.dw.hopAuth, nil
+	}
 	mk := func(i int) proofv2.VoteHop {
 		pos := w.sigPos[i]
 		return proofv2.VoteHop{

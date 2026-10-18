@@ -313,8 +313,21 @@ func build(o Options) *Built {
 		BankPage1: {proofv2.RoleAuthorityPage, proofv2.RoleVoter},
 		BankPage2: {proofv2.RoleAuthorityPage},
 	}
+	bvn3Roles := map[string][]proofv2.PageRole{
+		DeleBook:  {proofv2.RoleDelegateBook},
+		DelePage1: {proofv2.RoleDelegatePage},
+	}
+	if tw != nil && tw.dw != nil {
+		// the vote is cast through BankPage2 and DelePage1: they are the voters, BankPage1 only a page of the book
+		bvn2[2], bvn3[1] = tw.dw.p2.acct, tw.dw.p3.acct
+		bvn2Roles[BankPage1] = []proofv2.PageRole{proofv2.RoleAuthorityPage}
+		bvn2Roles[BankPage2] = []proofv2.PageRole{proofv2.RoleAuthorityPage, proofv2.RoleVoter}
+		bvn3Roles[DelePage1] = []proofv2.PageRole{proofv2.RoleDelegatePage, proofv2.RoleVoter}
+	}
 	if tw != nil {
-		bvn2[1] = tw.pageAcct
+		if tw.dw == nil {
+			bvn2[1] = tw.pageAcct
+		}
 		if tw.synth != nil {
 			bvn2 = append(bvn2, *tw.synth)
 			bvn2Roles[tw.synth.url()] = []proofv2.PageRole{proofv2.RoleSyntheticChain}
@@ -330,10 +343,7 @@ func build(o Options) *Built {
 	parts := []*partition{
 		{PartBVN1, "BVN1", BlockBVN1, bvn1, map[string][]proofv2.PageRole{Principal: {proofv2.RolePrincipalChain}}},
 		{PartBVN2, "BVN2", BlockBVN2, bvn2, bvn2Roles},
-		{PartBVN3, "BVN3", BlockBVN3, bvn3, map[string][]proofv2.PageRole{
-			DeleBook:  {proofv2.RoleDelegateBook},
-			DelePage1: {proofv2.RoleDelegatePage},
-		}},
+		{PartBVN3, "BVN3", BlockBVN3, bvn3, bvn3Roles},
 	}
 
 	txHash := seed("transaction")
@@ -491,6 +501,10 @@ func build(o Options) *Built {
 	if tw != nil {
 		hop, counted := tw.hops()
 		vote.Hops = []proofv2.VoteHop{hop}
+		if tw.dw != nil {
+			vote.Origin = BankPage2
+			vote.Hops = append(vote.Hops, tw.dw.hopKey)
+		}
 		vote.Counted = counted
 		vote.Produced = tw.production()
 	}
@@ -517,7 +531,12 @@ func build(o Options) *Built {
 			ev.Transaction = hexs(must(tw.txn.MarshalBinary()))
 		}
 		for i := range ev.Pages {
-			if ev.Pages[i].URL == BankPage1 {
+			switch {
+			case tw.dw != nil && ev.Pages[i].URL == BankPage2:
+				ev.Pages[i].History = tw.dw.p2.history
+			case tw.dw != nil && ev.Pages[i].URL == DelePage1:
+				ev.Pages[i].History = tw.dw.p3.history
+			case tw.dw == nil && ev.Pages[i].URL == BankPage1:
 				ev.Pages[i].History = tw.history
 			}
 		}
