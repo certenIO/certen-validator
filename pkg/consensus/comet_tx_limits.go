@@ -163,7 +163,7 @@ func checkTransactionFits(size, limit int, bound string) error {
 
 // requireTransactionFits judges a transaction of size bytes against everything the engine's node enforces: its
 // configuration and, once the node exists, the chain's block capacity from its genesis (block.max_bytes and the genesis
-// validator count; a rotation changes the count, which moves the capacity by 109 bytes per validator - CometBFT's own
+// validator count; a rotation changes the count, which moves the capacity by 111 bytes per validator (CometBFT's MaxCommitSigBytes 109 plus its protoEncodingOverhead 2) - CometBFT's own
 // pre-check stays the authority and its refusal, "tx size is too big", is surfaced as it is).
 func (e *RealCometBFTEngine) requireTransactionFits(size int) error {
 	if e.cometCfg == nil {
