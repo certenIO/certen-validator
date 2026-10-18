@@ -1554,13 +1554,7 @@ func NewValidatorChainEngine(
 	}
 
 	// Create minimal CometBFT config for ValidatorBlock consensus
-	cfg := config.DefaultConfig()
-	cfg.RootDir = filepath.Join("/app", "data", "validator-chain", validatorID)
-	cfg.P2P.ListenAddress = fmt.Sprintf("tcp://0.0.0.0:%d", p2pPort)
-	cfg.RPC.ListenAddress = fmt.Sprintf("tcp://0.0.0.0:%d", rpcPort)
-	cfg.Moniker = validatorID
-	cfg.DBBackend = "goleveldb"
-	cfg.TxIndex.Indexer = "kv" // Enable tx indexing for Tx query support
+	cfg := validatorChainCometConfig(validatorID, p2pPort, rpcPort)
 
 	adoptGenesisForRotation(app, cfg.GenesisFile(), logger)
 
@@ -1713,6 +1707,11 @@ func NewRealCometBFTEngine(
 	if cometCfg.RPC != nil && cometCfg.RPC.GRPCListenAddress != "" {
 		return nil, fmt.Errorf("the CometBFT gRPC broadcast API (rpc.grpc_laddr %q) is not served: GO-2026-6443", cometCfg.RPC.GRPCListenAddress)
 	}
+
+	// Whatever configuration reaches a node must be able to carry a transaction of its own mempool.max_tx_bytes
+	// through its RPC server: rpc.max_body_bytes defaults to 1,000,000, which refuses a base64-encoded 740 KB
+	// transaction long before the mempool's 1 MiB (comet_tx_limits.go, C5-D1). Only ever raises the limit.
+	applyCometTxLimits(cometCfg)
 
 	// DB provider – on-disk (Pebble / whatever cfg.DBBackend says)
 	dbProvider := config.DBProvider(func(ctx *config.DBContext) (dbm.DB, error) {
@@ -2293,75 +2292,7 @@ func (app *CertenApplication) computeAppHash() []byte {
 func NewUnifiedCometBFTEngine(validatorID string) (*RealCometBFTEngine, error) {
 	logger := log.New(os.Stdout, fmt.Sprintf("[CometBFT-%s] ", validatorID), log.LstdFlags|log.Lmicroseconds)
 
-	// All validators use the same internal container ports - Docker handles external mapping
-	p2pPort := 26656 // All validators listen on internal port 26656
-	rpcPort := 26657 // All validators listen on internal port 26657
-
-	// CometBFT home is a persistent Docker volume (validatorN_keys:/app/bft-keys).
-	// DO NOT wipe the data dir on boot: blockstore.db / state.db / cs.wal must survive
-	// restarts so CometBFT recovers to the same height as the persisted app ledger
-	// (validator-ledger, recovered via ValidatorApp.RecoverState). Wiping it reset CometBFT
-	// to genesis while the app recovered to height N, causing the handshake app-hash mismatch
-	// (assertAppHashEqualsOneFromState) crash-loop on any restart after the fleet had
-	// processed intents. Requires the FinalizeBlock AppHash fix (abci_validator.go) so the
-	// persisted app-hash matches what CometBFT records. Node/priv-validator keys below are
-	// still regenerated deterministically.
-	homeDir := filepath.Join("/app", "bft-keys", validatorID)
-
-	logger.Printf("💾 Using persistent CometBFT state at %s (survives restarts)", homeDir)
-
-	cfg := config.DefaultConfig()
-	cfg.SetRoot(homeDir)
-	cfg.P2P.ListenAddress = fmt.Sprintf("tcp://0.0.0.0:%d", p2pPort)
-	cfg.RPC.ListenAddress = fmt.Sprintf("tcp://0.0.0.0:%d", rpcPort)
-
-	// Block production settings - Event-based (only create blocks when there are transactions)
-	cfg.Consensus.CreateEmptyBlocks = false
-
-	// Faster consensus timeouts for responsive block production
-	cfg.Consensus.TimeoutPropose = 2 * time.Second
-	cfg.Consensus.TimeoutProposeDelta = 200 * time.Millisecond
-	cfg.Consensus.TimeoutPrevote = 500 * time.Millisecond
-	cfg.Consensus.TimeoutPrevoteDelta = 200 * time.Millisecond
-	cfg.Consensus.TimeoutPrecommit = 500 * time.Millisecond
-	cfg.Consensus.TimeoutPrecommitDelta = 200 * time.Millisecond
-	cfg.Consensus.TimeoutCommit = 1 * time.Second
-
-	// Enable transaction indexing for Tx query support
-	// This is required for polling transaction inclusion in blocks
-	cfg.TxIndex.Indexer = "kv"
-
-	cfg.Moniker = validatorID
-
-	// Set up deterministic P2P configuration with persistent peers
-	// Per BFT Resiliency Task 4: Each validator should have ALL other validators as persistent peers
-	persistentPeers := os.Getenv("COMETBFT_P2P_PERSISTENT_PEERS")
-	if persistentPeers != "" {
-		cfg.P2P.PersistentPeers = persistentPeers
-		logger.Printf("🔗 Configured persistent peers: %s", persistentPeers)
-	}
-
-	// Seeds for initial peer discovery (alternative to persistent peers)
-	seeds := os.Getenv("COMETBFT_P2P_SEEDS")
-	if seeds != "" {
-		cfg.P2P.Seeds = seeds
-		logger.Printf("🌱 Configured seeds: %s", seeds)
-	}
-
-	// Unconditional peer exchange for better network discovery
-	cfg.P2P.PexReactor = true
-	cfg.P2P.AddrBookStrict = false // Allow private IPs in Docker network
-
-	// P2P network configuration to prevent pong timeouts and connection drops
-	// These settings are critical for stable multi-validator consensus in Docker networks
-	cfg.P2P.SendRate = 20000000 // 20 MB/s - increase from default 512KB/s
-	cfg.P2P.RecvRate = 20000000 // 20 MB/s - increase from default 512KB/s
-	cfg.P2P.FlushThrottleTimeout = 100 * time.Millisecond
-	cfg.P2P.MaxPacketMsgPayloadSize = 1400                  // Default is 1024, increase for larger messages
-	cfg.P2P.HandshakeTimeout = 30 * time.Second             // Increase from default 20s
-	cfg.P2P.DialTimeout = 10 * time.Second                  // Increase from default 3s
-	cfg.P2P.AllowDuplicateIP = true                         // Allow duplicate IPs in Docker network
-	cfg.P2P.PersistentPeersMaxDialPeriod = 60 * time.Second // Keep trying persistent peers
+	cfg, homeDir := unifiedCometConfig(validatorID, os.Getenv, logger)
 
 	// Consensus key, node key, signing state and genesis by the key-management rules (comet_keys.go,
 	// RB3-F95): read from the persistent volume, never deleted, never overwritten, never derived from the
@@ -2480,17 +2411,24 @@ func (e *RealCometBFTEngine) BroadcastValidatorBlockCommit(
 		return alreadyCommitted(vb, prior, e.logger)
 	}
 
-	if err := e.Start(); err != nil {
-		e.logger.Printf("❌ [COMETBFT] Failed to start engine: %v", err)
-		return nil, err
-	}
-	e.logger.Printf("✅ [COMETBFT] Engine started/running")
-
 	payload, err := json.Marshal(vb)
 	if err != nil {
 		return nil, fmt.Errorf("marshal validator block: %w", err)
 	}
 	e.logger.Printf("📦 [COMETBFT] ValidatorBlock marshaled: %d bytes", len(payload))
+
+	// A block larger than the path accepts is refused here by name, with its size and the limit that binds, instead of
+	// being sent to be refused by the RPC as "request body too large" (C5-D1). It is never truncated or dropped.
+	if err := e.requireTransactionFits(len(payload)); err != nil {
+		e.logger.Printf("❌ [COMETBFT] ValidatorBlock %s is not broadcast: %v", vb.BundleID, err)
+		return nil, fmt.Errorf("ValidatorBlock %s not broadcast: %w", vb.BundleID, err)
+	}
+
+	if err := e.Start(); err != nil {
+		e.logger.Printf("❌ [COMETBFT] Failed to start engine: %v", err)
+		return nil, err
+	}
+	e.logger.Printf("✅ [COMETBFT] Engine started/running")
 
 	// Submit, then confirm inclusion. The outcome is decided by whether the transaction is admitted or
 	// committed — looked up by hash when a reply is lost — not by the RPC acknowledgement alone
@@ -2520,6 +2458,10 @@ func alreadyCommitted(vb *ValidatorBlock, prior *ledger.CommittedOperation, logg
 
 // BroadcastAppTxSync broadcasts ABCI transactions via in-process CometBFT engine
 func (e *RealCometBFTEngine) BroadcastAppTxSync(ctx context.Context, tx []byte) error {
+	if err := e.requireTransactionFits(len(tx)); err != nil {
+		return fmt.Errorf("transaction not broadcast: %w", err)
+	}
+
 	// Ensure engine is started
 	if err := e.Start(); err != nil {
 		return fmt.Errorf("start engine: %w", err)
@@ -3077,21 +3019,7 @@ func NewProductionEngine(cfg EngineConfig, app abcitypes.Application, logger *lo
 	logger.Printf("🏭 [PRODUCTION-ENGINE] Creating unified CometBFT engine: validator=%s", cfg.ValidatorID)
 
 	// 1. Setup structured configuration from cfg
-	cometConfig := config.DefaultConfig()
-	cometConfig.SetRoot(cfg.HomeDir)
-	cometConfig.P2P.ListenAddress = fmt.Sprintf("tcp://0.0.0.0:%d", cfg.P2PPort)
-	cometConfig.RPC.ListenAddress = fmt.Sprintf("tcp://0.0.0.0:%d", cfg.RPCPort)
-	cometConfig.Consensus.CreateEmptyBlocks = cfg.CreateEmptyBlocks
-	cometConfig.Moniker = cfg.ValidatorID
-
-	// Enable transaction indexing for Tx query support
-	cometConfig.TxIndex.Indexer = "kv"
-
-	// Set persistent peers from structured config
-	if len(cfg.PersistentPeers) > 0 {
-		cometConfig.P2P.PersistentPeers = strings.Join(cfg.PersistentPeers, ",")
-		logger.Printf("🔗 [PRODUCTION-ENGINE] Configured persistent peers: %s", cometConfig.P2P.PersistentPeers)
-	}
+	cometConfig := productionCometConfig(cfg, logger)
 
 	// 2-3. Keys, signing state and genesis by the key-management rules (comet_keys.go, RB3-F95).
 	if _, err := ensureCometKeys(cfg.HomeDir, cfg.ValidatorID, cometChainIDForFormulaCheck(), os.Getenv, logger); err != nil {
