@@ -7,11 +7,11 @@ package consensus
 //
 // The proof-v2 document travels inside the intent certificate, which is ONE transaction of this chain. Its `certify`
 // member grows linearly with the time since the last Accumulate major block (00:00 and 12:00 UTC), so for the last
-// hours of every 12-hour cycle the transaction was larger than ~740 KB, and every proposer's own CometBFT RPC refused
+// hours of every 12-hour cycle the transaction was larger than 749,946 bytes, and every proposer's own CometBFT RPC refused
 // it: `error reading request body: http: request body too large` (HTTP 400, JSON-RPC -32600). The intent was then marked
 // failed on all seven validators. Every config builder started from config.DefaultConfig(), whose rpc.max_body_bytes is
 // 1,000,000; BroadcastTxSync sends the transaction base64-encoded inside a JSON-RPC body (4 bytes per 3 plus the
-// wrapper), so the largest transaction the RPC accepted was about 740,000 bytes while the mempool accepts
+// wrapper), so the largest transaction the RPC accepted was 749,946 bytes while the mempool accepts
 // mempool.max_tx_bytes = 1 MiB and the evidence budget (pkg/proof/v2/xbudget.go) is written against 1 MiB.
 //
 // EVERY LIMIT ON THE PATH (cometbft v0.38.21)
@@ -21,7 +21,7 @@ package consensus
 //	                     config; the websocket read limit is the same number, node.go:729).
 //	mempool.max_tx_bytes config/config.go:799 default 1 MiB; CheckTx refuses a larger transaction with
 //	                     mempool.ErrTxTooLarge "Tx too large. Max size is X, but got Y"
-//	                     (mempool/clist_mempool.go:239; the error type is mempool/errors.go:25).
+//	                     (mempool/clist_mempool.go:239; the error type is mempool/errors.go:20).
 //	mempool.max_txs_bytes config/config.go:797 default 1 GiB for the whole pool (clist_mempool.go:381): not per transaction.
 //	mempool reactor      the p2p channel's RecvMessageCapacity is the size of a batch holding one transaction of
 //	                     max_tx_bytes (mempool/reactor.go:72-85), so gossip carries exactly max_tx_bytes.
@@ -162,7 +162,9 @@ func checkTransactionFits(size, limit int, bound string) error {
 }
 
 // requireTransactionFits judges a transaction of size bytes against everything the engine's node enforces: its
-// configuration and, once the node exists, the chain's block capacity from its genesis.
+// configuration and, once the node exists, the chain's block capacity from its genesis (block.max_bytes and the genesis
+// validator count; a rotation changes the count, which moves the capacity by 109 bytes per validator - CometBFT's own
+// pre-check stays the authority and its refusal, "tx size is too big", is surfaced as it is).
 func (e *RealCometBFTEngine) requireTransactionFits(size int) error {
 	if e.cometCfg == nil {
 		return errors.New("the engine has no CometBFT configuration to judge a transaction's size against")
