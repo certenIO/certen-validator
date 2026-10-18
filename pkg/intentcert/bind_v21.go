@@ -232,7 +232,7 @@ func ns(code, partition string, block uint64, format string, a ...any) error {
 // key page is the one role the verifier can only declare, because it depends on the intent certificate; THIS binding justifies it: the
 // page is G1's page, is a proven page of the governing set (it proves at least one other role), is recorded as certified-key-page, and is
 // a page of keyBookURL, the book the certificate declares. The facts' transaction must be the transaction the report proved. A report
-// with any Unproven entry is not a verified S3 and is refused by that entry. The executor version in force at every (partition, block)
+// with any Unproven entry is not a verified S3 and is refused by that entry, and so is one that discloses g1_vote_production_unbound. The executor version in force at every (partition, block)
 // the report is judged at is derived from the pinned activation table (proofv2.ExecutorFloorAt): the system-ledger page is not required
 // (live Kermit serves no historical receipt for it), and when a document carries one it must agree.
 //
@@ -248,6 +248,15 @@ func BindProofV21(rep *proofv2.Report, g0 *proof.G0Result, g1 *proof.G1Result, k
 	if len(rep.Unproven) > 0 {
 		first := rep.Unproven[0]
 		return &first
+	}
+	// A disclosure is a verified fact, not a refusal, except one: a sequenced vote whose production does not carry the SequencedMessage is not
+	// bound to the vote's message (a document made before the verifier round VA), so its arrival block is not established. Every document
+	// built since carries the message; an old capture is held until it is re-captured.
+	for _, d := range rep.Disclosures {
+		if d.Code == proofv2.StateVoteProductionUnbound {
+			first := d
+			return &first
+		}
 	}
 	if err := bindG0(rep, g0); err != nil {
 		return err

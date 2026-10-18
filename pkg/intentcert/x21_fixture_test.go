@@ -250,6 +250,6 @@ func x21Vote() proofv2.Vote {
 		Counted: []proofv2.VoteHop{{Page: xBook1, Message: hx32(12), Signature: "0e", Block: blkY2 - 7, Receipt: "0f",
 			Arrival: &proofv2.Arrival{Before: &before2, At: at2}}},
 		Produced: &proofv2.Production{Account: xPrincipal, Chain: "signature", Message: hx32(10), Receipt: "1011",
-			Arrival: proofv2.Arrival{At: prodAt}},
+			Arrival: proofv2.Arrival{At: prodAt}, Sequenced: "1213"},
 	}
 }

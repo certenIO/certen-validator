@@ -4,6 +4,8 @@ import (
 	"encoding/hex"
 	"strings"
 	"testing"
+
+	"github.com/ethereum/go-ethereum/crypto"
 )
 
 // govRoot v4 is its own domain over the same ten slots: never a v3 (or earlier) value, and the pinned vector, recomputed
@@ -58,5 +60,27 @@ func TestGovRootV4_EverySlotRequiredDeterministically(t *testing.T) {
 				t.Fatalf("missing %s: %v", name, err)
 			}
 		}
+	}
+}
+
+// The G2 slot of v4 is under its own tag (certen:g2:v4), as the G1 slot is: before this, v4 hashed G2 over the v4 G1 slot under the v3 tag.
+// The slot is recomputed here from the raw bytes - keccak256(tag ‖ ":" ‖ sha256(G2) ‖ the G1 slot) - not through the production helpers.
+func TestGovRootV4_G2SlotIsUnderItsOwnTag(t *testing.T) {
+	if GovRootV4TagG2 != "certen:g2:v4" || GovRootV4TagG2 == GovRootV3TagG2 {
+		t.Fatalf("the v4 G2 tag is %q (v3: %q)", GovRootV4TagG2, GovRootV3TagG2)
+	}
+	g2sha, g1slot := fill32(21), fill32(22)
+	got := GovRootV4G2(g2sha, g1slot)
+	raw := append([]byte("certen:g2:v4:"), append(g2sha[:], g1slot[:]...)...)
+	var want [32]byte
+	copy(want[:], crypto.Keccak256(raw))
+	if got != want {
+		t.Fatalf("G2 v4 slot: got %x, raw recomputation %x", got, want)
+	}
+	if got == GovRootV3G2(g2sha, g1slot) {
+		t.Fatal("the v4 G2 slot equals the v3 slot over the same inputs")
+	}
+	if GovRootV4G2(g2sha, fill32(23)) == got || GovRootV4G2(fill32(24), g1slot) == got {
+		t.Fatal("the G2 slot does not depend on both of its inputs")
 	}
 }

@@ -85,6 +85,7 @@ func rawVoteLeaf(v proofv2.Vote) [32]byte {
 		hexb(p.Message)
 		hexb(p.Receipt)
 		arr(p.Arrival)
+		hexb(p.Sequenced)
 	}
 	return sha256.Sum256(append([]byte("certen:g1:v4:vote:"), b...))
 }
@@ -182,16 +183,18 @@ func TestVotesRootV4_EveryMemberAndTheirOrderChangeTheRoot(t *testing.T) {
 			a.At.Receipt = "ff"
 			v.Hops[0].Arrival = &a
 		},
-		"counted dropped":       func(v *proofv2.Vote) { v.Counted = nil },
-		"counted block":         func(v *proofv2.Vote) { v.Counted[0].Block++ },
-		"counted moved to hops": func(v *proofv2.Vote) { v.Hops, v.Counted = append(v.Hops, v.Counted...), nil },
-		"hops moved to counted": func(v *proofv2.Vote) { v.Counted, v.Hops = append(v.Counted, v.Hops[1]), v.Hops[:1] },
-		"produced dropped":      func(v *proofv2.Vote) { v.Produced = nil },
-		"produced account":      func(v *proofv2.Vote) { p := *v.Produced; p.Account = xBook; v.Produced = &p },
-		"produced chain":        func(v *proofv2.Vote) { p := *v.Produced; p.Chain = "main"; v.Produced = &p },
-		"produced message":      func(v *proofv2.Vote) { p := *v.Produced; p.Message = hx32(96); v.Produced = &p },
-		"produced receipt":      func(v *proofv2.Vote) { p := *v.Produced; p.Receipt = "10ff"; v.Produced = &p },
-		"produced arrival":      func(v *proofv2.Vote) { p := *v.Produced; p.Arrival.At.Position++; v.Produced = &p },
+		"counted dropped":            func(v *proofv2.Vote) { v.Counted = nil },
+		"counted block":              func(v *proofv2.Vote) { v.Counted[0].Block++ },
+		"counted moved to hops":      func(v *proofv2.Vote) { v.Hops, v.Counted = append(v.Hops, v.Counted...), nil },
+		"hops moved to counted":      func(v *proofv2.Vote) { v.Counted, v.Hops = append(v.Counted, v.Hops[1]), v.Hops[:1] },
+		"produced dropped":           func(v *proofv2.Vote) { v.Produced = nil },
+		"produced account":           func(v *proofv2.Vote) { p := *v.Produced; p.Account = xBook; v.Produced = &p },
+		"produced chain":             func(v *proofv2.Vote) { p := *v.Produced; p.Chain = "main"; v.Produced = &p },
+		"produced message":           func(v *proofv2.Vote) { p := *v.Produced; p.Message = hx32(96); v.Produced = &p },
+		"produced receipt":           func(v *proofv2.Vote) { p := *v.Produced; p.Receipt = "10ff"; v.Produced = &p },
+		"produced arrival":           func(v *proofv2.Vote) { p := *v.Produced; p.Arrival.At.Position++; v.Produced = &p },
+		"produced sequenced":         func(v *proofv2.Vote) { p := *v.Produced; p.Sequenced = "1214"; v.Produced = &p },
+		"produced sequenced dropped": func(v *proofv2.Vote) { p := *v.Produced; p.Sequenced = ""; v.Produced = &p },
 		"produced arrival before": func(v *proofv2.Vote) {
 			p := *v.Produced
 			b := p.Arrival.At
@@ -243,6 +246,7 @@ func TestVotesRootV4_SpellingIsNotCommittedButBytesAre(t *testing.T) {
 		"odd length":  func(v *proofv2.Vote) { v.Hops[0].Signature = "abc" },
 		"arrival":     func(v *proofv2.Vote) { v.Hops[0].Arrival.At.Entry = "xyz" },
 		"production":  func(v *proofv2.Vote) { v.Produced.Receipt = "nothex" },
+		"sequenced":   func(v *proofv2.Vote) { v.Produced.Sequenced = "zz" },
 		"counted hop": func(v *proofv2.Vote) { v.Counted[0].Receipt = "q" },
 	} {
 		v := twoHopVote()

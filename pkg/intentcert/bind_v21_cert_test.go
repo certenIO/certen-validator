@@ -198,3 +198,25 @@ func TestBindProofV21LedgerPageMustAgreeWithThePinnedTable(t *testing.T) {
 		wantDetail(t, "a ledger page below the table", bind21(t, withLedger(v)), proofv2.StateExecutorVersionUnsupported, "disagrees with the pinned table")
 	}
 }
+
+// RB9-J1 handoff: a document built before a vote's production carried the SequencedMessage verifies with the disclosure
+// g1_vote_production_unbound (the production is not bound to the vote's message). A disclosure is not a refusal for the verifier, but the
+// intent binding cannot certify a vote whose arrival is not bound to it: BindProofV21 refuses the report by that named state, with the
+// partition and block it was judged at. Other disclosures stay disclosures.
+func TestBindProofV21RefusesAReportWhoseVoteProductionIsUnbound(t *testing.T) {
+	rep, g0, g1, kp := newX21().report()
+	rep.Disclosures = []proofv2.NamedState{
+		{Code: proofv2.StateAuthorityVoterOutsideList, Partition: partBVN1, Block: blkX, Detail: "a disclosure that is not a refusal"},
+		{Code: proofv2.StateVoteProductionUnbound, Partition: partBVN2, Block: blkY2, Detail: "no SequencedMessage"}}
+	facts := newX21().facts
+	err := BindProofV21(rep, g0, g1, kp, xERPBook, &facts)
+	var ns *proofv2.NamedState
+	if !errors.As(err, &ns) || ns.Code != proofv2.StateVoteProductionUnbound || ns.Partition != partBVN2 || ns.Block != blkY2 {
+		t.Fatalf("a report with an unbound production: want %s{%s,%d}, got %v", proofv2.StateVoteProductionUnbound, partBVN2, blkY2, err)
+	}
+	// Only that disclosure refuses: the others do not, and a report without any binds.
+	rep.Disclosures = rep.Disclosures[:1]
+	if err := BindProofV21(rep, g0, g1, kp, xERPBook, &facts); err != nil {
+		t.Fatalf("a report whose only disclosure is not a refusal: %v", err)
+	}
+}

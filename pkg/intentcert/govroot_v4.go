@@ -111,7 +111,7 @@ func GovRootV4FromHashes(in GovRootV4HashInputs) ([32]byte, contracts.Accumulate
 	slots.L4ConsensusProofH = contracts.GovRootV3L4(rep.AccumulateSetRoot, rep.Incarnation, rep.CertifiedBlock)
 	slots.G0CanonicalHash = contracts.GovRootV3G0(in.G0Hash, rep.TxHash, rep.CertifiedRoot)
 	slots.G1CanonicalHash = contracts.GovRootV4G1(in.G1Hash, pagesRoot, votesRoot)
-	slots.G2CanonicalHash = contracts.GovRootV3G2(in.G2Hash, slots.G1CanonicalHash)
+	slots.G2CanonicalHash = contracts.GovRootV4G2(in.G2Hash, slots.G1CanonicalHash)
 	slots.KeypageURLHash = contracts.HashURLString(govvote.CanonicalAccSpelling(in.KeyPageURL))
 	slots.KeybookURLHash = contracts.HashURLString(govvote.CanonicalAccSpelling(in.KeyBookURL))
 	slots.OperationID = in.OperationID
@@ -368,14 +368,16 @@ func (w *voteWriter) hops(name string, hops []proofv2.VoteHop) {
 //	‖ str(transport.kind) ‖ url(transport.source) ‖ url(transport.destination) ‖ u64(transport.number)
 //	‖ hex(message) ‖ hex(receipt)
 //	‖ u32(len hops)    ‖ hop*       ‖ u32(len counted) ‖ hop*
-//	‖ flag(produced)   ‖ [url(account) ‖ str(chain) ‖ hex(message) ‖ hex(receipt) ‖ arrival]
+//	‖ flag(produced)   ‖ [url(account) ‖ str(chain) ‖ hex(message) ‖ hex(receipt) ‖ arrival ‖ hex(sequenced)]
 //
 //	hop     = url(page) ‖ hex(message) ‖ hex(signature) ‖ u64(block) ‖ hex(receipt) ‖ flag(arrival) ‖ [arrival]
 //	arrival = flag(before) ‖ [indexproof] ‖ indexproof        indexproof = u64(position) ‖ hex(entry) ‖ hex(receipt)
 //
 // u64 is 8 bytes big-endian, u32 and the flag (1 byte, 0 or 1) as named; str and hex are a u32 big-endian length and the bytes (hex members
 // are committed as the bytes they encode, so the spelling of the hex does not matter); url is str of the lower-case spelling without a
-// trailing slash. An absent optional member is its flag 0 or the zero-length field - never omitted.
+// trailing slash. An absent optional member is its flag 0 or the zero-length field - never omitted. sequenced is the binary
+// SequencedMessage the production carries (zero-length for an inline vote, whose production is the vote's own entry): it binds the
+// production to the vote's message, so it is committed with it (RB9-J1 handoff; the v4 encoding was unreleased, so this is the v4 layout).
 func EncodeVoteV4(v *proofv2.Vote) ([]byte, error) {
 	w := &voteWriter{}
 	w.url(v.Authority)
@@ -397,6 +399,7 @@ func EncodeVoteV4(v *proofv2.Vote) ([]byte, error) {
 		w.hex("produced.message", p.Message)
 		w.hex("produced.receipt", p.Receipt)
 		w.arrival("produced.arrival", &p.Arrival)
+		w.hex("produced.sequenced", p.Sequenced)
 	}
 	if w.err != nil {
 		return nil, w.err

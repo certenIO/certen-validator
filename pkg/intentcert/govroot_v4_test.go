@@ -209,7 +209,7 @@ func TestGovRootV4_IndependentRecomputation(t *testing.T) {
 	l4 := k256([]byte("certen:l4gov:v3:"), rep.AccumulateSetRoot[:], rep.Incarnation[:], u64(rep.CertifiedBlock))
 	g0 := k256([]byte("certen:g0:v3:"), h0[:], rep.TxHash[:], rep.CertifiedRoot[:])
 	g1 := k256([]byte("certen:g1:v4:"), h1[:], pagesRoot[:], votesRoot[:])
-	g2 := k256([]byte("certen:g2:v3:"), h2[:], g1[:])
+	g2 := k256([]byte("certen:g2:v4:"), h2[:], g1[:])
 	kp := k256([]byte(strings.ToLower(in.KeyPageURL)))
 	kb := k256([]byte(strings.ToLower(in.KeyBookURL)))
 	for name, c := range map[string][2][32]byte{

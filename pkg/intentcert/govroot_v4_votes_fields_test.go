@@ -22,7 +22,7 @@ func TestVoteEncodingV4CoversEveryField(t *testing.T) {
 		{"VoteHop", reflect.TypeOf(proofv2.VoteHop{}), "Page,Message,Signature,Block,Receipt,Arrival"},
 		{"Arrival", reflect.TypeOf(proofv2.Arrival{}), "Before,At"},
 		{"IndexProof", reflect.TypeOf(proofv2.IndexProof{}), "Position,Entry,Receipt"},
-		{"Production", reflect.TypeOf(proofv2.Production{}), "Account,Chain,Message,Receipt,Arrival"},
+		{"Production", reflect.TypeOf(proofv2.Production{}), "Account,Chain,Message,Receipt,Arrival,Sequenced"},
 	} {
 		var got []string
 		for i := 0; i < c.typ.NumField(); i++ {

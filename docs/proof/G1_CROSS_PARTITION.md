@@ -93,7 +93,7 @@ Receipt}` for X and every Y (anchor kind per partition kind, `page.go:34-39,153-
 the verifier from the anchor message `Source`, never trusted (mismatch = `g1_foreign_partition_mismatch{url,claimed,derived}`; today the verifier blanks
 the routing table, `evidence.go:342-344`). `Roles` ⊂ {principal-chain, authority-book, authority-page, header-authority, delegate-book, delegate-page,
 voter, initiator-signer, certified-key-page}, recorded and checked against the re-derived set. The report lists every proven page as
-`(partition, block, role)`. `2.0` documents stay valid forever and verify byte for byte. New domain tags (never reused): `certen:g1:v4`, `certen:govroot:v4`.
+`(partition, block, role)`. `2.0` documents stay valid forever and verify byte for byte. New domain tags (never reused): `certen:g1:v4`, `certen:g2:v4`, `certen:govroot:v4`.
 
 **D5 — Routing proof.** `acc://dn.acme/routing` is proven with the machinery that proves dn.acme/network and dn.acme/globals: an `AccountStateProof`
 (`validator_set_proof.go:199-231`, built by `fetchAccountStateProofWith` which supports `{"forHeight": block}`: `validator_set_builder.go:172-228`)
@@ -306,8 +306,10 @@ recorded roles (proven and declared).
 layout over the final `Vote`/`VoteHop`/`Arrival`/`IndexProof`/`Production` shape, in a fixed field order: strings and bytes length-prefixed (4-byte big-endian), integers 8 bytes big-endian,
 hex members as the bytes they encode, URLs lower-cased without a trailing slash, an absent optional member its flag 0 (never omitted); the layout is in the comment of `EncodeVoteV4`
 (`pkg/intentcert/govroot_v4.go`), recomputed byte by byte in `TestVotesRootV4_IndependentRecomputation`, and `TestVoteEncodingV4CoversEveryField` fails when a member is added to any of the
-structs until the encoding is extended under a new tag. The v4 golden was unreleased and was regenerated once for this encoding (and for the executor-valid blocks of its fixture); the v3
-goldens are untouched.
+structs until the encoding is extended under a new tag. The v4 golden was unreleased and was regenerated twice, never released: once for this encoding (and for the executor-valid blocks of its fixture)
+and a second and last time for the verifier round VB (RB9-J2), which (a) commits `Production.Sequenced` - the `SequencedMessage` that binds a sequenced vote's production to the vote's message - as the last
+member of the production (`hex(sequenced)`, zero-length for an inline vote) and (b) gives the G2 slot its own tag `certen:g2:v4` (it hashes the v4 G1 slot and was hashed under the v3 tag). `BindProofV21` refuses a
+report that discloses `g1_vote_production_unbound` (a document made before the verifier carried the message). The v3 goldens are untouched.
 
 **D7, the integration of the stack (RB9 Phase I; added, nothing above is changed).** (1) Consensus verifies the evidence of a 2.1 certificate with the real verifier: `proofv2.VerifyEvidence21FromSpine` (the spine as the
 chain holds it, no I/O), chosen by the evidence version in `judgeProofV2` only after the activation gate has let the document through; `Verify`, `VerifyFromGenesis` and `VerifyFromSpine` still refuse
