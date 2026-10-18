@@ -112,7 +112,7 @@ func buildV3(t *testing.T, f *intentFixtureV3, vb *ValidatorBlock, reg *ledger.B
 	spine *ledger.AccumulateSpineLog, ev *proofv2.Evidence) error {
 	t.Helper()
 	return BuildIntentCertificate(vb, intentChain, reg, rf.keys[0], intentKeyPage, intentKeyBook, f.record(t), f.VoteEvidence,
-		f.ChainedProof, spine, ev)
+		f.ChainedProof, spine, nil, ev)
 }
 
 // A live intent certified under v3: consensus judges its proof v2 against the chain's spine, binds it to the block's
@@ -143,13 +143,13 @@ func TestAV3IntentCertificateIsJudgedAgainstTheChainSpine(t *testing.T) {
 	if err := json.Unmarshal(b, &back); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := VerifyIntentCertificate(&back, intentChain, reg, spine); err != nil {
+	if _, err := VerifyIntentCertificate(&back, intentChain, reg, spine, nil); err != nil {
 		t.Fatalf("after a JSON round trip: %v", err)
 	}
 	t.Logf("v3 block: %d bytes of JSON, govRoot v3 %s", len(b), ev.GovRootV3)
 
 	// The same block before any spine: v3 is not in force.
-	if _, err := VerifyIntentCertificate(&back, intentChain, reg, nil); !errors.Is(err, ErrIntentProofV3NotInForce) {
+	if _, err := VerifyIntentCertificate(&back, intentChain, reg, nil, nil); !errors.Is(err, ErrIntentProofV3NotInForce) {
 		t.Fatalf("a v3 certificate before the spine: %v", err)
 	}
 	// A v2 block once the spine exists: refused for its missing proof v2.
@@ -157,7 +157,7 @@ func TestAV3IntentCertificateIsJudgedAgainstTheChainSpine(t *testing.T) {
 	if err := buildV3(t, f, v2, reg, rf, nil, nil); err != nil {
 		t.Fatalf("building the v2 certificate: %v", err)
 	}
-	if _, err := VerifyIntentCertificate(v2, intentChain, reg, spine); !errors.Is(err, ErrIntentProofV2Missing) {
+	if _, err := VerifyIntentCertificate(v2, intentChain, reg, spine, nil); !errors.Is(err, ErrIntentProofV2Missing) {
 		t.Fatalf("a v2 certificate once the spine exists: %v", err)
 	}
 	// A spine of another incarnation does not require v3, so the v2 block verifies again.
@@ -165,7 +165,7 @@ func TestAV3IntentCertificateIsJudgedAgainstTheChainSpine(t *testing.T) {
 	g := *spine.Genesis
 	g.Incarnation = "0x" + strings.Repeat("ab", 32)
 	other.Genesis = &g
-	if _, err := VerifyIntentCertificate(v2, intentChain, reg, &other); err != nil {
+	if _, err := VerifyIntentCertificate(v2, intentChain, reg, &other, nil); err != nil {
 		t.Fatalf("a v2 certificate under another incarnation's spine: %v", err)
 	}
 }
@@ -212,7 +212,7 @@ func TestAV3IntentCertificateRefusesWhatItDoesNotProve(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			vb := built(t)
 			c.edit(vb)
-			if _, err := VerifyIntentCertificate(vb, intentChain, reg, spine); !errors.Is(err, c.want) {
+			if _, err := VerifyIntentCertificate(vb, intentChain, reg, spine, nil); !errors.Is(err, c.want) {
 				t.Fatalf("got %v, want %v", err, c.want)
 			}
 		})
@@ -223,7 +223,7 @@ func TestAV3IntentCertificateRefusesWhatItDoesNotProve(t *testing.T) {
 	short := *spine
 	short.Checkpoints = spine.Checkpoints[:ev.Majors-1]
 	vb := built(t)
-	if _, err := VerifyIntentCertificate(vb, intentChain, reg, &short); !errors.Is(err, ErrIntentProofV2Invalid) ||
+	if _, err := VerifyIntentCertificate(vb, intentChain, reg, &short, nil); !errors.Is(err, ErrIntentProofV2Invalid) ||
 		!strings.Contains(err.Error(), "the chain has verified") {
 		t.Fatalf("a proof past the chain's spine: %v", err)
 	}

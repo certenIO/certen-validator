@@ -236,8 +236,29 @@ const (
 	// (committedRulesVersion).
 	executionRulesV14 uint64 = 14
 
+	// v15 - evidence 2.1 becomes a governed requirement (RB9-C, docs/proof/G1_CROSS_PARTITION.md D7; govRoot v4,
+	// certen:g1:v4): an authority on another identity or partition, and delegation, are judged on proven state at the
+	// partition and block each page lives at, not skipped. Switching the whole fleet at one block needs a committed fact:
+	//
+	//   - a recognised transaction kind `certen.g1.crosspartition.activate/v1` (g1_activation.go), authorised by the admin
+	//     quorum in force (AdminSetAt) over the chain id, version 1 only, recorded append-only at the block H that accepted it
+	//     and served at /certen/g1_activation. Accepted, it contributes its id to the app hash; refused, it returns code 18.
+	//     v14 judged the same bytes as a ValidatorBlock.
+	//   - From the height after H - a fact of committed state on every node, never a date or a node's environment - every v3
+	//     intent certificate must carry proof v2 evidence 2.1 (a 2.0 one is refused, ErrIntentProofV21Missing) and is judged
+	//     with the strengthened binding (intentcert.BindProofV21) and govRoot v4. Until H, the v15 binary decides every block
+	//     exactly as v14 did, and a certificate that carries 2.1 is refused by name (ErrIntentProofV21NotInForce) with the
+	//     result code v14 returned for it (10): a refusal of the same code, so the block's results hash is v14's.
+	//
+	// v15 CONTINUES v7..v14 state without a reset: the kind is new, so no committed history contains it, and that is
+	// checked, not assumed - IndexCommittedHistory refuses to start on any committed activation-kind transaction that v15
+	// did not decide (a ValidatorBlock's code, or an acceptance with no activation recorded for it). No committed history
+	// holds an activation, so none reaches the 2.1 rule, and every other block is decided exactly as v14 decided it. The
+	// state stays stamped with the older version until a block accepts or refuses an activation (committedRulesVersion).
+	executionRulesV15 uint64 = 15
+
 	// CurrentExecutionRulesVersion is what THIS binary implements.
-	CurrentExecutionRulesVersion = executionRulesV14
+	CurrentExecutionRulesVersion = executionRulesV15
 )
 
 // compatibleContinuations names the older rules whose committed state this binary may continue, and why
@@ -255,13 +276,16 @@ var compatibleContinuations = map[uint64]uint64{
 	// v13 adds only the two spine kinds, which no committed history contains (checked at every start).
 	// v14 adds only the anchor-set kind, which no committed history contains (checked at every start), and its
 	// ValidatorBlock rules apply only from the height after an accepted anchor set, which no committed history reaches.
-	executionRulesV7:  executionRulesV14,
-	executionRulesV8:  executionRulesV14,
-	executionRulesV9:  executionRulesV14,
-	executionRulesV10: executionRulesV14,
-	executionRulesV11: executionRulesV14,
-	executionRulesV12: executionRulesV14,
-	executionRulesV13: executionRulesV14,
+	// v15 adds only the cross-partition activation kind, which no committed history contains (checked at every start), and
+	// its certificate rule applies only from the height after an accepted activation, which no committed history reaches.
+	executionRulesV7:  executionRulesV15,
+	executionRulesV8:  executionRulesV15,
+	executionRulesV9:  executionRulesV15,
+	executionRulesV10: executionRulesV15,
+	executionRulesV11: executionRulesV15,
+	executionRulesV12: executionRulesV15,
+	executionRulesV13: executionRulesV15,
+	executionRulesV14: executionRulesV15,
 }
 
 // ExecutionRulesMismatchError explains a refusal to start in terms an operator

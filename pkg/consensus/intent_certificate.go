@@ -70,7 +70,13 @@ var (
 	ErrIntentInputsMissing         = errors.New("the block lacks an input of its intent message")
 	ErrIntentProofV2Missing        = errors.New("the chain requires the v3 intent certificate, and the block carries no proof v2")
 	ErrIntentProofV3NotInForce     = errors.New("the block carries a v3 intent certificate, which the chain does not require yet")
-	ErrIntentProofV2Invalid        = errors.New("the block's proof v2 does not verify against the chain's Accumulate spine")
+	// ErrIntentProofV21NotInForce: a v3 certificate whose proof v2 is evidence 2.1, before the chain's cross-partition
+	// activation (rules v15, g1_activation.go) - the v14 refusal of the same block carries the same result code.
+	ErrIntentProofV21NotInForce = errors.New("the block carries evidence 2.1, which the chain does not require yet")
+	// ErrIntentProofV21Missing: a v3 certificate whose proof v2 is not evidence 2.1, from the height after the chain's
+	// cross-partition activation.
+	ErrIntentProofV21Missing = errors.New("the chain requires evidence 2.1, and the block's proof v2 is not")
+	ErrIntentProofV2Invalid  = errors.New("the block's proof v2 does not verify against the chain's Accumulate spine")
 )
 
 // ProofV3Required is whether a block judged with spine (the chain's Accumulate spine as committed for its height) and
@@ -102,8 +108,18 @@ func (f *intentFacts) message() ([32]byte, error) {
 	return intentcert.Message(f.in)
 }
 
-// intentInputs recomputes every input of the block's intent message from the block and the registry.
-func intentInputs(vb *ValidatorBlock, chainID string, reg *ledger.BLSRegistryRecord, spine *ledger.AccumulateSpineLog) (*intentFacts, error) {
+// proofV2Verifier judges a proof v2 document against the chain's spine, pinned to the registry's incarnation. Production
+// is always proofv2.VerifyFromSpine (ValidatorApp.proofVerifier is nil outside tests); the type exists so a test of the
+// activation gate can drive the 2.1 branch of consensus with a verifier that returns a report it builds, before the
+// document builder of evidence 2.1 (pkg/proof/v2, RB9-C1) is merged. It is never configuration.
+type proofV2Verifier func(ev *proofv2.Evidence, l *ledger.AccumulateSpineLog, pinned [32]byte) (*proofv2.Report, error)
+
+// intentInputs recomputes every input of the block's intent message from the block and the registry. g1 is the
+// cross-partition activation in force for the block's height (G1ActivationAt), nil before it: from the height after the
+// activation a v3 certificate must carry evidence 2.1 and is judged by govRoot v4; before it, a certificate carrying 2.1 is
+// refused by name and every other block is decided exactly as rules v14 decided it.
+func intentInputs(vb *ValidatorBlock, chainID string, reg *ledger.BLSRegistryRecord, spine *ledger.AccumulateSpineLog,
+	g1 *ledger.G1ActivationRecord, verify proofV2Verifier) (*intentFacts, error) {
 	in, govRoot, accRoot, err := intentInputsV2(vb, chainID, reg)
 	if err != nil {
 		return nil, err
@@ -115,11 +131,15 @@ func intentInputs(vb *ValidatorBlock, chainID string, reg *ledger.BLSRegistryRec
 	if ev.ProofV2 == nil {
 		return nil, ErrIntentProofV2Missing
 	}
-	rep, err := proofv2.VerifyFromSpine(ev.ProofV2, spine, in.Incarnation)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrIntentProofV2Invalid, err)
+	is21 := ev.ProofV2.Version == proofv2.Version21
+	switch {
+	case is21 && !G1CrossPartitionRequired(g1):
+		return nil, ErrIntentProofV21NotInForce
+	case !is21 && G1CrossPartitionRequired(g1):
+		return nil, fmt.Errorf("%w (proof version %q)", ErrIntentProofV21Missing, ev.ProofV2.Version)
 	}
-	if err := intentcert.BindProofV2(rep, gp.G0Proof, gp.G1Proof, ev.KeyPageURL); err != nil {
+	rep, err := verify(ev.ProofV2, spine, in.Incarnation)
+	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrIntentProofV2Invalid, err)
 	}
 	// One anchor commits one Accumulate set root: the set the spine derived must be the set the L4 leg was verified
@@ -128,9 +148,14 @@ func intentInputs(vb *ValidatorBlock, chainID string, reg *ledger.BLSRegistryRec
 	if rep.AccumulateSetRoot != accRoot {
 		return nil, fmt.Errorf("%w: the spine derives set root %x, the L4 leg %x", ErrIntentAccumulateSetMismatch, rep.AccumulateSetRoot, accRoot)
 	}
-	govRoot3, _, err := intentcert.GovRootV3(intentcert.GovRootV3Inputs{Report: rep, Evidence: ev.ProofV2, G0: gp.G0Proof,
-		G1: gp.G1Proof, G2: gp.G2Proof, KeyPageURL: ev.KeyPageURL, KeyBookURL: ev.KeyBookURL, OperationID: in.OperationID})
+	// Binding and root together, by the evidence's version: BindProofV2 and govRoot v3 for 2.0, the strengthened
+	// BindProofV21 over the intent's own vote evidence and govRoot v4 for 2.1 (intentcert.ProofV2Root).
+	govRoot3, _, err := intentcert.ProofV2Root(rep, ev.ProofV2, gp.G0Proof, gp.G1Proof, gp.G2Proof, ev.KeyPageURL, ev.KeyBookURL,
+		ev.VoteEvidence, in.OperationID)
 	if err != nil {
+		if errors.Is(err, intentcert.ErrBind) {
+			return nil, fmt.Errorf("%w: %v", ErrIntentProofV2Invalid, err)
+		}
 		return nil, fmt.Errorf("%w: %v", ErrIntentGovRootMismatch, err)
 	}
 	return &intentFacts{v3: true, in: in, govRoot: govRoot3, accRoot: rep.AccumulateSetRoot,
@@ -197,8 +222,16 @@ func registryMember(reg *ledger.BLSRegistryRecord, validatorID string) *ledger.B
 // (reg) on CERTEN chain chainID. It returns the recomputed message.
 //
 // spine is the chain's Accumulate spine as committed for the block's height; it decides whether the certificate must
-// be v3 (ProofV3Required), and a v3 certificate's proof v2 is judged against it.
-func VerifyIntentCertificate(vb *ValidatorBlock, chainID string, reg *ledger.BLSRegistryRecord, spine *ledger.AccumulateSpineLog) ([32]byte, error) {
+// be v3 (ProofV3Required), and a v3 certificate's proof v2 is judged against it. g1 is the cross-partition activation in
+// force for that height (nil before rules v15's activation): it decides whether the proof v2 must be evidence 2.1.
+func VerifyIntentCertificate(vb *ValidatorBlock, chainID string, reg *ledger.BLSRegistryRecord, spine *ledger.AccumulateSpineLog,
+	g1 *ledger.G1ActivationRecord) ([32]byte, error) {
+	return verifyIntentCertificate(vb, chainID, reg, spine, g1, proofv2.VerifyFromSpine)
+}
+
+// verifyIntentCertificate is VerifyIntentCertificate with the proof verifier named (see proofV2Verifier).
+func verifyIntentCertificate(vb *ValidatorBlock, chainID string, reg *ledger.BLSRegistryRecord, spine *ledger.AccumulateSpineLog,
+	g1 *ledger.G1ActivationRecord, verify proofV2Verifier) ([32]byte, error) {
 	ev := vb.IntentCertificate
 	if ev == nil {
 		return [32]byte{}, ErrIntentCertificateMissing
@@ -214,7 +247,7 @@ func VerifyIntentCertificate(vb *ValidatorBlock, chainID string, reg *ledger.BLS
 	if !v3 && (ev.ProofV2 != nil || ev.GovRootV3 != "") {
 		return [32]byte{}, ErrIntentProofV3NotInForce
 	}
-	f, err := intentInputs(vb, chainID, reg, spine)
+	f, err := intentInputs(vb, chainID, reg, spine, g1, verify)
 	if err != nil {
 		return [32]byte{}, err
 	}
@@ -266,7 +299,16 @@ func VerifyIntentCertificate(vb *ValidatorBlock, chainID string, reg *ledger.BLS
 // message with sk, then checks its own result with the verifier - a block this node would refuse is never built.
 func BuildIntentCertificate(vb *ValidatorBlock, chainID string, reg *ledger.BLSRegistryRecord, sk *bls.PrivateKey,
 	keyPageURL, keyBookURL string, authorization *govproof.AuthorizationRecord, voteEvidence json.RawMessage,
-	cp *chained_proof.ChainedProof, spine *ledger.AccumulateSpineLog, pv2 *proofv2.Evidence) error {
+	cp *chained_proof.ChainedProof, spine *ledger.AccumulateSpineLog, g1 *ledger.G1ActivationRecord, pv2 *proofv2.Evidence) error {
+	return buildIntentCertificate(vb, chainID, reg, sk, keyPageURL, keyBookURL, authorization, voteEvidence, cp, spine, g1, pv2,
+		proofv2.VerifyFromSpine)
+}
+
+// buildIntentCertificate is BuildIntentCertificate with the proof verifier named (see proofV2Verifier).
+func buildIntentCertificate(vb *ValidatorBlock, chainID string, reg *ledger.BLSRegistryRecord, sk *bls.PrivateKey,
+	keyPageURL, keyBookURL string, authorization *govproof.AuthorizationRecord, voteEvidence json.RawMessage,
+	cp *chained_proof.ChainedProof, spine *ledger.AccumulateSpineLog, g1 *ledger.G1ActivationRecord, pv2 *proofv2.Evidence,
+	verify proofV2Verifier) error {
 	if reg == nil {
 		return fmt.Errorf("no BLS registry is recorded on this chain")
 	}
@@ -285,7 +327,7 @@ func BuildIntentCertificate(vb *ValidatorBlock, chainID string, reg *ledger.BLSR
 	if ProofV3Required(spine, reg) {
 		vb.IntentCertificate.ProofV2 = pv2
 	}
-	f, err := intentInputs(vb, chainID, reg, spine)
+	f, err := intentInputs(vb, chainID, reg, spine, g1, verify)
 	if err != nil {
 		vb.IntentCertificate = nil
 		return err
@@ -304,7 +346,7 @@ func BuildIntentCertificate(vb *ValidatorBlock, chainID string, reg *ledger.BLSR
 	ev.AccumulateSetRoot = "0x" + hex.EncodeToString(f.accRoot[:])
 	ev.Message = "0x" + hex.EncodeToString(msg[:])
 	ev.Signature = hex.EncodeToString(bls_zkp.SignV6_1PreExec(sk, msg).Bytes())
-	if _, err := VerifyIntentCertificate(vb, chainID, reg, spine); err != nil {
+	if _, err := verifyIntentCertificate(vb, chainID, reg, spine, g1, verify); err != nil {
 		vb.IntentCertificate = nil
 		return fmt.Errorf("the intent certificate this node built does not verify: %w", err)
 	}

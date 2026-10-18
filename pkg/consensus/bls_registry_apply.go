@@ -7,6 +7,7 @@ import (
 	abcitypes "github.com/cometbft/cometbft/abci/types"
 
 	"github.com/certen/independant-validator/pkg/ledger"
+	proofv2 "github.com/certen/independant-validator/pkg/proof/v2"
 )
 
 // processBLSRegistry validates and records a BLS registry transaction carried by block height. Like a
@@ -125,8 +126,24 @@ func (app *ValidatorApp) judgeIntentCertificate(vb *ValidatorBlock) *abcitypes.E
 	if err != nil {
 		app.logger.Fatalf("❌ [INTENT-CERT] the Accumulate spine could not be read at height %d: %v", app.currentBlockHeight, err)
 	}
-	if _, err := VerifyIntentCertificate(vb, app.cometChainID, reg, spine); err != nil {
+	// The cross-partition activation as this block sees it (rules v15): accepted below this height. Nil until the admin
+	// quorum activates it, and then every v3 certificate is judged exactly as v14 judged it.
+	g1 := app.g1ActivationInForce(int64(app.currentBlockHeight))
+	verify := app.proofVerifier
+	if verify == nil {
+		verify = proofv2.VerifyFromSpine
+	}
+	if _, err := verifyIntentCertificate(vb, app.cometChainID, reg, spine, g1, verify); err != nil {
+		// A refusal only v15 reaches: before the activation the v14 verdict of the same block has the same result code,
+		// so nothing is recorded. From the activation on, v14 would have accepted a 2.0 certificate that v15 refuses.
+		if g1 != nil && errors.Is(err, ErrIntentProofV21Missing) {
+			app.blockRulesV15Verdict = true
+		}
 		return refuse(err.Error())
+	}
+	if g1 != nil && vb.IntentCertificate != nil && vb.IntentCertificate.ProofV2 != nil {
+		// Accepted with evidence 2.1: v14 refused every such block (the proof did not verify), so this is a v15 verdict.
+		app.blockRulesV15Verdict = true
 	}
 	return nil
 }

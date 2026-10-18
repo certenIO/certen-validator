@@ -126,6 +126,10 @@ func (app *ValidatorApp) recordCommittedOperations(height int64) {
 		app.recordFirstVerdict(executionRulesV14, &app.rulesV14FirstVerdict, height)
 		app.blockRulesV14Verdict = false
 	}
+	if app.blockRulesV15Verdict {
+		app.recordFirstVerdict(executionRulesV15, &app.rulesV15FirstVerdict, height)
+		app.blockRulesV15Verdict = false
+	}
 	// This binary decided this block, so it holds nothing this version decides differently (checkCommittedKinds).
 	if err := app.ledgerStore.AdvanceKindsChecked(CurrentExecutionRulesVersion, CommittedHistoryCheckVersion, height); err != nil {
 		app.logger.Fatalf("❌ [HISTORY] could not record committed block %d as checked: %v", height, err)
@@ -308,6 +312,8 @@ func (app *ValidatorApp) indexCommittedOperations(h committedHistory) error {
 				app.recordFirstVerdict(executionRulesV13, &app.rulesV13FirstVerdict, height)
 			} else if _, ok := DecodeAnchorSet(tx); ok {
 				app.recordFirstVerdict(executionRulesV14, &app.rulesV14FirstVerdict, height)
+			} else if _, ok := DecodeG1Activation(tx); ok {
+				app.recordFirstVerdict(executionRulesV15, &app.rulesV15FirstVerdict, height)
 			}
 		}
 		violations = append(violations, found...)
@@ -419,6 +425,9 @@ func isValidatorBlockTx(tx []byte) bool {
 		return false
 	}
 	if _, ok := DecodeAnchorSet(tx); ok {
+		return false
+	}
+	if _, ok := DecodeG1Activation(tx); ok {
 		return false
 	}
 	return true
@@ -630,6 +639,34 @@ func kindViolationWith(height int64, i int, tx []byte, code uint32,
 				"v14 decides it as an anchor set", height, i, code), true, "", nil
 		}
 	}
+	if ga, ok := DecodeG1Activation(tx); ok {
+		// v14 judged an activation-kind transaction as a ValidatorBlock. v15 refuses one with code 18 - a code no earlier
+		// version returns for it - or accepts it and records it at its height under its version and id. Anything else is
+		// a ValidatorBlock's verdict, which v15 does not reproduce; an acceptance without its record is divergent or
+		// corrupt state. No node before v15 can have recorded one, so records it cannot serve are no excuse.
+		switch code {
+		case codeG1ActivationRefused:
+			return "", true, "", nil
+		case 0:
+			rec, err := records()
+			if err != nil {
+				return "", true, "", fmt.Errorf("the committed records, to check the cross-partition activation at height %d: %w", height, err)
+			}
+			if rec != nil && rec.G1Activations != nil {
+				for _, r := range rec.G1Activations.Activations {
+					if r.Version == ga.Version && r.Height == height && r.ID == ga.ActivationID() {
+						return "", true, "", nil
+					}
+				}
+			}
+			return fmt.Sprintf("height %d tx %d is a cross-partition activation that was accepted, but no activation is "+
+				"recorded for it at that height: an acceptance without its record is divergent or corrupt state, or v14 "+
+				"accepted it as a ValidatorBlock; v15 decides it as an activation", height, i), true, "", nil
+		default:
+			return fmt.Sprintf("height %d tx %d is a cross-partition activation that v14 judged as a ValidatorBlock (code %d); "+
+				"v15 decides it as an activation", height, i, code), true, "", nil
+		}
+	}
 	if gt, ok := DecodeAccumulateSpineGenesis(tx); ok {
 		// v12 judged a spine-kind transaction as a ValidatorBlock. v13 refuses a genesis with code 13 - a code no earlier
 		// version returns - or accepts it and records it, at its height, in the spine log (or, once a later genesis
@@ -734,7 +771,10 @@ func spineExtensionRecorded(l *ledger.AccumulateSpineLog, et *AccumulateSpineExt
 //   - 4: rules v14's anchor set (RB4-F35): a committed anchor-set-kind transaction must be decided as one - refused with
 //     code 16, or accepted (code 0) with its record in the committed anchor set log at its height under its version and
 //     id - and CommittedRecords carries that log.
-const CommittedHistoryCheckVersion uint64 = 4
+//   - 5: rules v15's cross-partition activation (RB9-C): a committed activation-kind transaction must be decided as one -
+//     refused with code 18, or accepted (code 0) with its record in the committed activation log at its height under its
+//     version and id - and CommittedRecords carries that log.
+const CommittedHistoryCheckVersion uint64 = 5
 
 // checkCommittedKinds checks every committed block above the kinds watermark (ledger KindsCheckedThrough, for this rules
 // version and CommittedHistoryCheckVersion) with kindViolation and rotationBlockVerdicts, and advances the watermark to

@@ -116,6 +116,7 @@ type ValidatorApp struct {
 	blockRulesV12Verdict bool
 	blockRulesV13Verdict bool
 	blockRulesV14Verdict bool
+	blockRulesV15Verdict bool
 	rulesV8FirstVerdict  int64
 	rulesV9FirstVerdict  int64
 	rulesV10FirstVerdict int64
@@ -123,6 +124,7 @@ type ValidatorApp struct {
 	rulesV12FirstVerdict int64
 	rulesV13FirstVerdict int64
 	rulesV14FirstVerdict int64
+	rulesV15FirstVerdict int64
 
 	// blockAdminSetChanged: this execution of the block has accepted an admin-set change (a re-seal or an admin
 	// rotation). At most one lands per block (rules v12, admin_rotate_apply.go). Reset by FinalizeBlock.
@@ -140,6 +142,10 @@ type ValidatorApp struct {
 	blockSpine spineAcceptances
 	// The anchor-set versions THIS execution of the block accepted (rules v14), judged like the registry's.
 	blockAnchorSetRecords []ledger.AnchorSetRecord
+	// The cross-partition activation THIS execution of the block accepted (rules v15), judged like the anchor set's.
+	blockG1ActivationRecords []ledger.G1ActivationRecord
+	// proofVerifier is nil in production (proofv2.VerifyFromSpine); see proofV2Verifier.
+	proofVerifier proofV2Verifier
 }
 
 // EntitlementMode is the entitlement mode this chain enforces now: the sealed policy, as changed by every policy
@@ -161,15 +167,18 @@ func (app *ValidatorApp) EntitlementMode() EntitlementMode {
 //   - v8 from then on,
 //   - v9 once a block is decided in a way only v9 decides it: a refused second block for a committed
 //     operation, or a block naming no validator that v8 would have accepted under the chain's name.
-//   - v10, v11, v12, v13 and v14 once a block decides a transaction of the kind each adds (registry, re-seal, admin
-//     rotation, spine genesis or extension, anchor set), accepted or refused - each older version judged those bytes as a
+//   - v10, v11, v12, v13, v14 and v15 once a block decides a transaction of the kind each adds (registry, re-seal, admin
+//     rotation, spine genesis or extension, anchor set, cross-partition activation), accepted or refused - each older version judged those bytes as a
 //     ValidatorBlock. v14's ValidatorBlock rules (anchors, ENTITLEMENT_UNPRICED) apply only once an anchor set is in force, so
-//     they are reached only after a block decided an anchor set.
+//     they are reached only after a block decided an anchor set. v15's certificate rule (evidence 2.1 required) applies only
+//     from the height after an accepted activation, so it too is reached only after a block decided an activation.
 //
 // Stamping it (rather than the binary's version) is truthful, and it leaves the older binary able to start
 // on this state until a block makes that genuinely impossible.
 func (app *ValidatorApp) committedRulesVersion() uint64 {
 	switch {
+	case app.rulesV15FirstVerdict > 0:
+		return executionRulesV15
 	case app.rulesV14FirstVerdict > 0:
 		return executionRulesV14
 	case app.rulesV13FirstVerdict > 0:
@@ -296,7 +305,8 @@ func NewValidatorApp(ledgerStore *ledger.LedgerStore, chainID string) *Validator
 			into    *int64
 		}{{executionRulesV8, &app.rulesV8FirstVerdict}, {executionRulesV9, &app.rulesV9FirstVerdict},
 			{executionRulesV10, &app.rulesV10FirstVerdict}, {executionRulesV11, &app.rulesV11FirstVerdict},
-			{executionRulesV12, &app.rulesV12FirstVerdict}, {executionRulesV13, &app.rulesV13FirstVerdict}, {executionRulesV14, &app.rulesV14FirstVerdict}} {
+			{executionRulesV12, &app.rulesV12FirstVerdict}, {executionRulesV13, &app.rulesV13FirstVerdict}, {executionRulesV14, &app.rulesV14FirstVerdict},
+			{executionRulesV15, &app.rulesV15FirstVerdict}} {
 			first, err := ledgerStore.RulesFirstVerdict(v.version)
 			if err != nil {
 				app.logger.Fatalf("❌ the first v%d verdict could not be read: %v - not starting on a ledger this node cannot read", v.version, err)
@@ -548,6 +558,14 @@ func (app *ValidatorApp) CheckTx(ctx context.Context, req *abcitypes.RequestChec
 	if as, ok := DecodeAnchorSet(req.Tx); ok {
 		if err := as.CheckShape(); err != nil {
 			return &abcitypes.ResponseCheckTx{Code: codeAnchorSetRefused, Log: "anchor set refused: " + err.Error()}, nil
+		}
+		return &abcitypes.ResponseCheckTx{Code: 0, GasWanted: 1, GasUsed: 1}, nil
+	}
+	// The cross-partition activation (rules v15): its shape filters the mempool; the chain, whether one is already
+	// recorded and the admin quorum are judged in FinalizeBlock.
+	if ga, ok := DecodeG1Activation(req.Tx); ok {
+		if err := ga.CheckShape(); err != nil {
+			return &abcitypes.ResponseCheckTx{Code: codeG1ActivationRefused, Log: "cross-partition activation refused: " + err.Error()}, nil
 		}
 		return &abcitypes.ResponseCheckTx{Code: 0, GasWanted: 1, GasUsed: 1}, nil
 	}
@@ -909,10 +927,12 @@ func (app *ValidatorApp) FinalizeBlock(ctx context.Context, req *abcitypes.Reque
 	app.blockRulesV12Verdict = false
 	app.blockRulesV13Verdict = false
 	app.blockRulesV14Verdict = false
+	app.blockRulesV15Verdict = false
 	app.blockAdminSetChanged = false
 	app.blockSpine = spineAcceptances{}
 	app.blockPolicyChanges, app.blockRotationRecords, app.blockRegistryRecords = nil, nil, nil
 	app.blockAnchorSetRecords = nil
+	app.blockG1ActivationRecords = nil
 	// A fresh slice, never [:0]: the previous block's slice may already belong to the persister.
 	app.blockValidatorBlocks = nil
 
@@ -955,6 +975,13 @@ func (app *ValidatorApp) FinalizeBlock(ctx context.Context, req *abcitypes.Reque
 		if as, ok := DecodeAnchorSet(tx); ok {
 			app.blockRulesV14Verdict = true
 			result := app.processAnchorSet(as, req.Height)
+			txResults[i] = &result
+			continue
+		}
+		// Nor is the cross-partition activation (rules v15). v14 judged it as a ValidatorBlock.
+		if ga, ok := DecodeG1Activation(tx); ok {
+			app.blockRulesV15Verdict = true
+			result := app.processG1Activation(ga, req.Height)
 			txResults[i] = &result
 			continue
 		}
