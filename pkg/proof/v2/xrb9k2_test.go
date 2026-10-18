@@ -173,6 +173,9 @@ func TestRB9K2AddOpAdverseVerdicts(t *testing.T) {
 		"a book neither listed nor added voted beside the listed one": {
 			xworld.Timeline{Body: authOps(enableOp(xworld.BankBook)), PrincipalAuthorities: []xworld.AuthSpec{{Book: xworld.BankBook}}, Second: &xworld.Timeline{}},
 			proofv2.StateVoteNotReproduced},
+		"a book neither listed nor added voted although every listed authority is disabled: the any-vote shortcut is not this type's rule": {
+			xworld.Timeline{Body: authOps(disableOp(xworld.BankBook)), PrincipalAuthorities: []xworld.AuthSpec{{Book: xworld.BankBook, Disabled: true}}, Second: &xworld.Timeline{}},
+			proofv2.StateVoteNotReproduced},
 		"the first authorities of an inheriting account, both voted": {
 			xworld.Timeline{Body: authOps(addOp(xworld.BankBook), addOp(xworld.DeleBook)), PrincipalAuthorities: bothBooks(), Second: &xworld.Timeline{}},
 			proofv2.StateExecutorOverrideUnsupported},
