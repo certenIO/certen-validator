@@ -372,6 +372,11 @@ func (b *Builder) assemble21(ctx context.Context, ev *Evidence, x *Assembly, ar 
 	if err != nil {
 		return nil, nil, fmt.Errorf("built evidence 2.1 that does not verify: %w", err)
 	}
+	// Before anything is signed: the whole certificate must fit the transaction path (certificate_budget{size,limit} with tx_too_large), and
+	// the update windows (one link each) at this validator count must be inside the k x V bound (xbudget.go).
+	if err := checkAssembledBudget(ev, rep.Validators, seq.Source.String(), rep.AnchorBlock); err != nil {
+		return nil, nil, err
+	}
 	return ev, rep, nil
 }
 
