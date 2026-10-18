@@ -1,0 +1,705 @@
+{
+  "format": "certen-xpartition2b-conformance/1",
+  "domain": "certen:g1:v4",
+  "portableFormat": "certen-proof-v2-accumulate-portable/1",
+  "cases": [
+    {
+      "name": "timeline-valid",
+      "description": "the history folds to the proven main chain, the key signature's arrival block is derived from the signature-index chain, the vote is reproduced; the vote's production block is not established",
+      "file": "timeline-valid.json",
+      "sha256": "8e7f01cc28bc3f2288f67e46c146e3829789644e2e8ec3fc9f73fde82299ef4a",
+      "expect": "verified",
+      "report": {
+        "version": "2.1",
+        "tag": "certen:g1:v4",
+        "partition": "acc://bvn-BVN1.acme",
+        "anchorBlock": 50,
+        "certifiedRoot": "5983a1024d00d2664e8f9c61fdac3ccef7e93250992cf00ff2f0edf056e6ef12",
+        "checkBlock": 300,
+        "setVerdict": "verified",
+        "routingHeight": 1,
+        "proven": [
+          {
+            "url": "acc://pv2-cust-5.acme/data",
+            "partition": "acc://bvn-BVN1.acme",
+            "block": 50,
+            "roles": [
+              "principal-chain"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/1",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page",
+              "voter"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/2",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book/1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-page"
+            ]
+          }
+        ],
+        "pagesBound": 6,
+        "unproven": [
+          "g1_vote_held"
+        ],
+        "authorizationMode": "authorities_required",
+        "arrivals": [
+          {
+            "kind": "signature",
+            "account": "acc://pv2-bank-5.acme/book/1",
+            "block": 65
+          }
+        ]
+      }
+    },
+    {
+      "name": "timeline-history-with-update-and-credit",
+      "description": "a page that gained a key and burned credits before the signature arrived: three history entries, two index entries",
+      "file": "timeline-history-with-update-and-credit.json",
+      "sha256": "e7b4be5376157ae1520d9ed903f79ab9d8ad4fedd15ea104234bd567b2a01f69",
+      "expect": "verified",
+      "report": {
+        "version": "2.1",
+        "tag": "certen:g1:v4",
+        "partition": "acc://bvn-BVN1.acme",
+        "anchorBlock": 50,
+        "certifiedRoot": "8d3151f129498e9174c052b8818bd47a171cf48f6cffe78c18f68358a3af66a5",
+        "checkBlock": 300,
+        "setVerdict": "verified",
+        "routingHeight": 1,
+        "proven": [
+          {
+            "url": "acc://pv2-cust-5.acme/data",
+            "partition": "acc://bvn-BVN1.acme",
+            "block": 50,
+            "roles": [
+              "principal-chain"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/1",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page",
+              "voter"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/2",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book/1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-page"
+            ]
+          }
+        ],
+        "pagesBound": 6,
+        "unproven": [
+          "g1_vote_held"
+        ],
+        "authorizationMode": "authorities_required",
+        "arrivals": [
+          {
+            "kind": "signature",
+            "account": "acc://pv2-bank-5.acme/book/1",
+            "block": 65
+          }
+        ]
+      }
+    },
+    {
+      "name": "timeline-key-removed-after-arrival",
+      "description": "the signing key was removed in block 68, after the signature arrived in block 65 and before B_Y: it still counts",
+      "file": "timeline-key-removed-after-arrival.json",
+      "sha256": "61e3e018fcd3a315380a48e822cfffa5049578883f83b2aea21ce162877fbb4a",
+      "expect": "verified",
+      "report": {
+        "version": "2.1",
+        "tag": "certen:g1:v4",
+        "partition": "acc://bvn-BVN1.acme",
+        "anchorBlock": 50,
+        "certifiedRoot": "faa919e22cb4d41ed5a8054d2a7caca746f29c269033af1294e6f8eae4db7df0",
+        "checkBlock": 300,
+        "setVerdict": "verified",
+        "routingHeight": 1,
+        "proven": [
+          {
+            "url": "acc://pv2-cust-5.acme/data",
+            "partition": "acc://bvn-BVN1.acme",
+            "block": 50,
+            "roles": [
+              "principal-chain"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/1",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page",
+              "voter"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/2",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book/1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-page"
+            ]
+          }
+        ],
+        "pagesBound": 6,
+        "unproven": [
+          "g1_vote_held"
+        ],
+        "authorizationMode": "authorities_required",
+        "arrivals": [
+          {
+            "kind": "signature",
+            "account": "acc://pv2-bank-5.acme/book/1",
+            "block": 65
+          }
+        ]
+      }
+    },
+    {
+      "name": "timeline-threshold-raised-after-arrival",
+      "description": "the threshold was raised to 2 in block 68, after a one-key vote was produced: the vote stands",
+      "file": "timeline-threshold-raised-after-arrival.json",
+      "sha256": "689e26dcc3a271099cf6efaef742126ec344d9e177857687d7b88faf4626ded1",
+      "expect": "verified",
+      "report": {
+        "version": "2.1",
+        "tag": "certen:g1:v4",
+        "partition": "acc://bvn-BVN1.acme",
+        "anchorBlock": 50,
+        "certifiedRoot": "97d9a165859c24b6f5deff56810e9672c381df128f0a9f8939fda2391e7bc090",
+        "checkBlock": 300,
+        "setVerdict": "verified",
+        "routingHeight": 1,
+        "proven": [
+          {
+            "url": "acc://pv2-cust-5.acme/data",
+            "partition": "acc://bvn-BVN1.acme",
+            "block": 50,
+            "roles": [
+              "principal-chain"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/1",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page",
+              "voter"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/2",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book/1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-page"
+            ]
+          }
+        ],
+        "pagesBound": 6,
+        "unproven": [
+          "g1_vote_held"
+        ],
+        "authorizationMode": "authorities_required",
+        "arrivals": [
+          {
+            "kind": "signature",
+            "account": "acc://pv2-bank-5.acme/book/1",
+            "block": 65
+          }
+        ]
+      }
+    },
+    {
+      "name": "timeline-two-counted-signatures",
+      "description": "a threshold-2 page: the cause signature and one other counted signature, both with derived arrival blocks",
+      "file": "timeline-two-counted-signatures.json",
+      "sha256": "e6315fce35cacf2e13d7eea518abd1da26f3c02cc7afc53cf163a8e1c626c784",
+      "expect": "verified",
+      "report": {
+        "version": "2.1",
+        "tag": "certen:g1:v4",
+        "partition": "acc://bvn-BVN1.acme",
+        "anchorBlock": 50,
+        "certifiedRoot": "71c052f8888b88c748251c204253d29f99cbf1f338d94c83bf3281e3d09c111e",
+        "checkBlock": 300,
+        "setVerdict": "verified",
+        "routingHeight": 1,
+        "proven": [
+          {
+            "url": "acc://pv2-cust-5.acme/data",
+            "partition": "acc://bvn-BVN1.acme",
+            "block": 50,
+            "roles": [
+              "principal-chain"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/1",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page",
+              "voter"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/2",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book/1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-page"
+            ]
+          }
+        ],
+        "pagesBound": 6,
+        "unproven": [
+          "g1_vote_held"
+        ],
+        "authorizationMode": "authorities_required",
+        "arrivals": [
+          {
+            "kind": "signature",
+            "account": "acc://pv2-bank-5.acme/book/1",
+            "block": 66
+          },
+          {
+            "kind": "signature",
+            "account": "acc://pv2-bank-5.acme/book/1",
+            "block": 62
+          }
+        ]
+      }
+    },
+    {
+      "name": "timeline-vote-released-later",
+      "description": "the vote was produced in block 66 (a HoldUntil release after the signature arrived in block 65), established by its SequencedMessage's entry in the synthetic ledger",
+      "file": "timeline-vote-released-later.json",
+      "sha256": "bae32cccb45d205e5df6fcf4b61f1e78737736a559f73a0927d87321da4d3147",
+      "expect": "verified",
+      "report": {
+        "version": "2.1",
+        "tag": "certen:g1:v4",
+        "partition": "acc://bvn-BVN1.acme",
+        "anchorBlock": 50,
+        "certifiedRoot": "f9a4a512f5fa9c67161c59e1281283588cadf6cd2f116c496d86877624e2edb0",
+        "checkBlock": 300,
+        "setVerdict": "verified",
+        "routingHeight": 1,
+        "proven": [
+          {
+            "url": "acc://pv2-cust-5.acme/data",
+            "partition": "acc://bvn-BVN1.acme",
+            "block": 50,
+            "roles": [
+              "principal-chain"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/1",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page",
+              "voter"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/2",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page"
+            ]
+          },
+          {
+            "url": "acc://bvn-BVN2.acme/synthetic",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "synthetic-chain"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book/1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-page"
+            ]
+          }
+        ],
+        "pagesBound": 7,
+        "unproven": null,
+        "authorizationMode": "authorities_required",
+        "arrivals": [
+          {
+            "kind": "signature",
+            "account": "acc://pv2-bank-5.acme/book/1",
+            "block": 65
+          },
+          {
+            "kind": "produced",
+            "account": "acc://bvn-BVN2.acme/synthetic",
+            "block": 66
+          }
+        ]
+      }
+    },
+    {
+      "name": "timeline-without-transaction",
+      "description": "no transaction is carried, so the votes are not re-evaluated: a named state, not a verified S3",
+      "file": "timeline-without-transaction.json",
+      "sha256": "2c8777839d2e95aa82c9313126b2cd763d7e8347d165241a85f2f558405b186e",
+      "expect": "verified",
+      "report": {
+        "version": "2.1",
+        "tag": "certen:g1:v4",
+        "partition": "acc://bvn-BVN1.acme",
+        "anchorBlock": 50,
+        "certifiedRoot": "5983a1024d00d2664e8f9c61fdac3ccef7e93250992cf00ff2f0edf056e6ef12",
+        "checkBlock": 300,
+        "setVerdict": "verified",
+        "routingHeight": 1,
+        "proven": [
+          {
+            "url": "acc://pv2-cust-5.acme/data",
+            "partition": "acc://bvn-BVN1.acme",
+            "block": 50,
+            "roles": [
+              "principal-chain"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/1",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page",
+              "voter"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/2",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book/1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-page"
+            ]
+          }
+        ],
+        "pagesBound": 6,
+        "unproven": [
+          "g1_completeness_unproven"
+        ]
+      }
+    },
+    {
+      "name": "timeline-history-entry-tampered",
+      "description": "a history entry replaced by another valid transaction: the entries do not fold to the proven main chain",
+      "file": "timeline-history-entry-tampered.json",
+      "sha256": "7c0cfc3d937a5fc28f3e9076dce574157e8a309d6259931fc9dd8b021e4a4087",
+      "expect": "refused",
+      "state": "g1_history_fold_mismatch",
+      "partition": "BVN2",
+      "block": 70
+    },
+    {
+      "name": "timeline-history-entry-removed",
+      "description": "a history entry removed",
+      "file": "timeline-history-entry-removed.json",
+      "sha256": "9a15e1d41cb40a04a651890abb33b5a65949e4e78da09fe8273d19b8c2f195c5",
+      "expect": "refused",
+      "state": "g1_history_fold_mismatch",
+      "partition": "BVN2",
+      "block": 70
+    },
+    {
+      "name": "timeline-history-index-entry-removed",
+      "description": "the last main-index entry removed: the index does not fold to the proven main-index chain",
+      "file": "timeline-history-index-entry-removed.json",
+      "sha256": "ea83198cb1691d7a46bb9b7baa97bb03f2c0bd8d43618abd42ed1321b2b35afc",
+      "expect": "refused",
+      "state": "g1_history_fold_mismatch",
+      "partition": "BVN2",
+      "block": 70
+    },
+    {
+      "name": "timeline-replay-ends-elsewhere",
+      "description": "the folded history removes K1 but the page proven at B_Y still holds it",
+      "file": "timeline-replay-ends-elsewhere.json",
+      "sha256": "05d05989bf24b30d027516797b22bd26bdcdb5e05f78ba4e452a8c677f417371",
+      "expect": "refused",
+      "state": "g1_history_head_mismatch",
+      "partition": "BVN2",
+      "block": 70
+    },
+    {
+      "name": "timeline-key-added-after-arrival",
+      "description": "the signing key was added in block 68, after the signature claimed to arrive in block 65: it must not count although the page at B_Y holds it",
+      "file": "timeline-key-added-after-arrival.json",
+      "sha256": "f9cd30203c604841bbdafab7cd60156cae53825a1a6d2cd840052a112600823b",
+      "expect": "refused",
+      "state": "g1_vote_not_reproduced",
+      "partition": "BVN1",
+      "block": 50
+    },
+    {
+      "name": "timeline-threshold-lowered-after-arrival",
+      "description": "the threshold of a 2-key page was lowered to 1 in block 68: one signature at block 65 did not make a vote",
+      "file": "timeline-threshold-lowered-after-arrival.json",
+      "sha256": "dbd4845145573483c124db96e063c6d0868cd4200948cbfb7c960b665d40a110",
+      "expect": "refused",
+      "state": "g1_vote_not_reproduced",
+      "partition": "BVN1",
+      "block": 50
+    },
+    {
+      "name": "timeline-version-replaced-before-arrival",
+      "description": "the page became version 2 in block 60: a version-1 signature arriving in block 65 is not accepted",
+      "file": "timeline-version-replaced-before-arrival.json",
+      "sha256": "a669398e701c52d2bb26ea4d7ab2a041472a2c14bf4a867dae396a19c1a35829",
+      "expect": "refused",
+      "state": "g1_vote_not_reproduced",
+      "partition": "BVN1",
+      "block": 50
+    },
+    {
+      "name": "timeline-vote-value-disagrees",
+      "description": "the recorded vote is reject, the re-evaluation reaches accept",
+      "file": "timeline-vote-value-disagrees.json",
+      "sha256": "71bbb11cbb6e3e70e3e2e33a939e98b08edfad0c8d455bf8caebf4e9940f4e27",
+      "expect": "refused",
+      "state": "g1_vote_not_reproduced",
+      "partition": "BVN1",
+      "block": 50
+    },
+    {
+      "name": "timeline-vote-origin-disagrees",
+      "description": "the recorded origin is the book's second page, the re-evaluation decides it with the first",
+      "file": "timeline-vote-origin-disagrees.json",
+      "sha256": "494a5fde2d760a2bc5a723f37223be3006b9ed4fa3dd4d7a133a75cbd9985e3d",
+      "expect": "refused",
+      "state": "g1_vote_not_reproduced",
+      "partition": "BVN1",
+      "block": 50
+    },
+    {
+      "name": "timeline-counted-signature-dropped",
+      "description": "a threshold-2 page's vote with its second counted signature left out",
+      "file": "timeline-counted-signature-dropped.json",
+      "sha256": "c21ed8c599c37629ff74482d3e45d77680e8fef1b33408c0016edc228a97bd73",
+      "expect": "refused",
+      "state": "g1_vote_not_reproduced",
+      "partition": "BVN1",
+      "block": 50
+    },
+    {
+      "name": "timeline-arrival-block-claimed",
+      "description": "the hop claims block 64; the signature-index chain derives 65",
+      "file": "timeline-arrival-block-claimed.json",
+      "sha256": "5c35f7b5318ac8a2145216f4022f541613a4ed49349035ce862af9b1b140e8a0",
+      "expect": "refused",
+      "state": "g1_arrival_unproven",
+      "partition": "BVN2",
+      "block": 70
+    },
+    {
+      "name": "timeline-arrival-previous-index-entry-missing",
+      "description": "the previous signature-index entry is left out, so nothing shows the signature was not in an earlier block",
+      "file": "timeline-arrival-previous-index-entry-missing.json",
+      "sha256": "b5baa79f2e4604e9e6a7421cff1e4e409b79f6bce27dca9816515f516ef5fe4e",
+      "expect": "refused",
+      "state": "g1_arrival_unproven",
+      "partition": "BVN2",
+      "block": 70
+    },
+    {
+      "name": "timeline-vote-produced-before-its-cause",
+      "description": "the SequencedMessage is in the synthetic ledger in block 64, before the signature that caused the vote arrived in block 65",
+      "file": "timeline-vote-produced-before-its-cause.json",
+      "sha256": "fa25a45cf009c1102c671796d06d5e2e0c353b26ccea1d900e09fc24bf061b90",
+      "expect": "refused",
+      "state": "g1_block_before_signature",
+      "partition": "BVN2",
+      "block": 70
+    }
+  ]
+}

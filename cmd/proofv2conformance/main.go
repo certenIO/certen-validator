@@ -65,7 +65,16 @@ func main() {
 	evidence := flag.String("evidence", "evidence_3cfb04cf.json.gz", "the live evidence, in -testdata")
 	out := flag.String("out", "pkg/proof/v2/testdata/conformance", "output directory")
 	x2 := flag.String("xpartition2", "", "write only the evidence 2.1 (cross-partition) suite into this directory; the 2.0 suite is not touched")
+	x2b := flag.String("xpartition2b", "", "write only the certified-timeline suite (evidence 2.1 with page histories and derived arrivals) into this directory")
 	flag.Parse()
+	if *x2b != "" {
+		if err := writeXPartition2b(*x2b); err != nil {
+			fmt.Println("FAIL:", err)
+			os.Exit(1)
+		}
+		fmt.Println("wrote the certified-timeline suite to", *x2b)
+		return
+	}
 	if *x2 != "" {
 		if err := writeXPartition2(*x2); err != nil {
 			fmt.Println("FAIL:", err)

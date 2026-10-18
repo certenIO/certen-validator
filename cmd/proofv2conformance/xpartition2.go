@@ -42,6 +42,17 @@ type XReport struct {
 	Proven        []XPageReport `json:"proven"`
 	PagesBound    int           `json:"pagesBound"`
 	Unproven      []string      `json:"unproven"`
+
+	// The certified timeline (suite xpartition2b); absent from the first suite, whose reports have none.
+	AuthorizationMode string     `json:"authorizationMode,omitempty"`
+	Arrivals          []XArrival `json:"arrivals,omitempty"`
+}
+
+// XArrival is one counted signature (or a vote's production) and the block the verifier derived for it.
+type XArrival struct {
+	Kind    string `json:"kind"`
+	Account string `json:"account"`
+	Block   uint64 `json:"block"`
 }
 
 // XCase is one manifest entry.
@@ -88,16 +99,32 @@ func xreport(rep *proofv2.Report) *XReport {
 	for _, u := range rep.Unproven {
 		out.Unproven = append(out.Unproven, u.Code)
 	}
+	out.AuthorizationMode = rep.AuthorizationMode
+	for _, a := range rep.Arrivals {
+		out.Arrivals = append(out.Arrivals, XArrival{Kind: a.Kind, Account: a.Account, Block: a.Block})
+	}
 	return out
 }
 
 // writeXPartition2 writes the suite into out and refuses to write a case the Go verifier does not judge as the manifest says.
 func writeXPartition2(out string) error {
+	return writeXSuite(out, XManifestFormat, xworld.Cases())
+}
+
+// XManifestFormat2b names the certified-timeline suite (RB9 Phase C1b-1): new files, their own manifest and hash.
+const XManifestFormat2b = "certen-xpartition2b-conformance/1"
+
+// writeXPartition2b writes the certified-timeline suite; the first suite's files and manifest are never touched.
+func writeXPartition2b(out string) error {
+	return writeXSuite(out, XManifestFormat2b, xworld.Cases2())
+}
+
+func writeXSuite(out, format string, cases []xworld.Case) error {
 	if err := os.MkdirAll(out, 0o755); err != nil {
 		return err
 	}
-	m := XManifest{Format: XManifestFormat, Domain: proofv2.DomainG1V4, PortableFormat: proofv2.PortableFormat}
-	for _, c := range xworld.Cases() {
+	m := XManifest{Format: format, Domain: proofv2.DomainG1V4, PortableFormat: proofv2.PortableFormat}
+	for _, c := range cases {
 		_, p, err := c.Document()
 		if err != nil {
 			return fmt.Errorf("%s: %w", c.Name, err)
