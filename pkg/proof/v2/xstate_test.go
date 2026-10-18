@@ -201,13 +201,23 @@ func TestCheckpointGlobalsFieldIsOmittedWhenEmptyAndGated(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		// V-E A2(c): from the activation a checkpoint also holds the root chain index of the anchor it closed at (the lower bound of the first
+		// update window of a document built on it); before it the field is absent and the checkpoint is ExtendSpine's, byte for byte.
+		if gate {
+			for i := range got {
+				if got[i].RootChainIndex == 0 {
+					t.Fatalf("gate true: checkpoint %d holds no root chain index", i)
+				}
+				got[i].RootChainIndex = 0
+			}
+		}
 		a, _ := json.Marshal(plain)
 		z, _ := json.Marshal(got)
 		if string(a) != string(z) {
 			t.Fatalf("gate %v: the checkpoints differ from ExtendSpine's:\n%s\n%s", gate, a, z)
 		}
-		if strings.Contains(string(z), "globals_updates") {
-			t.Fatalf("gate %v: an empty count is encoded: %s", gate, z)
+		if strings.Contains(string(z), "globals_updates") || strings.Contains(string(z), "root_chain_index") {
+			t.Fatalf("gate %v: an empty count or index is encoded: %s", gate, z)
 		}
 	}
 	// A checkpoint that holds a count restores a spine that continues it.

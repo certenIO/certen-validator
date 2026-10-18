@@ -108,6 +108,13 @@ func certify1Worlds() map[string]xworld.Options {
 			Final: xworld.ChainItem{Anchored: true}, Omit: []int{0}}},
 		// A complete chain of another incarnation: it shares the pinned genesis records and the genesis set, and starts at a root of its own.
 		"chain-foreign-genesis": {Chain: &xworld.Chain{Final: xworld.ChainItem{Anchored: true}, Start: xworld.ForeignGenesis()}},
+		// The window of an update (V-E A2(c)): the update's root chain position, read from its receipt's shape and the signed tree size, must lie
+		// in (the previous anchor's RootChainIndex, this anchor's].
+		"chain-window-in": {Chain: &xworld.Chain{Items: []xworld.ChainItem{{Anchored: true, Update: xworld.UpdateGlobals}}, Final: xworld.ChainItem{Anchored: true}}},
+		"chain-window-before": {Chain: &xworld.Chain{Items: []xworld.ChainItem{{Anchored: true, Update: xworld.UpdateGlobalsB},
+			{Anchored: true, Update: xworld.UpdateGlobals, Leaf: xworld.LeafBefore}}, Final: xworld.ChainItem{Anchored: true}}},
+		"chain-window-after": {Chain: &xworld.Chain{Items: []xworld.ChainItem{{Anchored: true, Update: xworld.UpdateGlobals, Leaf: xworld.LeafAfter}}, Final: xworld.ChainItem{Anchored: true}}},
+		"chain-window-shape": {Chain: &xworld.Chain{Items: []xworld.ChainItem{{Anchored: true, Update: xworld.UpdateGlobals, Leaf: xworld.LeafShape}}, Final: xworld.ChainItem{Anchored: true}}},
 	}
 }
 
@@ -392,6 +399,12 @@ func certify1Specs() []certify1Spec {
 		{Certify1Case: c("accounted-set-change-verified", "chain-accounted", "none", "updates in the minor run: the globals are rewritten (B, then the genesis content again) and the network to version 2 (a fourth validator); the proven accounts hold 3 and 2 main chain entries, the walk applied every write: the set check is verified, not asserted", ok), apply: noEdit},
 		{Certify1Case: c("omitted-globals-update", "chain-globals-aba-omitted", "none (the document leaves out the first globals write of an A -> B -> A sequence; the proven globals account holds 3 main chain entries and the genesis content)", "the content of the globals the walk derives equals the proven one, so only the count of writes shows the omission", certify1State(proofv2.StateCertifyWindowUnaccounted, "globals", "300", "2", "3")), apply: noEdit},
 
+		// The window of an update (V-E A2(c)).
+		{Certify1Case: c("update-inside-its-window-verified", "chain-window-in", "none", "the update's root chain position, read from the end of its combined receipt and the signed tree size, lies between the previous anchor's RootChainIndex and this anchor's: verified", ok), apply: noEdit},
+		{Certify1Case: c("update-before-its-window", "chain-window-before", "none (the second item presents a write whose root chain leaf lies in the first item's window)", "an update recorded in an earlier block than the window it is presented in: its position is not above the previous anchor's RootChainIndex", certify1State(proofv2.StateCertifyUpdateUnproven, "acc://dn.acme/globals", "", "120")), apply: noEdit},
+		{Certify1Case: c("update-after-its-window", "chain-window-after", "none (the receipt is that of a tree one leaf larger than the signed RootChainIndex + 1)", "an update whose leaf lies beyond the root chain the anchor signs: its receipt does not decompose for the signed tree size", certify1State(proofv2.StateCertifyUpdateUnproven, "acc://dn.acme/globals", "", "110")), apply: noEdit},
+		{Certify1Case: c("update-receipt-shape-undecodable", "chain-window-shape", "none (the receipt's path is shorter than the root chain path of any leaf of the signed size)", "a receipt that hashes to the signed root but whose shape is the root chain path of no leaf of a tree of the signed size", certify1State(proofv2.StateCertifyUpdateUnproven, "acc://dn.acme/globals", "", "110")), apply: noEdit},
+
 		// Evidence 2.0 is frozen.
 		{Certify1Case: c("genesis-link-member-in-an-evidence-2.0-document", "conformance:network-update", "evidence/genesisLink = a string", "a genesisLink member in a document that claims 2.0 is not read: the verdict is the unmodified document's, whatever the member holds", Certify1Case{}),
 			sameAsBase: true,
@@ -449,6 +462,10 @@ func writeCertify1(out string) error {
 		rep, verr := verifyGuarded(edited)
 		xc := s.Certify1Case
 		xc.File = s.Name + ".json"
+		if block, unproven := map[string]string{"update-before-its-window": "120", "update-after-its-window": "110", "update-receipt-shape-undecodable": "110"}[s.Name]; unproven {
+			x := certify1State(proofv2.StateCertifyUpdateUnproven, "acc://dn.acme/globals", xworld.UpdateTxHash(xworld.UpdateGlobals, built.Inputs.GlobalsRecord), block)
+			xc.Expect, xc.State, xc.Fields, xc.Wording = x.Expect, x.State, x.Fields, x.Wording
+		}
 		if s.Name == "duplicated-update" || s.Name == "hop-duplicated-update" {
 			x := certify1State(proofv2.StateCertifyUpdateReplayed, xworld.UpdateTxHash(xworld.UpdateGlobals, built.Inputs.GlobalsRecord))
 			xc.Expect, xc.State, xc.Fields, xc.Wording = x.Expect, x.State, x.Fields, x.Wording

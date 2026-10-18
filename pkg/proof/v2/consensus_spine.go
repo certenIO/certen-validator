@@ -76,6 +76,9 @@ func SpineAt(l *ledger.AccumulateSpineLog, n uint64) (*Spine, error) {
 		return nil, err
 	}
 	sp.priorGlobalsUpdates = c.GlobalsUpdates
+	if c.RootChainIndex != 0 { // a checkpoint recorded before the rules v15 activation holds none: the window's lower bound is then unproven
+		sp.RootChainIndex, sp.rciKnown = c.RootChainIndex, true
+	}
 	return sp, nil
 }
 
@@ -133,6 +136,7 @@ func ExtendSpineCounting(l *ledger.AccumulateSpineLog, records []*api.MajorHeade
 			SetHash: h, NetworkUpdates: sp.NetworkUpdates()}
 		if countGlobals {
 			cp.GlobalsUpdates = sp.GlobalsUpdates()
+			cp.RootChainIndex = sp.RootChainIndex
 		}
 		cps = append(cps, cp)
 	}

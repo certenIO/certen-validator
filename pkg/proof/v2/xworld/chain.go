@@ -10,6 +10,7 @@ package xworld
 import (
 	"gitlab.com/accumulatenetwork/accumulate/pkg/api/v3"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/database/merkle"
+	"gitlab.com/accumulatenetwork/accumulate/pkg/types/messaging"
 	"gitlab.com/accumulatenetwork/accumulate/protocol"
 )
 
@@ -40,6 +41,8 @@ type ChainItem struct {
 	// duplicated update.
 	Update string
 	Repeat int
+	// Leaf places the update's root chain leaf in a chain that holds an update (windowed; V-E A2(c)): LeafInWindow (default), LeafBefore, LeafAfter, LeafShape.
+	Leaf string
 	// Block overrides the item's Directory minor block (0: 110 + 10 x position).
 	Block uint64
 }
@@ -89,9 +92,12 @@ func updateTx(kind string, rec chainRecords, label string) (*protocol.Transactio
 
 // itemEntry returns the item's tree entry e (its root is h2(prev, e)) and the updates it carries, each with a receipt that ends at the
 // item's root.
-func itemEntry(it ChainItem, label string, prev []byte, rec chainRecords) ([]byte, []*api.NetworkUpdateProof) {
+func itemEntry(it ChainItem, label string, prev []byte, rec chainRecords, pos int, windowed bool) ([]byte, []*api.NetworkUpdateProof) {
 	if it.Update == "" {
 		return seed(label + " entry"), nil
+	}
+	if windowed {
+		return windowedUpdates(it, label, prev, rec, pos)
 	}
 	tx, txh := updateTx(it.Update, rec, label)
 	sib := seed(label + " update sibling")
@@ -103,8 +109,22 @@ func itemEntry(it ChainItem, label string, prev []byte, rec chainRecords) ([]byt
 	return h2(txh, sib), ups
 }
 
-func (c *Chain) record(it ChainItem, linkStart []byte, linkSteps []step, e []byte, ups []*api.NetworkUpdateProof, block uint64, root, state [32]byte, v []validator) (*api.MinorRootRecord, *merkle.Receipt) {
+// windowed reports whether the chain holds an update anywhere in its items or hops: such a chain's items sign real root chain indexes and its
+// updates carry receipts whose shape fixes their root chain position (V-E A2(c)). A chain without one keeps the earlier synthetic shape and its bytes.
+func (c *Chain) windowed() bool {
+	for _, it := range append(append([]ChainItem(nil), c.Items...), c.Hops...) {
+		if it.Update != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *Chain) record(it ChainItem, linkStart []byte, linkSteps []step, e []byte, ups []*api.NetworkUpdateProof, block uint64, root, state [32]byte, v []validator, rci uint64) (*api.MinorRootRecord, *merkle.Receipt) {
 	anchor := directoryAnchor(block, root, state)
+	if rci != 0 {
+		anchor.Message.(*messaging.TransactionMessage).Transaction.Body.(*protocol.DirectoryAnchor).RootChainIndex = rci
+	}
 	rec := &api.MinorRootRecord{Anchor: anchor, Signatures: signAnchor(anchor, v[0], v[1], v[2]), Updates: ups}
 	if it.Anchored {
 		return rec, rcpt(linkStart, linkSteps...)
@@ -135,11 +155,12 @@ type chainBuilt struct {
 
 // build returns the records and links of Items and the root they end at (the root the final item starts from).
 func (c *Chain) build(start []byte, rec chainRecords, v []validator) chainBuilt {
+	win := c.windowed()
 	out := chainBuilt{keptRoot: start}
 	prev := start
 	for j, it := range c.Items {
 		label := "chain item " + string(rune('a'+j))
-		e, ups := itemEntry(it, label, prev, rec)
+		e, ups := itemEntry(it, label, prev, rec, j, win)
 		root := h2(prev, e)
 		block := it.Block
 		if block == 0 {
@@ -154,7 +175,7 @@ func (c *Chain) build(start []byte, rec chainRecords, v []validator) chainBuilt 
 			prev = root
 			continue
 		}
-		r, link := c.record(it, out.keptRoot, append(append([]step(nil), out.pending...), step{true, e}), e, ups, block, a32(root), a32(seed(label+" state")), v)
+		r, link := c.record(it, out.keptRoot, append(append([]step(nil), out.pending...), step{true, e}), e, ups, block, a32(root), a32(seed(label+" state")), v, rciOf(win, j))
 		out.recs = append(out.recs, hexs(must(r.MarshalBinary())))
 		if link != nil {
 			out.links = append(out.links, rcptHex(link))
@@ -172,7 +193,7 @@ func (c *Chain) final(b chainBuilt, q []byte, cert, state [32]byte, v []validato
 	if c.Final.Update != "" {
 		panic("xworld: the closing item of a chain carries no update")
 	}
-	rec, link := c.record(c.Final, b.keptRoot, append(append([]step(nil), b.pending...), step{true, q}), q, nil, dnBlockCert, cert, state, v)
+	rec, link := c.record(c.Final, b.keptRoot, append(append([]step(nil), b.pending...), step{true, q}), q, nil, dnBlockCert, cert, state, v, 0)
 	if link != nil {
 		return hexs(must(rec.MarshalBinary())), rcptHex(link)
 	}
@@ -225,16 +246,18 @@ func GenesisRoot() []byte { return seed("root 1") }
 // certified block at or after the certified one, whose state root is the one the network and globals accounts are proven into. The last
 // hop is the last item of its sequence.
 func (c *Chain) buildHops(start []byte, rec chainRecords, state [32]byte, v []validator) (recs []string, links []string) {
+	win := c.windowed()
 	prev := start
 	for j, it := range c.Hops {
 		label := "hop item " + string(rune('a'+j))
-		e, ups := itemEntry(it, label, prev, rec)
+		q := len(c.Items) + 1 + j // a hop is a later stretch of the chain than the certify items, so its root chain positions are beyond theirs
+		e, ups := itemEntry(it, label, prev, rec, q, win)
 		root := h2(prev, e)
 		block := it.Block
 		if block == 0 {
 			block = uint64(310 + 10*j)
 		}
-		r, link := c.record(it, prev, []step{{true, e}}, e, ups, block, a32(root), state, v)
+		r, link := c.record(it, prev, []step{{true, e}}, e, ups, block, a32(root), state, v, rciOf(win, q))
 		recs = append(recs, hexs(must(r.MarshalBinary())))
 		if link != nil {
 			links = append(links, rcptHex(link))

@@ -66,6 +66,13 @@ type Spine struct {
 	// refuseReplay, set by the evidence 2.1 verifier on the spines it walks, makes a record that applies an update the walk already
 	// applied (the same transaction hash) a refusal, certify_update_replayed. A 2.0 spine never sets it, so 2.0 verdicts do not move.
 	refuseReplay bool
+
+	// RootChainIndex is the root chain index of the last verified anchor, with rciKnown whether it is established: a spine from genesis or one
+	// that has verified an anchor knows it, one restored from a checkpoint recorded before the field existed does not (V-E A2(c): the lower
+	// bound of the first window after such a checkpoint is then unproven, certify_update_unproven). Only the evidence 2.1 walk (refuseReplay)
+	// reads it.
+	RootChainIndex uint64
+	rciKnown       bool
 }
 
 // NetworkUpdates is the number of writes to acc://dn.acme/network the spine has applied since genesis: what the network
@@ -100,6 +107,7 @@ func RestoreSpine(g *network.GlobalValues, next, lastMinor uint64, root, state [
 		return nil, err
 	}
 	s.LastMinorBlock, s.RootChainAnchor, s.StateTreeAnchor, s.priorNetworkUpdates = lastMinor, root, state, networkUpdates
+	s.rciKnown = false // a checkpoint says it separately (SpineAt)
 	return s, nil
 }
 
@@ -112,7 +120,7 @@ func NewSpine(genesis *network.GlobalValues, next uint64) (*Spine, error) {
 	if next == 0 {
 		return nil, errors.BadRequest.With("major blocks are 1-based")
 	}
-	return &Spine{globals: genesis.Copy(), NextMajor: next}, nil
+	return &Spine{globals: genesis.Copy(), NextMajor: next, rciKnown: true}, nil
 }
 
 // Clone returns an independent copy, so one verified spine can be extended to several targets.
@@ -270,6 +278,11 @@ func hasUpdate(list []AppliedUpdate, h [32]byte) bool {
 func (s *Spine) verifyAndCommit(body *protocol.DirectoryAnchor, anchor *messaging.SequencedMessage, sigs []protocol.KeySignature, updates []*api.NetworkUpdateProof, refuseReplay bool) error {
 	candidate := s.globals.Copy()
 	var applied []AppliedUpdate
+	// Evidence 2.1 only: each update's root chain position must lie in (the previous anchor's RootChainIndex, this one's] (V-E A2(c)).
+	var win *updateWindow
+	if refuseReplay {
+		win = &updateWindow{prev: s.RootChainIndex, prevKnown: s.rciKnown, this: body.RootChainIndex, block: body.MinorBlockIndex}
+	}
 	for _, u := range updates {
 		a, err := applyProvenUpdate(candidate, u, body.RootChainAnchor)
 		if err != nil {
@@ -281,6 +294,15 @@ func (s *Spine) verifyAndCommit(body *protocol.DirectoryAnchor, anchor *messagin
 			}
 			a.AnchorMinorBlock = body.MinorBlockIndex
 			applied = append(applied, *a)
+		}
+		if win != nil {
+			h, err := transactionHash(u.Transaction)
+			if err != nil {
+				return err
+			}
+			if err := win.check(u.Transaction.Header.Principal.String(), h, u.Receipt.Entries); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -298,6 +320,7 @@ func (s *Spine) verifyAndCommit(body *protocol.DirectoryAnchor, anchor *messagin
 	s.LastMinorBlock = body.MinorBlockIndex
 	s.RootChainAnchor = body.RootChainAnchor
 	s.StateTreeAnchor = body.StateTreeAnchor
+	s.RootChainIndex, s.rciKnown = body.RootChainIndex, true
 	s.Applied = append(s.Applied, applied...)
 	return nil
 }
