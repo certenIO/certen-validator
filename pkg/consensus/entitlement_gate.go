@@ -274,12 +274,15 @@ func VerifyEntitlement(
 //
 // The ceiling is BINDING from execution rules v14 (requireBasis, RB4-F6):
 //
-//   - No cost basis was published for a chain the block touches: refused as
+//   - No cost basis was published for a chain the block touches, or the one
+//     published is not a bound (zero where the block multiplies it: the base,
+//     or the per-leg figure of a chain with several legs): refused as
 //     ENTITLEMENT_UNPRICED, naming the chain. The bound is unknown, so the
 //     ceiling cannot be shown to hold, and admitting the block would let an
-//     unpriced chain spend without one. The gateway publishes an entry for
-//     every settlement chain or refuses to publish the epoch at all, so this is
-//     reached only by an epoch that breaks that rule.
+//     unpriced chain spend without one - a zero would sum to nothing and pass
+//     every ceiling (PV2-F3). The gateway publishes a positive entry for every
+//     chain it prices and omits the rest, so this is reached only by an epoch
+//     that breaks that rule.
 //
 //   - A published basis no bound can be computed from - negative, or
 //     overflowing int64 for the block's legs: refused as

@@ -74,11 +74,29 @@ func sortedChains(perChain map[int64]int64) []int64 {
 	return ids
 }
 
-// UnpricedChains is the chains a block settles on for which the header publishes no cost basis, ascending.
+// basisBounds says whether a published basis is a bound for a chain a block settles `legs` legs on. A basis is a bound only
+// if it is positive where the block multiplies it: the base always (every block that touches the chain pays it once), the
+// per-leg figure when there is more than one leg (it is what each further leg adds). A zero there is not a cheap price, it is
+// no price - the cost sums to nothing and the chain passes any ceiling - which is what an unpriced chain does and what the
+// binding ceiling exists to stop (PV2-F3: the live epoch listed Telcoin Adiri at 0/0). A per-leg figure of zero on a
+// single-leg block is not multiplied by anything, so it does not make that block unbounded.
+//
+// A negative basis is not judged here: WorstCaseCostMicroUSD reports it as invalid, before this is asked.
+func basisBounds(b entitlement.ChainCostBasis, legs int64) bool {
+	if b.BaseMicroUSD <= 0 {
+		return false
+	}
+	return legs <= 1 || b.PerLegMicroUSD > 0
+}
+
+// UnpricedChains is the chains a block settles on for which the header publishes no cost basis, or a basis that is not a
+// bound (basisBounds), ascending.
 func UnpricedChains(vb *ValidatorBlock, h entitlement.Header) []int64 {
 	var out []int64
-	for _, id := range sortedChains(legsPerChain(vb)) {
-		if _, found := h.CostBasisFor(id); !found {
+	perChain := legsPerChain(vb)
+	for _, id := range sortedChains(perChain) {
+		basis, found := h.CostBasisFor(id)
+		if !found || (basis.BaseMicroUSD >= 0 && basis.PerLegMicroUSD >= 0 && !basisBounds(basis, perChain[id])) {
 			out = append(out, id)
 		}
 	}
@@ -87,7 +105,8 @@ func UnpricedChains(vb *ValidatorBlock, h entitlement.Header) []int64 {
 
 // WorstCaseCostMicroUSD bounds what executing this block can cost, in micro-USD.
 //
-// Returns ok=false when no basis was published for a chain the block touches,
+// Returns ok=false when no basis was published for a chain the block touches, or the
+// one published is not a bound (zero where the block multiplies it: basisBounds),
 // and an error when a published basis is negative or the bound overflows int64.
 // Neither is a bound. From execution rules v14 the caller REFUSES the block on
 // either (ENTITLEMENT_UNPRICED, ENTITLEMENT_COST_BASIS_INVALID; RB4-F6): an
@@ -111,6 +130,9 @@ func WorstCaseCostMicroUSD(vb *ValidatorBlock, h entitlement.Header) (total int6
 		}
 		if basis.BaseMicroUSD < 0 || basis.PerLegMicroUSD < 0 {
 			return 0, false, fmt.Errorf("negative cost basis for chain %d", chainID)
+		}
+		if !basisBounds(basis, legs) {
+			return 0, false, nil
 		}
 
 		// base + perLeg * (legs - 1). Legs beyond the first cost their MARGINAL

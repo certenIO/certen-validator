@@ -132,15 +132,17 @@ func TestOverflowIsReportedNotWrapped(t *testing.T) {
 // refuse legitimate work rather than prevent a wrap.
 func TestLargestNonOverflowingBoundIsStillUsable(t *testing.T) {
 	vb := blockWithLegs(map[int64]int{84532: 3}) // extra = 2
+	// The base is 1, not 0: a zero base is no bound (PV2-F3) and would make this chain unpriced. 1 + 2*(maxInt64/2) is
+	// exactly maxInt64, the largest total that fits.
 	h := basis(entitlement.ChainCostBasis{
-		ChainID: 84532, BaseMicroUSD: 0, PerLegMicroUSD: maxInt64 / 2,
+		ChainID: 84532, BaseMicroUSD: 1, PerLegMicroUSD: maxInt64 / 2,
 	})
 
 	got, ok, err := WorstCaseCostMicroUSD(vb, h)
 	if err != nil || !ok {
 		t.Fatalf("ok=%v err=%v — this product fits and must be reported", ok, err)
 	}
-	if want := (maxInt64 / 2) * 2; got != want {
+	if want := 1 + (maxInt64/2)*2; got != want {
 		t.Fatalf("got %d, want %d", got, want)
 	}
 }
