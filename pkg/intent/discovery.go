@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"github.com/certen/independant-validator/pkg/entitlement"
 	"github.com/certen/independant-validator/pkg/envvar"
+	"io"
 	"log"
 	"runtime/debug"
 	"sort"
@@ -1605,23 +1606,57 @@ var errIntentNotInBlock = errors.New("the intent is not in its block")
 
 // intentInBlock rebuilds one intent from its block as discovery builds it.
 func (id *IntentDiscovery) intentInBlock(height uint64, intentID string) (*CertenIntent, error) {
+	intents, err := id.intentsOfBlock(height)
+	if err != nil {
+		return nil, err
+	}
+	for _, ci := range intents {
+		if ci.IntentID == intentID {
+			return ci, nil
+		}
+	}
+	return nil, fmt.Errorf("%w: block %d carries no intent %s", errIntentNotInBlock, height, intentID)
+}
+
+// intentsOfBlock rebuilds every intent a block carries, as discovery builds them: one search of the block, the transactions
+// of that block only, each converted exactly as discovery converts it, and one that does not convert (not a CERTEN intent of
+// four blobs) skipped as discovery skips it.
+func (id *IntentDiscovery) intentsOfBlock(height uint64) ([]*CertenIntent, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	txs, err := id.client.SearchCertenTransactions(ctx, int64(height))
 	if err != nil {
 		return nil, fmt.Errorf("search block %d: %w", height, err)
 	}
+	var intents []*CertenIntent
 	for _, tx := range txs {
 		if tx.BlockHeight != int64(height) {
 			continue
 		}
 		ci, err := id.convertCertenTransactionToIntent(tx)
-		if err != nil || ci.IntentID != intentID {
+		if err != nil {
 			continue
 		}
-		return ci, nil
+		intents = append(intents, ci)
 	}
-	return nil, fmt.Errorf("%w: block %d carries no intent %s", errIntentNotInBlock, height, intentID)
+	return intents, nil
+}
+
+// IntentsInBlock lists, as a set of intent ids, the intents a Directory Network block carries - found with the Accumulate
+// client exactly as discovery's own retry finds one (intentInBlock): the id is the one discovery's conversion builds. A block
+// that cannot be searched is an error, not an empty answer (RB8-G: `repair lifecycle-rows` owes a row only for an intent
+// its block carries).
+func IntentsInBlock(client accumulate.Client, height uint64) (map[string]bool, error) {
+	id := &IntentDiscovery{client: client, logger: log.New(io.Discard, "", 0)}
+	intents, err := id.intentsOfBlock(height)
+	if err != nil {
+		return nil, err
+	}
+	set := make(map[string]bool, len(intents))
+	for _, ci := range intents {
+		set[ci.IntentID] = true
+	}
+	return set, nil
 }
 
 // retryWorker drains the decoupled on_demand retry queue, re-attempting consensus-bound proof
