@@ -1302,7 +1302,7 @@ func (id *IntentDiscovery) serveHandedOffIntent(job *intentRetryJob, workerID st
 	defer func() {
 		if r := recover(); r != nil {
 			id.logger.Printf("🚨 PANIC handling intent %s in worker %s: %v\n%s", job.intent.IntentID, workerID, r, debug.Stack())
-			id.markFailed(job.intent.IntentID)
+			id.markFailedIfActive(job.intent.IntentID)
 		}
 	}()
 	id.runHandedOffIntent(job, workerID)
@@ -2461,6 +2461,18 @@ func (id *IntentDiscovery) markFailed(intentID string) {
 	id.mu.Lock()
 	defer id.mu.Unlock()
 	id.intentStatus[intentID] = IntentStatusFailed
+}
+
+// markFailedIfActive is markFailed for a recovered panic: the intent is marked failed only while it is still queued or in
+// progress (compare-and-set under the lock). A panic after the intent was processed and marked completed (the journal write
+// that ends its retry, the log switch) leaves it completed, and a terminal failure stays terminal.
+func (id *IntentDiscovery) markFailedIfActive(intentID string) {
+	id.mu.Lock()
+	defer id.mu.Unlock()
+	switch id.intentStatus[intentID] {
+	case IntentStatusQueued, IntentStatusInProgress:
+		id.intentStatus[intentID] = IntentStatusFailed
+	}
 }
 
 // markFailedTerminal records a failure that no retry can fix.

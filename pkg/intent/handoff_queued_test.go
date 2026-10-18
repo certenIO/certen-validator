@@ -181,3 +181,35 @@ func TestAPanicAfterProcessingIsThatIntentFailingAndTheWorkerGoesOn(t *testing.T
 		t.Fatalf("after both ended: queued=%d in progress=%d, want 0 and 0", id.queued(), id.inProgress())
 	}
 }
+
+// panicDropJournal is a retry journal whose Drop panics, as a bug in the step after a successful processing would.
+type panicDropJournal struct{ RetryJournal }
+
+func (panicDropJournal) Drop(string) error { panic("journal drop exploded") }
+
+// V-G D2: the per-job recover marks the intent failed only if it is still queued or in progress. A panic AFTER the intent was
+// processed and marked completed (here in the journal write that ends its retry) must leave it completed, not hand a done
+// intent back to `acquire` as re-acquirable.
+func TestAPanicAfterSuccessLeavesTheIntentCompleted(t *testing.T) {
+	tx := blockTx("5e5e", "panics-after-success", 713)
+	id := retryDiscovery(&blockClient{txs: []*accumulate.CertenTransaction{tx}},
+		panicDropJournal{openJournal(t, filepath.Join(t.TempDir(), "r.json"))}, nil, 4)
+	id.lifecycleRows, id.lifecyclePolicy = &rowLog{}, fastPolicy()
+	startIntentWorkers(t, id, 1)
+	var done doneLog
+	id.blockProcess = func(ci *CertenIntent, _ uint64) (consensus.TargetChainOutcome, error) {
+		done.mark(ci.IntentID)
+		return consensus.TargetChainPending, nil
+	}
+	if err := id.processBlock(&BlockProcessJob{BlockHeight: 713}, "test"); err != nil {
+		t.Fatal(err)
+	}
+	intentID := convertedIntent(t, tx).IntentID
+	waitUntil(t, "the intent was processed", 5*time.Second, func() bool { return done.has(intentID) })
+	waitUntil(t, "the worker is idle again", 5*time.Second, func() bool { return id.queued() == 0 && id.inProgress() == 0 })
+	// let the recover run to its end before reading the status
+	time.Sleep(100 * time.Millisecond)
+	if got := id.getIntentStatus(intentID); got != IntentStatusCompleted {
+		t.Fatalf("an intent processed successfully whose handling then panicked is %s, want completed", got.String())
+	}
+}
