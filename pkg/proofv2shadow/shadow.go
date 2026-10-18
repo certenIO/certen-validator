@@ -21,10 +21,8 @@ import (
 	"github.com/certen/independant-validator/pkg/proof"
 	proofv2 "github.com/certen/independant-validator/pkg/proof/v2"
 	"github.com/prometheus/client_golang/prometheus"
-	"gitlab.com/accumulatenetwork/accumulate/pkg/api/v3"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/api/v3/jsonrpc"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/url"
-	"gitlab.com/accumulatenetwork/accumulate/protocol"
 )
 
 var shadowResults = prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: "certen", Subsystem: "proof_v2_shadow",
@@ -37,11 +35,12 @@ const certifyWait = 20 * time.Minute
 
 // Shadow captures and builds v2 proofs beside v1.
 type Shadow struct {
-	b    *proofv2.Builder
-	c    *jsonrpc.Client
-	repo *database.ProofV2ShadowRepository
-	inc  *proof.IncarnationEvidence
-	pin  [32]byte
+	b        *proofv2.Builder
+	c        *jsonrpc.Client
+	endpoint string
+	repo     *database.ProofV2ShadowRepository
+	inc      *proof.IncarnationEvidence
+	pin      [32]byte
 	// inputs are what the pinned incarnation's evidence verified to: the genesis records a portable document carries.
 	inputs proof.IncarnationInputs
 	logf   func(string, ...any)
@@ -64,7 +63,7 @@ func New(ctx context.Context, endpoint string, repo *database.ProofV2ShadowRepos
 	if err != nil {
 		return nil, fmt.Errorf("the incarnation evidence does not verify: %w", err)
 	}
-	s := &Shadow{b: b, c: c, repo: repo, inc: inc, pin: pin, inputs: rep.Inputs, logf: logf, builds: make(chan job, 256)}
+	s := &Shadow{b: b, c: c, endpoint: endpoint, repo: repo, inc: inc, pin: pin, inputs: rep.Inputs, logf: logf, builds: make(chan job, 256)}
 	if err := s.saveSpine(ctx); err != nil {
 		return nil, err
 	}
@@ -102,13 +101,18 @@ func (s *Shadow) saveSpine(ctx context.Context) error {
 	return nil
 }
 
-// Capture reads the governing pages as of the transaction's block. It returns at once; the work runs in the
-// background and its result, or the named reason it failed, is stored.
-func (s *Shadow) Capture(intentID, account, tx string) {
+// captureWait bounds one capture: every partition's pages are read as soon as their blocks are servable, which can take
+// as long as the longest lull of a partition (about 15 minutes, R9 M4), and the transaction's own partition's anchor must be
+// recorded by the Directory.
+const captureWait = 30 * time.Minute
+
+// Capture reads the governing pages as of the transaction's block, and of each other partition's block (design D2). It
+// returns at once; the work runs in the background and its result, or the named reason it failed, is stored.
+func (s *Shadow) Capture(intentID, account, tx, keyBook, keyPage string) {
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		ctx, cancel := context.WithTimeout(context.Background(), captureWait)
 		defer cancel()
-		block, pages, err := s.capture(ctx, account, tx)
+		cp, err := s.capture(ctx, account, tx, keyBook, keyPage)
 		msg := ""
 		result := "ok"
 		if err != nil {
@@ -116,103 +120,80 @@ func (s *Shadow) Capture(intentID, account, tx string) {
 			s.logf("[PROOF-V2-SHADOW] capture %s: %v", intentID, err)
 		}
 		shadowResults.WithLabelValues("capture", result).Inc()
-		if rerr := s.repo.RecordCapture(ctx, intentID, tx, account, block, pages, msg); rerr != nil {
+		var block uint64
+		var captured any
+		if cp != nil {
+			block, captured = cp.Block, cp
+		}
+		if rerr := s.repo.RecordCapture(ctx, intentID, tx, account, block, captured, msg); rerr != nil {
 			s.logf("[PROOF-V2-SHADOW] store capture %s: %v", intentID, rerr)
 		}
 	}()
 }
 
-func (s *Shadow) capture(ctx context.Context, account, tx string) (uint64, []*proofv2.PageState, error) {
-	block, err := s.b.TxBlock(ctx, account, tx)
+func (s *Shadow) capture(ctx context.Context, account, tx, keyBook, keyPage string) (*Capture, error) {
+	col, err := s.collector(ctx, keyBook, keyPage)
 	if err != nil {
-		return 0, nil, fmt.Errorf("transaction block: %w", err)
+		return nil, err
 	}
-	urls, skipped, err := s.governingPages(ctx, account)
-	if err != nil {
-		return block, nil, err
-	}
-	var pages []*proofv2.PageState
-	for _, u := range urls {
-		p, err := s.b.CapturePage(ctx, u, block)
-		if err != nil {
-			return block, pages, err
-		}
-		pages = append(pages, p)
-	}
-	if len(skipped) > 0 {
-		return block, pages, fmt.Errorf("g1_cross_identity_pending: authorities on other identities are not captured yet: %s", strings.Join(skipped, ", "))
-	}
-	return block, pages, nil
+	return col.Collect(ctx, account, tx)
 }
 
-// governingPages returns the accounts whose state decides who may sign for account: the account itself, every account
-// the authority set is inherited through, and every page of each key book in the set it resolves to. Resolution
-// follows Accumulate's own rule (internal/core/block/shared GetAccountAuthoritySet): a full account that lists any
-// authorities uses them; one that lists none inherits from its parent identity, recursively, up to the root identity.
-// Each account on the way is captured, because its proven state is what shows it lists none.
-//
-// A book of another identity may live on another partition, whose block numbering differs; those are returned as
-// skipped, by name.
-func (s *Shadow) governingPages(ctx context.Context, account string) ([]string, []string, error) {
-	return governing(ctx, account, func(ctx context.Context, u *url.URL) (protocol.Account, error) {
-		r, err := s.c.Query(ctx, u, &api.DefaultQuery{})
-		if err != nil {
-			return nil, err
-		}
-		ar, ok := r.(*api.AccountRecord)
-		if !ok {
-			return nil, fmt.Errorf("got %T", r)
-		}
-		return ar.Account, nil
-	})
+// collector wires a Collector to the live network: the routing table as the network publishes it, the Directory's anchor
+// chains, and each partition's retained range.
+func (s *Shadow) collector(ctx context.Context, keyBook, keyPage string) (*Collector, error) {
+	return NewCollector(ctx, s.endpoint, s.c, s.b, s.logf, keyBook, keyPage)
 }
 
-// governing resolves the governing accounts through get, which reads one account's current state.
-func governing(ctx context.Context, account string, get func(context.Context, *url.URL) (protocol.Account, error)) ([]string, []string, error) {
-	u, err := url.Parse(account)
+// NewCollector wires a Collector to a live network through the Builder that reads transaction positions.
+func NewCollector(ctx context.Context, endpoint string, c *jsonrpc.Client, b *proofv2.Builder, logf func(string, ...any), keyBook, keyPage string) (*Collector, error) {
+	router, err := proof.LoadNetworkRouter(ctx, endpoint)
 	if err != nil {
-		return nil, nil, err
+		return nil, fmt.Errorf("routing: %w", err)
 	}
-	var out, skipped []string
-	var auth *protocol.AccountAuth
-	for cur := u; ; {
-		acct, err := get(ctx, cur)
-		if err != nil {
-			return nil, nil, fmt.Errorf("account %v: %w", cur, err)
-		}
-		out = append(out, cur.String())
-		full, ok := acct.(protocol.FullAccount)
-		if !ok {
-			return nil, nil, fmt.Errorf("account %v is %T, which is not governed by key books", cur, acct)
-		}
-		if len(full.GetAuth().Authorities) > 0 || cur.IsRootIdentity() {
-			auth = full.GetAuth()
-			break
-		}
-		cur = cur.Identity()
+	reader := &proofv2.PageReader{Net: c, Q: b.Q, Retention: &proofv2.ClientRetention{C: c}}
+	resolver, err := proof.NewChainKeyPageResolver(endpoint, logf)
+	if err != nil {
+		return nil, err
 	}
-	for _, a := range auth.Authorities {
-		if a.Disabled {
-			continue
-		}
-		if !a.Url.RootIdentity().Equal(u.RootIdentity()) {
-			skipped = append(skipped, a.Url.String())
-			continue
-		}
-		ba, err := get(ctx, a.Url)
-		if err != nil {
-			return nil, nil, fmt.Errorf("key book %v: %w", a.Url, err)
-		}
-		book, ok := ba.(*protocol.KeyBook)
-		if !ok {
-			return nil, nil, fmt.Errorf("authority %v is %T, not a key book", a.Url, ba)
-		}
-		out = append(out, a.Url.String())
-		for i := uint64(0); i < book.PageCount; i++ {
-			out = append(out, protocol.FormatKeyPageUrl(a.Url, i).String())
-		}
-	}
-	return out, skipped, nil
+	return &Collector{
+		Route: func(_ context.Context, account string) (string, error) { return router.PartitionID(account) },
+		Block: func(ctx context.Context, account, tx string) (uint64, error) { return b.TxBlock(ctx, account, tx) },
+		Position: func(ctx context.Context, account, tx, label string) (*proofv2.TxPosition, error) {
+			return PositionFor(ctx, b, account, tx, label)
+		},
+		Facts: func(ctx context.Context, account, tx string) (*TxFacts, error) {
+			return ReadTxFacts(ctx, c, account, tx)
+		},
+		Log:    proofv2.NetLog{Net: c},
+		Chains: proofv2.NetChains{Net: c},
+		Page:   reader.PageAt,
+		Anchor: func(ctx context.Context, pb *proofv2.PartitionBlock) ([32]byte, error) {
+			_, h, err := proofv2.AnchorAt(ctx, c, pb, 0)
+			return h, err
+		},
+		Arrival: func(ctx context.Context, id *url.TxID) (string, uint64, error) {
+			acct := id.Account()
+			p, err := router.PartitionID(acct.String())
+			if err != nil {
+				return "", 0, err
+			}
+			blk, err := proofv2.ChainEntryBlock(ctx, c, acct, "signature", id.Hash())
+			return p, blk, err
+		},
+		Trace: func(ctx context.Context, cause *url.TxID) ([]Hop, []*url.URL, error) {
+			return TraceCause(ctx, c, cause)
+		},
+		// The certified key page is resolved exactly as the intent certificate resolves it (pkg/proof ResolveSigningKeyPage), from
+		// the intent's declared key book and page and the transaction's signatures.
+		Certified: func(ctx context.Context, account, tx string) (*url.URL, error) {
+			page, err := resolver.ResolveSigningKeyPage(ctx, account, tx, keyBook, keyPage)
+			if err != nil {
+				return nil, err
+			}
+			return url.Parse(page)
+		},
+	}, nil
 }
 
 // Build queues the v2 build for an intent whose v1 proof was built. It never blocks.
@@ -237,7 +218,7 @@ func (s *Shadow) buildLoop() {
 func (s *Shadow) build(j job) {
 	ctx, cancel := context.WithTimeout(context.Background(), certifyWait+10*time.Minute)
 	defer cancel()
-	ev, rep, err := s.buildOne(ctx, j, 0)
+	ev, rep, err := s.buildOne(ctx, j, 0, false, false)
 	s.record(ctx, j, ev, rep, err)
 }
 
@@ -283,8 +264,23 @@ func (s *Shadow) storePortable(ctx context.Context, intentID string, ev *proofv2
 
 // Prove builds an intent's v2 evidence now, for its intent certificate (docs/proof/GOVROOT_V3.md): from the pages
 // captured at discovery - waiting for that capture to be recorded - on no more than maxMajors major blocks, the
-// checkpoints the chain has verified. The result is also stored, as a shadow build's is.
+// checkpoints the chain has verified. The result is also stored, as a shadow build's is. It is the certificate of a chain on which the rules
+// v15 cross-partition activation is NOT in force: an intent whose governing pages are on other partitions is answered
+// g1_evidence_21_not_in_force and retried (ProveG1 builds it once the activation is in force).
 func (s *Shadow) Prove(ctx context.Context, intentID, account, tx, bvn string, maxMajors uint64) (*proofv2.Evidence, error) {
+	return s.prove(ctx, intentID, account, tx, bvn, maxMajors, false)
+}
+
+// ProveG1 is Prove for a chain on which the rules v15 activation is in force when g1InForce is true: from the block after the
+// activation consensus requires evidence 2.1 in every v3 certificate (a 2.0 certificate is refused, ErrIntentProofV21Missing), so the
+// intent is proven as 2.1 whether its governing pages are on one partition or several. With g1InForce false it is Prove. The activation
+// is the proposer's own view (consensus G1ActivationContext), read per intent: no setting of the shadow can say whether a governed
+// activation has happened.
+func (s *Shadow) ProveG1(ctx context.Context, intentID, account, tx, bvn string, maxMajors uint64, g1InForce bool) (*proofv2.Evidence, error) {
+	return s.prove(ctx, intentID, account, tx, bvn, maxMajors, g1InForce)
+}
+
+func (s *Shadow) prove(ctx context.Context, intentID, account, tx, bvn string, maxMajors uint64, g1InForce bool) (*proofv2.Evidence, error) {
 	if maxMajors == 0 {
 		return nil, fmt.Errorf("proof v2: the chain has verified no major block to start from")
 	}
@@ -306,7 +302,7 @@ func (s *Shadow) Prove(ctx context.Context, intentID, account, tx, bvn string, m
 		}
 	}
 	j := job{intentID, account, tx, bvn}
-	ev, rep, err := s.buildOne(ctx, j, maxMajors)
+	ev, rep, err := s.buildOne(ctx, j, maxMajors, true, g1InForce)
 	s.record(ctx, j, ev, rep, err)
 	if err != nil {
 		return nil, fmt.Errorf("proof v2: %w", err)
@@ -314,18 +310,56 @@ func (s *Shadow) Prove(ctx context.Context, intentID, account, tx, bvn string, m
 	return ev, nil
 }
 
-func (s *Shadow) buildOne(ctx context.Context, j job, maxMajors uint64) (*proofv2.Evidence, *proofv2.Report, error) {
+// buildPlan says how a capture becomes a document: evidence 2.0 over the transaction's own partition's pages, or evidence 2.1.
+type buildPlan struct {
+	is21  bool
+	pages []*proofv2.PageState // the 2.0 pages
+}
+
+// planBuild decides the document for a capture. A capture with pages on other partitions needs 2.1. A proof for an intent's certificate
+// (prove) may carry 2.1 only when allow21, which is the proposer's view that the rules v15 activation is in force for the next block (design
+// D7): until then consensus refuses 2.1, so the certificate path is given the named state g1_evidence_21_not_in_force, never a document that
+// fails later. From the block after the activation consensus REFUSES a 2.0 certificate (ErrIntentProofV21Missing), so with allow21 a
+// certificate proof is 2.1 for every capture, one partition or several; the activation is read per intent, never configured. The shadow
+// (not prove) builds and verifies 2.1 for a foreign capture either way.
+func planBuild(cp *Capture, prove, allow21 bool) (*buildPlan, error) {
+	if cp == nil {
+		return &buildPlan{}, nil
+	}
+	if prove && allow21 {
+		return &buildPlan{is21: true}, nil
+	}
+	if cp.HasForeignPages() {
+		if prove && !allow21 {
+			return nil, &proofv2.NamedState{Code: proofv2.StateEvidence21NotInForce, Block: cp.Block,
+				Detail: "the governing pages are on more than one partition, so the proof is evidence 2.1: it is built and verified, but a certificate may carry it only after the rules that accept it are in force (design D7)"}
+		}
+		return &buildPlan{is21: true}, nil
+	}
+	pages, err := evidencePages(cp)
+	if err != nil {
+		return nil, err
+	}
+	return &buildPlan{pages: pages}, nil
+}
+
+func (s *Shadow) buildOne(ctx context.Context, j job, maxMajors uint64, prove, allow21 bool) (*proofv2.Evidence, *proofv2.Report, error) {
 	raw, ok, err := s.repo.Captured(ctx, j.intentID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("load captured pages: %w", err)
 	}
-	var pages []*proofv2.PageState
-	if ok && raw != nil {
-		if err := json.Unmarshal(raw, &pages); err != nil {
+	var cp *Capture
+	var plan *buildPlan
+	if ok && raw != nil && strings.TrimSpace(string(raw)) != "null" {
+		if cp, err = DecodeCapture(raw); err != nil {
 			return nil, nil, fmt.Errorf("decode captured pages: %w", err)
 		}
 	}
-	if len(pages) == 0 {
+	if plan, err = planBuild(cp, prove, allow21); err != nil {
+		return nil, nil, err
+	}
+	pages := plan.pages
+	if len(pages) == 0 && !plan.is21 {
 		return nil, nil, fmt.Errorf("g1_historical_unavailable: no pages were captured at discovery")
 	}
 	if err := s.b.Refresh(ctx); err != nil {
@@ -336,6 +370,28 @@ func (s *Shadow) buildOne(ctx context.Context, j job, maxMajors uint64) (*proofv
 	}
 	deadline := time.Now().Add(certifyWait)
 	for {
+		if plan.is21 {
+			asm, err := cp.Assembly(ctx, proofv2.NetLog{Net: s.c}, proofv2.NetChains{Net: s.c})
+			if err != nil {
+				return nil, nil, err
+			}
+			ev, rep, err := s.b.Build21(ctx, maxMajors, j.account, j.tx, j.bvn, asm)
+			if errors.Is(err, proofv2.ErrNotYetCertified) && time.Now().Before(deadline) {
+				select {
+				case <-ctx.Done():
+					return nil, nil, ctx.Err()
+				case <-time.After(15 * time.Second):
+				}
+				continue
+			}
+			// A certificate's proof is never a document the binding will refuse: a report that left anything unproven (the votes not
+			// re-evaluated, a vote held, ...) is not a verified S3, so the intent is held with the state that says what is missing.
+			if err == nil && prove && rep != nil && len(rep.Unproven) > 0 {
+				u := rep.Unproven[0]
+				return nil, rep, &u
+			}
+			return ev, rep, err
+		}
 		ev, err := s.b.BuildBounded(ctx, maxMajors, j.account, j.tx, j.bvn, pages...)
 		if errors.Is(err, proofv2.ErrNotYetCertified) && time.Now().Before(deadline) {
 			select {
@@ -392,9 +448,9 @@ func (l *Lazy) Start(endpoint string, pin [32]byte) {
 }
 
 // Capture implements intent.ProofV2Shadow.
-func (l *Lazy) Capture(intentID, account, tx string) {
+func (l *Lazy) Capture(intentID, account, tx, keyBook, keyPage string) {
 	if s := l.p.Load(); s != nil {
-		s.Capture(intentID, account, tx)
+		s.Capture(intentID, account, tx, keyBook, keyPage)
 		return
 	}
 	l.notReady(intentID, account, tx)
@@ -413,6 +469,15 @@ func (l *Lazy) Build(intentID, account, tx, bvn string) {
 func (l *Lazy) Prove(ctx context.Context, intentID, account, tx, bvn string, maxMajors uint64) (*proofv2.Evidence, error) {
 	if s := l.p.Load(); s != nil {
 		return s.Prove(ctx, intentID, account, tx, bvn, maxMajors)
+	}
+	return nil, fmt.Errorf("proof_v2_not_ready: the spine walk from the pinned incarnation's genesis has not finished")
+}
+
+// ProveG1 implements intent.ProofV2G1Prover: Prove for a chain on which the rules v15 activation is in force. Before the spine walk
+// finishes there is nothing to prove from, by name.
+func (l *Lazy) ProveG1(ctx context.Context, intentID, account, tx, bvn string, maxMajors uint64, g1InForce bool) (*proofv2.Evidence, error) {
+	if s := l.p.Load(); s != nil {
+		return s.ProveG1(ctx, intentID, account, tx, bvn, maxMajors, g1InForce)
 	}
 	return nil, fmt.Errorf("proof_v2_not_ready: the spine walk from the pinned incarnation's genesis has not finished")
 }

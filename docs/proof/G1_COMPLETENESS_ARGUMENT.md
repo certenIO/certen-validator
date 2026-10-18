@@ -45,15 +45,27 @@ So:
 
 ## Where it is not yet sound (named, not hidden)
 
-1. **Authorities of another identity.** A book outside P's root identity may live on another partition, whose blocks
-   differ from X's. These are recorded as `g1_cross_identity_pending` and not captured. Completing them needs that
-   partition's anchor for the matching block, which the same mechanism provides.
-2. **Delegation.** A page entry can delegate to another book. The pages that a delegated vote reaches are governed
-   the same way, but the capture does not follow delegation yet. v1's vote model does, and the cross-check compares
-   only the pages both captured.
+1. **SUPERSEDED 2026-10-17** (RB9 Phase B, branch `pv2/rb9-b-cross-partition-capture`; design `docs/proof/G1_CROSS_PARTITION.md`
+   D1, D2, D6). History kept: **Authorities of another identity.** A book outside P's root identity may live on another
+   partition, whose blocks differ from X's. These are recorded as `g1_cross_identity_pending` and not captured. Completing
+   them needs that partition's anchor for the matching block, which the same mechanism provides.
+   *Now:* `governing` returns every authority book on any identity (enabled and disabled), the `Header.Authorities` books,
+   the actual voter when every list authority is disabled, and the initiator and payer pages; each page is captured on its
+   own partition at that partition's block B_Y, through that partition's own `BlockValidatorAnchor`. The constant
+   `g1_cross_identity_pending` is kept only to decode old shadow rows. The verification side (the completeness argument over
+   the proven closure) is RB9 Phase C.
+2. **SUPERSEDED 2026-10-17** (same). History kept: **Delegation.** A page entry can delegate to another book. The pages that
+   a delegated vote reaches are governed the same way, but the capture does not follow delegation yet. v1's vote model does,
+   and the cross-check compares only the pages both captured.
+   *Now:* every page entry with a delegate puts the delegate book and all its pages into the closure, recursively, with a
+   visited set and a depth bound of 20 delegators (the executor has no cycle detection, so a cycle is legal), and the
+   cross-check compares every page both v1 and v2 captured.
 3. **Signature arrival time.** v1 judges each signature against the page's states during its own arrival block. G1(b)
    establishes the complete set as of B. The certified timeline (PROOF_V2.md §5.2, refined 2026-10-05) is what extends
    the guarantee back to each arrival.
 
 Until 1 and 2 are captured, G1(b) is sound for intents whose authorities lie in the principal's identity and whose
 pages do not delegate, which is every intent in the shadow run to date. The verifier reports any other case by name.
+
+*Status 2026-10-17:* items 1 and 2 are captured as of RB9 Phase B (see the SUPERSEDED notes above). The verifier side is
+RB9 Phase C, so until it lands the verifier still reports any intent that needs a foreign or delegated page by name.

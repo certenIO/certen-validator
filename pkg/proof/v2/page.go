@@ -51,6 +51,19 @@ type PageState struct {
 	Chains      []proof.ChainRoot `json:"chains,omitempty"`
 	PendingHash string            `json:"pendingHash,omitempty"`
 	ChainError  string            `json:"chainError,omitempty"`
+
+	// Evidence 2.1 only (design D4); empty, and so absent from the encoding, in 2.0.
+	//
+	// Partition is the partition the page is proven through, as the Source of Evidence.Anchors' message names it
+	// ("acc://bvn-BVN2.acme"). The verifier DERIVES it from that anchor and requires this to equal it; a page whose
+	// claimed partition differs is the named state g1_foreign_partition_mismatch. Roles say why the page is proven; the
+	// verifier re-derives them from the proven states and requires them equal (see PageRole).
+	Partition string     `json:"partition,omitempty"`
+	Roles     []PageRole `json:"roles,omitempty"`
+
+	// History, in evidence 2.1 with a timeline, is the page's main chain from its genesis to its height at the block, which the verifier folds
+	// to the proven chain root and replays (PROOF_V2 5.2 steps 2-3; see PageHistory).
+	History *PageHistory `json:"history,omitempty"`
 }
 
 // PageChain is what the verifier established about one page's chains.
@@ -64,11 +77,17 @@ type PageChain struct {
 // CapturePage reads an account's state as of block, with the node's receipt. It must run while block is inside the
 // node's retention; the receipt is trimmed to the block's state root when the proof is built.
 func (b *Builder) CapturePage(ctx context.Context, account string, block uint64) (*PageState, error) {
+	return capturePageWith(ctx, b.C, b.Q, account, block)
+}
+
+// capturePageWith is CapturePage over any v3 querier: the account is read on the partition that holds it, whichever that is,
+// so the same read captures a page of the transaction's partition at its block and a foreign partition's at its own.
+func capturePageWith(ctx context.Context, c api.Querier, qr proof.AccumulateQuerier, account string, block uint64) (*PageState, error) {
 	u, err := url.Parse(account)
 	if err != nil {
 		return nil, err
 	}
-	q, err := b.C.Query(ctx, u, &api.DefaultQuery{IncludeReceipt: &api.ReceiptOptions{ForHeight: block}})
+	q, err := c.Query(ctx, u, &api.DefaultQuery{IncludeReceipt: &api.ReceiptOptions{ForHeight: block}})
 	if err != nil {
 		return nil, fmt.Errorf("%s as of block %d: %w", account, block, err)
 	}
@@ -97,7 +116,7 @@ func (b *Builder) CapturePage(ctx context.Context, account string, block uint64)
 	// receipt's second sibling is H(chains || pending) at the block), so roots that moved since fail it and are
 	// named, never assumed. The pending component is 32 zero bytes when nothing is pending; when something is, its
 	// hash covers the network's internal transaction state, which no API serves, so the page is named unbound.
-	chains, err := proof.FetchChainRoots(ctx, b.Q, account)
+	chains, err := proof.FetchChainRoots(ctx, qr, account)
 	if err != nil {
 		p.ChainError = fmt.Sprintf("g1_chain_unread: %v", err)
 		return p, nil
@@ -110,7 +129,7 @@ func (b *Builder) CapturePage(ctx context.Context, account string, block uint64)
 			return p, nil
 		}
 		// The chains moved since the block (a busy page): read their roots as of the block instead.
-		at, aerr := proof.FetchChainRootsAt(ctx, b.Q, account, block)
+		at, aerr := proof.FetchChainRootsAt(ctx, qr, account, block)
 		if aerr != nil {
 			p.ChainError = fmt.Sprintf("g1_chain_unread_at_block: %v", aerr)
 			return p, nil
@@ -147,7 +166,8 @@ func trimPage(p *PageState, stateRoot []byte) (*PageState, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &PageState{URL: p.URL, State: p.State, Receipt: hex.EncodeToString(rb), Chains: p.Chains, PendingHash: p.PendingHash, ChainError: p.ChainError}, nil
+	return &PageState{URL: p.URL, State: p.State, Receipt: hex.EncodeToString(rb), Chains: p.Chains, PendingHash: p.PendingHash, ChainError: p.ChainError,
+		Partition: p.Partition, Roles: p.Roles, History: p.History}, nil
 }
 
 // anchorBody decodes a delivered partition anchor and returns its body and transaction hash.

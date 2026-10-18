@@ -130,6 +130,7 @@ func CheckIntentCertificate(row *database.IntentQuorumCertificateRow, cp *chaine
 	var g1 certenproof.G1Result
 	var g2 certenproof.G2Result
 	var rec certenproof.AuthorizationRecord
+	var voteEvidence json.RawMessage
 	have := map[string]bool{}
 	for _, l := range levels {
 		switch l.Level {
@@ -139,6 +140,7 @@ func CheckIntentCertificate(row *database.IntentQuorumCertificateRow, cp *chaine
 			err = json.Unmarshal(l.Result, &g1)
 			if err == nil {
 				err = json.Unmarshal(l.Flags[GovLevelAuthorizationKey], &rec)
+				voteEvidence = l.Flags[GovLevelVoteEvidenceKey]
 			}
 		case "G2":
 			err = json.Unmarshal(l.Result, &g2)
@@ -186,11 +188,14 @@ func CheckIntentCertificate(row *database.IntentQuorumCertificateRow, cp *chaine
 		if in.GovRootV2 != "" {
 			return nil, fmt.Errorf("the certified message claims both govRoot v2 %s and govRoot v3 %s", in.GovRootV2, in.GovRootV3)
 		}
-		govRoot3, err := checkProofV2(in, trust, inc, opBytes, accRoot, &g0, &g1, &g2)
+		govRoot3, is21, err := checkProofV2(in, trust, inc, opBytes, accRoot, &g0, &g1, &g2, voteEvidence)
 		if err != nil {
 			return nil, err
 		}
 		rootName, claimedRoot, isRoot = "govRoot v3", in.GovRootV3, govRoot3
+		if is21 {
+			rootName = "govRoot v4"
+		}
 	}
 	for _, c := range []struct {
 		name    string
@@ -231,34 +236,43 @@ func CheckIntentCertificate(row *database.IntentQuorumCertificateRow, cp *chaine
 		CertifiedHeight: row.CertifiedHeight, IncarnationPinned: pinned != nil, AnchoredInBatch: anchored, ProofV3: v3}, nil
 }
 
-// checkProofV2 verifies a v3 certificate's proof v2 from the incarnation's genesis and returns its govRoot v3: what
-// consensus checked against the chain's spine (consensus.VerifyIntentCertificate), checked again with no chain - the
-// same binding to G0 and G1, and the same set root as the stored Directory leg's (accRoot).
+// checkProofV2 verifies a v3 certificate's proof v2 from the incarnation's genesis and returns its govRoot - v3 over
+// evidence 2.0, v4 over evidence 2.1 (is21) - what consensus checked against the chain's spine
+// (consensus.VerifyIntentCertificate), checked again with no chain: the same binding to G0 and G1 (and, for 2.1, to the
+// intent's own vote evidence), and the same set root as the stored Directory leg's (accRoot).
 func checkProofV2(in consensus.IntentMessageInputs, trust *ProofV2Trust, inc, op, accRoot [32]byte,
-	g0 *certenproof.G0Result, g1 *certenproof.G1Result, g2 *certenproof.G2Result) ([32]byte, error) {
+	g0 *certenproof.G0Result, g1 *certenproof.G1Result, g2 *certenproof.G2Result, voteEvidence json.RawMessage) (root [32]byte, is21 bool, err error) {
 	var zero [32]byte
 	switch {
 	case in.ProofV2 == nil || in.GovRootV3 == "":
-		return zero, fmt.Errorf("the certified v3 message does not keep both its govRoot v3 and its proof v2")
+		return zero, false, fmt.Errorf("the certified v3 message does not keep both its govRoot and its proof v2")
 	case trust == nil || trust.Archive == nil:
-		return zero, ErrProofV2TrustMissing
+		return zero, false, ErrProofV2TrustMissing
 	}
-	rep, err := proofv2.VerifyFromGenesis(in.ProofV2, trust.Archive, trust.Inputs, inc)
+	// The entry point by the evidence's version, as consensus chooses its own (defaultProofV2Verifier): the 2.0 entry point refuses 2.1 by
+	// version and the 2.1 one refuses 2.0, so a document is never judged by the other version's verifier.
+	verify := proofv2.VerifyFromGenesis
+	if in.ProofV2.Version == proofv2.Version21 {
+		verify = proofv2.Verify21FromGenesis
+	}
+	// A document that claims 2.0 is judged on its evidence-2.0 view, as consensus judges it (judgeProofV2, consensus.Evidence20View): a
+	// certificate consensus accepted before the cross-partition activation has the same verdict here.
+	doc := in.ProofV2
+	if doc.Version != proofv2.Version21 {
+		doc = consensus.Evidence20View(doc)
+	}
+	rep, err := verify(doc, trust.Archive, trust.Inputs, inc)
 	if err != nil {
-		return zero, fmt.Errorf("the certified proof v2: %w", err)
-	}
-	if err := intentcert.BindProofV2(rep, g0, g1, in.KeyPageURL); err != nil {
-		return zero, err
+		return zero, false, fmt.Errorf("the certified proof v2: %w", err)
 	}
 	if rep.AccumulateSetRoot != accRoot {
-		return zero, fmt.Errorf("the certified proof v2 derives Accumulate set root %x, the stored Directory leg %x", rep.AccumulateSetRoot, accRoot)
+		return zero, false, fmt.Errorf("the certified proof v2 derives Accumulate set root %x, the stored Directory leg %x", rep.AccumulateSetRoot, accRoot)
 	}
-	root, _, err := intentcert.GovRootV3(intentcert.GovRootV3Inputs{Report: rep, Evidence: in.ProofV2, G0: g0, G1: g1, G2: g2,
-		KeyPageURL: in.KeyPageURL, KeyBookURL: in.KeyBookURL, OperationID: op})
+	root, is21, err = intentcert.ProofV2Root(rep, doc, g0, g1, g2, in.KeyPageURL, in.KeyBookURL, voteEvidence, op)
 	if err != nil {
-		return zero, fmt.Errorf("govRoot v3 from the certified proof v2: %w", err)
+		return zero, is21, fmt.Errorf("the certified proof v2: %w", err)
 	}
-	return root, nil
+	return root, is21, nil
 }
 
 func hex32Of(s string) ([32]byte, error) {

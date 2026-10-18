@@ -25,6 +25,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/govvote"
 	"github.com/certen/independant-validator/pkg/accumulate"
 	"github.com/certen/independant-validator/pkg/commitment"
 	"github.com/certen/independant-validator/pkg/consensus"
@@ -379,9 +380,17 @@ func (id *IntentDiscovery) SetBFTConsensus(consensus BFTConsensusProtocol) {
 // ProofV2Shadow captures an intent's governing pages at discovery and builds its v2 proof after the v1 proof: in the
 // background (Build) until the chain requires the v3 intent certificate, then at once for the certificate (Prove).
 type ProofV2Shadow interface {
-	Capture(intentID, account, tx string)
+	// Capture reads the governing pages. keyBook and keyPage are the key book and page the intent declares (its governance data),
+	// from which the certified key page is resolved; either may be empty.
+	Capture(intentID, account, tx, keyBook, keyPage string)
 	Build(intentID, account, tx, bvn string)
 	Prove(ctx context.Context, intentID, account, tx, bvn string, maxMajors uint64) (*proofv2.Evidence, error)
+}
+
+// ProofV2CrossChecker is implemented by a shadow that compares the pages v1 replayed for an intent with the pages v2 captured
+// (docs/proof/PROOF_V2.md §5.2: a disagreement on any page is stop-the-line). It never delays or fails an intent.
+type ProofV2CrossChecker interface {
+	CrossCheck(intentID string, ev *govvote.Evidence)
 }
 
 // SetProofV2Shadow installs the proof v2 shadow.
@@ -395,6 +404,20 @@ type ProofV2Gate interface {
 
 // SetProofV2Gate installs the gate; without one, no intent is proven for a v3 certificate.
 func (id *IntentDiscovery) SetProofV2Gate(g ProofV2Gate) { id.v2Gate = g }
+
+// ProofV2G1Gate is implemented by a gate that also knows the rules v15 cross-partition activation: whether the NEXT block requires
+// evidence 2.1 in every v3 certificate (read from the same committed state the proposer builds certificates against, consensus
+// G1ActivationContext). A gate without it (rules before v15) never asks for 2.1.
+type ProofV2G1Gate interface {
+	G1CrossPartitionRequired() (bool, error)
+}
+
+// ProofV2G1Prover is implemented by a shadow that can build evidence 2.1 for an intent's certificate. It is called, instead of Prove, only
+// while the activation is in force (g1InForce is then true); an intent whose 2.1 evidence cannot be built is answered by a named state and
+// retried, never certified under 2.0 or a weaker binding.
+type ProofV2G1Prover interface {
+	ProveG1(ctx context.Context, intentID, account, tx, bvn string, maxMajors uint64, g1InForce bool) (*proofv2.Evidence, error)
+}
 
 func (id *IntentDiscovery) SetRepositories(repos *database.Repositories) {
 	id.repos = repos
@@ -1377,6 +1400,9 @@ func chainedRetryBackoff(base time.Duration, step, maxShift int, capDur time.Dur
 // on the checkpoints the chain has verified, and the intent fails closed (retryably) without it, as it does without
 // its chained proof. Before that, proof v2 is a shadow built in the background.
 func (id *IntentDiscovery) proveV2(ctx context.Context, intentID, accountURL, txHash, partition string, cp *proof.CertenProof) error {
+	if cc, ok := id.v2Shadow.(ProofV2CrossChecker); ok && cp != nil && cp.GovVoteEvidence != nil {
+		cc.CrossCheck(intentID, cp.GovVoteEvidence)
+	}
 	required, maxMajors := false, uint64(0)
 	if id.v2Gate != nil {
 		var err error
@@ -1388,7 +1414,26 @@ func (id *IntentDiscovery) proveV2(ctx context.Context, intentID, accountURL, tx
 	case required && id.v2Shadow == nil:
 		return fmt.Errorf("intent %s: %w: the chain requires proof v2 and no prover is configured", intentID, errChainedProofTerminal)
 	case required:
-		ev, err := id.v2Shadow.Prove(ctx, intentID, accountURL, txHash, partition, maxMajors)
+		// From the block after the rules v15 activation every v3 certificate must carry evidence 2.1; until then the certificate is built
+		// exactly as before. An unreadable activation, or a prover that cannot build 2.1 while it is in force, retries the intent: it is
+		// never proven under the other form.
+		g1InForce := false
+		if gg, ok := id.v2Gate.(ProofV2G1Gate); ok {
+			var err error
+			if g1InForce, err = gg.G1CrossPartitionRequired(); err != nil {
+				return fmt.Errorf("intent %s: %w: whether evidence 2.1 is required: %v", intentID, errChainedProofUnavailable, err)
+			}
+		}
+		var ev *proofv2.Evidence
+		var err error
+		switch p, can := id.v2Shadow.(ProofV2G1Prover); {
+		case g1InForce && !can:
+			return fmt.Errorf("intent %s: %w: evidence 2.1 is required and the prover cannot build it", intentID, errChainedProofUnavailable)
+		case g1InForce:
+			ev, err = p.ProveG1(ctx, intentID, accountURL, txHash, partition, maxMajors, true)
+		default:
+			ev, err = id.v2Shadow.Prove(ctx, intentID, accountURL, txHash, partition, maxMajors)
+		}
 		if err != nil {
 			return fmt.Errorf("intent %s: %w: %v", intentID, errChainedProofUnavailable, err)
 		}
@@ -1875,7 +1920,8 @@ func (id *IntentDiscovery) processIntent(intent *CertenIntent, blockHeight uint6
 				intent.IntentID, intent.TransactionHash[:16]+"...", intent.ProofPartition, inlineAttempts)
 
 			if id.v2Shadow != nil {
-				id.v2Shadow.Capture(intent.IntentID, accountURL, intent.TransactionHash)
+				keyBook, keyPage := declaredKeyPage(intent)
+				id.v2Shadow.Capture(intent.IntentID, accountURL, intent.TransactionHash, keyBook, keyPage)
 			}
 			cp, perr := id.buildChainedCertenProof(ctx, accountURL, intent.TransactionHash, intent.ProofPartition, intent.IntentID, inlineAttempts)
 			if perr != nil {
@@ -2040,7 +2086,8 @@ func (id *IntentDiscovery) processMultiLegIntent(intent *CertenIntent, blockHeig
 			id.logger.Printf("🔗 [MULTI-LEG] Generating L1-L3 chained proof for %s (attempts=%d)", intent.IntentID, inlineAttempts)
 
 			if id.v2Shadow != nil {
-				id.v2Shadow.Capture(intent.IntentID, accountURL, intent.TransactionHash)
+				keyBook, keyPage := declaredKeyPage(intent)
+				id.v2Shadow.Capture(intent.IntentID, accountURL, intent.TransactionHash, keyBook, keyPage)
 			}
 			cp, perr := id.buildChainedCertenProof(ctx, accountURL, intent.TransactionHash, intent.ProofPartition, intent.IntentID, inlineAttempts)
 			if perr != nil {
@@ -2391,4 +2438,13 @@ func failureClassOf(err error) database.IntentFailureClass {
 		return database.FailureGovernanceUnavailable
 	}
 	return database.FailureProcessingFailed
+}
+
+// declaredKeyPage is the key book and page an intent's governance data declares; empty when it declares none or cannot be read.
+func declaredKeyPage(ci *consensus.CertenIntent) (keyBook, keyPage string) {
+	gov, err := ci.ParseGovernance()
+	if err != nil || gov == nil {
+		return "", ""
+	}
+	return gov.Authorization.RequiredKeyBook, gov.Authorization.RequiredKeyPage
 }

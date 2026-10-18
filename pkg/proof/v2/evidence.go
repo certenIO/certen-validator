@@ -46,8 +46,22 @@ type Evidence struct {
 	// and the partition's state root at it, which every page must be proven into.
 	Anchor PartitionAnchor `json:"anchor"`
 
-	// Pages are the governing key pages and the principal account as of the anchor's block (G1(a)).
+	// Pages are the governing key pages and the principal account as of the anchor's block (G1(a)). In evidence 2.1 each
+	// page is as of ITS partition's block, proven through Anchors[its partition].
 	Pages []PageState `json:"pages,omitempty"`
+
+	// Evidence 2.1 only (docs/proof/G1_CROSS_PARTITION.md D3, D4); empty, and so absent from the encoding, in 2.0.
+	//
+	// Anchors holds, for the transaction's partition and for every other partition that holds a proven page, that
+	// partition's BlockValidatorAnchor for the block its pages are proven at (B_Y) and the receipt proving the anchor
+	// into the certified Directory root, keyed by the anchor message's Source ("acc://bvn-BVN2.acme"). Anchors[X] is the
+	// 2.0 field Anchor.
+	Anchors map[string]PartitionAnchor `json:"anchors,omitempty"`
+	// Votes are the authority votes copied from the principal's proven signature chain (D3).
+	Votes []Vote `json:"votes,omitempty"`
+	// Transaction is the governed transaction, binary, hex (2.1 timeline): its type decides the page blacklist and which authorities must vote,
+	// and its hash must be TxHash. Absent, the votes are not re-evaluated (named in the report).
+	Transaction string `json:"transaction,omitempty"`
 
 	// Check proves the validator set in force at a certified block at or after the certified one.
 	Check SetCheck `json:"check"`
@@ -59,6 +73,11 @@ type SetCheck struct {
 	Majors uint64                  `json:"majors"`
 	Hops   []string                `json:"hops"`
 	Set    proof.ValidatorSetProof `json:"set"`
+
+	// Routing, in evidence 2.1, is the Directory's routing table (acc://dn.acme/routing) proven into the same state root as
+	// the network and globals accounts, so a verifier can check Partition == route(URL) for every page (design D5). Absent
+	// in 2.0; absent in 2.1 only with the named state g1_routing_unproven.
+	Routing *proof.AccountStateProof `json:"routing,omitempty"`
 }
 
 // Report is what Verify established.
@@ -76,9 +95,28 @@ type Report struct {
 	AnchorBlock uint64
 	Pages       []protocol.Account
 	PageChains  []PageChain // per page, in the same order: whether its chains are proven at AnchorBlock
-	SetVerdict  proof.Verdict
-	Validators  int
-	Threshold   uint64
+	// Proven lists every proven page as (partition, block, roles), in the same order as Pages. Evidence 2.0 leaves it
+	// empty (every page is the transaction's partition's, at AnchorBlock); 2.1 fills it (design D4).
+	Proven     []ProvenPage
+	SetVerdict proof.Verdict
+	Validators int
+	Threshold  uint64
+
+	// Version is the evidence version verified and Tag the domain tag its commitments are made under: empty for 2.0, certen:g1:v4
+	// for 2.1. Unproven lists, for 2.1, every fact the verifier could not establish with the partition and block it was judged at
+	// (design D6): a report with any entry is not a verified S3. RoutingHeight is the main chain height of the proven routing
+	// table (1: never rewritten since genesis; 0: no routing proof carried).
+	Version       string
+	Tag           string
+	Unproven      []NamedState
+	RoutingHeight uint64
+
+	// Timeline results (2.1 with a timeline; zero otherwise). AuthorizationMode is "authorities_required" or "all_authorities_disabled"
+	// (design D3). Disclosures are verified facts that are not refusals (design D6). Arrivals lists, per counted signature, the block it
+	// arrived in as the verifier derived it from the page's signature-index chain.
+	AuthorizationMode string
+	Disclosures       []NamedState
+	Arrivals          []ArrivalReport
 
 	// TxHash is the transaction the receipt starts at; AnchorTxHash the partition anchor transaction proven into the
 	// certified root, and AnchorStateRoot that anchor's StateTreeAnchor: the partition's state root at AnchorBlock,
@@ -126,6 +164,22 @@ func VerifyFromGenesis(ev *Evidence, ar *Archive, in proof.IncarnationInputs, pi
 	if ev == nil || ev.Version != Version {
 		return nil, fmt.Errorf("not a v2 Accumulate proof")
 	}
+	return verifyFromGenesis(ev, ar, in, pinned)
+}
+
+// Verify21FromGenesis verifies evidence 2.1 (docs/proof/G1_CROSS_PARTITION.md; pages on more than one partition) from the
+// incarnation's genesis. It is a separate entry point on purpose: Verify, VerifyFromGenesis and VerifyFromSpine - the ones
+// consensus and the execution check call - refuse 2.1 by version exactly as before, so no 2.1 document is accepted anywhere
+// until the rules switch that activates it (design D7, RB9 Phase C2). The report it returns carries Unproven: a report with an
+// entry is not a verified S3.
+func Verify21FromGenesis(ev *Evidence, ar *Archive, in proof.IncarnationInputs, pinned [32]byte) (*Report, error) {
+	if ev == nil || ev.Version != Version21 {
+		return nil, fmt.Errorf("not a v2.1 Accumulate proof")
+	}
+	return verifyFromGenesis(ev, ar, in, pinned)
+}
+
+func verifyFromGenesis(ev *Evidence, ar *Archive, in proof.IncarnationInputs, pinned [32]byte) (*Report, error) {
 	rep := &Report{}
 	id, err := proof.ComputeIncarnation(in)
 	if err != nil {
@@ -170,6 +224,25 @@ func VerifyFromSpine(ev *Evidence, l *ledger.AccumulateSpineLog, pinned [32]byte
 	if ev == nil || ev.Version != Version {
 		return nil, fmt.Errorf("not a v2 Accumulate proof")
 	}
+	return verifyFromSpine(ev, l, pinned)
+}
+
+// VerifyEvidence21FromSpine is VerifyFromSpine for evidence 2.1 (docs/proof/G1_CROSS_PARTITION.md; pages on more than one
+// partition): the entry point consensus calls for a 2.1 certificate, with the starting checkpoints taken from the chain's spine log
+// and no I/O, so every validator judging the same block reaches the same verdict. It is a separate function on purpose:
+// VerifyFromSpine (like Verify and VerifyFromGenesis) refuses 2.1 by version exactly as before, so a 2.0 call site can never accept a
+// 2.1 document; pkg/consensus reaches this function only for a certificate that carries 2.1 AND only when the rules v15 activation is
+// in force at the block (intentInputs checks that first and refuses a 2.1 certificate before it by name). The report it returns
+// carries Unproven: BindProofV21 refuses a report that is not complete for the intent's governing set.
+func VerifyEvidence21FromSpine(ev *Evidence, l *ledger.AccumulateSpineLog, pinned [32]byte) (*Report, error) {
+	if ev == nil || ev.Version != Version21 {
+		return nil, fmt.Errorf("not a v2.1 Accumulate proof")
+	}
+	return verifyFromSpine(ev, l, pinned)
+}
+
+// verifyFromSpine is the spine walk the 2.0 and 2.1 entry points share, each of which has checked its own version.
+func verifyFromSpine(ev *Evidence, l *ledger.AccumulateSpineLog, pinned [32]byte) (*Report, error) {
 	if l == nil || l.Genesis == nil {
 		return nil, fmt.Errorf("the chain has no Accumulate spine")
 	}
@@ -198,6 +271,18 @@ func VerifyFromSpine(ev *Evidence, l *ledger.AccumulateSpineLog, pinned [32]byte
 // ev.Check.Majors major blocks.
 func verifyFrom(ev *Evidence, rep *Report, at map[uint64]*Spine, pinned [32]byte) (*Report, error) {
 	var err error
+	is21 := ev.Version == Version21
+	if !is21 {
+		// A 2.0 document carries none of the 2.1 members; one that does would have them silently ignored.
+		if ev.Anchors != nil || ev.Votes != nil || ev.Check.Routing != nil {
+			return nil, fmt.Errorf("evidence 2.0 carries 2.1 members (anchors, votes or a routing proof)")
+		}
+		for _, p := range ev.Pages {
+			if p.Partition != "" || p.Roles != nil {
+				return nil, fmt.Errorf("evidence 2.0 page %s carries a partition or roles", p.URL)
+			}
+		}
+	}
 	// S1-S2: the receipt from the transaction to a certified root.
 	cert := at[ev.Majors].Clone()
 	if len(ev.Certify) == 0 {
@@ -234,7 +319,7 @@ func verifyFrom(ev *Evidence, rep *Report, at map[uint64]*Spine, pinned [32]byte
 
 	// The partition anchor: executed by the Directory, proven into the same certified root, naming the block whose
 	// root chain the transaction's receipt passes through and whose state root the pages are proven into.
-	body, seq, anchorTx, err := anchorBody(ev.Anchor.Message)
+	body, seq, anchorTx, err := anchorOf(ev.Anchor.Message, is21)
 	if err != nil {
 		return nil, err
 	}
@@ -251,10 +336,14 @@ func verifyFrom(ev *Evidence, rep *Report, at map[uint64]*Spine, pinned [32]byte
 	if len(anchorTx) != 32 {
 		return nil, fmt.Errorf("partition anchor: its transaction hash is %d bytes, not 32", len(anchorTx))
 	}
-	rep.Partition, rep.AnchorBlock = seq.Source.String(), body.MinorBlockIndex
+	srcURL := seq.Source
+	if is21 {
+		srcURL = body.Source // the committed value; anchorOf has required the wrapper to agree (xdirectory.go partition)
+	}
+	rep.Partition, rep.AnchorBlock = srcURL.String(), body.MinorBlockIndex
 	copy(rep.AnchorTxHash[:], anchorTx)
 	rep.AnchorStateRoot, rep.AnchorRootChainAnchor = body.StateTreeAnchor, body.RootChainAnchor
-	for i := range ev.Pages {
+	for i := 0; i < len(ev.Pages) && !is21; i++ {
 		acct, pc, err := verifyPage(&ev.Pages[i], body.StateTreeAnchor[:])
 		if err != nil {
 			return nil, fmt.Errorf("page: %w", err)
@@ -262,6 +351,9 @@ func verifyFrom(ev *Evidence, rep *Report, at map[uint64]*Spine, pinned [32]byte
 		rep.Pages = append(rep.Pages, acct)
 		rep.PageChains = append(rep.PageChains, pc)
 	}
+	xin := xIn{certRoot: append([]byte(nil), cert.RootChainAnchor[:]...), setRoot: [32]byte{}}
+	xin.x = xAnchor{source: srcURL.String(), block: body.MinorBlockIndex, stateRoot: append([]byte(nil), body.StateTreeAnchor[:]...)}
+	xin.x.id, _ = protocol.ParsePartitionUrl(srcURL)
 
 	// The validator set: walked to a certified block at or after the certified one, proven there, equal to the set
 	// the walk derived. Every write the walk applied must be accounted for by the network account's main chain.
@@ -327,6 +419,13 @@ func verifyFrom(ev *Evidence, rep *Report, at map[uint64]*Spine, pinned [32]byte
 	}
 	rep.Validators = len(chk.Globals().Network.Validators)
 	rep.Threshold = chk.Globals().ValidatorThreshold(protocol.Directory)
+	if is21 {
+		xin.setRoot = chk.StateTreeAnchor
+		xin.network = chk.Globals().Network.NetworkName
+		if err := verify21(ev, rep, xin); err != nil {
+			return nil, err
+		}
+	}
 	return rep, nil
 }
 

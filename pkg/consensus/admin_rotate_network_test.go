@@ -320,6 +320,7 @@ func TestAdminRotationRehearsalOnALiveNetwork(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		// The binary's rules (v14 since the anchor set); the state stays stamped v12 - no later kind was committed here.
 		if info.Response.AppVersion != CurrentExecutionRulesVersion {
 			t.Fatalf("%s reports app version %d", n.name, info.Response.AppVersion)
 		}

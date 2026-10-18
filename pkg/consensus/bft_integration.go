@@ -448,6 +448,11 @@ type BFTValidator struct {
 	// and a block built without a certificate under one would be refused.
 	intentCertificates IntentCertificateSource
 
+	// anchorSets is where this node learns the anchor set the chain judges chain targets by (rules v14, RB4-F35): the
+	// ValidatorApp, wired in main. Required: without it the node cannot know whether one is in force, and admits nothing
+	// (CheckAnchorSetAdmission).
+	anchorSets AnchorSetSource
+
 	// Entitlement gate mode, so the proposer can decline to sign locally rather
 	// than build a block the fleet will reject anyway. Purely an optimisation:
 	// the authority is the consensus rule in abci_validator.go.
@@ -617,6 +622,9 @@ func (bv *BFTValidator) SetKeyPageResolver(r SigningKeyPageResolver) {
 type IntentCertificateSource interface {
 	IntentCertificateContext() (string, *ledger.BLSRegistryRecord, error)
 	CommittedAccumulateSpine() (*ledger.AccumulateSpineLog, error)
+	// G1ActivationContext is the cross-partition activation in force for the next block, nil before rules v15's
+	// activation: it decides whether the certificate is built over evidence 2.1.
+	G1ActivationContext() (*ledger.G1ActivationRecord, error)
 }
 
 // SetIntentCertificateSource installs the source of the chain id and BLS registry intent certificates are built
@@ -625,6 +633,13 @@ func (bv *BFTValidator) SetIntentCertificateSource(s IntentCertificateSource) {
 	bv.mu.Lock()
 	defer bv.mu.Unlock()
 	bv.intentCertificates = s
+}
+
+// SetAnchorSetSource installs the source of the committed anchor set intents are admitted against (rules v14).
+func (bv *BFTValidator) SetAnchorSetSource(s AnchorSetSource) {
+	bv.mu.Lock()
+	defer bv.mu.Unlock()
+	bv.anchorSets = s
 }
 
 // SetBatchEnqueuer installs the cross-ADI batch mempool.
@@ -1068,6 +1083,10 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 	if err != nil {
 		return nil, fmt.Errorf("intent %s: intent certificate context: %w", certenIntent.IntentID, err)
 	}
+	certG1, err := certSource.G1ActivationContext()
+	if err != nil {
+		return nil, fmt.Errorf("intent %s: intent certificate context: %w", certenIntent.IntentID, err)
+	}
 	certified := certRegistry != nil
 	if certified {
 		blsSignature = ""
@@ -1257,7 +1276,7 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 	}
 
 	if certified {
-		if err := bv.certifyIntent(vb, certChainID, certRegistry, certSpine, certenProof, resolvedKeyPageURL, resolvedKeyBookURL,
+		if err := bv.certifyIntent(vb, certChainID, certRegistry, certSpine, certG1, certenProof, resolvedKeyPageURL, resolvedKeyBookURL,
 			govAuthorization, govVoteEvidence); err != nil {
 			return &ExecutionTaskResult{
 				Success: false,

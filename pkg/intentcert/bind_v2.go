@@ -23,6 +23,29 @@ func BindProofV2(rep *proofv2.Report, g0 *proof.G0Result, g1 *proof.G1Result, ke
 	if rep == nil || g0 == nil || g1 == nil {
 		return fmt.Errorf("proof v2 binding: the report, G0 and G1 are all required")
 	}
+	// A report of evidence 2.1 lists its proven pages at their own partitions and blocks with their roles. It is bound by the
+	// strengthened rule only (BindProofV21): this one checks one page, which is the rule that let an intent whose certified
+	// page belongs to another identity's initiator be certified without that page being among the governing set.
+	if len(rep.Proven) > 0 {
+		return fmt.Errorf("proof v2 binding: the report is evidence 2.1 (%d proven pages with partitions, blocks and roles); it is bound by BindProofV21 with the intent's governing facts, never by this rule", len(rep.Proven))
+	}
+	if err := bindG0(rep, g0); err != nil {
+		return err
+	}
+	page := govvote.CanonicalAccSpelling(keyPageURL)
+	if page == "" || page != govvote.CanonicalAccSpelling(g1.AuthoritySnapshot.Page) {
+		return fmt.Errorf("proof v2 binding: the certified key page %q is not the page G1 validated against (%q)", keyPageURL, g1.AuthoritySnapshot.Page)
+	}
+	for _, a := range rep.Pages {
+		if a != nil && a.GetUrl() != nil && govvote.CanonicalAccSpelling(a.GetUrl().String()) == page {
+			return nil
+		}
+	}
+	return fmt.Errorf("proof v2 binding: the certified key page %s is not among the pages the report proved", page)
+}
+
+// bindG0 is the part of the binding both rules share: G0's execution entry, witness and block are the report's.
+func bindG0(rep *proofv2.Report, g0 *proof.G0Result) error {
 	entry, err := hashOf(g0.EntryHashExec, "G0 entry_hash_exec")
 	if err != nil {
 		return err
@@ -46,16 +69,7 @@ func BindProofV2(rep *proofv2.Report, g0 *proof.G0Result, g1 *proof.G1Result, ke
 	case g0.ExecMBI <= 0 || uint64(g0.ExecMBI) != rep.AnchorBlock:
 		return fmt.Errorf("proof v2 binding: G0's execution block %d is not the partition anchor's block %d", g0.ExecMBI, rep.AnchorBlock)
 	}
-	page := govvote.CanonicalAccSpelling(keyPageURL)
-	if page == "" || page != govvote.CanonicalAccSpelling(g1.AuthoritySnapshot.Page) {
-		return fmt.Errorf("proof v2 binding: the certified key page %q is not the page G1 validated against (%q)", keyPageURL, g1.AuthoritySnapshot.Page)
-	}
-	for _, a := range rep.Pages {
-		if a != nil && a.GetUrl() != nil && govvote.CanonicalAccSpelling(a.GetUrl().String()) == page {
-			return nil
-		}
-	}
-	return fmt.Errorf("proof v2 binding: the certified key page %s is not among the pages the report proved", page)
+	return nil
 }
 
 func hashOf(s, what string) ([32]byte, error) {
