@@ -831,6 +831,19 @@ func (o *UnifiedOrchestrator) recordMemberOutcome(
 	proofCycle database.MemberProofCycle,
 	reason string,
 ) error {
+	return o.recordMemberOutcomeAs(ctx, cycle, settlement, proofCycle, reason, false)
+}
+
+// recordMemberOutcomeAs is recordMemberOutcome for a report that may be a start failure (notStarted): that report never
+// replaces a member beyond start (database.ErrMemberBeyondStart), and is then said and not queued - it is not owed.
+func (o *UnifiedOrchestrator) recordMemberOutcomeAs(
+	ctx context.Context,
+	cycle *activeCycle,
+	settlement database.MemberSettlement,
+	proofCycle database.MemberProofCycle,
+	reason string,
+	notStarted bool,
+) error {
 	if o.config.Repos == nil || o.config.Repos.IntentLifecycle == nil || cycle == nil || cycle.Request == nil {
 		return nil
 	}
@@ -843,6 +856,7 @@ func (o *UnifiedOrchestrator) recordMemberOutcome(
 	out := database.MemberOutcome{
 		IntentID: req.IntentID, ChainID: chainID, MemberChains: chains, Legs: legs,
 		Settlement: settlement, ProofCycle: proofCycle, CycleID: req.CycleID, Reason: reason,
+		NotStarted:    notStarted,
 		EffectsProven: cycleEffectsProven(cycle), ReportedBy: o.config.ValidatorID, Refusal: cycle.Refusal,
 	}
 	if result != nil {
@@ -855,6 +869,10 @@ func (o *UnifiedOrchestrator) recordMemberOutcome(
 	}
 	derived, err := o.config.Repos.IntentLifecycle.RecordMemberOutcome(ctx, out)
 	if err != nil {
+		if errors.Is(err, database.ErrMemberBeyondStart) {
+			fmt.Printf("⚠️ [LIFECYCLE] intent %s member %d: %v; the start failure is not recorded over it\n", req.IntentID, chainID, err)
+			return nil
+		}
 		// The intent's status waits on this record (RB3-F78): the outbox keeps it until the store takes it.
 		if o.config.MemberOutcomes == nil {
 			fmt.Printf("❌ [LIFECYCLE] intent %s member %d: %v\n", req.IntentID, chainID, err)
@@ -924,7 +942,7 @@ func (o *UnifiedOrchestrator) recordStartFailure(ctx context.Context, req *Unifi
 	}
 	cycle := &activeCycle{CycleID: req.CycleID, Request: req, Result: result}
 	reason := fmt.Sprintf("proof cycle not started: %v", err)
-	if rErr := o.recordMemberOutcome(ctx, cycle, database.MemberSettlementUnobserved, database.MemberProofCycleFailed, reason); rErr != nil {
+	if rErr := o.recordMemberOutcomeAs(ctx, cycle, database.MemberSettlementUnobserved, database.MemberProofCycleFailed, reason, true); rErr != nil {
 		fmt.Printf("❌ [LIFECYCLE] intent %s: its proof cycle could not start (%v) and that could not be recorded: %v\n",
 			req.IntentID, err, rErr)
 	}
