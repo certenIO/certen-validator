@@ -6,7 +6,7 @@
 //
 //	DISAGREEMENTS=<n> VERIFICATION_FAILURES=<n> NOT_RUN=<n>
 //
-// It exits 0 only when all three are zero.
+// It exits 0 only when all three are zero, 1 on any disagreement or verification failure, 3 when there are none but some decision was not run.
 //
 // A DISAGREEMENT is a difference between what v1 established and what the 2.1 document proves: a page whose authority-deciding fields differ
 // (CrossCheckPages), a page v1 evaluated that the document does not prove, a vote v1 recorded that the document does not carry (or the
@@ -21,6 +21,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"flag"
@@ -67,14 +68,27 @@ type result struct {
 
 func main() {
 	dir := flag.String("fixtures", "", "directory holding <name>.json.gz and <name>.capture.json.gz (cmd/g1fixture)")
+	window := flag.Bool("window", false, "read every captured intent of a time window through the read-only database session in CERTEN_DB (window.go)")
+	since := flag.String("since", "", "window: start, a timestamp Postgres reads (2026-10-18T08:00:00Z)")
+	until := flag.String("until", "", "window: end (exclusive)")
 	incPath := flag.String("incarnation-evidence", "pkg/proof/testdata/incarnation/kermit.json", "incarnation evidence JSON")
 	pinHex := flag.String("pin", "cac6698ed49a286ad8a3de94540a3354dfe964f366a439f4fdfb34533059fda0", "pinned incarnation, hex32")
 	flag.Parse()
-	if *dir == "" {
-		fmt.Fprintln(os.Stderr, "g1shadowcompare: -fixtures is required")
+	if *dir == "" && !*window {
+		fmt.Fprintln(os.Stderr, "g1shadowcompare: -fixtures or -window is required")
 		os.Exit(2)
 	}
-	code, err := run(*dir, *incPath, *pinHex)
+	var code int
+	var err error
+	if *window {
+		if *since == "" || *until == "" || os.Getenv("CERTEN_DB") == "" {
+			fmt.Fprintln(os.Stderr, "g1shadowcompare: -window needs -since, -until and CERTEN_DB (a read-only session)")
+			os.Exit(2)
+		}
+		code, err = runWindowMode(*dir, *incPath, *pinHex, *since, *until)
+	} else {
+		code, err = run(*dir, *incPath, *pinHex)
+	}
 	if err != nil {
 		fmt.Println("ERROR:", err)
 		os.Exit(2)
@@ -82,21 +96,37 @@ func main() {
 	os.Exit(code)
 }
 
-func run(dir, incPath, pinHex string) (int, error) {
+func loadIncarnation(incPath, pinHex string) (*proof.IncarnationReport, error) {
 	raw, err := os.ReadFile(incPath)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	inc := new(proof.IncarnationEvidence)
 	if err := json.Unmarshal(raw, inc); err != nil {
-		return 0, fmt.Errorf("incarnation evidence: %w", err)
+		return nil, fmt.Errorf("incarnation evidence: %w", err)
 	}
 	incRep, err := inc.Verify()
 	if err != nil {
-		return 0, fmt.Errorf("the incarnation evidence does not verify: %w", err)
+		return nil, fmt.Errorf("the incarnation evidence does not verify: %w", err)
 	}
 	if b, err := hex.DecodeString(strings.TrimPrefix(strings.ToLower(pinHex), "0x")); err != nil || len(b) != 32 || !bytes.Equal(b, incRep.Incarnation[:]) {
-		return 0, fmt.Errorf("-pin is not the incarnation the evidence verifies to (%x)", incRep.Incarnation)
+		return nil, fmt.Errorf("-pin is not the incarnation the evidence verifies to (%x)", incRep.Incarnation)
+	}
+	return incRep, nil
+}
+
+func runWindowMode(dir, incPath, pinHex, since, until string) (int, error) {
+	incRep, err := loadIncarnation(incPath, pinHex)
+	if err != nil {
+		return 0, err
+	}
+	return runWindow(context.Background(), os.Getenv("CERTEN_DB"), since, until, dir, func() *fixtureEnv { return &fixtureEnv{incRep: incRep} })
+}
+
+func run(dir, incPath, pinHex string) (int, error) {
+	incRep, err := loadIncarnation(incPath, pinHex)
+	if err != nil {
+		return 0, err
 	}
 	files, err := filepath.Glob(filepath.Join(dir, "*.json.gz"))
 	if err != nil {
@@ -105,7 +135,7 @@ func run(dir, incPath, pinHex string) (int, error) {
 	sort.Strings(files)
 	var results []*result
 	for _, f := range files {
-		if strings.HasSuffix(f, ".capture.json.gz") {
+		if strings.HasSuffix(f, ".capture.json.gz") || filepath.Base(f) == "archive.json.gz" {
 			continue
 		}
 		results = append(results, compareOne(context.Background(), f, incRep))
@@ -133,8 +163,11 @@ func run(dir, incPath, pinHex string) (int, error) {
 	}
 	fmt.Printf("\n%d intents, %d page comparisons\n", len(results), pages)
 	fmt.Printf("DISAGREEMENTS=%d VERIFICATION_FAILURES=%d NOT_RUN=%d\n", dis, fail, notRun)
-	if dis+fail+notRun > 0 {
+	switch {
+	case dis+fail > 0:
 		return 1, nil
+	case notRun > 0:
+		return 3, nil
 	}
 	return 0, nil
 }
@@ -227,7 +260,14 @@ func compareOne(ctx context.Context, path string, incRep *proof.IncarnationRepor
 	}
 
 	// ---- v15: the 2.1 document, from genesis, bound to the intent's own facts
-	ar, err := proofv2.UnmarshalArchive(f.Archive)
+	archive := []byte(f.Archive)
+	if len(archive) == 0 { // the major records are stored once beside the fixtures (cmd/g1fixture -shared-archive)
+		if err := readGz(filepath.Join(filepath.Dir(path), "archive.json.gz"), &archive); err != nil {
+			fail("the major records are neither in the fixture nor beside it: %v", err)
+			return r
+		}
+	}
+	ar, err := proofv2.UnmarshalArchive(archive)
 	if err != nil {
 		fail("the major records do not decode: %v", err)
 		return r
@@ -241,7 +281,9 @@ func compareOne(ctx context.Context, path string, incRep *proof.IncarnationRepor
 	for _, u := range rep.Unproven {
 		fail("not a verified S3, unproven: %s", u.Error())
 	}
-	var opID [32]byte
+	// The operation id enters only the govRoot value, never a decision; the fixture does not carry the validators' (it is computed by the
+	// consensus pipeline from the intent's blobs), so the comparator uses a fixed function of the transaction and says so in its header.
+	opID := sha256.Sum256([]byte("certen:g1shadowcompare:operation-id:" + strings.ToLower(f.TxHash)))
 	root, is21, err := intentcert.ProofV2Root(rep, ev21, &g0, &g1, &g2, f.KeyPage, f.KeyBook, f.VoteEvidence, opID)
 	switch {
 	case err != nil:

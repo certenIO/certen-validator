@@ -52,7 +52,7 @@ type Fixture struct {
 	Authorization json.RawMessage             `json:"authorization"`
 	VoteEvidence  json.RawMessage             `json:"vote_evidence"`
 	ProofV2       json.RawMessage             `json:"proof_v2"`
-	Archive       json.RawMessage             `json:"archive"`
+	Archive       json.RawMessage             `json:"archive,omitempty"` // the Directory major records the document builds on; empty with -shared-archive (they are in <out>/archive.json.gz)
 	Report        json.RawMessage             `json:"report"`
 }
 
@@ -73,13 +73,14 @@ func main() {
 		archive  = flag.String("archive", "pkg/proof/v2/testdata/archive.json.gz", "major records already walked (gzip JSON); extended from the network")
 		out      = flag.String("out", "", "directory to write <name>.json.gz and <name>.capture.json.gz into")
 		name     = flag.String("name", "", "fixture name")
+		shared   = flag.Bool("shared-archive", false, "write the major records once to <out>/archive.json.gz instead of into every fixture")
 	)
 	flag.Parse()
 	if *account == "" || *tx == "" || *name == "" || *out == "" {
 		fmt.Fprintln(os.Stderr, "g1fixture: -account, -tx, -name and -out are required")
 		os.Exit(2)
 	}
-	if err := run(*endpoint, *account, *tx, *book, *page, *capPath, *govproof, *txhash, *incPath, *pin, *archive, *out, *name); err != nil {
+	if err := run(*endpoint, *account, *tx, *book, *page, *capPath, *govproof, *txhash, *incPath, *pin, *archive, *out, *name, *shared); err != nil {
 		fmt.Println("FAIL:", err)
 		os.Exit(1)
 	}
@@ -87,7 +88,7 @@ func main() {
 
 func logf(f string, a ...any) { fmt.Printf(f+"\n", a...) }
 
-func run(endpoint, account, tx, book, page, capPath, govproofPath, txhashPath, incPath, pinHex, archivePath, out, name string) error {
+func run(endpoint, account, tx, book, page, capPath, govproofPath, txhashPath, incPath, pinHex, archivePath, out, name string, shared bool) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Minute)
 	defer cancel()
 	c := jsonrpc.NewClient(endpoint)
@@ -274,11 +275,19 @@ func run(endpoint, account, tx, book, page, capPath, govproofPath, txhashPath, i
 			return err
 		}
 	}
-	if f.Archive, err = proofv2.MarshalArchive(b.Archive()); err != nil {
+	arJSON, err := proofv2.MarshalArchive(b.Archive())
+	if err != nil {
 		return err
 	}
 	if err := os.MkdirAll(out, 0o755); err != nil {
 		return err
+	}
+	if shared {
+		if err := writeGzRaw(filepath.Join(out, "archive.json.gz"), arJSON); err != nil {
+			return err
+		}
+	} else {
+		f.Archive = arJSON
 	}
 	if err := writeGz(filepath.Join(out, name+".json.gz"), f); err != nil {
 		return err
@@ -320,6 +329,10 @@ func writeGz(path string, v any) error {
 	if err != nil {
 		return err
 	}
+	return writeGzRaw(path, j)
+}
+
+func writeGzRaw(path string, j []byte) error {
 	f, err := os.Create(path)
 	if err != nil {
 		return err
