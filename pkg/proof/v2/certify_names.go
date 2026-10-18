@@ -32,7 +32,7 @@ var certifyDetails = map[string]string{
 	StateCertifyLinkInvalid:       "the link is not a valid receipt of an anchored item",
 	StateCertifyLinkUnavailable:   "no receipt links the previous root chain anchor into the item's root chain height",
 	StateCertifyUpdateReplayed:    "the update was already applied earlier in the walk",
-	StateCertifyItemWithoutEffect: "an anchored item that is not the last of its sequence carries no update",
+	StateCertifyItemWithoutEffect: "an anchored item that is not the last of its sequence applies no update",
 	StateCertifyUpdateUnproven:    "the update's root chain position does not lie between the previous and this anchor's root chain index",
 	StateCertifyWindowUnaccounted: "the account's main chain holds writes the walk did not account for",
 	StateCertifyRangeUnavailable:  "the Directory does not serve the minor-root range; retry",

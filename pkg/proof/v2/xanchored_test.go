@@ -29,6 +29,12 @@ func orc(anchored bool) xworld.ChainItem {
 	return xworld.ChainItem{Anchored: anchored, Update: xworld.UpdateOracle}
 }
 
+// eff is an item with an effect: a write to the globals account that the walk applies and records. An anchored item that is not the last
+// of its sequence must have one (a transaction the walk does not apply, as orc carries, has none).
+func eff(anchored bool) xworld.ChainItem {
+	return xworld.ChainItem{Anchored: anchored, Update: xworld.UpdateGenesisGlobals}
+}
+
 func buildChain(t *testing.T, c *xworld.Chain) *xworld.Built {
 	t.Helper()
 	b, err := xworld.Build(xworld.Options{Chain: c})
@@ -309,9 +315,9 @@ func TestVerify21AnchoredFormsGiveTheSameReport(t *testing.T) {
 		}
 		return rep
 	}
-	cont := verify(&xworld.Chain{Items: []xworld.ChainItem{orc(false), orc(false)}})
-	anch := verify(&xworld.Chain{Items: []xworld.ChainItem{orc(true), orc(true)}, Final: xworld.ChainItem{Anchored: true}})
-	mixed := verify(&xworld.Chain{Items: []xworld.ChainItem{orc(true), orc(false)}, Final: xworld.ChainItem{Anchored: true}})
+	cont := verify(&xworld.Chain{Items: []xworld.ChainItem{eff(false), eff(false)}})
+	anch := verify(&xworld.Chain{Items: []xworld.ChainItem{eff(true), eff(true)}, Final: xworld.ChainItem{Anchored: true}})
+	mixed := verify(&xworld.Chain{Items: []xworld.ChainItem{eff(true), eff(false)}, Final: xworld.ChainItem{Anchored: true}})
 	js := func(r *proofv2.Report) string {
 		b, err := json.Marshal(r)
 		if err != nil {
@@ -326,7 +332,7 @@ func TestVerify21AnchoredFormsGiveTheSameReport(t *testing.T) {
 
 func TestVerify21AnchoredHopsAndLinkOrdinals(t *testing.T) {
 	c := func() *xworld.Chain {
-		return &xworld.Chain{Final: xworld.ChainItem{Anchored: true}, Hops: []xworld.ChainItem{orc(true), {Anchored: true}}}
+		return &xworld.Chain{Final: xworld.ChainItem{Anchored: true}, Hops: []xworld.ChainItem{eff(true), {Anchored: true}}}
 	}
 	b := buildChain(t, c())
 	if len(b.Evidence.Links) != 3 {
@@ -345,6 +351,30 @@ func TestVerify21AnchoredHopsAndLinkOrdinals(t *testing.T) {
 	b = buildChain(t, &xworld.Chain{Final: xworld.ChainItem{Anchored: true}, Hops: []xworld.ChainItem{{Anchored: true}, {Anchored: true}}})
 	_, err = proofv2.Verify21FromGenesis(b.Evidence, b.Archive, b.Inputs, b.Pin)
 	wantCertifyState(t, err, proofv2.StateCertifyItemWithoutEffect, "1", "310")
+}
+
+// The canonical form is about effect: an anchored item that is not the last of its sequence and carries only updates the walk does not apply
+// (here a write to the oracle account, whose receipt is valid) changes nothing and is refused like one without updates (V-F N1).
+func TestVerify21AnchoredRefusesAnItemWhoseOnlyUpdateIsNotApplied(t *testing.T) {
+	b := buildChain(t, &xworld.Chain{Items: []xworld.ChainItem{orc(true)}, Final: xworld.ChainItem{Anchored: true}})
+	_, err := proofv2.Verify21FromGenesis(b.Evidence, b.Archive, b.Inputs, b.Pin)
+	wantCertifyState(t, err, proofv2.StateCertifyItemWithoutEffect, "0", "110")
+
+	// the same padding repeated is still no effect
+	b = buildChain(t, &xworld.Chain{Items: []xworld.ChainItem{{Anchored: true, Update: xworld.UpdateOracle, Repeat: 3}}, Final: xworld.ChainItem{Anchored: true}})
+	_, err = proofv2.Verify21FromGenesis(b.Evidence, b.Archive, b.Inputs, b.Pin)
+	wantCertifyState(t, err, proofv2.StateCertifyItemWithoutEffect, "0", "110")
+
+	// in the set check's hops the item is numbered across certify and hops
+	b = buildChain(t, &xworld.Chain{Final: xworld.ChainItem{Anchored: true}, Hops: []xworld.ChainItem{orc(true), {Anchored: true}}})
+	_, err = proofv2.Verify21FromGenesis(b.Evidence, b.Archive, b.Inputs, b.Pin)
+	wantCertifyState(t, err, proofv2.StateCertifyItemWithoutEffect, "1", "310")
+
+	// an update the walk applies is an effect, whether or not it changes the globals
+	b = buildChain(t, &xworld.Chain{Items: []xworld.ChainItem{eff(true)}, Final: xworld.ChainItem{Anchored: true}})
+	if _, err = proofv2.Verify21FromGenesis(b.Evidence, b.Archive, b.Inputs, b.Pin); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestVerify21AnchoredRefusesAnUnusedLink(t *testing.T) {

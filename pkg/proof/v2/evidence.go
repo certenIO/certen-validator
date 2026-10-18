@@ -459,8 +459,8 @@ func verifyFrom(ev *Evidence, rep *Report, at map[uint64]*Spine, pinned [32]byte
 // walkRuns advances sp through the minor-root records of one sequence (certify, or the set check's hops), each given as hex. In evidence 2.0
 // a record is always a continuous item (AdvanceEpoch, which refuses one without a root proof as it always has). In evidence 2.1 a record
 // without a root proof is an anchored item: it takes the next link (used counts the links taken so far, across both sequences) and is
-// advanced by AdvanceAnchored, and an anchored item that carries no update is refused unless it is the last of its sequence (the canonical
-// form: an item with no effect on the set is only the final one). first is the position of runs[0] in certify followed by hops. A refusal
+// advanced by AdvanceAnchored, and an anchored item that has no effect (it carries no update, or none that the walk applies) is refused
+// unless it is the last of its sequence (the canonical form: an item with no effect on the set is only the final one). first is the position of runs[0] in certify followed by hops. A refusal
 // that is a *CertifyState is returned as it is; any other is wrapped with the run it was found in, as it always has been.
 func walkRuns(sp *Spine, runs []string, label string, is21 bool, links []*merkle.Receipt, used *int, first int) error {
 	for i, h := range runs {
@@ -476,6 +476,7 @@ func walkRuns(sp *Spine, runs []string, label string, is21 bool, links []*merkle
 			if *used < len(links) {
 				link = links[*used]
 			}
+			applied := len(sp.Applied)
 			err := sp.AdvanceAnchored(mr, link)
 			if cs, ok := err.(*CertifyState); ok {
 				return reindexCertifyState(cs, *used)
@@ -484,6 +485,11 @@ func walkRuns(sp *Spine, runs []string, label string, is21 bool, links []*merkle
 				return fmt.Errorf("%s %d: %w", label, i, err)
 			}
 			*used++
+			// The canonical form is about effect, not about the updates member: an update the walk does not apply (a transaction that is
+			// not a write to the network or globals account) changes nothing, so an item that carries only such updates is one without effect.
+			if len(sp.Applied) == applied && i != len(runs)-1 {
+				return certifyState(StateCertifyItemWithoutEffect, strconv.Itoa(first+i), strconv.FormatUint(sp.LastMinorBlock, 10))
+			}
 			continue
 		}
 		if err := sp.AdvanceEpoch(mr); err != nil {

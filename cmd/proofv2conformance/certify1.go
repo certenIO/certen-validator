@@ -3,8 +3,8 @@ package main
 // The anchored-certify suite of RB9-F5 (evidence 2.1 `links`: certify with one O(log n) Merkle link per anchored item). Each vector is a
 // portable document of a synthetic chain (pkg/proof/v2/xworld, test keys, fixed seeds), either whole or with ONE member changed, and carries
 // the verdict every verifier must reach: verified (with the report), or the refusal's exact text and, for a certify state, its name and
-// fields. The names and their fixed details are testdata/certify1/names.json; the Go and TypeScript constants are generated from, and tested
-// against, that file.
+// fields. The names and their fixed details are testdata/certify1/names.json; the Go constants are hand-written and checked against it (a drift test), the TypeScript constants are generated from it and tested
+// against it.
 //
 //	go run ./cmd/proofv2conformance -certify1 pkg/proof/v2/testdata/certify1
 //
@@ -75,17 +75,23 @@ type certify1Spec struct {
 // the continuous, anchored and mixed forms of one chain certify the same root.
 func certify1Worlds() map[string]xworld.Options {
 	orc := func(a bool) xworld.ChainItem { return xworld.ChainItem{Anchored: a, Update: xworld.UpdateOracle} }
+	// eff is an item with an effect: a write to the globals account that the walk applies and records (the globals stay what they were). An
+	// anchored item that is not the last of its sequence must have one; orc is a transaction the walk does not apply, so it has none.
+	eff := func(a bool) xworld.ChainItem {
+		return xworld.ChainItem{Anchored: a, Update: xworld.UpdateGenesisGlobals}
+	}
 	return map[string]xworld.Options{
-		"chain-continuous":          {Chain: &xworld.Chain{Items: []xworld.ChainItem{orc(false), orc(false)}}},
-		"chain-anchored":            {Chain: &xworld.Chain{Items: []xworld.ChainItem{orc(true), orc(true)}, Final: xworld.ChainItem{Anchored: true}}},
-		"chain-mixed":               {Chain: &xworld.Chain{Items: []xworld.ChainItem{orc(true), orc(false)}, Final: xworld.ChainItem{Anchored: true}}},
+		"chain-continuous":          {Chain: &xworld.Chain{Items: []xworld.ChainItem{eff(false), eff(false)}}},
+		"chain-anchored":            {Chain: &xworld.Chain{Items: []xworld.ChainItem{eff(true), eff(true)}, Final: xworld.ChainItem{Anchored: true}}},
+		"chain-mixed":               {Chain: &xworld.Chain{Items: []xworld.ChainItem{eff(true), eff(false)}, Final: xworld.ChainItem{Anchored: true}}},
 		"chain-final-only":          {Chain: &xworld.Chain{Final: xworld.ChainItem{Anchored: true}}},
 		"chain-no-effect":           {Chain: &xworld.Chain{Items: []xworld.ChainItem{{Anchored: true}, orc(false)}}},
-		"chain-non-monotone":        {Chain: &xworld.Chain{Items: []xworld.ChainItem{{Anchored: true, Update: xworld.UpdateOracle, Block: 130}, {Anchored: true, Update: xworld.UpdateOracle, Block: 120}}, Final: xworld.ChainItem{Anchored: true}}},
+		"chain-non-monotone":        {Chain: &xworld.Chain{Items: []xworld.ChainItem{{Anchored: true, Update: xworld.UpdateGenesisGlobals, Block: 130}, {Anchored: true, Update: xworld.UpdateGenesisGlobals, Block: 120}}, Final: xworld.ChainItem{Anchored: true}}},
 		"chain-duplicated-update":   {Chain: &xworld.Chain{Items: []xworld.ChainItem{{Anchored: true, Update: xworld.UpdateGlobals, Repeat: 2}}, Final: xworld.ChainItem{Anchored: true}}},
 		"chain-continuous-then-end": {Chain: &xworld.Chain{Items: []xworld.ChainItem{orc(false)}, Final: xworld.ChainItem{Anchored: true}}},
-		"chain-anchored-then-end":   {Chain: &xworld.Chain{Items: []xworld.ChainItem{orc(true)}}},
-		"chain-hops-anchored":       {Chain: &xworld.Chain{Final: xworld.ChainItem{Anchored: true}, Hops: []xworld.ChainItem{orc(true), {Anchored: true}}}},
+		"chain-anchored-then-end":   {Chain: &xworld.Chain{Items: []xworld.ChainItem{eff(true)}}},
+		"chain-junk-update":         {Chain: &xworld.Chain{Items: []xworld.ChainItem{orc(true)}, Final: xworld.ChainItem{Anchored: true}}},
+		"chain-hops-anchored":       {Chain: &xworld.Chain{Final: xworld.ChainItem{Anchored: true}, Hops: []xworld.ChainItem{eff(true), {Anchored: true}}}},
 		"chain-hops-no-effect":      {Chain: &xworld.Chain{Final: xworld.ChainItem{Anchored: true}, Hops: []xworld.ChainItem{{Anchored: true}, {Anchored: true}}}},
 		"chain-hops-duplicated":     {Chain: &xworld.Chain{Final: xworld.ChainItem{Anchored: true}, Hops: []xworld.ChainItem{{Anchored: true, Update: xworld.UpdateGlobals, Repeat: 2}, {Anchored: true}}}},
 	}
@@ -271,6 +277,7 @@ func certify1Specs() []certify1Spec {
 
 		// The canonical form and the walk's order.
 		{Certify1Case: c("anchored-item-without-update-not-last", "chain-no-effect", "none (the world's first item is anchored and carries no update, and is not the last)", "an anchored item that changes nothing is only allowed as the last of its sequence", certify1State(proofv2.StateCertifyItemWithoutEffect, "0", "110")), apply: noEdit},
+		{Certify1Case: c("anchored-item-with-only-an-unapplied-update-not-last", "chain-junk-update", "none (the world's first item is anchored and carries one update, a write to acc://dn.acme/oracle with a valid receipt, which the walk does not apply; it is not the last)", "the canonical form is about effect, not about the updates member: an anchored item padded with an update that changes nothing is refused like one without updates", certify1State(proofv2.StateCertifyItemWithoutEffect, "0", "110")), apply: noEdit},
 		{Certify1Case: c("non-monotone-block", "chain-non-monotone", "none (the second item's block, 120, does not pass the first's, 130)", "anchored items whose Directory minor blocks do not increase", plain("certify run 1: anchor for minor block 120 does not advance past 130")), apply: noEdit},
 		{Certify1Case: c("duplicated-update", "chain-duplicated-update", "none (the anchored item carries the same globals write twice)", "an update the walk already applied: refused, so a count of the network's writes is injective", Certify1Case{Expect: "refused"}), apply: noEdit},
 
@@ -303,6 +310,11 @@ func certify1Specs() []certify1Spec {
 		{Certify1Case: c("record-with-an-unknown-trailing-field", "chain-final-only", "evidence/certify/0/$epilogue = field 5", "a record carrying a field the decoder does not know (Accumulate keeps it as its epilogue): the verdict is the unmodified document's", ok),
 			apply: func(d map[string]any, _ *xworld.Built) error {
 				return setMember(d, append(certifyAt(0), "$epilogue"), "05010a")
+			}},
+
+		{Certify1Case: c("link-with-an-unknown-trailing-field", "chain-final-only", "evidence/links/0/$epilogue = field 5", "a link is a receipt, not a record: unlike a record, whose unknown trailing field leaves the verdict unchanged, a receipt carrying one is refused as an invalid link at its ordinal", certify1State(proofv2.StateCertifyLinkInvalid, "0")),
+			apply: func(d map[string]any, _ *xworld.Built) error {
+				return setMember(d, linkAt(0, "$epilogue"), "05010a")
 			}},
 
 		// The set check's own items (check.hops): the same rules, the links numbered on after certify's.

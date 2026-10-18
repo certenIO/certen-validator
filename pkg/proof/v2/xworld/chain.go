@@ -20,6 +20,10 @@ const (
 	UpdateOracle = "oracle"
 	// UpdateGlobals is a write to acc://dn.acme/globals of the genesis content: an update the walk applies and records.
 	UpdateGlobals = "globals"
+	// UpdateGenesisGlobals is a write to acc://dn.acme/globals of the genesis content whose transaction header carries the item's label as
+	// its memo, so every item's write is a distinct transaction: an update the walk applies and records (the globals stay what they were),
+	// which gives its item an effect.
+	UpdateGenesisGlobals = "globals-genesis"
 )
 
 // ChainItem shapes one minor-root item.
@@ -43,15 +47,19 @@ type Chain struct {
 	Hops []ChainItem
 }
 
-func updateTx(kind string, globals []byte) (*protocol.Transaction, []byte) {
+func updateTx(kind string, globals []byte, label string) (*protocol.Transaction, []byte) {
 	var principal = protocol.DnUrl().JoinPath(protocol.Oracle)
 	data := seed("oracle write")
-	if kind == UpdateGlobals {
+	memo := ""
+	if kind == UpdateGlobals || kind == UpdateGenesisGlobals {
 		principal = protocol.DnUrl().JoinPath(protocol.Globals)
 		data = globals
 	}
+	if kind == UpdateGenesisGlobals {
+		memo = label
+	}
 	tx := &protocol.Transaction{
-		Header: protocol.TransactionHeader{Principal: principal},
+		Header: protocol.TransactionHeader{Principal: principal, Memo: memo},
 		Body:   &protocol.WriteData{Entry: &protocol.DoubleHashDataEntry{Data: [][]byte{data}}},
 	}
 	return tx, tx.GetHash()
@@ -63,7 +71,7 @@ func itemEntry(it ChainItem, label string, prev, globals []byte) ([]byte, []*api
 	if it.Update == "" {
 		return seed(label + " entry"), nil
 	}
-	tx, txh := updateTx(it.Update, globals)
+	tx, txh := updateTx(it.Update, globals, label)
 	sib := seed(label + " update sibling")
 	n := max(it.Repeat, 1)
 	var ups []*api.NetworkUpdateProof
@@ -120,7 +128,7 @@ func (c *Chain) final(base, q []byte, cert, state [32]byte, v []validator) (stri
 // UpdateTxHash is the hash (hex) of the transaction an update of the given kind carries in a world whose genesis globals record is
 // globals (Built.Inputs.GlobalsRecord).
 func UpdateTxHash(kind string, globals []byte) string {
-	_, h := updateTx(kind, globals)
+	_, h := updateTx(kind, globals, "")
 	return hexs(h)
 }
 

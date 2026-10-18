@@ -3,7 +3,7 @@
   "domain": "certen:g1:v4",
   "portableFormat": "certen-proof-v2-accumulate-portable/1",
   "namesFile": "names.json",
-  "namesSha256": "890f0beb52658b38b22cb41c735f50e35cfdcab2286956fb8a4032e8720b7613",
+  "namesSha256": "09e110cc4959a67a1d34e02ca4588102e9b50406a79f02fd9e643a7f9c72a061",
   "cases": [
     {
       "name": "continuous-chain-verified",
@@ -11,14 +11,14 @@
       "world": "chain-continuous",
       "edit": "none",
       "file": "continuous-chain-verified.json",
-      "sha256": "73560426233b57fa37d9167c76515a9d687819628a929c6dc39c9dfc1ccb5553",
+      "sha256": "b718fad48518de8dc8637f6447f083e2ea5dcb7180ffe54a2dd1c37901697331",
       "expect": "verified",
       "report": {
         "version": "2.1",
         "tag": "certen:g1:v4",
         "partition": "acc://bvn-BVN1.acme",
         "anchorBlock": 50,
-        "certifiedRoot": "11132e5295cb410f9b2e8b8215e959a247dce422d7536f94460f88f84fd4e8f7",
+        "certifiedRoot": "657d313c9d895339df48c252984f5a47318a4a08f884795648c5eefcaf840ee9",
         "checkBlock": 300,
         "setVerdict": "verified",
         "routingHeight": 1,
@@ -85,7 +85,7 @@
       "world": "chain-anchored",
       "edit": "none",
       "file": "anchored-chain-verified.json",
-      "sha256": "88fddd39276db02a436cf99d4e38143abddf094236c437de4b0979dc47c44e3d",
+      "sha256": "560403f135b730e40b8e42360bd6f08341bb8c0d6e4814f861486e2100f5670b",
       "expect": "verified",
       "sameReportAs": "continuous-chain-verified",
       "report": {
@@ -93,7 +93,7 @@
         "tag": "certen:g1:v4",
         "partition": "acc://bvn-BVN1.acme",
         "anchorBlock": 50,
-        "certifiedRoot": "11132e5295cb410f9b2e8b8215e959a247dce422d7536f94460f88f84fd4e8f7",
+        "certifiedRoot": "657d313c9d895339df48c252984f5a47318a4a08f884795648c5eefcaf840ee9",
         "checkBlock": 300,
         "setVerdict": "verified",
         "routingHeight": 1,
@@ -160,7 +160,7 @@
       "world": "chain-mixed",
       "edit": "none",
       "file": "mixed-chain-verified.json",
-      "sha256": "d3be8b5260c8c7a71adfec145d17433b8291e7fe6dc4fac2f87b03d4c9fc2660",
+      "sha256": "b4915f1fae6d0011b3eae9ceab3bb442e3e1aafa9f99f6dff2625b9d82cc73c4",
       "expect": "verified",
       "sameReportAs": "continuous-chain-verified",
       "report": {
@@ -168,7 +168,7 @@
         "tag": "certen:g1:v4",
         "partition": "acc://bvn-BVN1.acme",
         "anchorBlock": 50,
-        "certifiedRoot": "11132e5295cb410f9b2e8b8215e959a247dce422d7536f94460f88f84fd4e8f7",
+        "certifiedRoot": "657d313c9d895339df48c252984f5a47318a4a08f884795648c5eefcaf840ee9",
         "checkBlock": 300,
         "setVerdict": "verified",
         "routingHeight": 1,
@@ -369,7 +369,7 @@
       "world": "chain-mixed",
       "edit": "evidence/links/0 and /1 exchanged",
       "file": "link-of-a-different-item.json",
-      "sha256": "bb64c8fb42cbcbfa00300eb2b5f14a3db9a8caa9319cc00f17b712cc0b781016",
+      "sha256": "dea245ba06677f17f6e581b2c429f2f2a26856f27e68d6b7053e3bc8ef4e9c63",
       "expect": "refused",
       "state": "certify_link_start",
       "fields": [
@@ -399,7 +399,7 @@
       "world": "chain-anchored",
       "edit": "evidence/links/1 removed",
       "file": "link-of-the-second-item-missing.json",
-      "sha256": "65772518df72e773d7a23f6545ac4df5302e97656c49a3547095a3475ebff2c6",
+      "sha256": "9b446698412d983873f37a6074ee13757149fc390248b2144e4189110cea94b4",
       "expect": "refused",
       "state": "certify_link_start",
       "fields": [
@@ -421,8 +421,24 @@
         "0",
         "110"
       ],
-      "wording": "certify_item_without_effect{0,110}: an anchored item that is not the last of its sequence carries no update",
-      "prefix": "certify_item_without_effect{0,110}: an anchored item that is not the last of its sequence carries no update"
+      "wording": "certify_item_without_effect{0,110}: an anchored item that is not the last of its sequence applies no update",
+      "prefix": "certify_item_without_effect{0,110}: an anchored item that is not the last of its sequence applies no update"
+    },
+    {
+      "name": "anchored-item-with-only-an-unapplied-update-not-last",
+      "description": "the canonical form is about effect, not about the updates member: an anchored item padded with an update that changes nothing is refused like one without updates",
+      "world": "chain-junk-update",
+      "edit": "none (the world's first item is anchored and carries one update, a write to acc://dn.acme/oracle with a valid receipt, which the walk does not apply; it is not the last)",
+      "file": "anchored-item-with-only-an-unapplied-update-not-last.json",
+      "sha256": "11e2006adda65a2ed3cacb12b185e697912c9a6ff77c8bec986f59bd146b8bc0",
+      "expect": "refused",
+      "state": "certify_item_without_effect",
+      "fields": [
+        "0",
+        "110"
+      ],
+      "wording": "certify_item_without_effect{0,110}: an anchored item that is not the last of its sequence applies no update",
+      "prefix": "certify_item_without_effect{0,110}: an anchored item that is not the last of its sequence applies no update"
     },
     {
       "name": "non-monotone-block",
@@ -430,7 +446,7 @@
       "world": "chain-non-monotone",
       "edit": "none (the second item's block, 120, does not pass the first's, 130)",
       "file": "non-monotone-block.json",
-      "sha256": "99bba8f8c7755d5d88a2eee1c3017cda7bc352559b428a8b1aecea0afe4dc63c",
+      "sha256": "4be9ceda79fcfd6e9bc38305baa64320ecb5a76635c5b191f70d9d6e7aff6d44",
       "expect": "refused",
       "wording": "certify run 1: anchor for minor block 120 does not advance past 130",
       "prefix": "certify run 1: anchor for minor block 120 does not advance past 130"
@@ -467,7 +483,7 @@
       "world": "chain-anchored-then-end",
       "edit": "evidence/certify/1/rootProof/merkleState/pending/0 first byte flipped",
       "file": "anchored-then-continuous-item-wrongly-rooted.json",
-      "sha256": "a80a2ed4bec677119fae56f5cba44030bed91294474fa946f156fd25d548de76",
+      "sha256": "2d10ed47f1cfa79ba6762016716a2057dacec3e63aab5054ed16c93e1974ea95",
       "expect": "refused",
       "wording": "certify run 1: root proof does not start at the verified root",
       "prefix": "certify run 1: root proof does not start at the verified root"
@@ -680,12 +696,27 @@
       }
     },
     {
+      "name": "link-with-an-unknown-trailing-field",
+      "description": "a link is a receipt, not a record: unlike a record, whose unknown trailing field leaves the verdict unchanged, a receipt carrying one is refused as an invalid link at its ordinal",
+      "world": "chain-final-only",
+      "edit": "evidence/links/0/$epilogue = field 5",
+      "file": "link-with-an-unknown-trailing-field.json",
+      "sha256": "956bd983cd7c0107ba592fe1da07eae8f455074079a63037a65bd81b64178fce",
+      "expect": "refused",
+      "state": "certify_link_invalid",
+      "fields": [
+        "0"
+      ],
+      "wording": "certify_link_invalid{0}: the link is not a valid receipt of an anchored item",
+      "prefix": "certify_link_invalid{0}: the link is not a valid receipt of an anchored item"
+    },
+    {
       "name": "hops-anchored-verified",
       "description": "an anchored closing certify item and two anchored hops, three links in the order certify then hops",
       "world": "chain-hops-anchored",
       "edit": "none",
       "file": "hops-anchored-verified.json",
-      "sha256": "a23a18d4aa0229e7dc0e4254bbc9b39c779b45cf0d2817d08f9d1151ef6eae33",
+      "sha256": "f542adb05f61ed07d7d6fe1241f67597ef4fc356f6fe3dc72017fa7bb73f5b94",
       "expect": "verified",
       "report": {
         "version": "2.1",
@@ -759,7 +790,7 @@
       "world": "chain-hops-anchored",
       "edit": "evidence/links/2 removed",
       "file": "hop-link-absent.json",
-      "sha256": "29609166df2f24147d6d70e3df065d22eb0b17dace2a130e28da5c5d16764a79",
+      "sha256": "dcae2cd254aca09fd84f32b280f66ab4d5ad353a89dcc2e41661d551f1c52ee7",
       "expect": "refused",
       "state": "certify_link_missing",
       "fields": [
@@ -774,7 +805,7 @@
       "world": "chain-hops-anchored",
       "edit": "evidence/links/1/start first byte flipped",
       "file": "hop-link-start-altered.json",
-      "sha256": "54186e3a038fc1b7e19b327182c290bf668b8095afd43788a41004125360e3bf",
+      "sha256": "509d756543105de484bb7915eb8d903d8a4da3010ef75e77b280aa12fb458859",
       "expect": "refused",
       "state": "certify_link_start",
       "fields": [
@@ -796,8 +827,8 @@
         "1",
         "310"
       ],
-      "wording": "certify_item_without_effect{1,310}: an anchored item that is not the last of its sequence carries no update",
-      "prefix": "certify_item_without_effect{1,310}: an anchored item that is not the last of its sequence carries no update"
+      "wording": "certify_item_without_effect{1,310}: an anchored item that is not the last of its sequence applies no update",
+      "prefix": "certify_item_without_effect{1,310}: an anchored item that is not the last of its sequence applies no update"
     },
     {
       "name": "hop-duplicated-update",
