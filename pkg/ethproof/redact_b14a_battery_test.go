@@ -22,15 +22,15 @@ var v10b5Leaks = []struct {
 	// D1: escaped forms of a URL
 	{"json slashes", `{"msg":"Post https:~/~/eth.g.alchemy.com~/v2~/§ failed"}`, true},
 	{"json slashes after the host", `{"msg":"Post https://eth.g.alchemy.com~/v2~/§ failed"}`, true},
-	{"u002f lower", `Post "https://eth.g.alchemy.com~u002fv2~u002fK": EOF`, true},
-	{"u002F upper", `Post "https://eth.g.alchemy.com~u002Fv2~u002FK": EOF`, true},
-	{"u002f scheme too", `Post "https:~u002f~u002feth.g.alchemy.com~u002fv2~u002fK": EOF`, true},
-	{"percent scheme", `redirect https%3A%2F%2Feth.g.alchemy.com%2Fv2%2FK failed`, true},
-	{"percent path", `https://eth.g.alchemy.com%2Fv2%2FK`, true},
+	{"u002f lower", `Post "https://eth.g.alchemy.com~u002fv2~u002f§": EOF`, true},
+	{"u002F upper", `Post "https://eth.g.alchemy.com~u002Fv2~u002F§": EOF`, true},
+	{"u002f scheme too", `Post "https:~u002f~u002feth.g.alchemy.com~u002fv2~u002f§": EOF`, true},
+	{"percent scheme", `redirect https%3A%2F%2Feth.g.alchemy.com%2Fv2%2F§ failed`, true},
+	{"percent path", `https://eth.g.alchemy.com%2Fv2%2F§`, true},
 	{"double-escaped ampersand", `{"m":"https://h.example.org/rpc?a=1~~u0026apikey=§~~u0026c=2"}`, true},
-	{"newline in the path", "Post \"https://eth.g.alchemy.com/v2/\nK\"", true},
-	{"tab in the path", "Post \"https://eth.g.alchemy.com/v2/\tK\"", true},
-	{"CRLF in the path", "Post \"https://eth.g.alchemy.com/v2/\r\nK\"", true},
+	{"newline in the path", "Post \"https://eth.g.alchemy.com/v2/\n§\"", true},
+	{"tab in the path", "Post \"https://eth.g.alchemy.com/v2/\t§\"", true},
+	{"CRLF in the path", "Post \"https://eth.g.alchemy.com/v2/\r\n§\"", true},
 	{"world Body with escaped slashes", `{"error":"not found https:~/~/eth.g.alchemy.com~/v2~/§"}`, true},
 	{"world Transport with escaped slashes", `Post "https:~/~/eth.g.alchemy.com~/v2~/§": EOF`, true},
 	// D2: a key echoed without its host
@@ -70,6 +70,9 @@ func TestB14a_TheReviewersLeaksAreClean(t *testing.T) {
 	// Without the literal: exactly the pattern-cleanable inputs are clean; the others are the documented limit.
 	for _, tc := range v10b5Leaks {
 		in := v10b5(tc.in)
+		if !strings.Contains(in, b14aKey) {
+			t.Fatalf("%s: the input holds no key, so it proves nothing: %q", tc.name, in)
+		}
 		got := ethproof.RedactEndpoints(in)
 		if tc.pattern && strings.Contains(got, b14aKey) {
 			t.Errorf("%s: the pattern pass left the key:\n in: %q\nout: %q", tc.name, in, got)
