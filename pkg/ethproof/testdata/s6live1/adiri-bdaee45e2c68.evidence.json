@@ -1,0 +1,31 @@
+{
+  "version": "certen:s6-replay:v1",
+  "state": {
+    "state": "s6_replay_unproven",
+    "reason": "state_unavailable",
+    "chainId": 2017,
+    "txHash": "0xbdaee45e2c68b7a980046bc1d73067b4c437e3567fb25feb0634414a79ecdfce",
+    "blockNumber": 513643,
+    "blockHash": "0xd156a3a26a0fcd49bd4016630c9e66cfa3fa6f51e0625e1b1a2982a46ac1fb38",
+    "contract": "0xb6d37a09f7069ca9715223c9b794354366d1fa2f",
+    "providers": [
+      {
+        "host": "(agreeing providers)",
+        "error": "no agreed latest header: header 513643: 1 of 3 providers answered, 2 needed (rpc.telcoin.network: context deadline exceeded; node2.telcoin.network: context deadline exceeded)"
+      },
+      {
+        "host": "rpc.telcoin.network",
+        "error": "not asked: the capture budget of 1ms ended"
+      },
+      {
+        "host": "node1.telcoin.network",
+        "error": "not asked: the capture budget of 1ms ended"
+      },
+      {
+        "host": "node2.telcoin.network",
+        "error": "not asked: the capture budget of 1ms ended"
+      }
+    ],
+    "detail": "no provider could prove the slot 0xd08e132ca8c32b69989951f174a1f9d94c155909f52044e841fd77e54f13f3e8 of 0xB6D37A09f7069Ca9715223C9b794354366D1Fa2F at any of the newest 4 blocks (settlement block 513643, newest seen 0) before the capture budget of 1ms ended"
+  }
+}
