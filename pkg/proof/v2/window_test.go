@@ -92,3 +92,35 @@ func TestRootChainLeafIndexRefusesWhatDoesNotDecompose(t *testing.T) {
 		t.Fatal("a null step decomposed")
 	}
 }
+
+// V-E A2(c) on the live Kermit archive: every update a real major header record carries (its combined receipt, as the Directory serves it:
+// main chain steps first, then the root chain path) decodes to a root chain position inside (the previous record's RootChainIndex, this
+// record's], and the check the 2.1 spine makes accepts it. The count of updates seen is reported so a fixture without any cannot pass silently.
+func TestUpdateWindowHoldsOnTheLiveKermitArchive(t *testing.T) {
+	fx := load(t)
+	seen := 0
+	prev := uint64(0)
+	for _, r := range fx.ar.Majors {
+		body, err := checkDirectorySelfAnchor(r.Anchor)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, u := range r.Updates {
+			h, err := transactionHash(u.Transaction)
+			if err != nil {
+				t.Fatal(err)
+			}
+			w := &updateWindow{prev: prev, prevKnown: true, this: body.RootChainIndex, block: body.MinorBlockIndex}
+			idx, ok := rootChainLeafIndex(u.Receipt.Entries, body.RootChainIndex+1)
+			if err := w.check(u.Transaction.Header.Principal.String(), h, u.Receipt.Entries); err != nil {
+				t.Fatalf("major %d: the update (position %d decoded %v, window (%d,%d]) is refused: %v", r.Index, idx, ok, prev, body.RootChainIndex, err)
+			}
+			seen++
+		}
+		prev = body.RootChainIndex
+	}
+	t.Logf("%d updates of %d live major block records decode into their windows", seen, len(fx.ar.Majors))
+	if seen == 0 {
+		t.Fatal("the live archive carries no update: the shape of a real combined receipt is not exercised")
+	}
+}
