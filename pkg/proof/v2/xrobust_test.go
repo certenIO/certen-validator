@@ -421,7 +421,11 @@ func examineRobust(src robustSource, base jm.Verdict, outs []jm.Outcome) (findin
 				findings = append(findings, robustFinding{class: "A document the vector refuses VERIFIED after a mutation, listing nothing unproven", what: where})
 			}
 		case v.Report == base.Report:
-			optional[form+":"+o.M.Path.Shape()] = src.name + " :: " + o.M.Path.String() + " <- " + o.M.Kind
+			key := form + ":" + o.M.Path.Shape()
+			if robustOptionalByMutation[strings.Replace(key, "evo:", "ev:", 1)] {
+				key += "!" + o.M.Kind // the excuse is for THIS mutation of the member, not for the member (V-P D5)
+			}
+			optional[key] = src.name + " :: " + o.M.Path.String() + " <- " + o.M.Kind
 		default:
 			vf, _ := factsOf(v.Report)
 			bf, _ := factsOf(base.Report)
@@ -507,6 +511,10 @@ func runRobustSources(t *testing.T, srcs []robustSource) ([]robustFinding, map[s
 // robustOptionalMembers are the members whose removal, nulling or replacement leaves a verified document verified with the same report,
 // keyed "<form>:<member shape>" (form portable or ev; an array index is *). The value is the reason the member does not matter. A member is
 // listed only for what it was observed to be: the verifier reads nothing of it in the documents named.
+// robustOptionalByMutation lists the members whose entry in robustOptionalMembers is per MUTATION: the observed key is "<form>:<shape>!<mutation kind>", so a
+// mutation that is not listed fails even if another mutation of the same member is excused. (V-P D5: a member-path excuse would excuse removal and null.)
+var robustOptionalByMutation = map[string]bool{"ev:genesisLink": true}
+
 var robustOptionalMembers = optionalTable(
 	grp("Evidence.Account is the principal's URL: the 2.1 verifier reads it (the principal chain, the carried transaction, the vote "+
 		"membership); nothing in the verification of evidence 2.0 does, and a 2.0 document names it for its reader (the 2.0 conformance documents)",
@@ -516,11 +524,10 @@ var robustOptionalMembers = optionalTable(
 		"(xdirectory.go partition())",
 		"ev:anchor/message", "ev:anchors/acc://bvn-BVN2.acme/message", "ev:anchors/acc://bvn-BVN3.acme/message", "ev:anchors/acc://dn.acme/message",
 		"portable:evidence/anchors/acc://dn.acme/message/number"),
-	grp("merkle.Receipt carries, besides Start, Entries and Anchor, position fields (StartIndex, EndIndex, End) that Validate does not read (the genesis link is one: "+
-		"of its 15 mutations in the real document exactly one, hollow-receipt.End, leaves it verified, by both loops; every other mutation, an absent link included, is refused); "+
+	grp("merkle.Receipt carries, besides Start, Entries and Anchor, position fields (StartIndex, EndIndex, End) that Validate does not read; "+
 		"a minor-root run's merkle state keeps a HashList the verifier does not read (Anchor() folds Pending), and a validator signature's "+
 		"TransactionHash is not read: the quorum check verifies each signature over the delivered anchor message (sig.Verify(nil, anchor))",
-		"ev:anchor/receipt", "ev:certify/*", "ev:check/hops/*", "ev:genesisLink", "portable:evidence/certify/*/signatures/*/transactionHash",
+		"ev:anchor/receipt", "ev:certify/*", "ev:check/hops/*", "portable:evidence/certify/*/signatures/*/transactionHash",
 		"portable:majors/*/signatures/*/transactionHash"),
 	grp("the Anchors entry for the transaction's own partition must equal Evidence.Anchor and is set aside when it does "+
 		"(xverify.go verify21): a document whose only entries are its own carries nothing that field does not",
@@ -548,6 +555,11 @@ var robustOptionalMembers = optionalTable(
 		"ev:check/set/network/stateReceipt/entries", "ev:check/set/incarnation", "portable:evidence/check/globals/stateReceipt",
 		"portable:evidence/check/globals/stateReceipt/entries", "portable:evidence/check/network/stateReceipt",
 		"portable:evidence/check/network/stateReceipt/entries", "portable:evidence/check/incarnation"),
+	grp("Evidence.GenesisLink is a merkle.Receipt and every evidence 2.1 document needs it (certify_link_missing{genesis}), so it is NOT excused as a member: only the mutation "+
+		"hollow-receipt.End (the receipt re-encoded with its End position field zeroed) leaves a document verified with the original report, because Validate "+
+		"recomputes Start through Entries to Anchor and reads no position field. Removal, null, an empty or wrong-typed value and every change to Start, Entries or "+
+		"Anchor are refused, in both evidence-form loops; TestGenesisLinkMutationsAreRefusedExceptTheReceiptEndField pins that set exactly",
+		"ev:genesisLink!hollow-receipt.End"),
 	grp("Vote.Cause is recorded and committed into govRoot v4 (intentcert EncodeVoteV4) and read by no verifier step: a recorded fact "+
 		"that is not proven (recorded as a finding)",
 		"ev:votes/*/cause"),

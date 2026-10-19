@@ -85,7 +85,9 @@ The verifier outputs one verdict per statement plus an overall verdict. A missin
      Without it a complete chain of ANOTHER incarnation that shares the pinned genesis records would pass the pin, because the walk from the genesis
      records binds the validator set but not the root chain. The offline walk (`Verify21FromGenesis`, `proofverify`) and the spine-log walk consensus
      runs (`VerifyEvidence21FromSpine`) both refuse a document without it, by name, `certify_link_missing{genesis}`, judged last for a continuous
-     document. **Wording limit:** the fixed text of that name is shared with the TypeScript verifier (`testdata/certify1/names.json`, pinned) and reads
+     document. **What the link proves, exactly:** the pinned genesis root chain anchor is covered by the certified root (an entry of the tree the
+     certified root commits to, by a path that validates); its position in that tree is not authenticated (the receipt's start index is not signed and
+     nothing derives the position from the path). **Wording limit:** the fixed text of that name is shared with the TypeScript verifier (`testdata/certify1/names.json`, pinned) and reads
      "an anchored item has no link"; for the index `genesis` it means the document carries no genesis link (a continuous document has no anchored item
      at all). `proofverify` prints a hint saying so.
    - a proof-authorized (signature-less, Kourou) anchor counts only as a Merkle path to an already-verified root;

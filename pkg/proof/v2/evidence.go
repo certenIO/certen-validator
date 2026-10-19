@@ -76,8 +76,11 @@ type Evidence struct {
 	// document that claims 2.0 the member is not read.
 	Links []string `json:"links,omitempty"`
 	// GenesisLink (evidence 2.1 only; RB9-F5 V-E A1b, F-VE-2) is the chain identity of an anchored document, binary merkle.Receipt, hex: a
-	// receipt from the pinned incarnation's GenesisRootChainAnchor (consensus: the spine log's Genesis.RootChainAnchor) to the certified root,
-	// which proves the certified root extends the very chain the pin names, not another incarnation's that shares its genesis records.
+	// receipt from the pinned incarnation's GenesisRootChainAnchor (consensus: the spine log's Genesis.RootChainAnchor) to the certified root.
+	// What it proves, exactly: the pinned genesis root chain anchor is covered by the certified root, an entry of the tree the certified root
+	// commits to by a path that validates from Start to Anchor; so a complete chain of another incarnation that merely shares the pinned genesis
+	// records, and so passes the walk from those records, is refused. What it does not prove: WHERE in the certified tree that entry sits - the
+	// receipt's StartIndex is unauthenticated and nothing derives the position from the path's Right flags (as window.go does for an update's leaf).
 	// Required of EVERY evidence 2.1 document, the continuous form included (RB9-F6, F-VE-2 option b), by the offline walk (VerifyPortable,
 	// Verify21FromGenesis) and by the spine-log walk consensus runs (VerifyEvidence21FromSpine) alike: certify_link_missing{genesis}. In a document that
 	// claims 2.0 the member is not read.
