@@ -112,6 +112,11 @@ type ReplayCaptureConfig struct {
 	// afterDone is called once when the capture's After phase is over - its After proof is in hand, or the capture ended for
 	// whatever reason - and frees the capture slot a capturer holds for it (RB10-B10 D1).
 	afterDone func()
+	// slotWait is the time a capture spent waiting for one of the slotCount capture slots of its chain, out of slotBudget (zero: it
+	// got its slot at once). A capture that waited has what was left of its budget to read with (V-R10B4 N2).
+	slotWait   time.Duration
+	slotBudget time.Duration
+	slotCount  int
 }
 
 func (c *ReplayCaptureConfig) concurrent() int {
@@ -269,6 +274,14 @@ func CaptureReplayGuard(ctx context.Context, cfg ReplayCaptureConfig, txHash com
 			break
 		}
 		if bctx.Err() != nil || !clock.Sleep(bctx, cfg.poll()) {
+			if cfg.slotWait > 0 && cfg.budget() < cfg.poll() && ctx.Err() == nil {
+				// V-R10B4 N2: a capture that spent its budget waiting for a slot had less than one poll left: its single read of
+				// the receipt did not answer in that time, which says nothing of the chain. It is the slot wait, not a receipt
+				// the providers lack.
+				return finish(ReplayUnproven, ReasonStateUnavailable,
+					"the capture waited %s for one of the %d capture slots of chain %d and had %s of its budget of %s left, less than the poll of %s: its single read of the receipt did not answer before %s (last: %v) (the settlements observed at once exceed what the providers are asked for at once)",
+					cfg.slotWait, cfg.slotCount, cfg.ChainID, cfg.budget(), cfg.slotBudget, cfg.poll(), ended(), err)
+			}
 			return finish(ReplayUnproven, ReasonReceiptUnavailable, "no agreed receipt for the settlement before %s (last: %v)", ended(), err)
 		}
 	}
@@ -738,8 +751,22 @@ func (s *ReplayGuardStore) begin(chain int64, tx common.Hash) (*replayEntry, boo
 }
 
 func (s *ReplayGuardStore) put(e *replayEntry, ev *ReplayGuardEvidence, bound bool) {
+	s.putIf(e, ev, bound, false)
+}
+
+// putCaptured stores the capture's own evidence unless the entry was bound to the proven settlement in the meantime: a Bind
+// that stopped waiting for the capture stored the named state of that, and the capture that finishes later must not replace
+// it with evidence that was never held to the settlement (V-R10B4 N1).
+func (s *ReplayGuardStore) putCaptured(e *replayEntry, ev *ReplayGuardEvidence) {
+	s.putIf(e, ev, false, true)
+}
+
+func (s *ReplayGuardStore) putIf(e *replayEntry, ev *ReplayGuardEvidence, bound, unlessBound bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if unlessBound && e.bound {
+		return
+	}
 	e.ev, e.bound = ev, bound
 	size := ReplayEvidenceSize(ev)
 	if s.m[e.key] == e {
@@ -824,7 +851,7 @@ func NewReplayGuardCapturer(cfg ReplayCaptureConfig, store *ReplayGuardStore) *R
 // reads that must happen within a block or two of inclusion); a capture holds its slot for that phase only, and asks for the
 // Before state (which head-only providers never serve) without one, so a settlement is never made to wait for a slot by
 // captures that are merely waiting for a state that will not be served (RB10-B10). One waiting for a slot has begun spending
-// its budget, and names the wait when the budget ends before a slot frees, or frees with less than a poll of it left.
+// its budget, and names the wait when the budget ends before a slot frees or a slot frees after it ended; one that frees with budget left reads the chain with what is left (V-R10B4 N2), and if that is less than a poll and its single read does not answer, it is named the wait too.
 func (c *ReplayGuardCapturer) Begin(txHash common.Hash) {
 	e, first := c.store.begin(c.cfg.ChainID, txHash)
 	if !first {
@@ -842,7 +869,7 @@ func (c *ReplayGuardCapturer) Begin(txHash common.Hash) {
 			if ev == nil {
 				c.store.discard(c.cfg.ChainID, txHash) // no S6 claim: not an account settlement
 			} else {
-				c.store.put(e, ev, false)
+				c.store.putCaptured(e, ev)
 			}
 			close(e.done)
 		}()
@@ -877,18 +904,22 @@ func (c *ReplayGuardCapturer) Begin(txHash common.Hash) {
 		free := func() { once.Do(func() { <-slots }) }
 		defer free()
 		remaining := deadline.Sub(clock.Now()) // the budget not spent waiting for the slot
-		if waited && remaining < c.cfg.poll() {
-			// V-R10B3 D2: a capture that got its slot with (all but) no budget left cannot read the chain on its own behalf: it
-			// is the slot wait, not a receipt it failed to find.
+		if waited && remaining <= 0 {
+			// V-R10B3 D2: a capture that got its slot after its budget had ended cannot read the chain on its own behalf: it is
+			// the slot wait, not a receipt it failed to find. V-R10B4 N2: one with any budget left reads, and is judged by what
+			// its reads found (CaptureReplayGuard names a read cut short by that wait as the slot wait).
 			free()
-			ev = slotWait(fmt.Sprintf("the capture waited for one of the %d capture slots of chain %d and one freed with %s of its budget of %s left, less than the poll of %s, too little to read the chain",
-				cap(slots), c.cfg.ChainID, max(remaining, 0), c.cfg.budget(), c.cfg.poll()))
+			ev = slotWait(fmt.Sprintf("the capture waited for one of the %d capture slots of chain %d and one freed after its budget of %s had ended",
+				cap(slots), c.cfg.ChainID, c.cfg.budget()))
 			return
 		}
 		cfg := c.cfg
 		cfg.Budget = remaining
 		if cfg.Budget <= 0 {
 			cfg.Budget = time.Nanosecond // a zero budget would mean the default one
+		}
+		if waited {
+			cfg.slotWait, cfg.slotBudget, cfg.slotCount = c.cfg.budget()-remaining, c.cfg.budget(), cap(slots)
 		}
 		cfg.afterDone = free
 		ev = CaptureReplayGuard(ctx, cfg, txHash)

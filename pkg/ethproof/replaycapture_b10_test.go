@@ -242,16 +242,17 @@ func TestCapturer_TheSlotIsReleasedOnAPanicAndOnSourceErrors(t *testing.T) {
 
 var budgetOf = regexp.MustCompile(`budget of (\S+) ended`)
 
-// V-R10B3 D2: a capture that obtains its slot when its budget has (all but) ended is the named state of the slot wait; it
-// never reads the chain, and is never receipt_unavailable with a budget it could not have used.
+// V-R10B3 D2 (V-R10B4 N2): a capture that obtains its slot with less than one poll of its budget left reads the chain once with
+// what is left (it is refused only when none is left); that read does not answer, and the capture is the named state of the
+// slot wait, never receipt_unavailable with a budget it could not have used.
 func TestCapturer_ACaptureThatGetsItsSlotWithNoBudgetLeftIsTheNamedStateOfTheSlotWait(t *testing.T) {
 	g := newGated(t)
 	store := ethproof.NewReplayGuardStore(16)
-	cfg := ethproof.ReplayCaptureConfig{ChainID: testChainID, Source: g, Budget: 300 * time.Millisecond, Poll: 50 * time.Millisecond, Concurrent: 1}
+	cfg := ethproof.ReplayCaptureConfig{ChainID: testChainID, Source: g, Budget: 300 * time.Millisecond, Poll: 200 * time.Millisecond, Concurrent: 1}
 	cp := ethproof.NewReplayGuardCapturer(cfg, store)
 	holder, waiter := common.Hash{0x01}, common.Hash{0x02}
 	cp.Begin(holder)
-	time.Sleep(10 * time.Millisecond) // the waiter's budget ends 10ms after the holder frees the slot: less than one poll
+	time.Sleep(100 * time.Millisecond) // the waiter's budget ends 100ms after the holder frees the slot: positive, and less than one poll
 	cp.Begin(waiter)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -265,8 +266,8 @@ func TestCapturer_ACaptureThatGetsItsSlotWithNoBudgetLeftIsTheNamedStateOfTheSlo
 		!strings.Contains(ev.State.Detail, "slot") || !strings.Contains(ev.State.Detail, fmt.Sprint(cfg.Budget)) {
 		t.Fatalf("the capture that got its slot with no budget left is not named for the slot wait: %+v", ev)
 	}
-	if _, asked := g.stats(); asked[waiter] != 0 {
-		t.Fatalf("the capture with no budget left read the chain %d times", asked[waiter])
+	if _, asked := g.stats(); asked[waiter] != 1 {
+		t.Fatalf("the capture with budget left must read the chain once, not %d times", asked[waiter])
 	}
 	if hev, _, _ := store.Get(testChainID, holder); hev == nil || hev.State == nil || hev.State.Reason != ethproof.ReasonReceiptUnavailable {
 		t.Fatalf("the capture that held the slot and read the chain is receipt_unavailable: %+v", hev)
