@@ -453,29 +453,41 @@ func RegisterProviderURL(raw string) (unregister func()) {
 	if secrets.lits == nil {
 		secrets.lits, secrets.hosts = map[string]int{}, map[string]int{}
 	}
+	added := false // a registration of a URL already registered (a client dialed per request) changes nothing
 	for _, l := range lits {
-		secrets.lits[l]++
+		if secrets.lits[l]++; secrets.lits[l] == 1 {
+			added = true
+		}
 	}
 	if host != "" {
-		secrets.hosts[host]++
+		if secrets.hosts[host]++; secrets.hosts[host] == 1 {
+			added = true
+		}
 	}
-	rebuildSecretsLocked()
+	if added {
+		rebuildSecretsLocked()
+	}
 	var once sync.Once
 	return func() {
 		once.Do(func() {
 			secrets.mu.Lock()
 			defer secrets.mu.Unlock()
+			removed := false
 			for _, l := range lits {
 				if secrets.lits[l]--; secrets.lits[l] <= 0 {
 					delete(secrets.lits, l)
+					removed = true
 				}
 			}
 			if host != "" {
 				if secrets.hosts[host]--; secrets.hosts[host] <= 0 {
 					delete(secrets.hosts, host)
+					removed = true
 				}
 			}
-			rebuildSecretsLocked()
+			if removed {
+				rebuildSecretsLocked()
+			}
 		})
 	}
 }
