@@ -63,9 +63,14 @@ func TestS6Replay5Vectors(t *testing.T) {
 	if err := json.Unmarshal(mraw, &m); err != nil {
 		t.Fatal(err)
 	}
-	if m.Generator != s6replay5.Generator || m.Domain != ethproof.ReplayGuardDomain || m.MaxEvidenceBytes != 4194304 ||
-		m.MaxEvidenceBytes != s6replay5.Cap || m.MaxEvidenceBytes != ethproof.MaxReplayEvidenceBytes {
+	// The set's cap, the package constant and the number the SPEC states are one value: a compile-time check, so the
+	// comparisons below are against a single number.
+	const _ = uint(s6replay5.Cap-ethproof.MaxReplayEvidenceBytes) + uint(ethproof.MaxReplayEvidenceBytes-s6replay5.Cap)
+	if m.Generator != s6replay5.Generator || m.Domain != ethproof.ReplayGuardDomain {
 		t.Fatalf("manifest header %+v", m)
+	}
+	if m.MaxEvidenceBytes != s6replay5.Cap {
+		t.Fatalf("manifest maxEvidenceBytes %d, the set pins %d", m.MaxEvidenceBytes, s6replay5.Cap)
 	}
 	if len(m.Vectors) != len(s6Want5) {
 		t.Fatalf("%d vectors, the set states %d", len(m.Vectors), len(s6Want5))
