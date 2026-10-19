@@ -67,6 +67,14 @@ The verifier outputs one verdict per statement plus an overall verdict. A missin
      position of the main-chain anchor the receipt is proven into lies in (the previous RootChainIndex, this RootChainIndex]; a
      later main-chain anchor re-proving an older entry is not excluded. The stronger binding, and the wording of this sentence,
      are an owner decision (pr/proof-v2-a8-wording-draft.md, OWNER_QUEUE.md).]
+   - **the chain identity** [Evidence 2.1 only; RB9-F6, owner decision 2026-10-19]: every evidence 2.1 document carries a `genesisLink`, the receipt
+     from the pinned incarnation's genesis root chain anchor to the certified root, whether its certification is anchored (with `links`) or continuous.
+     Without it a complete chain of ANOTHER incarnation that shares the pinned genesis records would pass the pin, because the walk from the genesis
+     records binds the validator set but not the root chain. The offline walk (`Verify21FromGenesis`, `proofverify`) and the spine-log walk consensus
+     runs (`VerifyEvidence21FromSpine`) both refuse a document without it, by name, `certify_link_missing{genesis}`, judged last for a continuous
+     document. **Wording limit:** the fixed text of that name is shared with the TypeScript verifier (`testdata/certify1/names.json`, pinned) and reads
+     "an anchored item has no link"; for the index `genesis` it means the document carries no genesis link (a continuous document has no anchored item
+     at all). `proofverify` prints a hint saying so.
    - a proof-authorized (signature-less, Kourou) anchor counts only as a Merkle path to an already-verified root;
    - the proof carries its spine segment. CERTEN-published checkpoints are accelerators the verifier re-derives, never
      inputs (measured: all 473 Kermit majors verify in 1.7 s / 887 KB).

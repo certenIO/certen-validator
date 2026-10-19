@@ -624,7 +624,8 @@ func (c *Collector) checkClosureBudget(out *Capture) error {
 	if c.G1InForce != nil {
 		var err error
 		if in, err = c.G1InForce(); err != nil {
-			return fmt.Errorf("the closure budget is not judged at %s block %d: whether the rules v15 activation is in force could not be read: %w", out.Partition, out.Block, err)
+			return &proofv2.NamedState{Code: proofv2.StateActivationUnreadable, Partition: out.Partition, Block: out.Block,
+				Detail: fmt.Sprintf("the closure budget is not judged: whether the rules v15 activation is in force could not be read: %v", err)}
 		}
 	}
 	return out.checkClosureBudgetFor(in)

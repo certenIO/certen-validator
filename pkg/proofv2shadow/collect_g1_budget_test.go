@@ -77,8 +77,10 @@ func TestCaptureClosureBudgetFollowsTheActivation(t *testing.T) {
 
 	// An activation that cannot be read is the capture's soft error, by name; the capture is kept and no form is assumed.
 	cp, err = collectWith(t, gap, func() (bool, error) { return false, errors.New("the committed state is unreadable") })
-	if err == nil || !strings.Contains(err.Error(), "not judged") || !strings.Contains(err.Error(), "unreadable") {
-		t.Fatalf("an unreadable activation: %v", err)
+	var ns *proofv2.NamedState
+	if !errors.As(err, &ns) || ns.Code != proofv2.StateActivationUnreadable || ns.Partition != "BVN1" || ns.Block == 0 ||
+		!strings.Contains(ns.Detail, "not judged") || !strings.Contains(ns.Detail, "unreadable") {
+		t.Fatalf("an unreadable activation: %v, want g1_activation_unreadable{BVN1,block}", err)
 	}
 	if cp == nil || len(cp.Pages) == 0 {
 		t.Fatal("the capture was not kept")

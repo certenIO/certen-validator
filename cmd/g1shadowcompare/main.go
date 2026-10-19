@@ -61,6 +61,7 @@ type result struct {
 	Name, Account, Tx string
 	V14               string   // what the chain decides today
 	V15               string   // what rules v15 would decide after the activation
+	GenesisLink       string   // where the document's genesis link came from: carried, or attached from a recorded answer, or none
 	Pages             int      // pages compared
 	Disagree          []string // each a difference
 	Failures          []string // each a reason the v15 decision could not be reached
@@ -74,6 +75,7 @@ func main() {
 	until := flag.String("until", "", "window: end (exclusive)")
 	incPath := flag.String("incarnation-evidence", "pkg/proof/testdata/incarnation/kermit.json", "incarnation evidence JSON")
 	pinHex := flag.String("pin", "cac6698ed49a286ad8a3de94540a3354dfe964f366a439f4fdfb34533059fda0", "pinned incarnation, hex32")
+	answers := flag.String("genesis-answers", "", "recorded Directory answers to the genesis question (cmd/proofv2linkprobe -g1 file, its `links` member), for fixtures captured before every evidence 2.1 document carried its genesis link; a document without a link and without a recorded answer ends certify_link_missing{genesis}")
 	flag.Parse()
 	if *dir == "" && !*window {
 		fmt.Fprintln(os.Stderr, "g1shadowcompare: -fixtures or -window is required")
@@ -86,9 +88,9 @@ func main() {
 			fmt.Fprintln(os.Stderr, "g1shadowcompare: -window needs -since, -until and CERTEN_DB (a read-only session)")
 			os.Exit(2)
 		}
-		code, err = runWindowMode(*dir, *incPath, *pinHex, *since, *until)
+		code, err = runWindowMode(*dir, *incPath, *pinHex, *since, *until, *answers)
 	} else {
-		code, err = run(*dir, *incPath, *pinHex)
+		code, err = run(*dir, *incPath, *pinHex, *answers)
 	}
 	if err != nil {
 		fmt.Println("ERROR:", err)
@@ -116,19 +118,28 @@ func loadIncarnation(incPath, pinHex string) (*proof.IncarnationReport, error) {
 	return incRep, nil
 }
 
-func runWindowMode(dir, incPath, pinHex, since, until string) (int, error) {
+func runWindowMode(dir, incPath, pinHex, since, until, answersPath string) (int, error) {
 	incRep, err := loadIncarnation(incPath, pinHex)
 	if err != nil {
 		return 0, err
 	}
-	return runWindow(context.Background(), os.Getenv("CERTEN_DB"), since, until, dir, func() *fixtureEnv { return &fixtureEnv{incRep: incRep} })
+	answers, err := loadGenesisAnswers(answersPath)
+	if err != nil {
+		return 0, err
+	}
+	return runWindow(context.Background(), os.Getenv("CERTEN_DB"), since, until, dir, func() *fixtureEnv { return &fixtureEnv{incRep: incRep, answers: answers} })
 }
 
-func run(dir, incPath, pinHex string) (int, error) {
+func run(dir, incPath, pinHex, answersPath string) (int, error) {
 	incRep, err := loadIncarnation(incPath, pinHex)
 	if err != nil {
 		return 0, err
 	}
+	answers, err := loadGenesisAnswers(answersPath)
+	if err != nil {
+		return 0, err
+	}
+	env := &fixtureEnv{incRep: incRep, answers: answers}
 	files, err := filepath.Glob(filepath.Join(dir, "*.json.gz"))
 	if err != nil {
 		return 0, err
@@ -139,7 +150,7 @@ func run(dir, incPath, pinHex string) (int, error) {
 		if strings.HasSuffix(f, ".capture.json.gz") || filepath.Base(f) == "archive.json.gz" {
 			continue
 		}
-		results = append(results, compareOne(context.Background(), f, incRep))
+		results = append(results, compareOne(context.Background(), f, env))
 	}
 	if len(results) == 0 {
 		return 0, fmt.Errorf("no fixture in %s", dir)
@@ -147,7 +158,7 @@ func run(dir, incPath, pinHex string) (int, error) {
 	var dis, fail, notRun, pages int
 	for _, r := range results {
 		fmt.Printf("== %s  %s  tx %s\n", r.Name, r.Account, short(r.Tx))
-		fmt.Printf("   v14 (live rule) : %s\n   v15 (G1 rule)   : %s\n   pages compared  : %d\n", r.V14, r.V15, r.Pages)
+		fmt.Printf("   v14 (live rule) : %s\n   v15 (G1 rule)   : %s\n   genesis link    : %s\n   pages compared  : %d\n", r.V14, r.V15, r.GenesisLink, r.Pages)
 		for _, d := range r.Disagree {
 			fmt.Println("   DISAGREE:", d)
 		}
@@ -200,7 +211,8 @@ func readGz(path string, v any) error {
 	return json.Unmarshal(j, v)
 }
 
-func compareOne(ctx context.Context, path string, incRep *proof.IncarnationReport) *result {
+func compareOne(ctx context.Context, path string, env *fixtureEnv) *result {
+	incRep := env.incRep
 	r := &result{Name: strings.TrimSuffix(filepath.Base(path), ".json.gz")}
 	fail := func(f string, a ...any) { r.Failures = append(r.Failures, fmt.Sprintf(f, a...)) }
 	var f fixture
@@ -272,6 +284,14 @@ func compareOne(ctx context.Context, path string, incRep *proof.IncarnationRepor
 	if err != nil {
 		fail("the major records do not decode: %v", err)
 		return r
+	}
+	r.GenesisLink = "carried by the document"
+	if ev21.GenesisLink == "" {
+		if link, ok := env.answers.linkFor(ev21, incRep.Inputs.GenesisRootChainAnchor); ok {
+			ev21.GenesisLink, r.GenesisLink = link, "attached from the recorded answer "+env.answers.path
+		} else {
+			r.GenesisLink = "none: the document carries none and no recorded answer was given"
+		}
 	}
 	rep, err := proofv2.Verify21FromGenesis(ev21, ar, incRep.Inputs, incRep.Incarnation)
 	if err != nil {

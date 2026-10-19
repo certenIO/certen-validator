@@ -347,8 +347,13 @@ func (b *Builder) assemble21(ctx context.Context, ev *Evidence, x *Assembly, ar 
 	}
 	ev.Version = Version21
 	// The chain identity (V-E A1b, F-VE-2) of EVERY evidence 2.1 document, the continuous form included (RB9-F6): the offline walk requires it,
-	// and this builder verifies its own output with that walk below.
-	if err := b.addGenesisLink(ctx, ev); err != nil {
+	// and this builder verifies its own output with that walk below. The incarnation evidence is verified once, for the genesis root it names and for
+	// the walk.
+	ir, err := b.incEv.Verify()
+	if err != nil {
+		return nil, nil, fmt.Errorf("incarnation evidence: %w", err)
+	}
+	if err := b.addGenesisLink(ctx, ev, ir.Inputs.GenesisRootChainAnchor); err != nil {
 		return nil, nil, err
 	}
 	ev.Anchors = map[string]PartitionAnchor{seq.Source.String(): ev.Anchor}
@@ -368,10 +373,6 @@ func (b *Builder) assemble21(ctx context.Context, ev *Evidence, x *Assembly, ar 
 	ev.Transaction = x.Transaction
 	if ev.Check.Routing, err = proof.BuildRoutingProofAt(ctx, b.Q, chk.LastMinorBlock, chk.StateTreeAnchor); err != nil {
 		return nil, nil, fmt.Errorf("routing proof: %w", err)
-	}
-	ir, err := b.incEv.Verify()
-	if err != nil {
-		return nil, nil, fmt.Errorf("incarnation evidence: %w", err)
 	}
 	rep, err := Verify21FromGenesis(ev, ar, ir.Inputs, b.inc)
 	if err != nil {

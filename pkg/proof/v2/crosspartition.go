@@ -259,6 +259,9 @@ const (
 	StateCertifiedPageUnproven = "g1_certified_page_unproven"
 	// StateExecutorOverrideUnsupported: the body type has an executor override the default authority rules do not describe (D6).
 	StateExecutorOverrideUnsupported = "g1_executor_override_unsupported"
+	// StateActivationUnreadable: the rules v15 activation could not be read when a capture was complete (Collector.G1InForce), so the document form its
+	// closure budget is judged for - evidence 2.0 or 2.1 - is unknown and the budget is not judged (RB9-F6, B1). A soft state of the capture: the pages are kept.
+	StateActivationUnreadable = "g1_activation_unreadable"
 	// StateClosureExceedsBudget: the governing set is larger than the evidence budget (the consensus block size) allows (D6).
 	StateClosureExceedsBudget = "g1_closure_exceeds_budget"
 	// StateRoutingHistoryUnproven: the routing table has more than its genesis write, so its state at each B_Y is not proven (D5).

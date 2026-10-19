@@ -233,7 +233,7 @@ from the chain's entries and checked against the root the page proves, and the t
 entries the chain had when its proven root had n, so they can be read after the block has left the node's retention; only the page states are retention-limited.
 `Shadow.Prove` still refuses a cross-partition intent for a certificate, now by the name `g1_evidence_21_not_in_force` (the document is built and verified; consensus accepts it only
 after the rules switch of D7): the interim `g1_evidence_21_required` is no longer emitted (the constant stays, superseded). The shadow build builds, verifies and stores the 2.1
-document. `g1_completeness_unproven` is emitted by the verifier only when the evidence lacks a member the re-evaluation needs; a complete document carries no `Unproven` entry.
+document. `g1_activation_unreadable{partition,block}` is a soft state of a capture (the pages are kept): the rules v15 activation could not be read when the capture was complete, so the form (2.0 or 2.1) its closure budget is judged for is unknown and the budget is not judged. `g1_completeness_unproven` is emitted by the verifier only when the evidence lacks a member the re-evaluation needs; a complete document carries no `Unproven` entry.
 
 **Real data (done).** A live Kermit transaction on `certen-protocol.acme/billing-receipts` (BVN1) was captured promptly, assembled and verified end to end (`cmd/proofv2xbuild`;
 `pkg/proof/v2/testdata/xpartition3/real-bvn1-billing-receipts/`, `pkg/proofv2shadow/testdata/capture21_*`): the history of the voting page (book/2), the arrival of its signature derived

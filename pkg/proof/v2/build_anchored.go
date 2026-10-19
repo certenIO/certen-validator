@@ -286,12 +286,10 @@ func genesisLinkOf(ctx context.Context, src LinkSource, genesis [32]byte, lastRu
 	return hex.EncodeToString(gb), nil
 }
 
-// addGenesisLink gives an anchored document the chain identity, asked of the live Directory.
-func (b *Builder) addGenesisLink(ctx context.Context, ev *Evidence) error {
-	ir, err := b.incEv.Verify()
-	if err != nil {
-		return err
-	}
-	ev.GenesisLink, err = genesisLinkOf(ctx, NewClientLinks(b.C), ir.Inputs.GenesisRootChainAnchor, ev.Certify[len(ev.Certify)-1])
+// addGenesisLink gives an evidence 2.1 document the chain identity, asked of the live Directory: the receipt from genesis (the pinned incarnation's
+// genesis root chain anchor) to the certified root.
+func (b *Builder) addGenesisLink(ctx context.Context, ev *Evidence, genesis [32]byte) error {
+	var err error
+	ev.GenesisLink, err = genesisLinkOf(ctx, NewClientLinks(b.C), genesis, ev.Certify[len(ev.Certify)-1])
 	return err
 }
