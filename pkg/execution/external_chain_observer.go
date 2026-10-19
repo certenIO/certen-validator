@@ -50,6 +50,10 @@ type ExternalChainObserver struct {
 	chainID     int64
 	validatorID string
 
+	// replay captures the S6 replay-guard proof of an account settlement from inclusion, beside the observation (RB10).
+	// Nil when the chain's providers serve no state proofs.
+	replay *ethproof.ReplayGuardCapturer
+
 	// Configuration
 	requiredConfirmations int           // Number of blocks required for finalization
 	pollingInterval       time.Duration // How often to check for new blocks
@@ -120,11 +124,23 @@ func NewExternalChainObserver(config *ExternalChainObserverConfig) (*ExternalCha
 		finality = agreeing
 	}
 
+	var replay *ethproof.ReplayGuardCapturer
+	if finality != nil {
+		if src, ok := ethproof.ReplaySourceOf(finality); ok {
+			replay = ethproof.NewReplayGuardCapturer(ethproof.ReplayCaptureConfig{ChainID: config.ChainID, Source: src,
+				Logf: func(f string, a ...interface{}) {
+					if config.Logger != nil {
+						config.Logger.Printf(f, a...)
+					}
+				}}, nil)
+		}
+	}
 	return &ExternalChainObserver{
 		ethClient:             client,
 		rpcClient:             rpcClient,
 		finality:              finality,
 		finalityErr:           finalityErr,
+		replay:                replay,
 		chainID:               config.ChainID,
 		validatorID:           config.ValidatorID,
 		requiredConfirmations: requiredConf,
@@ -150,6 +166,11 @@ func (o *ExternalChainObserver) ObserveTransaction(
 ) (*ExternalChainResult, error) {
 
 	o.log("📡 [OBSERVER] Starting observation for tx: %s", txHash.Hex())
+
+	// The S6 capture starts at inclusion, not at finality; it never delays or fails this observation.
+	if o.replay != nil {
+		o.replay.Begin(txHash)
+	}
 
 	startTime := time.Now()
 	deadline := startTime.Add(o.timeout)
@@ -197,6 +218,11 @@ func (o *ExternalChainObserver) ObserveTransaction(
 	} else {
 		result.TxInclusionProof = settlement.Tx
 		result.ReceiptInclusionProof = settlement.Receipt
+		result.settlement = settlement
+		if o.replay != nil {
+			result.ReplayGuard = o.replay.Resolve(settlement)
+			o.replay.Bind(settlement)
+		}
 	}
 
 	o.log("🎉 [OBSERVER] External chain result complete: hash=%s status=%d", result.ToHex()[:16], result.Status)

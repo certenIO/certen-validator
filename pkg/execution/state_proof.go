@@ -12,7 +12,6 @@
 package execution
 
 import (
-	"bytes"
 	"fmt"
 	"math/big"
 	"strings"
@@ -20,8 +19,8 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethdb/memorydb"
-	"github.com/ethereum/go-ethereum/rlp"
-	"github.com/ethereum/go-ethereum/trie"
+
+	"github.com/certen/independant-validator/pkg/ethproof"
 )
 
 // StateProof is an independently verifiable proof that account `Account`'s storage slot
@@ -72,68 +71,25 @@ func (p *StateProof) Verify(stateRoot common.Hash) bool {
 	if len(p.AccountProof) == 0 || len(p.StorageProof) == 0 {
 		return false
 	}
-
-	// (1) Account proof against the state root.
-	accDB, err := nodeDB(p.AccountProof)
-	if err != nil {
+	// One implementation (pkg/ethproof, RB10): the account proof from the state root, the storage proof from that
+	// account's storageRoot. An absent account is no account here: a committed slot of one is not a held value.
+	res, err := ethproof.VerifyStorage(stateRoot, p.Account, p.AccountProof, p.Slot, p.StorageProof)
+	if err != nil || !res.Account.Exists {
 		return false
 	}
-	accKey := crypto.Keccak256(p.Account.Bytes())
-	accRLP, err := trie.VerifyProof(stateRoot, accKey, accDB)
-	if err != nil || accRLP == nil {
+	// The account's storageRoot must be the one the proof states.
+	if res.Account.StorageRoot != p.StorageHash {
 		return false
 	}
-	var acc ethAccount
-	if err := rlp.DecodeBytes(accRLP, &acc); err != nil {
-		return false
-	}
-	// The account's storageRoot must be the one we verify the storage proof against.
-	if acc.Root != p.StorageHash {
-		return false
-	}
-
-	// (2) Storage proof against the account's storageRoot.
-	stoDB, err := nodeDB(p.StorageProof)
-	if err != nil {
-		return false
-	}
-	stoKey := crypto.Keccak256(p.Slot.Bytes())
-	valRLP, err := trie.VerifyProof(p.StorageHash, stoKey, stoDB)
-	if err != nil {
-		return false
-	}
-
-	// A cleared slot (value 0) is proven by absence: VerifyProof returns (nil, nil).
-	if valRLP == nil {
-		return p.Value == (common.Hash{})
-	}
-
-	// Storage leaves are RLP( big-endian value with leading zeros trimmed ).
-	var valBytes []byte
-	if err := rlp.DecodeBytes(valRLP, &valBytes); err != nil {
-		return false
-	}
-	got := common.BytesToHash(valBytes) // left-pads to 32 bytes
-	return bytes.Equal(got.Bytes(), p.Value.Bytes())
+	return res.Value == p.Value
 }
 
 // verifyAccountProof is true when proof is a valid Merkle-Patricia proof, against stateRoot, that account exists in the
 // state: the part of Verify that needs no storage slot. The boot probe uses it, so that an eth_getProof answer that is
 // empty, null, of another account or of another state is not taken as a provider serving proofs.
 func verifyAccountProof(stateRoot common.Hash, account common.Address, proof [][]byte) bool {
-	if len(proof) == 0 {
-		return false
-	}
-	db, err := nodeDB(proof)
-	if err != nil {
-		return false
-	}
-	accRLP, err := trie.VerifyProof(stateRoot, crypto.Keccak256(account.Bytes()), db)
-	if err != nil || accRLP == nil {
-		return false
-	}
-	var acc ethAccount
-	return rlp.DecodeBytes(accRLP, &acc) == nil
+	acc, err := ethproof.VerifyAccount(stateRoot, account, proof)
+	return err == nil && acc.Exists
 }
 
 // EthGetProofResult mirrors the subset of the eth_getProof JSON-RPC response we verify.

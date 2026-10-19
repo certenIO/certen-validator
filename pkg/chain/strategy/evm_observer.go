@@ -94,6 +94,10 @@ type EVMObserver struct {
 	finality    ethrpc.FinalityReader // RB5-F53: agreeing independent providers
 	finalityErr error
 
+	// replay captures the S6 replay-guard proof of a settlement from inclusion, beside the observation (RB10). Nil when
+	// the finality reader serves no state proofs.
+	replay *ethproof.ReplayGuardCapturer
+
 	// Configuration
 	requiredConfirmations int
 	pollingInterval       time.Duration
@@ -141,10 +145,17 @@ func NewEVMObserver(config *EVMObserverConfig) (*EVMObserver, error) {
 		config.Timeout = 30 * time.Minute
 	}
 
+	var replay *ethproof.ReplayGuardCapturer
+	if config.Finality != nil {
+		if src, ok := ethproof.ReplaySourceOf(config.Finality); ok {
+			replay = ethproof.NewReplayGuardCapturer(ethproof.ReplayCaptureConfig{ChainID: config.ChainID, Source: src, Logf: log.Printf}, nil)
+		}
+	}
 	return &EVMObserver{
 		client:                config.Client,
 		finality:              config.Finality,
 		finalityErr:           config.FinalityErr,
+		replay:                replay,
 		chainID:               config.ChainID,
 		validatorID:           config.ValidatorID,
 		requiredConfirmations: config.RequiredConfirmations,
@@ -214,6 +225,11 @@ func (o *EVMObserver) observeSettled(ctx context.Context, txHash common.Hash, de
 	if o.finality == nil {
 		return nil, fmt.Errorf("chain %d: no agreeing providers to observe %s with: %v", o.chainID, txHash.Hex(), o.finalityErr)
 	}
+	// The S6 capture starts NOW, at inclusion, not when the chain finalizes: no public provider serves old state. It runs
+	// beside this observation and never delays or fails it.
+	if o.replay != nil {
+		o.replay.Begin(txHash)
+	}
 	receipt, err := ethrpc.SettledInFinalizedChain(ctx, o.finality, txHash, deadline, o.pollingInterval, log.Printf)
 	if err != nil {
 		return nil, fmt.Errorf("observe %s in the finalized chain %d: %w", txHash.Hex(), o.chainID, err)
@@ -259,6 +275,12 @@ func (o *EVMObserver) observeSettled(ctx context.Context, txHash common.Hash, de
 	result.ObservedAt = time.Now().UTC()
 	if err := bindInclusion(result, settlement); err != nil {
 		return nil, fmt.Errorf("chain %d: %w", o.chainID, err)
+	}
+	// The capture is held to the settlement just proven, in the background; what has been captured so far rides on the
+	// result as a snapshot, outside every hashed input.
+	if o.replay != nil {
+		result.ReplayGuard = o.replay.Resolve(settlement)
+		o.replay.Bind(settlement)
 	}
 	return result, nil
 }

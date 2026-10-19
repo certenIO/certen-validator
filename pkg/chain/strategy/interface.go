@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 
 	attestation "github.com/certen/independant-validator/pkg/attestation/strategy"
+	"github.com/certen/independant-validator/pkg/ethproof"
 )
 
 // =============================================================================
@@ -406,6 +407,13 @@ type ObservationResult struct {
 	// Chain identification (populated by each strategy)
 	ChainName      string `json:"chain_name,omitempty"`
 	ChainIDNumeric int64  `json:"chain_id_numeric,omitempty"`
+
+	// ReplayGuard is the S6 evidence of an account settlement (RB10, domain tag certen:s6-replay:v1): the storage proof
+	// that the transaction's replay-guard slot was consumed, or the named state saying it could not be proven. It is a
+	// snapshot taken when the observation returns - the capture runs beside the observation from inclusion and is
+	// finished in the background, so it may be absent here; the ethproof store is authoritative. It is NOT an input of
+	// ResultHash (computeResultHash) or of the attestation: its bytes depend on which provider still served the state.
+	ReplayGuard *ethproof.ReplayGuardEvidence `json:"replay_guard,omitempty"`
 }
 
 // =============================================================================

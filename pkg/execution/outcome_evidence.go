@@ -189,6 +189,10 @@ type OutcomeMemberEvidence struct {
 	Transaction *ChainInclusionEvidence `json:"transaction,omitempty"`
 	// StateProofs: every committed state slot, proven at the settlement block's state root (1, 2).
 	StateProofs []*StateProof `json:"stateProofs,omitempty"`
+	// ReplayGuard: the S6 evidence of the settlement (1, 2) - the storage proof that the member's replay-guard slot was
+	// consumed by this transaction, or the named state saying it could not be proven (certen:s6-replay:v1). Evidence BESIDE
+	// the leaf, never an input of OutcomeLeaf.Hash or of the outcome root: it is provider-dependent (RB10).
+	ReplayGuard *ethproof.ReplayGuardEvidence `json:"replayGuard,omitempty"`
 	// ClaimHeader and ClaimParentHeader: the block a member not settled is decided at, and its parent (3).
 	ClaimHeader       hexutil.Bytes `json:"claimHeader,omitempty"`
 	ClaimParentHeader hexutil.Bytes `json:"claimParentHeader,omitempty"`
@@ -899,7 +903,7 @@ func (m OutcomeMemberEvidence) settlement(leaf OutcomeLeaf, what string) (*types
 }
 
 func (m OutcomeMemberEvidence) verifyExecuted(chainID int64, a *anchorFacts, leaf OutcomeLeaf, account common.Address, chk *OutcomeEvidenceCheck) error {
-	hdr, _, rcpt, err := m.settlement(leaf, "settlement")
+	hdr, settlementTx, rcpt, err := m.settlement(leaf, "settlement")
 	if err != nil {
 		return err
 	}
@@ -980,6 +984,31 @@ func (m OutcomeMemberEvidence) verifyExecuted(chainID int64, a *anchorFacts, lea
 		len(unset), leaf.Status, leaf.EffectsHash[:8])
 	chk.unproven("that the LeafConsumed log's emitter %s runs CertenAccountV7_2 code (an account consumes a leaf only by "+
 		"executing exactly the calls it recomputes into it)", account.Hex())
+	return m.verifyReplayGuard(hdr, settlementTx, rcpt, chk)
+}
+
+// verifyReplayGuard holds the S6 evidence to the settlement just proven (RB10). Evidence that is carried and does not
+// verify refuses the member's evidence; evidence not carried, or a named state, is stated as not established - never as
+// established.
+func (m OutcomeMemberEvidence) verifyReplayGuard(hdr *types.Header, tx *types.Transaction, rcpt *types.Receipt, chk *OutcomeEvidenceCheck) error {
+	if m.ReplayGuard == nil {
+		chk.unproven("S6: that the settlement's replay-guard slot was consumed (storage proof): this evidence carries no replay-guard proof")
+		return nil
+	}
+	rg, err := m.ReplayGuard.VerifyAgainst(hdr, tx, rcpt.Status == types.ReceiptStatusSuccessful, rcpt.Logs)
+	if err != nil {
+		return evidenceFail("the replay-guard evidence: %v", err)
+	}
+	if rg.State != ethproof.ReplayProven {
+		chk.unproven("S6: %s{reason=%s} at block %d (%s): %s", rg.State, rg.Reason, rg.SettlementBlock.Number, rg.SettlementBlock.Hash.Hex(), rg.Named.Detail)
+		return nil
+	}
+	for _, line := range rg.Established {
+		chk.proved("%s", line)
+	}
+	if rg.BeforeUnavailable != nil {
+		chk.unproven("S6 transition: s6_before_unavailable{%s}: the slot's value before the settlement block is not proven (the claim is the consumed slot above)", rg.BeforeUnavailable.Reason)
+	}
 	return nil
 }
 

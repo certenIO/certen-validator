@@ -43,6 +43,13 @@ type OutcomeEvidenceReader interface {
 	QuorumRegistryAt(ctx context.Context, header *types.Header) (*OutcomeQuorumRegistry, error)
 }
 
+// ReplayGuardReader is the optional part of an OutcomeEvidenceSource that serves the S6 evidence captured for a settlement
+// (RB10): the storage proof that its replay-guard slot was consumed, or the named state saying it could not be proven. It
+// is nil when no capture was made for the transaction; the evidence is then built without it and says so.
+type ReplayGuardReader interface {
+	ReplayGuardOf(tx common.Hash) *ethproof.ReplayGuardEvidence
+}
+
 // OutcomeQuorumRegistry is an anchor's validator registry as read.
 type OutcomeQuorumRegistry struct {
 	Validators           []OutcomeQuorumValidator
@@ -230,6 +237,9 @@ func buildMemberEvidence(ctx context.Context, c OutcomeEvidenceSource, leafVersi
 				hdr.Hash().Hex(), leaf.BlockHash)
 		}
 		ev.Transaction = incl
+		if rg, ok := c.(ReplayGuardReader); ok && leaf.Status != OutcomeConsumedElsewhere {
+			ev.ReplayGuard = rg.ReplayGuardOf(common.Hash(leaf.Tx))
+		}
 		if leaf.Status != OutcomeConsumedElsewhere {
 			var slots []ExpectedStateSlot
 			for _, l := range m.Legs {
@@ -317,6 +327,15 @@ func (c *AgreedOutcomeChain) TransactionInclusion(ctx context.Context, tx common
 		out.ReceiptProof = append(out.ReceiptProof, n)
 	}
 	return out, hdr, nil
+}
+
+// ReplayGuardOf: see ReplayGuardReader. Only evidence already held to the proven settlement (bound) is returned.
+func (c *AgreedOutcomeChain) ReplayGuardOf(tx common.Hash) *ethproof.ReplayGuardEvidence {
+	ev, bound, ok := ethproof.DefaultReplayGuards.Get(c.chainID, tx)
+	if !ok || !bound {
+		return nil
+	}
+	return ev
 }
 
 // StateProofsAt: see OutcomeEvidenceReader. Every slot needs a proof that verifies against the agreed header's state
