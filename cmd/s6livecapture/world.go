@@ -374,7 +374,7 @@ func scrubRaw(raw json.RawMessage) json.RawMessage {
 func scrubValue(v interface{}) interface{} {
 	switch x := v.(type) {
 	case string:
-		return ethproof.RedactEndpoints(x)
+		return ethproof.BoundProviderText(x)
 	case []interface{}:
 		for i := range x {
 			x[i] = scrubValue(x[i])
@@ -390,12 +390,12 @@ func scrubValue(v interface{}) interface{} {
 	return v
 }
 
-// scrubExchange is the exchange with the text a provider or a transport wrote in it sanitised: the transport error, the body
-// that was no JSON-RPC answer, and the JSON-RPC error. The result of a call is chain data and is kept as it is.
+// scrubExchange is the exchange with the text a provider or a transport wrote in it sanitised and bounded (RB10-B13: a provider's
+// error page can be many MB): the transport error, the body that was no JSON-RPC answer, and the JSON-RPC error. The result of a call is chain data and is kept as it is.
 func scrubExchange(x Exchange) Exchange {
 	x.Host = ethproof.RedactEndpoints(x.Host)
-	x.Transport = ethproof.RedactEndpoints(x.Transport)
-	x.Body = ethproof.RedactEndpoints(x.Body)
+	x.Transport = ethproof.BoundProviderText(x.Transport)
+	x.Body = ethproof.BoundProviderText(x.Body)
 	x.RPCError = scrubRaw(x.RPCError)
 	return x
 }

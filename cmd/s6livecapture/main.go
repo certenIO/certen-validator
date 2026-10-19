@@ -338,7 +338,7 @@ func summarize(ev *ethproof.ReplayGuardEvidence) string {
 		}
 		return fmt.Sprintf("proven at block %d, %s", ev.Proof.ProvenAt.Number, b)
 	default:
-		return fmt.Sprintf("%s{%s}: %s", ev.State.State, ev.State.Reason, ethproof.RedactEndpoints(ev.State.Detail))
+		return fmt.Sprintf("%s{%s}: %s", ev.State.State, ev.State.Reason, ethproof.BoundProviderText(ev.State.Detail))
 	}
 }
 
@@ -362,16 +362,17 @@ func Judge(ctx context.Context, w *World) (*Verdict, *ethproof.ReplayGuardEviden
 	if ev == nil {
 		return v, nil, fmt.Errorf("%s is no account settlement: no S6 claim", tx.Hex())
 	}
+	ev = boundForFile(ev, w.ChainID, tx)
 	rc, err := src.TransactionReceipt(ctx, tx)
 	if err != nil {
-		v.Settlement = ethproof.RedactEndpoints("receipt not agreed in the recorded world: " + err.Error())
+		v.Settlement = ethproof.BoundProviderText("receipt not agreed in the recorded world: " + err.Error())
 		v.State, v.Reason = ev.State.State, ev.State.Reason
 		return v, ev, nil
 	}
 	v.BlockNumber, v.BlockHash = rc.BlockNumber.Uint64(), rc.BlockHash.Hex()
 	s, err := ethproof.Build(ctx, src, rc.BlockHash, tx, uint64(rc.TransactionIndex))
 	if err != nil {
-		v.Settlement = ethproof.RedactEndpoints(err.Error())
+		v.Settlement = ethproof.BoundProviderText(err.Error())
 	} else {
 		v.Settlement = "verified"
 	}
@@ -382,7 +383,7 @@ func Judge(ctx context.Context, w *World) (*Verdict, *ethproof.ReplayGuardEviden
 		err = fmt.Errorf("no settlement proof to hold the evidence to")
 	}
 	if err != nil {
-		v.State, v.Detail = "verify_failed", ethproof.RedactEndpoints(err.Error())
+		v.State, v.Detail = "verify_failed", ethproof.BoundProviderText(err.Error())
 		return v, ev, nil
 	}
 	v.State, v.Reason = chk.State, chk.Reason
@@ -409,7 +410,7 @@ func Judge(ctx context.Context, w *World) (*Verdict, *ethproof.ReplayGuardEviden
 			}
 		}
 	} else {
-		v.Providers, v.Detail = ev.State.Providers, ethproof.RedactEndpoints(ev.State.Detail)
+		v.Providers, v.Detail = ev.State.Providers, ethproof.BoundProviderText(ev.State.Detail)
 		v.Contract = ev.State.Contract.Hex()
 	}
 	return v, ev, nil
@@ -453,4 +454,22 @@ func verifyGetProof(raw json.RawMessage, root common.Hash, account common.Addres
 	}
 	_, err := ethproof.VerifyStorage(root, account, nodes(ans.AccountProof), slot, nodes(ans.StorageProof[0].Proof))
 	return err
+}
+
+// boundForFile is the evidence as the proof file the recorder writes it: indented, which is longer than the compact form the
+// capture bounds. A file longer than ethproof.MaxReplayEvidenceBytes would be refused evidence_too_large by the verifier
+// that reads it, so the evidence of such a file is the named state saying so (RB10-B13), and the verdict is judged on that.
+func boundForFile(ev *ethproof.ReplayGuardEvidence, chainID int64, tx common.Hash) *ethproof.ReplayGuardEvidence {
+	if ev == nil {
+		return nil
+	}
+	b, err := json.MarshalIndent(ev, "", "  ")
+	if err != nil {
+		return ethproof.UnemittableReplayEvidence(ev, chainID, tx, "the evidence cannot be encoded: "+ethproof.BoundProviderText(err.Error()))
+	}
+	if n := len(b) + 1; n > ethproof.MaxReplayEvidenceBytes {
+		return ethproof.UnemittableReplayEvidence(ev, chainID, tx,
+			fmt.Sprintf("the evidence file would be %d bytes, more than the %d the format allows", n, ethproof.MaxReplayEvidenceBytes))
+	}
+	return ev
 }

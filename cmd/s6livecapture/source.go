@@ -66,7 +66,7 @@ func newSource(ctx context.Context, chainID int64, provs []Provider, transports 
 	for _, p := range provs {
 		c, err := rpc.DialOptions(ctx, p.URL, rpc.WithHTTPClient(&http.Client{Transport: transports(p.Host), Timeout: 40 * time.Second}))
 		if err != nil {
-			return nil, fmt.Errorf("dial %s: %s", p.Host, ethproof.RedactEndpoints(err.Error()))
+			return nil, fmt.Errorf("dial %s: %s", p.Host, ethproof.BoundProviderText(err.Error()))
 		}
 		s.providers = append(s.providers, &provider{host: p.Host, rpc: c, eth: ethclient.NewClient(c)})
 	}
@@ -107,7 +107,7 @@ func agree[T any](ctx context.Context, s *source, what string, read func(context
 	var notes []string
 	for _, a := range as {
 		if a.err != nil {
-			notes = append(notes, ethproof.RedactEndpoints(fmt.Sprintf("%s: %v", a.host, a.err)))
+			notes = append(notes, ethproof.BoundProviderText(fmt.Sprintf("%s: %v", a.host, a.err)))
 			continue
 		}
 		ok = append(ok, a)
@@ -185,7 +185,7 @@ func (s *source) heads(ctx context.Context) ([]uint64, error) {
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil || h == nil || h.Number == nil {
-				notes = append(notes, ethproof.RedactEndpoints(fmt.Sprintf("%s: %v", p.host, err)))
+				notes = append(notes, ethproof.BoundProviderText(fmt.Sprintf("%s: %v", p.host, err)))
 				return
 			}
 			out = append(out, h.Number.Uint64())
