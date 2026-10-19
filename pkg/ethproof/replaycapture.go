@@ -171,7 +171,8 @@ func proveAt(ctx context.Context, p ReplayStateProvider, contract common.Address
 	} else if res.Value != (common.Hash{}) {
 		return nil, nil, fmt.Errorf("states an empty value, the proof proves %s", res.Value.Hex())
 	}
-	sp := &SlotProof{AccountAbsent: !res.Account.Exists, StorageHash: res.Account.StorageRoot, CodeHash: res.Account.CodeHash, Value: res.Value}
+	sp := &SlotProof{AccountAbsent: !res.Account.Exists, StorageHash: res.Account.StorageRoot, CodeHash: res.Account.CodeHash, Value: res.Value,
+		AccountProof: []hexutil.Bytes{}, StorageProof: []hexutil.Bytes{}}
 	for _, n := range ans.AccountProof {
 		sp.AccountProof = append(sp.AccountProof, n)
 	}
