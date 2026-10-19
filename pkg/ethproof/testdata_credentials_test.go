@@ -33,6 +33,12 @@ var publicProviderURLs = []string{
 // keyedProviderHosts are providers whose URL path is the API key: no fixture may name one at all.
 var keyedProviderHosts = regexp.MustCompile(`(?i)alchemy\.com|alchemyapi\.io|infura\.io|quiknode\.pro|quicknode\.com|blastapi\.io|chainstack\.com|ankr\.com|getblock\.io|nodereal\.io|drpc\.org|moralis\.io`)
 
+// scanWindow and scanOverlap: how a fixture is read through the bounded redactor.
+const (
+	scanWindow  = 32 << 10
+	scanOverlap = 4 << 10
+)
+
 // RB10-B11: the published fixtures (the recorded live worlds with their evidence and verdicts, the s6replay vectors and
 // their mutations) hold no provider credential: only a public provider URL, with no path beyond the public one.
 func TestPublishedS6FixturesHoldNoProviderCredential(t *testing.T) {
@@ -73,12 +79,21 @@ func TestPublishedS6FixturesHoldNoProviderCredential(t *testing.T) {
 				i := strings.Index(rest, "://")
 				t.Errorf("%s holds a URL that is not a public provider's: %q", path, rest[max(0, i-20):min(len(rest), i+60)])
 			}
-			if red := ethproof.RedactEndpoints(rest); red != rest {
-				i := 0
-				for i < len(red) && i < len(rest) && red[i] == rest[i] {
-					i++
+			// The redactor reads at most 64 KiB of a text (RB10-B15), so a fixture is read in overlapping windows of 32 KiB: a URL or a key
+			// in it, 4 KiB or shorter, lies whole in one window.
+			for off := 0; off < len(rest); off += scanWindow - scanOverlap {
+				w := rest[off:min(len(rest), off+scanWindow)]
+				if red := ethproof.RedactEndpoints(w); red != w {
+					i := 0
+					for i < len(red) && i < len(w) && red[i] == w[i] {
+						i++
+					}
+					t.Errorf("%s holds a host with a path or a key in it: %q", path, w[max(0, i-30):min(len(w), i+60)])
+					break
 				}
-				t.Errorf("%s holds a host with a path or a key in it: %q", path, rest[max(0, i-30):min(len(rest), i+60)])
+				if off+scanWindow >= len(rest) {
+					break
+				}
 			}
 			return nil
 		})
