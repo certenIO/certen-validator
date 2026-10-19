@@ -1,0 +1,20 @@
+{
+  "chainId": 421614,
+  "chain": "arbitrum-sepolia",
+  "txHash": "0xb46171b58f493813001a1138852a1507d8b8f8787564795577c43216a8043cd4",
+  "blockNumber": 316685513,
+  "blockHash": "0xe083531d69d320c4fef80c6fa10ad35ca399ae9ad3ce47c4598f3038aafdc309",
+  "settlement": "verified",
+  "state": "proven",
+  "contract": "0x057fC30274d1AB39DC1EF51a84CF995c9b8c50f2",
+  "slot": "0xa9a6f842e4f07ecbb509cc07ced80ba968e3a366610a29b533c4daec7cfa7508",
+  "provenAt": 316686023,
+  "before": "proven",
+  "servedAfter": [
+    "sepolia-rollup.arbitrum.io"
+  ],
+  "servedBefore": [
+    "sepolia-rollup.arbitrum.io"
+  ],
+  "live": "proven at block 316686023, s6_before_unavailable"
+}
