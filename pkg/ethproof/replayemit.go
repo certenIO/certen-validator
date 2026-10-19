@@ -20,7 +20,34 @@ import (
 // bounded; this is the last guard for what is still longer - a provider padding its eth_getProof answer with nodes the
 // walk ignores, say - and for evidence that cannot be encoded at all.
 
-// replayEmitProblem is why ev cannot be emitted as JSON within the bound, or "" when it can.
+// storedFormLen is the length of the text form PostgreSQL's jsonb writes for the compact JSON raw: the form
+// chained_proof_layers.layer_json is read back in, and so the form a layer-6 member's replayGuard document reaches
+// DecodeReplayGuardEvidence in. jsonb prints one space after every ':' and every ',' that is outside a string, and nothing
+// else of a document of this kind changes. It is computed by expanding raw outside its strings, one byte at a time, without
+// building the expanded document.
+func storedFormLen(raw []byte) int {
+	n, inString, escaped := len(raw), false, false
+	for _, c := range raw {
+		switch {
+		case escaped:
+			escaped = false
+		case inString:
+			if c == '\x5c' {
+				escaped = true
+			} else if c == '"' {
+				inString = false
+			}
+		case c == '"':
+			inString = true
+		case c == ':' || c == ',':
+			n++
+		}
+	}
+	return n
+}
+
+// replayEmitProblem is why ev cannot be emitted as JSON within the bound, or "" when it can. The bound is measured on the form
+// the evidence is stored and read back in (storedFormLen), which is longer than the compact form it is marshalled in.
 func replayEmitProblem(ev *ReplayGuardEvidence) string {
 	if ev == nil {
 		return ""
@@ -29,13 +56,14 @@ func replayEmitProblem(ev *ReplayGuardEvidence) string {
 	if err != nil {
 		return "the evidence cannot be encoded: " + BoundProviderText(err.Error())
 	}
-	if len(raw) > MaxReplayEvidenceBytes {
-		return fmt.Sprintf("the evidence would be %d bytes, more than the %d the format allows", len(raw), MaxReplayEvidenceBytes)
+	if stored := storedFormLen(raw); stored > MaxReplayEvidenceBytes {
+		return fmt.Sprintf("the evidence would be %d bytes, more than the %d the format allows", stored, MaxReplayEvidenceBytes)
 	}
 	return ""
 }
 
-// BoundReplayEvidence is ev when its wire form (the JSON a stored layer-6 member and a proof file carry) is at most
+// BoundReplayEvidence is ev when its stored form (the jsonb text a layer-6 member is read back in: the compact JSON with a
+// space after every ':' and ',' outside a string, see storedFormLen) is at most
 // MaxReplayEvidenceBytes, and otherwise the named state s6_replay_unproven{state_unavailable} saying why, built from what ev
 // itself states of the settlement block and contract (chainID and tx are the settlement's). ev is never changed. Nil
 // evidence (no S6 claim) stays nil.
@@ -48,7 +76,7 @@ func BoundReplayEvidence(ev *ReplayGuardEvidence, chainID int64, tx common.Hash)
 }
 
 // UnemittableReplayEvidence is the named state that stands for evidence that cannot be emitted for the reason why, in the
-// form the emitter writes it (an indented proof file is longer than the compact form BoundReplayEvidence measures, so its
+// form the emitter writes it (an indented proof file is longer than the stored form BoundReplayEvidence measures, so its
 // writer states its own reason). The block and contract are those ev states.
 func UnemittableReplayEvidence(ev *ReplayGuardEvidence, chainID int64, tx common.Hash, why string) *ReplayGuardEvidence {
 	st := &ReplayNamedState{State: ReplayUnproven, Reason: ReasonStateUnavailable, ChainID: chainID, TxHash: tx}

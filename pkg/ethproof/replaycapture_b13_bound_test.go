@@ -64,7 +64,7 @@ func TestB13_BoundProviderTextCutsAfterRedactionOnAUTF8Boundary(t *testing.T) {
 				t.Fatalf("rune %q pad %d: no visible suffix: %q", r, pad, out[len(out)-40:])
 			}
 			dropped, _ := strconv.Atoi(m[1])
-			kept := out[:len(out)-len(m[0])]
+			kept := strings.TrimSuffix(out[:len(out)-len(m[0])], " ")
 			if !strings.HasPrefix(in, kept) || dropped != len(in)-len(kept) {
 				t.Fatalf("rune %q pad %d: kept %d bytes and says %d dropped of %d", r, pad, len(kept), dropped, len(in))
 			}
@@ -295,10 +295,10 @@ func TestB13_TheGuardReplacesOversizeEvidenceByANamedState(t *testing.T) {
 		t.Fatalf("oversize evidence was not replaced by a named state: %+v", got)
 	}
 	st := got.State
-	want := fmt.Sprintf("the evidence would be %d bytes, more than the %d the format allows", len(raw), ethproof.MaxReplayEvidenceBytes)
+	want := fmt.Sprintf("the evidence would be %d bytes, more than the %d the format allows", jsonbLen(raw), ethproof.MaxReplayEvidenceBytes)
 	if st.State != ethproof.ReplayUnproven || st.Reason != ethproof.ReasonStateUnavailable || !strings.Contains(st.Detail, want) ||
 		st.ChainID != testChainID || st.TxHash != tx || st.BlockNumber != testN || st.BlockHash != f.w.headerN.Hash() || st.Contract != f.w.contract {
-		t.Fatalf("the named state is %+v, want the %d-byte reason, chain, tx, block %d and contract of the proof", st, len(raw), testN)
+		t.Fatalf("the named state is %+v, want the %d-byte reason, chain, tx, block %d and contract of the proof", st, jsonbLen(raw), testN)
 	}
 	if over.Proof == nil || len(over.Proof.After.StorageProof) < 2 {
 		t.Fatal("the guard changed the evidence it was given")
@@ -327,18 +327,18 @@ func TestB13_TheGuardReplacesOversizeEvidenceByANamedState(t *testing.T) {
 		ev := &ethproof.ReplayGuardEvidence{Version: ethproof.ReplayGuardDomain, State: &ethproof.ReplayNamedState{State: ethproof.ReplayUnproven,
 			Reason: ethproof.ReasonStateUnavailable, ChainID: testChainID, TxHash: tx, BlockNumber: testN, BlockHash: f.w.headerN.Hash(), Contract: f.w.contract, Detail: "x"}}
 		b, _ := json.Marshal(ev)
-		ev.State.Detail = strings.Repeat("x", 1+ethproof.MaxReplayEvidenceBytes-len(b)+extra)
+		ev.State.Detail = strings.Repeat("x", 1+ethproof.MaxReplayEvidenceBytes-jsonbLen(b)+extra)
 		return ev
 	}
 	atBound, pastBound := exact(0), exact(1)
-	if b, _ := json.Marshal(atBound); len(b) != ethproof.MaxReplayEvidenceBytes {
-		t.Fatalf("the boundary evidence is %d bytes", len(b))
+	if b, _ := json.Marshal(atBound); jsonbLen(b) != ethproof.MaxReplayEvidenceBytes {
+		t.Fatalf("the boundary evidence is %d bytes", jsonbLen(b))
 	}
 	if got := ethproof.BoundReplayEvidence(atBound, testChainID, tx); got != atBound {
 		t.Fatal("evidence of exactly the bound was replaced")
 	}
-	if b, _ := json.Marshal(pastBound); len(b) != ethproof.MaxReplayEvidenceBytes+1 {
-		t.Fatalf("the evidence one past the bound is %d bytes", len(b))
+	if b, _ := json.Marshal(pastBound); jsonbLen(b) != ethproof.MaxReplayEvidenceBytes+1 {
+		t.Fatalf("the evidence one past the bound is %d bytes", jsonbLen(b))
 	}
 	if got := ethproof.BoundReplayEvidence(pastBound, testChainID, tx); got == pastBound || got.State == nil || !strings.Contains(got.State.Detail, "4194305 bytes") {
 		t.Fatalf("evidence one byte past the bound was not replaced: %+v", got)

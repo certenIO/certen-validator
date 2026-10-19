@@ -3,9 +3,6 @@
 package ethproof
 
 import (
-	"strconv"
-	"unicode/utf8"
-
 	"github.com/certen/independant-validator/pkg/ethrpc"
 )
 
@@ -37,50 +34,17 @@ const MaxReplayTextBytes = 1024
 // after them are one last entry, "(N more providers)".
 const MaxReplayProviderFailures = 64
 
-// boundReadBytes is how much of a text is read at all: redaction is regular-expression work, and a 10 MB body must not cost
-// a second of it each time a provider answers. Only a prefix is kept, so what is cut off is never shown; the bytes not read
-// are counted in the suffix like the others.
-const boundReadBytes = 64 << 10
-
-const (
-	truncatedPrefix = "…(truncated "
-	truncatedSuffix = " bytes)"
-)
-
-// BoundProviderText is the one sanitiser of text a provider served before it is stored: RedactEndpoints first, then, when
-// the result is longer than MaxReplayTextBytes, a cut at a UTF-8 character boundary with the visible suffix
-// "…(truncated N bytes)" (N the bytes dropped), the whole of it at most MaxReplayTextBytes long. Text within the bound is
-// returned as RedactEndpoints returns it, and bounding is idempotent.
+// BoundProviderText is the one sanitiser of text a provider served before it is stored: ethrpc.BoundRedacted at
+// MaxReplayTextBytes (RB10-B15), the rule every bound on provider text shares. Only the first 64 KiB of the text is read
+// (redaction is regular-expression work, and a 10 MB body must not cost a second of it each time a provider answers), cut
+// where no URL or registered literal straddles the cut; that prefix is redacted; and when the result is longer than
+// MaxReplayTextBytes it is ended at a token boundary (a UTF-8 character boundary at the least) and followed by a space and
+// the visible suffix "…(truncated N bytes)", N the bytes not shown, the whole of it at most MaxReplayTextBytes long. Text
+// within both bounds is returned as RedactEndpoints returns it, and bounding is idempotent.
 func BoundProviderText(s string) string {
 	return boundProviderTextTo(s, MaxReplayTextBytes)
 }
 
 func boundProviderTextTo(s string, max int) string {
-	if s == "" {
-		return s
-	}
-	total := len(s)
-	if len(s) > boundReadBytes {
-		cut := boundReadBytes
-		for cut > 0 && !utf8.RuneStart(s[cut]) {
-			cut--
-		}
-		s = s[:cut]
-	}
-	unread := total - len(s)
-	r := RedactEndpoints(s)
-	if unread == 0 && len(r) <= max {
-		return r
-	}
-	keep := max - len(truncatedPrefix) - len(truncatedSuffix) - len(strconv.Itoa(total))
-	if keep < 0 {
-		keep = 0
-	}
-	if keep > len(r) {
-		keep = len(r)
-	}
-	for keep > 0 && keep < len(r) && !utf8.RuneStart(r[keep]) {
-		keep--
-	}
-	return r[:keep] + truncatedPrefix + strconv.Itoa(len(r)-keep+unread) + truncatedSuffix
+	return ethrpc.BoundRedacted(s, max)
 }
