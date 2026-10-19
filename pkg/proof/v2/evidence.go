@@ -78,8 +78,8 @@ type Evidence struct {
 	// GenesisLink (evidence 2.1 only; RB9-F5 V-E A1b, F-VE-2) is the chain identity of an anchored document, binary merkle.Receipt, hex: a
 	// receipt from the pinned incarnation's GenesisRootChainAnchor (consensus: the spine log's Genesis.RootChainAnchor) to the certified root,
 	// which proves the certified root extends the very chain the pin names, not another incarnation's that shares its genesis records.
-	// Required of EVERY evidence 2.1 document by the offline walk (VerifyPortable, Verify21FromGenesis: certify_link_missing{genesis}), the continuous
-	// form included (RB9-F6, F-VE-2 option b); the spine-log entry point requires it only of a document that carries links. In a document that
+	// Required of EVERY evidence 2.1 document, the continuous form included (RB9-F6, F-VE-2 option b), by the offline walk (VerifyPortable,
+	// Verify21FromGenesis) and by the spine-log walk consensus runs (VerifyEvidence21FromSpine) alike: certify_link_missing{genesis}. In a document that
 	// claims 2.0 the member is not read.
 	GenesisLink string `json:"genesisLink,omitempty"`
 
@@ -238,7 +238,7 @@ func verifyFromGenesis(ev *Evidence, ar *Archive, in proof.IncarnationInputs, pi
 		}
 	}
 	rep.Majors = need
-	return verifyFrom(ev, rep, at, pinned, in.GenesisRootChainAnchor, true)
+	return verifyFrom(ev, rep, at, pinned, in.GenesisRootChainAnchor)
 }
 
 // VerifyFromSpine verifies ev against the validator-set spine as CERTEN's consensus state holds it (the spine log a
@@ -310,18 +310,19 @@ func verifyFromSpine(ev *Evidence, l *ledger.AccumulateSpineLog, pinned [32]byte
 		}
 		at[n] = sp
 	}
-	// The spine log is the chain's own: its checkpoints were extended from the pinned incarnation's genesis, so a continuous document needs no
-	// genesis link here (requireGenesisLink false; a document that carries links or a genesis link is judged as ever). RB9-F6.
-	return verifyFrom(ev, &Report{Incarnation: pinned, Majors: need}, at, pinned, genesisRoot, false)
+	// Consensus judges exactly what the offline walk judges, the genesis link of every evidence 2.1 document included (RB9-F6: consensus must not
+	// accept as a certificate's proof a document no independent auditor can verify offline). Until the rules v15 activation intentInputs refuses a
+	// 2.1 certificate before this function runs.
+	return verifyFrom(ev, &Report{Incarnation: pinned, Majors: need}, at, pinned, genesisRoot)
 }
 
 // verifyFrom checks everything after the spine's starting points: at holds the spine after ev.Majors and after
-// ev.Check.Majors major blocks. requireGenesisLink is true for the offline walk (verifyFromGenesis) and makes the genesis link (V-E A1b,
-// F-VE-2) a requirement of EVERY evidence 2.1 document, the continuous form included (RB9-F6, owner decision 2026-10-19): offline,
-// `NewSpine(g, 1)` binds the pinned incarnation's genesis records but not its root chain, so without the link a complete chain of ANOTHER
-// incarnation that shares those records would pass the pin. The spine-log entry point passes false: there the spine's starting points
-// come from the chain's own log, and a document that carries links or a genesis link is judged either way.
-func verifyFrom(ev *Evidence, rep *Report, at map[uint64]*Spine, pinned, genesisRoot [32]byte, requireGenesisLink bool) (*Report, error) {
+// ev.Check.Majors major blocks. The genesis link (V-E A1b, F-VE-2) is a requirement of EVERY evidence 2.1 document, the continuous form included
+// (RB9-F6, owner decision 2026-10-19), by the offline walk (verifyFromGenesis) and by the spine-log walk consensus runs (verifyFromSpine) alike:
+// offline, `NewSpine(g, 1)` binds the pinned incarnation's genesis records but not its root chain, so without the link a complete chain of
+// ANOTHER incarnation that shares those records would pass the pin; and consensus must accept as a certificate's proof exactly the documents an
+// independent auditor can verify offline.
+func verifyFrom(ev *Evidence, rep *Report, at map[uint64]*Spine, pinned, genesisRoot [32]byte) (*Report, error) {
 	var err error
 	is21 := ev.Version == Version21
 	if !is21 {
@@ -362,7 +363,7 @@ func verifyFrom(ev *Evidence, rep *Report, at map[uint64]*Spine, pinned, genesis
 		return nil, err
 	}
 	// The chain identity (V-E A1b, F-VE-2): a document with links, or with a genesis link, ties the certified root to the genesis root of the
-	// pinned incarnation. (A continuous document with neither is judged at the end of this function when the walk is offline.)
+	// pinned incarnation. (A continuous document with neither is judged at the end of this function.)
 	if is21 && (len(links) > 0 || genesisLink != nil) {
 		if err := checkGenesisLink(genesisLink, genesisRoot, cert.RootChainAnchor); err != nil {
 			return nil, err
@@ -518,8 +519,8 @@ func verifyFrom(ev *Evidence, rep *Report, at map[uint64]*Spine, pinned, genesis
 		}
 		// RB9-F6 / F-VE-2 (b): a document in the continuous form that carries no genesis link (a document with links, or with a genesis link,
 		// was judged above) is refused here, by the same name, after everything it does carry has been judged: a document that fails for
-		// another reason keeps that refusal. Nothing is accepted without the link on the offline walk.
-		if requireGenesisLink && len(links) == 0 && genesisLink == nil {
+		// another reason keeps that refusal. Nothing is accepted without the link, offline or by consensus.
+		if len(links) == 0 && genesisLink == nil {
 			return nil, certifyState(StateCertifyLinkMissing, genesisLinkIndex)
 		}
 	}

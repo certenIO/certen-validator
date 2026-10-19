@@ -215,10 +215,11 @@ var craftedUnread = unreadTable(
 	ug("the Anchors entry for the transaction's own partition must equal Evidence.Anchor and is set aside when it does "+
 		"(xverify.go verify21): a document whose only entries are its own carries nothing that field does not",
 		"certificate/proof_v2/anchors", "certificate/proof_v2/anchors/acc://bvn-BVN1.acme"),
-	ug("merkle.Receipt carries, besides Start, Entries and Anchor, position fields (StartIndex, EndIndex, End) that Validate does not read; "+
+	ug("merkle.Receipt carries, besides Start, Entries and Anchor, position fields (StartIndex, EndIndex, End) that Validate does not read (the genesis link is one: "+
+		"of its mutations exactly hollow-receipt.End leaves the certificate accepted over the same govRoot; an absent, empty or altered link is refused); "+
 		"a minor-root run's merkle state keeps a HashList the verifier does not read, and a validator signature's TransactionHash is not read "+
 		"(the quorum check verifies each signature over the delivered anchor message)",
-		"certificate/proof_v2/certify/*"),
+		"certificate/proof_v2/certify/*", "certificate/proof_v2/genesisLink"),
 	ug("ChainRoot.Anchor is a restatement recomputed from Pending (an empty one is not compared); a chain's Name is read only to find "+
 		"the main chain, and for a page the chains the timeline looks up by name (the names are not covered by the chain component of the "+
 		"state hash: a finding); the account URL of the network and globals proofs is a label - the set check reads the account by its bytes, "+

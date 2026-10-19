@@ -176,6 +176,16 @@ func TestG1LiveAnchored(t *testing.T) {
 
 				rf, reg := intentRegistry(t)
 				spine := v3Spine(t, fx)
+				// Every evidence 2.1 document needs its genesis link, the continuous form too (RB9-F6): consensus refuses the stored continuous
+				// document without it, by name, and judges it with Kermit's recorded answer to the genesis question - the very receipt the anchored
+				// form carries.
+				var cs0 *proofv2.CertifyState
+				if _, err := proofv2.VerifyEvidence21FromSpine(cont, spine, ir.Incarnation); !errors.As(err, &cs0) || cs0.Code != proofv2.StateCertifyLinkMissing {
+					t.Fatalf("continuous without a genesis link: %v, want certify_link_missing{genesis}", err)
+				}
+				contLinked := *cont
+				contLinked.GenesisLink = anchored.GenesisLink
+				cont = &contLinked
 				contRep, err := proofv2.VerifyEvidence21FromSpine(cont, spine, ir.Incarnation)
 				if err != nil {
 					t.Fatalf("continuous: %v", err)

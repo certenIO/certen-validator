@@ -46,11 +46,12 @@ func gunzipFile(t *testing.T, path string) []byte {
 
 // real21World is the stored document with the spine a chain holds after verifying the document's archive from Kermit's genesis.
 type real21World struct {
-	ev    *proofv2.Evidence
-	spine *ledger.AccumulateSpineLog
-	inc   [32]byte
-	ar    *proofv2.Archive           // the archive the spine was extended from, for the offline walk (RB9-F6)
-	in    govproof.IncarnationInputs // the pinned incarnation's inputs, for the offline walk (RB9-F6)
+	ev       *proofv2.Evidence
+	spine    *ledger.AccumulateSpineLog
+	inc      [32]byte
+	ar       *proofv2.Archive           // the archive the spine was extended from, for the offline walk (RB9-F6)
+	unlinked *proofv2.Evidence          // the committed document, without a genesis link (RB9-F6)
+	in       govproof.IncarnationInputs // the pinned incarnation's inputs, for the offline walk (RB9-F6)
 }
 
 func loadReal21World(t *testing.T) real21World {
@@ -86,6 +87,10 @@ func loadReal21World(t *testing.T) real21World {
 	}
 	l.Checkpoints, l.Sets = cps, append(l.Sets, sets...)
 	w.spine, w.inc, w.ar, w.in = l, ir.Incarnation, ar, ir.Inputs
+	// The document as the builder emits it since RB9-F6: with the genesis link every evidence 2.1 document needs, Kermit's recorded answer to the
+	// genesis question. The committed fixture is the continuous document without it, unchanged (w.unlinked).
+	w.unlinked = w.clone(t)
+	w.ev.GenesisLink = recordedGenesisLink(t, w)
 	return w
 }
 

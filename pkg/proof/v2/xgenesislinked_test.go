@@ -40,7 +40,7 @@ func TestGenesisLinkedWorldVerifiesInTheContinuousForm(t *testing.T) {
 	if _, err := proofv2.VerifyPortable(p); err != nil {
 		t.Fatalf("VerifyPortable: %v", err)
 	}
-	// the consensus-callable entry point judges the same bytes the same way (a link it does not need is still judged)
+	// the consensus-callable entry point judges the same bytes the same way
 	g, set, err := proofv2.AcceptSpineGenesis(b.Inputs, b.Pin, 1)
 	if err != nil {
 		t.Fatal(err)

@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/certen/independant-validator/pkg/ledger"
@@ -19,8 +20,8 @@ import (
 // document the offline walk (verifyFromGenesis: Verify21FromGenesis, VerifyPortable, the builder's own check, the execution recheck,
 // proofverify --offline) judges, the continuous form included. Before this a 2.1 document with no `links` needed none, so an offline
 // continuous document built from a complete chain of ANOTHER incarnation (same genesis records, same genesis set, its own root chain) passed the
-// pin. The spine-log entry point (VerifyEvidence21FromSpine, the one consensus calls) is deliberately unchanged: its starting checkpoints come
-// from the chain's own log, which carries the incarnation's genesis root chain anchor.
+// pin. The spine-log entry point (VerifyEvidence21FromSpine, the one consensus calls) requires it too, and judges it in the same place (last), so
+// consensus accepts as a certificate's proof exactly the documents an independent auditor can verify offline.
 
 // plainWorld is the world every earlier suite is made of: one continuous item, no links, no genesis link.
 func plainWorld(t *testing.T) *xworld.Built {
@@ -135,30 +136,61 @@ func mustPortable(t *testing.T, j []byte) *proofv2.Portable {
 	return p
 }
 
-// The consensus-callable entry point (VerifyEvidence21FromSpine) judges the continuous form exactly as before: its checkpoints come from the
-// chain's spine log, so the log, not the document, carries the incarnation's genesis root chain anchor. The offline walk refuses the very same
-// bytes (above). This pins the asymmetry the owner's decision names ("consensus is unaffected").
-func TestSpineEntryPointStillAcceptsTheContinuousForm(t *testing.T) {
+// The consensus-callable entry point (VerifyEvidence21FromSpine) refuses the continuous form without the link exactly as the offline walk does -
+// by the same name, after everything else (a document refused for another reason keeps that refusal) - and accepts the same document with it,
+// with the report the offline walk gives. Consensus accepts as a certificate's proof exactly the documents an independent auditor can verify
+// offline.
+func TestSpineEntryPointRequiresTheGenesisLikeTheOfflineWalk(t *testing.T) {
+	spine := func(b *xworld.Built) *ledger.AccumulateSpineLog {
+		g, set, err := proofv2.AcceptSpineGenesis(b.Inputs, b.Pin, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		l := &ledger.AccumulateSpineLog{Genesis: g, Sets: []ledger.AccumulateSpineSet{set}}
+		cps, sets, err := proofv2.ExtendSpine(l, b.Archive.Majors, 2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		l.Checkpoints, l.Sets = cps, append(l.Sets, sets...)
+		return l
+	}
 	b := plainWorld(t)
-	g, set, err := proofv2.AcceptSpineGenesis(b.Inputs, b.Pin, 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	l := &ledger.AccumulateSpineLog{Genesis: g, Sets: []ledger.AccumulateSpineSet{set}}
-	cps, sets, err := proofv2.ExtendSpine(l, b.Archive.Majors, 2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	l.Checkpoints, l.Sets = cps, append(l.Sets, sets...)
-	rep, err := proofv2.VerifyEvidence21FromSpine(b.Evidence, l, b.Pin)
-	if err != nil {
-		t.Fatalf("the spine entry point refused the continuous 2.1 document: %v", err)
-	}
-	if rep.Version != proofv2.Version21 {
-		t.Fatalf("version %q", rep.Version)
-	}
-	_, err = verify21(t, b)
+	_, err := proofv2.VerifyEvidence21FromSpine(b.Evidence, spine(b), b.Pin)
 	wantCertifyState(t, err, proofv2.StateCertifyLinkMissing, "genesis")
+	_, offline := verify21(t, b)
+	wantCertifyState(t, offline, proofv2.StateCertifyLinkMissing, "genesis")
+
+	// refused for another reason, it keeps that refusal in both: the genesis link is judged last
+	other := plainWorld(t)
+	other.Evidence.Pages[0].State = other.Evidence.Pages[1].State
+	_, errSpine := proofv2.VerifyEvidence21FromSpine(other.Evidence, spine(other), other.Pin)
+	_, errOffline := verify21(t, other)
+	if errSpine == nil || errOffline == nil || errSpine.Error() != errOffline.Error() {
+		t.Fatalf("a document refused for another reason: spine %v, offline %v", errSpine, errOffline)
+	}
+	var cs *proofv2.CertifyState
+	if errors.As(errSpine, &cs) {
+		t.Fatalf("the genesis link was judged before the page: %v", errSpine)
+	}
+
+	// with the link, both accept, with the same report
+	linked, err := xworld.Build(xworld.Options{GenesisLinked: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := proofv2.VerifyEvidence21FromSpine(linked.Evidence, spine(linked), linked.Pin)
+	if err != nil {
+		t.Fatalf("the spine entry point refused the continuous document with its genesis link: %v", err)
+	}
+	want, err := verify21(t, linked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gj, _ := json.Marshal(got)
+	wj, _ := json.Marshal(want)
+	if string(gj) != string(wj) {
+		t.Fatal("the spine entry point's report differs from the offline walk's")
+	}
 }
 
 // onlyTheGenesisIsAnchored serves the genesis question and answers every other link question "not yet anchored": every kept run is emitted

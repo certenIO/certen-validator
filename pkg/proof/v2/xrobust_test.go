@@ -1,11 +1,13 @@
 // Copyright 2026 Certen Protocol
 //
 // RB9-L: a crafted document is refused, never a panic. Every committed vector (the xpartition2 .. xpartition5 suites, the real Kermit
-// documents and the 2.0 conformance documents) is mutated at every member (internal/jsonmutate) and judged twice:
+// documents and the 2.0 conformance documents) is mutated at every member (internal/jsonmutate) and judged three times:
 //
 //   - as a PORTABLE document by VerifyPortable, the verifier proofverify runs offline;
 //   - as an EVIDENCE document, the form a consensus certificate carries (hex receipts and all), decoded by UnmarshalCertifiedEvidence and
-//     judged against the spine a chain holds by VerifyEvidence21FromSpine / VerifyFromSpine, the verifiers consensus runs.
+//     judged against the spine a chain holds by VerifyEvidence21FromSpine / VerifyFromSpine, the verifiers consensus runs;
+//   - as the same EVIDENCE document judged by the offline walk (Verify21FromGenesis / VerifyFromGenesis) from the archive and the incarnation
+//     inputs, so a member only the offline walk reads is exercised in the evidence form too (RB9-F6).
 //
 // The assertions, for every mutation:
 //
@@ -219,6 +221,60 @@ func judgeEvidence(base []byte, l *ledger.AccumulateSpineLog, pin [32]byte) jm.J
 	}
 }
 
+// judgeEvidenceOffline judges the evidence a certificate carries by the offline walk: decoded by UnmarshalCertifiedEvidence, verified by the
+// entry point of its version from the archive and the incarnation inputs (RB9-F6).
+func judgeEvidenceOffline(base []byte, ar *Archive, in proof.IncarnationInputs, pin [32]byte) jm.Judge {
+	canonical := func(raw []byte) string {
+		doc, err := UnmarshalCertifiedEvidence(raw)
+		if err != nil || doc == nil {
+			return ""
+		}
+		return jm.Canonical(doc)
+	}
+	baseInput := canonical(base)
+	return func(raw []byte) jm.Verdict {
+		doc, err := UnmarshalCertifiedEvidence(raw)
+		if err != nil {
+			return jm.Verdict{Refused: true, Err: "decode: " + err.Error()}
+		}
+		if doc == nil {
+			return jm.Verdict{Refused: true, Err: "no evidence"}
+		}
+		same := baseInput != "" && jm.Canonical(doc) == baseInput
+		var rep *Report
+		if doc.Version == Version21 {
+			rep, err = Verify21FromGenesis(doc, ar, in, pin)
+		} else {
+			rep, err = VerifyFromGenesis(doc, ar, in, pin)
+		}
+		if err != nil {
+			return jm.Verdict{Refused: true, Err: err.Error(), Noop: same}
+		}
+		v := reportVerdict(rep)
+		v.Noop = same
+		return v
+	}
+}
+
+// evidenceOfflineSource is the evidence form of a portable source judged by the offline walk. It keeps the portable source's bounds: the real
+// documents walk hundreds of spine records for every mutation.
+func evidenceOfflineSource(t *testing.T, src robustSource) (robustSource, bool) {
+	t.Helper()
+	p := new(Portable)
+	if err := json.Unmarshal(src.raw, p); err != nil {
+		return robustSource{}, false
+	}
+	ev, ar, in, pin, err := Import(p)
+	if err != nil {
+		return robustSource{}, false
+	}
+	raw, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return robustSource{name: src.name + " (evidence form, offline)", raw: raw, judge: judgeEvidenceOffline(raw, ar, in, pin), walk: src.walk}, true
+}
+
 // evidenceSource converts a portable source to the evidence form a certificate carries, judged against the spine its archive gives. ok is
 // false when the portable document does not import (it is refused before there is an evidence to mutate).
 func evidenceSource(t *testing.T, src robustSource) (robustSource, bool) {
@@ -315,6 +371,11 @@ func robustAllSources(t *testing.T) []robustSource {
 			out = append(out, e)
 		}
 	}
+	for _, s := range portable {
+		if e, ok := evidenceOfflineSource(t, s); ok {
+			out = append(out, e)
+		}
+	}
 	return out
 }
 
@@ -326,6 +387,9 @@ type robustFinding struct {
 
 // formOf is "ev" for an evidence-form source and "portable" for the rest: the prefix of the keys of robustOptionalMembers.
 func formOf(src robustSource) string {
+	if strings.HasSuffix(src.name, " (evidence form, offline)") {
+		return "evo" // its own form: what the spine-log loop mutated is mutated again here (onceEach), its optional members keyed as ev's (checkOptional)
+	}
 	if strings.HasSuffix(src.name, " (evidence form)") {
 		return "ev"
 	}
@@ -452,10 +516,11 @@ var robustOptionalMembers = optionalTable(
 		"(xdirectory.go partition())",
 		"ev:anchor/message", "ev:anchors/acc://bvn-BVN2.acme/message", "ev:anchors/acc://bvn-BVN3.acme/message", "ev:anchors/acc://dn.acme/message",
 		"portable:evidence/anchors/acc://dn.acme/message/number"),
-	grp("merkle.Receipt carries, besides Start, Entries and Anchor, position fields (StartIndex, EndIndex, End) that Validate does not read; "+
+	grp("merkle.Receipt carries, besides Start, Entries and Anchor, position fields (StartIndex, EndIndex, End) that Validate does not read (the genesis link is one: "+
+		"of its 15 mutations in the real document exactly one, hollow-receipt.End, leaves it verified, by both loops; every other mutation, an absent link included, is refused); "+
 		"a minor-root run's merkle state keeps a HashList the verifier does not read (Anchor() folds Pending), and a validator signature's "+
 		"TransactionHash is not read: the quorum check verifies each signature over the delivered anchor message (sig.Verify(nil, anchor))",
-		"ev:anchor/receipt", "ev:certify/*", "ev:check/hops/*", "portable:evidence/certify/*/signatures/*/transactionHash",
+		"ev:anchor/receipt", "ev:certify/*", "ev:check/hops/*", "ev:genesisLink", "portable:evidence/certify/*/signatures/*/transactionHash",
 		"portable:majors/*/signatures/*/transactionHash"),
 	grp("the Anchors entry for the transaction's own partition must equal Evidence.Anchor and is set aside when it does "+
 		"(xverify.go verify21): a document whose only entries are its own carries nothing that field does not",
@@ -483,11 +548,6 @@ var robustOptionalMembers = optionalTable(
 		"ev:check/set/network/stateReceipt/entries", "ev:check/set/incarnation", "portable:evidence/check/globals/stateReceipt",
 		"portable:evidence/check/globals/stateReceipt/entries", "portable:evidence/check/network/stateReceipt",
 		"portable:evidence/check/network/stateReceipt/entries", "portable:evidence/check/incarnation"),
-	grp("Evidence.GenesisLink: the OFFLINE walk requires it of every evidence 2.1 document (certify_link_missing{genesis}, RB9-F6, F-VE-2 option b), and the "+
-		"portable form is judged by it; the evidence form is judged here by VerifyEvidence21FromSpine, which requires it only of a document that carries links "+
-		"(verifyFromSpine): its starting points come from the chain's own spine log, which carries the incarnation's genesis root chain anchor - the "+
-		"owner's decision that consensus is unaffected. A continuous document without the member is refused offline and judged on its merits here",
-		"ev:genesisLink"),
 	grp("Vote.Cause is recorded and committed into govRoot v4 (intentcert EncodeVoteV4) and read by no verifier step: a recorded fact "+
 		"that is not proven (recorded as a finding)",
 		"ev:votes/*/cause"),
@@ -514,6 +574,17 @@ func optionalTable(groups ...optionalGroup) map[string]string {
 // observed (the full run), so a stale entry cannot hide a member that has become required.
 func checkOptional(t *testing.T, observed map[string]string, exact bool) {
 	t.Helper()
+	// the offline evidence-form loop ("evo") reads the same members as the spine-log one ("ev"): one table lists both
+	norm := map[string]string{}
+	for k, e := range observed {
+		if strings.HasPrefix(k, "evo:") {
+			k = "ev:" + strings.TrimPrefix(k, "evo:")
+		}
+		if _, ok := norm[k]; !ok {
+			norm[k] = e
+		}
+	}
+	observed = norm
 	var unlisted []string
 	for k := range observed {
 		if _, ok := robustOptionalMembers[k]; !ok {
