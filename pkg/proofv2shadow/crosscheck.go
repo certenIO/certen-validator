@@ -126,23 +126,47 @@ func delegateOf(k *protocol.KeySpec) string {
 // CrossCheck compares the pages v1's vote evidence replayed with the capture stored for the intent, once the capture is
 // recorded, and reports the result: a disagreement is logged by name and counted, and must be zero before the shadow exits
 // (PROOF_V2 §11). It never delays or fails an intent.
+//
+// How an operator reads the result, without a log search: every call ends in exactly one count of
+// certen_proof_v2_shadow_results_total{stage="crosscheck", result=...} - "agree", "disagree" (the exit criterion is that this stays 0) or
+// "unavailable" (v1 had no evidence, nothing was captured to compare, or the comparison could not run: never a pass) - and in one log line
+// that carries the number of pages compared and, for a disagreement, each page, partition, block and field:
+//
+//	[PROOF-V2-SHADOW] cross-check <intent>: <n> pages compared, v1 and v2 agree
+//	[PROOF-V2-SHADOW] CROSS-CHECK DISAGREEMENT (stop the line) <intent>: <n> pages compared, <k> disagreements: ...
+//	[PROOF-V2-SHADOW] cross-check <intent> unavailable: <why>
 func (s *Shadow) CrossCheck(intentID string, ev *govvote.Evidence) {
 	go func() {
+		// This goroutine belongs to no intent and nothing waits for it: a panic in it must end only the comparison, never the validator.
+		defer func() {
+			if r := recover(); r != nil {
+				s.reportCrossCheck(intentID, nil, fmt.Errorf("the comparison panicked: %v", r))
+			}
+		}()
 		ctx, cancel := context.WithTimeout(context.Background(), captureWait+5*time.Minute)
 		defer cancel()
 		res, err := s.crossCheck(ctx, intentID, ev)
-		switch {
-		case err != nil:
-			shadowResults.WithLabelValues("crosscheck", "unavailable").Inc()
-			s.logf("[PROOF-V2-SHADOW] cross-check %s unavailable: %v", intentID, err)
-		case !res.OK():
-			shadowResults.WithLabelValues("crosscheck", "disagree").Inc()
-			s.logf("[PROOF-V2-SHADOW] CROSS-CHECK DISAGREEMENT (stop the line) %s: %s", intentID, res)
-		default:
-			shadowResults.WithLabelValues("crosscheck", "agree").Inc()
-			s.logf("[PROOF-V2-SHADOW] cross-check %s: %s", intentID, res)
-		}
+		s.reportCrossCheck(intentID, res, err)
 	}()
+}
+
+// reportCrossCheck counts and logs what a cross-check established (see CrossCheck for the contract).
+func (s *Shadow) reportCrossCheck(intentID string, res *CrossCheckResult, err error) {
+	switch {
+	case err != nil:
+		shadowResults.WithLabelValues("crosscheck", "unavailable").Inc()
+		s.logf("[PROOF-V2-SHADOW] cross-check %s unavailable: %v", intentID, err)
+	case res.OK() && res.Compared == 0:
+		// v1 and the capture share no page: "0 pages compared, agree" would be agreement by vacuity, which the shadow-exit rule must never count
+		shadowResults.WithLabelValues("crosscheck", "unavailable").Inc()
+		s.logf("[PROOF-V2-SHADOW] cross-check %s unavailable: nothing was compared (v1 and the capture share no page)", intentID)
+	case !res.OK():
+		shadowResults.WithLabelValues("crosscheck", "disagree").Inc()
+		s.logf("[PROOF-V2-SHADOW] CROSS-CHECK DISAGREEMENT (stop the line) %s: %s", intentID, res)
+	default:
+		shadowResults.WithLabelValues("crosscheck", "agree").Inc()
+		s.logf("[PROOF-V2-SHADOW] cross-check %s: %s", intentID, res)
+	}
 }
 
 func (s *Shadow) crossCheck(ctx context.Context, intentID string, ev *govvote.Evidence) (*CrossCheckResult, error) {
@@ -176,9 +200,13 @@ func (s *Shadow) crossCheck(ctx context.Context, intentID string, ev *govvote.Ev
 	}
 }
 
-// CrossCheck implements intent.ProofV2CrossChecker.
+// CrossCheck implements intent.ProofV2CrossChecker. Before the spine walk finishes the shadow captured nothing for the intent, so there
+// is nothing to compare: that is counted and logged by name like every other outcome, never dropped.
 func (l *Lazy) CrossCheck(intentID string, ev *govvote.Evidence) {
 	if s := l.p.Load(); s != nil {
 		s.CrossCheck(intentID, ev)
+		return
 	}
+	shadowResults.WithLabelValues("crosscheck", "unavailable").Inc()
+	l.logf("[PROOF-V2-SHADOW] cross-check %s unavailable: the shadow is not ready (the spine walk from the pinned incarnation's genesis has not finished), so no capture was made to compare", intentID)
 }

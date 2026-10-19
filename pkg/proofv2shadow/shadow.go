@@ -26,9 +26,16 @@ import (
 )
 
 var shadowResults = prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: "certen", Subsystem: "proof_v2_shadow",
-	Name: "results_total", Help: "Proof v2 shadow outcomes by stage (capture, build) and result."}, []string{"stage", "result"})
+	Name: "results_total", Help: "Proof v2 shadow outcomes by stage (start, capture, build, crosscheck) and result. crosscheck results: agree, disagree (must stay 0 before the shadow exits), unavailable."}, []string{"stage", "result"})
 
-func init() { prometheus.MustRegister(shadowResults) }
+func init() {
+	prometheus.MustRegister(shadowResults)
+	// The cross-check's series exist from the start, at 0: "wired, nothing compared yet" reads as 0, never as no series (which is also what
+	// a validator without the cross-check shows).
+	for _, r := range []string{"agree", "disagree", "unavailable"} {
+		shadowResults.WithLabelValues("crosscheck", r)
+	}
+}
 
 // certifyWait bounds how long a build waits for the Directory to anchor the block it needs certified.
 const certifyWait = 20 * time.Minute
