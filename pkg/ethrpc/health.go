@@ -107,7 +107,7 @@ func (h *providerHealth) record(caller, read context.Context, err error) {
 		h.restFor *= 2
 	}
 	h.restUntil = time.Now().Add(h.restFor)
-	h.reason = err.Error()
+	h.reason = RedactText(err.Error()) // redacted before it is cut (RB10-B14a)
 	if len(h.reason) > 200 {
 		h.reason = h.reason[:200] + "…"
 	}
