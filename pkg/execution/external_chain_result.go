@@ -22,6 +22,7 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 
 	"github.com/certen/independant-validator/pkg/ethproof"
+	"github.com/certen/independant-validator/pkg/ethrpc"
 )
 
 // =============================================================================
@@ -387,7 +388,7 @@ func (r *ExternalChainResult) GetLogsByTopic(topic common.Hash) []LogEntry {
 func (r *ExternalChainResult) VerifyInclusionProofs() error {
 	if r.TxInclusionProof == nil || r.ReceiptInclusionProof == nil {
 		if r.inclusionErr != nil {
-			return fmt.Errorf("RB-2: no inclusion proofs for %s: %w", r.TxHash.Hex(), r.inclusionErr)
+			return fmt.Errorf("RB-2: no inclusion proofs for %s: %w", r.TxHash.Hex(), ethrpc.RedactError(r.inclusionErr))
 		}
 		return fmt.Errorf("RB-2: no inclusion proofs for %s", r.TxHash.Hex())
 	}

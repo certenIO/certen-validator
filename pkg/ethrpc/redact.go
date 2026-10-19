@@ -574,6 +574,9 @@ func providerSecrets(raw string) (lits []string, host string) {
 // hex), and JSON-escaped (with the HTML escapes encoding/json writes, and an escaped slash).
 func spellings(l string) []string {
 	out := []string{l}
+	if low := lowerPercentHex(l); low != l {
+		out = append(out, low)
+	}
 	if d, err := url.PathUnescape(l); err == nil && d != l {
 		out = append(out, d)
 	}

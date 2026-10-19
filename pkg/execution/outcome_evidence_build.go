@@ -273,7 +273,7 @@ func buildMemberEvidence(ctx context.Context, c OutcomeEvidenceSource, leafVersi
 		if leaf.Tx != ([32]byte{}) {
 			incl, _, err := c.TransactionInclusion(ctx, common.Hash(leaf.Tx))
 			if err != nil {
-				return ev, fmt.Errorf("its last attempt: %w", err)
+				return ev, fmt.Errorf("its last attempt: %w", ethrpc.RedactError(err))
 			}
 			ev.Transaction = incl
 		}
@@ -311,9 +311,9 @@ func (c *AgreedOutcomeChain) TransactionInclusion(ctx context.Context, tx common
 		if !errors.Is(err, ethrpc.ErrTooFewProviders) && !errors.Is(err, ethrpc.ErrProvidersDisagree) {
 			// The block cannot be proven (settled_unproven): the evidence is asked for again, as a read is, until it can.
 			return nil, nil, readErr(fmt.Errorf("settled_unproven: %s cannot be proven in block %d yet (asked again until it can): %w",
-				tx.Hex(), hdr.Number.Uint64(), err))
+				tx.Hex(), hdr.Number.Uint64(), ethrpc.RedactError(err)))
 		}
-		return nil, nil, readErr(fmt.Errorf("inclusion proofs of %s in block %d: %w", tx.Hex(), hdr.Number.Uint64(), err))
+		return nil, nil, readErr(fmt.Errorf("inclusion proofs of %s in block %d: %w", tx.Hex(), hdr.Number.Uint64(), ethrpc.RedactError(err)))
 	}
 	raw, err := rlp.EncodeToBytes(hdr)
 	if err != nil {
@@ -384,7 +384,7 @@ func readQuorumRegistry(call func(method string, args ...interface{}) ([]interfa
 	word := func(method string, args ...interface{}) (*big.Int, error) {
 		out, err := call(method, args...)
 		if err != nil {
-			return nil, fmt.Errorf("%s: %w", method, err)
+			return nil, fmt.Errorf("%s: %w", method, ethrpc.RedactError(err))
 		}
 		n, ok := out[0].(*big.Int)
 		if !ok || !n.IsUint64() {
@@ -413,7 +413,7 @@ func readQuorumRegistry(call func(method string, args ...interface{}) ([]interfa
 	for i := uint64(0); i < count.Uint64(); i++ {
 		out, err := call("validatorList", new(big.Int).SetUint64(i))
 		if err != nil {
-			return nil, fmt.Errorf("validatorList(%d): %w", i, err)
+			return nil, fmt.Errorf("validatorList(%d): %w", i, ethrpc.RedactError(err))
 		}
 		addr, ok := out[0].(common.Address)
 		if !ok {
@@ -421,7 +421,7 @@ func readQuorumRegistry(call func(method string, args ...interface{}) ([]interfa
 		}
 		info, err := call("validators", addr)
 		if err != nil {
-			return nil, fmt.Errorf("validators(%s): %w", addr.Hex(), err)
+			return nil, fmt.Errorf("validators(%s): %w", addr.Hex(), ethrpc.RedactError(err))
 		}
 		registered, _ := info[0].(bool)
 		power, _ := info[1].(*big.Int)

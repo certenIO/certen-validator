@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/certen/independant-validator/pkg/ethproof"
+	"github.com/certen/independant-validator/pkg/ethrpc"
 )
 
 // A World is every raw JSON-RPC exchange the capture had with the chain's public providers, exactly as the providers
@@ -107,14 +108,17 @@ type Recorder struct {
 // NewRecorder starts a world. The providers' URLs are dialed as given but stored as scheme://host only (RB10-B11: a provider URL
 // may carry its API key in the path; the host is the key of the exchanges).
 func NewRecorder(chainID int64, chain string, providers []Provider) *Recorder {
+	for _, p := range providers {
+		ethrpc.RegisterProviderURL(p.URL) // the key a URL carries is a secret literal from here on (RB10-B14a)
+	}
 	return &Recorder{world: &World{Format: WorldFormat, ChainID: chainID, Chain: chain, Providers: scrubProviders(providers),
 		StartedUTC: time.Now().UTC().Format(time.RFC3339Nano)}}
 }
 
 func (r *Recorder) add(x Exchange) {
+	x = scrubExchange(x) // before the lock: a hostile, large body must not hold up the other exchanges (RB10-B14a)
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	x = scrubExchange(x)
 	x.Seq = len(r.world.Exchanges)
 	x.AtUTC = time.Now().UTC().Format(time.RFC3339Nano)
 	r.world.Exchanges = append(r.world.Exchanges, x)
@@ -390,12 +394,28 @@ func scrubValue(v interface{}) interface{} {
 	return v
 }
 
+// scrubBody is a body that was no JSON-RPC answer, sanitised and bounded: a body that is valid JSON is scrubbed structurally,
+// string by string, as scrubRaw scrubs a JSON-RPC error (the strings are decoded first, so a JSON-escaped URL is read as the URL
+// it is), and any other body, or one too large to decode, is sanitised as text (RB10-B14a).
+func scrubBody(body string) string {
+	if len(body) > 0 && len(body) <= maxStructuredBody {
+		if t := strings.TrimSpace(body); t != "" && (t[0] == '{' || t[0] == '[' || t[0] == '"') && json.Valid([]byte(t)) {
+			return ethproof.BoundProviderText(string(scrubRaw(json.RawMessage(t))))
+		}
+	}
+	return ethproof.BoundProviderText(body)
+}
+
+// maxStructuredBody is the largest body decoded as JSON before it is scrubbed; a larger one is scrubbed as text, which is
+// linear and bounded by ethproof.BoundProviderText.
+const maxStructuredBody = 1 << 20
+
 // scrubExchange is the exchange with the text a provider or a transport wrote in it sanitised and bounded (RB10-B13: a provider's
 // error page can be many MB): the transport error, the body that was no JSON-RPC answer, and the JSON-RPC error. The result of a call is chain data and is kept as it is.
 func scrubExchange(x Exchange) Exchange {
 	x.Host = ethproof.RedactEndpoints(x.Host)
 	x.Transport = ethproof.BoundProviderText(x.Transport)
-	x.Body = ethproof.BoundProviderText(x.Body)
+	x.Body = scrubBody(x.Body)
 	x.RPCError = scrubRaw(x.RPCError)
 	return x
 }
