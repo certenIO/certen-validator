@@ -348,9 +348,11 @@ func TestB13_TheGuardReplacesOversizeEvidenceByANamedState(t *testing.T) {
 	}
 }
 
-// The store never holds, and a capturer never returns, oversize evidence: a provider that pads its eth_getProof answer
-// with 5 MB of nodes the walk ignores gets a proof that verifies and is too long for the format, which reaches a reader
-// as the named state saying so.
+// The store never holds, and a capturer never returns, oversize evidence. B13 met a provider that pads its eth_getProof
+// answer with nodes the walk ignores by replacing the too-long evidence with the named state saying so; RB10-B14b keeps only
+// the nodes the walk used, so the same answer now gives the proof (this expectation is updated explicitly, below), and the
+// guard is held by the shapes pruning cannot shrink: evidence put directly with a padded proof, a huge Detail, and 200000
+// providers.
 type paddingProvider struct {
 	*fakeProvider
 	padding int
@@ -395,7 +397,42 @@ func TestB13_APaddedProofNeverReachesAReaderAsEvidenceItRefuses(t *testing.T) {
 	cfg := cfgFor(f)
 	cfg.Source = src
 	tx := f.w.tx.Hash()
-	check := func(what string, ev *ethproof.ReplayGuardEvidence, verify bool) {
+	wantAfter := f.w.after.prove(f.w.contract, f.w.slot)
+	// RB10-B14b: the 3 MiB node the provider padded its answer with is not a node the walk used, so the capture does not keep
+	// it: what B13 turned into the named state evidence_too_large is now the proof of the honest nodes, under 1 MiB.
+	checkProof := func(what string, ev *ethproof.ReplayGuardEvidence) {
+		t.Helper()
+		if ev == nil || ev.Proof == nil || ev.State != nil {
+			t.Fatalf("%s: not a proof: %+v", what, ev)
+		}
+		raw, _ := json.Marshal(ev)
+		if len(raw) >= 1<<20 {
+			t.Fatalf("%s: %d bytes", what, len(raw))
+		}
+		b14bSameSlotProof(t, what, ev.Proof.After, wantAfter)
+		if _, err := ev.Verify(f.w.settlement); err != nil {
+			t.Fatalf("%s: does not verify: %v", what, err)
+		}
+	}
+	checkProof("the capture", ethproof.CaptureReplayGuard(context.Background(), cfg, tx))
+
+	store := ethproof.NewReplayGuardStore(16)
+	cp := ethproof.NewReplayGuardCapturer(cfg, store)
+	cp.Begin(tx)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if _, _, err := store.Wait(ctx, testChainID, tx); err != nil {
+		t.Fatal(err)
+	}
+	stored, _, _ := store.Get(testChainID, tx)
+	checkProof("the store after the capture", stored)
+	checkProof("Resolve", cp.Resolve(f.w.settlement))
+	cp.Bind(f.w.settlement)
+	checkProof("the store after Bind", waitStored(t, store, testChainID, tx, true))
+
+	// The guard is unchanged for what pruning cannot shrink. Evidence put directly into the store (a Put by any caller) with
+	// a padded proof, with 5 MB of Detail, or with 200000 providers is held to the same rule: the named state saying so.
+	checkNamed := func(what string, ev *ethproof.ReplayGuardEvidence, verify bool) {
 		t.Helper()
 		if ev == nil || ev.State == nil || ev.Proof != nil {
 			t.Fatalf("%s: not a named state: %+v", what, ev)
@@ -413,31 +450,29 @@ func TestB13_APaddedProofNeverReachesAReaderAsEvidenceItRefuses(t *testing.T) {
 			}
 		}
 	}
-	check("the capture", ethproof.CaptureReplayGuard(context.Background(), cfg, tx), false)
-
-	store := ethproof.NewReplayGuardStore(16)
-	cp := ethproof.NewReplayGuardCapturer(cfg, store)
-	cp.Begin(tx)
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	if _, _, err := store.Wait(ctx, testChainID, tx); err != nil {
-		t.Fatal(err)
+	named := func(mod func(*ethproof.ReplayNamedState)) *ethproof.ReplayGuardEvidence {
+		st := &ethproof.ReplayNamedState{State: ethproof.ReplayUnproven, Reason: ethproof.ReasonStateUnavailable, ChainID: testChainID, TxHash: tx,
+			BlockNumber: testN, BlockHash: f.w.headerN.Hash(), Contract: f.w.contract}
+		mod(st)
+		return &ethproof.ReplayGuardEvidence{Version: ethproof.ReplayGuardDomain, State: st}
 	}
-	stored, _, _ := store.Get(testChainID, tx)
-	check("the store after the capture", stored, false)
-	check("Resolve", cp.Resolve(f.w.settlement), true)
-	cp.Bind(f.w.settlement)
-	check("the store after Bind", waitStored(t, store, testChainID, tx, true), true)
-
-	// Evidence put directly into the store (a Put by any caller) is held to the same rule.
-	direct := ethproof.NewReplayGuardStore(16)
-	direct.Put(testChainID, tx, paddedEvidence(t, f, 3<<20), true)
-	got, bound, ok := direct.Get(testChainID, tx)
-	if !ok || !bound {
-		t.Fatal("nothing stored")
-	}
-	check("Put", got, true)
-	if direct.Bytes() > 64<<10 {
-		t.Fatalf("the store was charged %d bytes for a named state", direct.Bytes())
+	for _, c := range []struct {
+		name string
+		ev   *ethproof.ReplayGuardEvidence
+	}{
+		{"a padded proof", paddedEvidence(t, f, 3<<20)},
+		{"5 MB of Detail", named(func(s *ethproof.ReplayNamedState) { s.Detail = strings.Repeat("d", 5<<20) })},
+		{"200000 providers", named(func(s *ethproof.ReplayNamedState) { s.Providers = make([]ethproof.ReplayProviderFailure, 200000) })},
+	} {
+		direct := ethproof.NewReplayGuardStore(16)
+		direct.Put(testChainID, tx, c.ev, true)
+		got, bound, ok := direct.Get(testChainID, tx)
+		if !ok || !bound {
+			t.Fatalf("%s: nothing stored", c.name)
+		}
+		checkNamed("Put of "+c.name, got, true)
+		if direct.Bytes() > 64<<10 {
+			t.Fatalf("%s: the store was charged %d bytes for a named state", c.name, direct.Bytes())
+		}
 	}
 }

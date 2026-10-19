@@ -199,11 +199,13 @@ func proveAt(ctx context.Context, p ReplayStateProvider, contract common.Address
 		return nil, nil, fmt.Errorf("%d storage proofs for the one slot asked", len(ans.StorageProof))
 	}
 	st := ans.StorageProof[0]
-	nodes := func(in []hexutil.Bytes) [][]byte { return hexNodeList(in) }
-	res, err := VerifyStorage(hdr.Root, contract, nodes(ans.AccountProof), slot, nodes(st.Proof))
+	// RB10-B14b: the evidence keeps the nodes the verification walk read, not the answer as served: the verifier ignores
+	// unused nodes, so a provider can pad an answer that still verifies.
+	pruned, err := PruneStorageProof(hdr.Root, contract, hexNodeList(ans.AccountProof), slot, hexNodeList(st.Proof))
 	if err != nil {
 		return nil, nil, fmt.Errorf("does not verify against the agreed state root of block %d: %w", hdr.Number.Uint64(), err)
 	}
+	res := pruned.Result
 	// What the provider's text says of the value is checked against what the proof proves.
 	if v := strings.TrimPrefix(strings.TrimPrefix(st.Value, "0x"), "0X"); v != "" {
 		got, ok := new(big.Int).SetString(v, 16)
@@ -215,10 +217,10 @@ func proveAt(ctx context.Context, p ReplayStateProvider, contract common.Address
 	}
 	sp := &SlotProof{AccountAbsent: !res.Account.Exists, StorageHash: res.Account.StorageRoot, CodeHash: res.Account.CodeHash, Value: res.Value,
 		AccountProof: []hexutil.Bytes{}, StorageProof: []hexutil.Bytes{}}
-	for _, n := range ans.AccountProof {
+	for _, n := range pruned.AccountProof {
 		sp.AccountProof = append(sp.AccountProof, n)
 	}
-	for _, n := range st.Proof {
+	for _, n := range pruned.StorageProof {
 		sp.StorageProof = append(sp.StorageProof, n)
 	}
 	if !res.Account.Exists {
