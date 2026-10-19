@@ -728,7 +728,7 @@ func dialFirstReachable(endpoints []string, primary string) (*ethclient.Client, 
 		}
 		return client, ordered, nil
 	}
-	return nil, ordered, fmt.Errorf("all %d endpoint(s) failed, last error: %w", len(ordered), lastErr)
+	return nil, ordered, fmt.Errorf("all %d endpoint(s) failed, last error: %w", len(ordered), ethrpc.RedactError(lastErr))
 }
 
 // read runs an observation call, rotating endpoints when one refuses.

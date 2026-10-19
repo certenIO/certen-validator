@@ -325,7 +325,7 @@ func NewEthereumContractManager(config *CertenContractConfig) (*EthereumContract
 	// Connect to Ethereum
 	client, err := ethrpc.DialRetrying(context.Background(), config.EthereumRPC)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to Ethereum: %w", err)
+		return nil, fmt.Errorf("failed to connect to Ethereum: %w", ethrpc.RedactError(err))
 	}
 
 	// Parse private key for real transaction signing (remove 0x prefix if present)

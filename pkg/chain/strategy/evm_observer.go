@@ -354,7 +354,7 @@ func (o *EVMObserver) observeTron(ctx context.Context, txHash common.Hash, deadl
 	header, headerErr = o.client.HeaderByHash(ctx, receipt.BlockHash)
 	if headerErr != nil {
 		// Fallback: build result from receipt only (TRON, non-standard EVM chains)
-		log.Printf("⚠️ [EVM-OBSERVER] HeaderByHash failed (non-standard chain): %v — using receipt-only observation", headerErr)
+		log.Printf("⚠️ [EVM-OBSERVER] HeaderByHash failed (non-standard chain): %v — using receipt-only observation", ethrpc.RedactError(headerErr))
 		result = &ObservationResult{
 			TxHash:                receipt.TxHash.Hex(),
 			BlockNumber:           receipt.BlockNumber.Uint64(),
@@ -469,10 +469,10 @@ func (o *EVMObserver) observeTron(ctx context.Context, txHash common.Hash, deadl
 		if from, sErr := types.Sender(signer, tx); sErr == nil {
 			result.TxFrom = from.Hex()
 		} else {
-			log.Printf("⚠️ [EVM-OBSERVER] types.Sender failed (non-standard chain?): %v", sErr)
+			log.Printf("⚠️ [EVM-OBSERVER] types.Sender failed (non-standard chain?): %v", ethrpc.RedactError(sErr))
 		}
 	} else if txErr != nil {
-		log.Printf("⚠️ [EVM-OBSERVER] TransactionByHash failed: %v — trying raw RPC fallback for tx_from", txErr)
+		log.Printf("⚠️ [EVM-OBSERVER] TransactionByHash failed: %v — trying raw RPC fallback for tx_from", ethrpc.RedactError(txErr))
 		// Fallback: raw JSON-RPC call to extract "from" field (works on TRON jsonrpc)
 		type rpcTx struct {
 			From string `json:"from"`

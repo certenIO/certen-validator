@@ -98,7 +98,7 @@ func (m *AnchorEventMonitor) Start(ctx context.Context) error {
 		}
 		client, err := ethrpc.DialRetrying(ctx, rpc)
 		if err != nil {
-			return fmt.Errorf("anchor event monitor: chain %d: dial: %w", chainID, err)
+			return fmt.Errorf("anchor event monitor: chain %d: dial: %w", chainID, ethrpc.RedactError(err))
 		}
 		head, err := client.BlockNumber(ctx)
 		if err != nil {

@@ -14,6 +14,7 @@ import (
 	"github.com/ethereum/go-ethereum/ethclient"
 
 	"github.com/certen/independant-validator/pkg/crypto/bls_zkp"
+	"github.com/certen/independant-validator/pkg/ethrpc"
 	"github.com/certen/independant-validator/pkg/execution/contracts"
 )
 
@@ -38,9 +39,10 @@ func VerifyOutcomeEvidenceOnline(ctx context.Context, rpcURL string, e *OutcomeE
 	if e == nil {
 		return nil, ErrNoOutcomeEvidence
 	}
+	ethrpc.RegisterProviderURL(rpcURL) // its key is a secret literal from here on (RB10-B15)
 	client, err := ethclient.DialContext(ctx, rpcURL)
 	if err != nil {
-		return nil, fmt.Errorf("connect to %s: %w", rpcURL, err)
+		return nil, fmt.Errorf("connect to %s: %w", ethrpc.RedactText(rpcURL), ethrpc.RedactError(err))
 	}
 	defer client.Close()
 	return verifyOutcomeEvidenceOnline(ctx, client, e)

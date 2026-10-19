@@ -30,7 +30,7 @@ type Client struct {
 func NewClient(url string) (*Client, error) {
 	client, err := ethrpc.DialRetrying(context.Background(), url)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to Ethereum: %w", err)
+		return nil, fmt.Errorf("failed to connect to Ethereum: %w", ethrpc.RedactError(err))
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()

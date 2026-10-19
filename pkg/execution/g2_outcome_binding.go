@@ -83,10 +83,10 @@ func NewG2OutcomeBindingService(config *G2Config, logger Logger) *G2OutcomeBindi
 	if config.EthereumRPCURL != "" {
 		client, err := ethrpc.DialRetrying(context.Background(), config.EthereumRPCURL)
 		if err != nil {
-			logger.Printf("⚠️ [G2] Failed to connect to Ethereum RPC: %v", err)
+			logger.Printf("⚠️ [G2] Failed to connect to Ethereum RPC: %v", ethrpc.RedactError(err))
 		} else {
 			service.ethClient = client
-			logger.Printf("✅ [G2] Connected to Ethereum RPC for state verification: %s", config.EthereumRPCURL)
+			logger.Printf("✅ [G2] Connected to Ethereum RPC for state verification: %s", ethrpc.RedactText(config.EthereumRPCURL))
 		}
 	}
 

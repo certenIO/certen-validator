@@ -40,7 +40,7 @@ func VerifyLayer5Online(ctx context.Context, rpcURL string, l5 *Layer5) (*Layer5
 	}
 	client, err := ethrpc.DialRetrying(ctx, rpcURL)
 	if err != nil {
-		return nil, fmt.Errorf("connect to %s: %w", rpcURL, err)
+		return nil, fmt.Errorf("connect to %s: %w", ethrpc.RedactText(rpcURL), ethrpc.RedactError(err))
 	}
 	defer client.Close()
 	h := common.HexToHash(l5.AnchorTx)

@@ -36,6 +36,7 @@ import (
 	"github.com/ethereum/go-ethereum/rlp"
 
 	"github.com/certen/independant-validator/pkg/ethproof"
+	"github.com/certen/independant-validator/pkg/ethrpc"
 )
 
 // chainDef is a live chain and its public providers.
@@ -112,13 +113,14 @@ func main() {
 }
 
 func fatal(f string, a ...interface{}) {
-	fmt.Fprintf(os.Stderr, "s6livecapture: "+f+"\n", a...)
+	// the message is redacted whole: an error from a provider URL carries the URL, and a keyed URL carries its key (RB10-B15)
+	fmt.Fprintf(os.Stderr, "s6livecapture: %s\n", ethrpc.RedactText(fmt.Sprintf(f, a...)))
 	os.Exit(1)
 }
 
 func report(v *Verdict, err error) {
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "s6livecapture: %v\n", err)
+		fmt.Fprintf(os.Stderr, "s6livecapture: %v\n", ethrpc.RedactError(err))
 	}
 	if v != nil {
 		b, _ := json.MarshalIndent(v, "", "  ")
@@ -141,9 +143,10 @@ func watchChain(c chainDef, acct *common.Address, dur time.Duration, max int, ou
 	defer cancel()
 	var cl []*ethclient.Client
 	for _, u := range c.URLs {
+		ethrpc.RegisterProviderURL(u) // its key is a secret literal from here on (RB10-B15)
 		e, err := ethclient.DialContext(ctx, u)
 		if err != nil {
-			return err
+			return ethrpc.RedactError(err)
 		}
 		cl = append(cl, e)
 	}
