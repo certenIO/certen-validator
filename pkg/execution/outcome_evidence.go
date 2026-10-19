@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -1264,7 +1265,53 @@ func (ev *OutcomeEvidence) UnmarshalJSON(b []byte) error {
 		return evidenceFail("member: %v", err)
 	}
 	type plain OutcomeEvidence
-	return json.Unmarshal(b, (*plain)(ev))
+	if err := json.Unmarshal(b, (*plain)(ev)); err != nil {
+		return documentDecodeError(err)
+	}
+	return nil
+}
+
+// documentDecodeError names a document that does not decode by the document and the field, not by the decoder's internal
+// type (RB10-B10): "outcome evidence does not verify: member.leaf is a JSON number where an object is expected".
+func documentDecodeError(err error) error {
+	if errors.Is(err, ErrOutcomeEvidence) {
+		return err
+	}
+	var te *json.UnmarshalTypeError
+	if !errors.As(err, &te) {
+		return evidenceFail("%v", err)
+	}
+	where := "the document"
+	var path []string
+	for _, p := range strings.Split(te.Field, ".") {
+		if p != "" && p != "plain" { // plain is the decoder's alias type, not a key of the document
+			path = append(path, p)
+		}
+	}
+	if len(path) > 0 {
+		where = strings.Join(path, ".")
+	}
+	want := "a value of another kind"
+	if te.Type != nil {
+		t := te.Type
+		for t.Kind() == reflect.Ptr {
+			t = t.Elem()
+		}
+		switch t.Kind() {
+		case reflect.Struct, reflect.Map:
+			want = "an object"
+		case reflect.Slice, reflect.Array:
+			want = "an array"
+		case reflect.String:
+			want = "a string"
+		case reflect.Bool:
+			want = "a boolean"
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64, reflect.Uint, reflect.Uint8, reflect.Uint16,
+			reflect.Uint32, reflect.Uint64, reflect.Float32, reflect.Float64:
+			want = "a number"
+		}
+	}
+	return evidenceFail("%s is a JSON %s where %s is expected", where, te.Value, want)
 }
 
 // checkReplayGuardKey reads the member object's keys (V-R10B D3): encoding/json matches keys case-insensitively and lets

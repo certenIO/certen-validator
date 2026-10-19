@@ -120,8 +120,24 @@ func TestTheOutcomeEvidenceMemberKeyIsReadStrictly(t *testing.T) {
 		{"a second member without a replay guard", `"member":` + string(bareJSON)},
 		{"MEMBER", `"MEMBER":` + string(bareJSON)},
 		{"mEmBeR null", `"mEmBeR":null`},
-		{"an escaped duplicate", `"member":` + string(bareJSON)},
+		{"an escaped duplicate", `"m\u0065mber":` + string(bareJSON)},
+		{"an escaped case variant", `"\u004dember":` + string(bareJSON)},
 		{"the honest member twice", `"member":` + string(raw[bytes.Index(raw, []byte(`"member":`))+len(`"member":`):len(raw)-1])},
+	}
+	// The escaped cases are escaped (V-R10B3 D3): the text of the key is not "member"/"Member", and the decoder reads it as such.
+	for name, want := range map[string]string{"an escaped duplicate": "member", "an escaped case variant": "Member"} {
+		for _, c := range refused {
+			if c.name != name {
+				continue
+			}
+			if !strings.Contains(c.extra, `\u00`) {
+				t.Fatalf("%s: the key is not escaped: %s", name, c.extra[:20])
+			}
+			var keys map[string]json.RawMessage
+			if err := json.Unmarshal([]byte("{"+c.extra+"}"), &keys); err != nil || keys[want] == nil {
+				t.Fatalf("%s: the escaped key does not decode to %q (err=%v, keys=%v)", name, want, err, len(keys))
+			}
+		}
 	}
 	for _, c := range refused {
 		t.Run(c.name, func(t *testing.T) {
