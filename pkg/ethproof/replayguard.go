@@ -57,23 +57,35 @@ type replayLayout struct {
 	selectors [][4]byte
 }
 
-// replayLayouts: selectors from `forge inspect CertenAccountV7_3 methodIdentifiers` (R10 M4): executeGovernanceProofDirect
-// 0x606f2c8d and batchExecuteGovernanceProofDirect 0x329fe012. pkg/execution pins them to the ABI it sends with.
-var replayLayouts = map[string]replayLayout{
-	AccountGenerationV7_3: {base: 4, selectors: [][4]byte{{0x60, 0x6f, 0x2c, 0x8d}, {0x32, 0x9f, 0xe0, 0x12}}},
-}
-
 // AccountGenerationV7_2 is the older account generation (leaf v3, factory V10) and the settlements made before each
-// chain's v4 cutover. Its layout is not pinned here: its settlements are the named state s6_replay_unproven
-// {account_generation}, never omitted and never answered with the V7_3 layout.
+// chain's v4 cutover.
 const AccountGenerationV7_2 = "CertenAccountV7_2"
 
+// replayLayouts are the pinned layouts, one per account generation.
+//
+// CertenAccountV7_3: selectors from `forge inspect CertenAccountV7_3 methodIdentifiers` (R10 M4):
+// executeGovernanceProofDirect 0x606f2c8d and batchExecuteGovernanceProofDirect 0x329fe012.
+//
+// CertenAccountV7_2 (RB10-F3): `FOUNDRY_CONFIG=evm/foundry.toml forge inspect
+// src/account/CertenAccountV7_2.sol:CertenAccountV7_2 storageLayout --json` at certen-contracts 16c6d47 (the factory V10
+// deploy commit; solc 0.8.24, via_ir, 1000 runs, cancun; the V7_2 source blob 2225ede4 is unchanged on every later ref)
+// gives `_consumedLeaf` mapping(bytes32 => bool) at slot 4, offset 0; methodIdentifiers give executeGovernanceProofDirect
+// 0x57f8567d and batchExecuteGovernanceProofDirect 0xb7daa901. Checked on chain: the runtime code of the V7_2 account
+// 0x1019dbd5..21AC (Sepolia) is that build (immutables masked), and eth_getStorageAt(account, keccak256(leaf, 4)) is 1
+// for consumed leaves on Sepolia and Base Sepolia (slot 5 control 0, an unused leaf 0). V7_2 emits the same
+// LeafConsumed(bytes32 indexed anchorId, bytes32 indexed leaf, bytes32 operationID).
+//
+// pkg/execution pins both generations' selectors to the ABIs it sends with.
+var replayLayouts = map[string]replayLayout{
+	AccountGenerationV7_3: {base: 4, selectors: [][4]byte{{0x60, 0x6f, 0x2c, 0x8d}, {0x32, 0x9f, 0xe0, 0x12}}},
+	AccountGenerationV7_2: {base: 4, selectors: [][4]byte{{0x57, 0xf8, 0x56, 0x7d}, {0xb7, 0xda, 0xa9, 0x01}}},
+}
+
 // settlementSelectors are the settlement entry points of every account generation, to tell an account settlement of
-// either generation from any other transaction. V7_3's are replayLayouts'; V7_2's are the selectors of its ABI
-// (pkg/execution pins both to the ABIs it sends with).
+// any generation from any other transaction: every generation's are replayLayouts'.
 var settlementSelectors = map[string][][4]byte{
 	AccountGenerationV7_3: replayLayouts[AccountGenerationV7_3].selectors,
-	AccountGenerationV7_2: {{0x57, 0xf8, 0x56, 0x7d}, {0xb7, 0xda, 0xa9, 0x01}},
+	AccountGenerationV7_2: replayLayouts[AccountGenerationV7_2].selectors,
 }
 
 // SettlementCallGeneration is the account generation whose settlement entry point calldata calls, and false when the

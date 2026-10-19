@@ -188,14 +188,28 @@ func proveAt(ctx context.Context, p ReplayStateProvider, contract common.Address
 // CaptureReplayGuard captures the replay-guard evidence of the settlement txHash, trying for up to the budget. It returns
 // evidence: a proof, or the named state saying what it could not prove, at which block, from which providers. It returns
 // nil only for a transaction that is no account settlement of any generation, which makes no S6 claim.
+//
+// The budget bounds the whole capture (RB10-F6): every request carries the budget's deadline, a pass over the candidate
+// blocks and providers stops when the budget ends, and a provider not yet asked by then is named as such. The headers
+// after the settlement block are read once each: the linked chain is extended, never read again for another candidate
+// block, provider or pass.
 func CaptureReplayGuard(ctx context.Context, cfg ReplayCaptureConfig, txHash common.Hash) *ReplayGuardEvidence {
 	src := cfg.Source
 	deadline := time.Now().Add(cfg.budget())
+	bctx, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
 	state := &ReplayNamedState{ChainID: cfg.ChainID, TxHash: txHash}
 	finish := func(st, reason, format string, args ...interface{}) *ReplayGuardEvidence {
 		state.State, state.Reason, state.Detail = st, reason, fmt.Sprintf(format, args...)
 		cfg.logf("⚠️ [S6-REPLAY] chain %d tx %s: %s{reason=%s}: %s", cfg.ChainID, txHash.Hex(), st, reason, state.Detail)
 		return &ReplayGuardEvidence{Version: ReplayGuardDomain, State: state}
+	}
+	// ended says why the capture stopped asking: its caller cancelled it, or its budget ended.
+	ended := func() string {
+		if ctx.Err() != nil {
+			return fmt.Sprintf("the capture was cancelled (%v)", ctx.Err())
+		}
+		return fmt.Sprintf("the capture budget of %s ended", cfg.budget())
 	}
 	if src == nil {
 		return finish(ReplayUnproven, ReasonStateUnavailable, "no provider that serves state proofs is configured for chain %d", cfg.ChainID)
@@ -204,16 +218,13 @@ func CaptureReplayGuard(ctx context.Context, cfg ReplayCaptureConfig, txHash com
 	// The receipt, as soon as the agreeing providers have it.
 	var rc *types.Receipt
 	for {
-		r, err := src.TransactionReceipt(ctx, txHash)
+		r, err := src.TransactionReceipt(bctx, txHash)
 		if err == nil && r != nil && r.BlockNumber != nil {
 			rc = r
 			break
 		}
-		if ctx.Err() != nil || time.Now().After(deadline) {
-			return finish(ReplayUnproven, ReasonReceiptUnavailable, "no agreed receipt for the settlement within %s (last: %v)", cfg.budget(), err)
-		}
-		if !sleepCtx(ctx, cfg.poll()) {
-			return finish(ReplayUnproven, ReasonReceiptUnavailable, "cancelled before an agreed receipt: %v", ctx.Err())
+		if bctx.Err() != nil || !sleepCtx(bctx, cfg.poll()) {
+			return finish(ReplayUnproven, ReasonReceiptUnavailable, "no agreed receipt for the settlement before %s (last: %v)", ended(), err)
 		}
 	}
 	state.BlockNumber, state.BlockHash = rc.BlockNumber.Uint64(), rc.BlockHash
@@ -224,8 +235,9 @@ func CaptureReplayGuard(ctx context.Context, cfg ReplayCaptureConfig, txHash com
 	// The transaction, from any provider that has it; verification later holds it to the proven one.
 	var tx *types.Transaction
 	var txErrs []string
-	for _, p := range src.StateProviders() {
-		t, _, err := p.TransactionByHash(ctx, txHash)
+	providers := src.StateProviders()
+	for _, p := range providers {
+		t, _, err := p.TransactionByHash(bctx, txHash)
 		if err == nil && t != nil && t.Hash() == txHash {
 			tx = t
 			break
@@ -240,15 +252,14 @@ func CaptureReplayGuard(ctx context.Context, cfg ReplayCaptureConfig, txHash com
 	}
 	contract := *tx.To()
 	state.Contract = contract
-	layout := replayLayouts[AccountGenerationV7_3]
 	gen, isSettlement := SettlementCallGeneration(tx.Data())
 	if !isSettlement {
 		// Not an account settlement of any generation (an anchor transaction, say): there is no S6 claim to make.
 		return nil
 	}
-	if gen != AccountGenerationV7_3 {
-		return finish(ReplayUnproven, ReasonAccountGeneration,
-			"the settlement calls a %s: its replay-guard layout is not pinned (only %s's is)", gen, AccountGenerationV7_3)
+	layout, pinned := replayLayouts[gen]
+	if !pinned {
+		return finish(ReplayUnproven, ReasonAccountGeneration, "the settlement calls a %s: its replay-guard layout is not pinned", gen)
 	}
 
 	// The event, which names the key.
@@ -265,27 +276,21 @@ func CaptureReplayGuard(ctx context.Context, cfg ReplayCaptureConfig, txHash com
 	}
 	slot := ReplaySlotFor(leaf, layout.base)
 
-	headerN, err := agreedHeaderByHash(ctx, src, rc.BlockHash, deadline, cfg.poll())
+	headerN, err := agreedHeaderByHash(bctx, src, rc.BlockHash, deadline, cfg.poll())
 	if err != nil {
 		return finish(ReplayUnproven, ReasonStateUnavailable, "the settlement block %s has no agreed header: %v", rc.BlockHash.Hex(), err)
 	}
 	n := headerN.Number.Uint64()
 
 	// After: the newest block any provider can prove the slot at.
-	failures := map[string]string{}
-	var order []string
-	note := func(host, msg string) {
-		if _, ok := failures[host]; !ok {
-			order = append(order, host)
-		}
-		failures[host] = msg
-	}
+	failures := newProviderFailures()
+	headers := &linkedHeaderChain{src: src, base: headerN}
 	var after *SlotProof
 	var chain []*types.Header // N+1 .. H
 	var provenAt *types.Header
 	var latestSeen uint64
 	for after == nil {
-		latest, lerr := src.HeaderByNumber(ctx, big.NewInt(int64(rpc.LatestBlockNumber)))
+		latest, lerr := src.HeaderByNumber(bctx, big.NewInt(int64(rpc.LatestBlockNumber)))
 		if lerr == nil && latest != nil && latest.Number != nil {
 			top := latest.Number.Uint64()
 			latestSeen = top
@@ -299,24 +304,28 @@ func CaptureReplayGuard(ctx context.Context, cfg ReplayCaptureConfig, txHash com
 			if top >= n+replayAfterCandidates {
 				low = top - replayAfterCandidates + 1
 			}
-			for _, p := range src.StateProviders() {
+		pass:
+			for _, p := range providers {
 				for h := top; ; h-- {
-					hdrs, herr := linkedHeaders(ctx, src, headerN, h)
+					if bctx.Err() != nil {
+						break pass
+					}
+					hdrs, herr := headers.upTo(bctx, h)
 					if herr != nil {
-						note(p.Name(), fmt.Sprintf("block %d: %v", h, herr))
+						failures.note(p.Name(), fmt.Sprintf("block %d: %v", h, herr))
 					} else {
 						hdrH := headerN
 						if len(hdrs) > 0 {
 							hdrH = hdrs[len(hdrs)-1]
 						}
-						sp, res, perr := proveAt(ctx, p, contract, slot, hdrH)
+						sp, res, perr := proveAt(bctx, p, contract, slot, hdrH)
 						switch {
 						case perr != nil:
-							note(p.Name(), fmt.Sprintf("block %d: %v", h, perr))
+							failures.note(p.Name(), fmt.Sprintf("block %d: %v", h, perr))
 						case res.Value != common.BigToHash(big.NewInt(1)):
-							note(p.Name(), fmt.Sprintf("block %d: serves the slot as %s, not consumed", h, res.Value.Hex()))
+							failures.note(p.Name(), fmt.Sprintf("block %d: serves the slot as %s, not consumed", h, res.Value.Hex()))
 						case !res.Account.HasCode():
-							note(p.Name(), fmt.Sprintf("block %d: %s holds no code", h, contract.Hex()))
+							failures.note(p.Name(), fmt.Sprintf("block %d: %s holds no code", h, contract.Hex()))
 						default:
 							after, chain, provenAt = sp, hdrs, hdrH
 						}
@@ -330,28 +339,22 @@ func CaptureReplayGuard(ctx context.Context, cfg ReplayCaptureConfig, txHash com
 				}
 			}
 		} else {
-			note("(agreeing providers)", fmt.Sprintf("no agreed latest header: %v", lerr))
+			failures.note("(agreeing providers)", fmt.Sprintf("no agreed latest header: %v", lerr))
 		}
 		if after != nil {
 			break
 		}
-		if ctx.Err() != nil || time.Now().After(deadline) {
-			var provs []ReplayProviderFailure
-			for _, h := range order {
-				provs = append(provs, ReplayProviderFailure{Host: h, Error: failures[h]})
-			}
-			state.Providers = provs
+		if bctx.Err() != nil || !sleepCtx(bctx, cfg.poll()) {
+			failures.notAsked(providers, ended())
+			state.Providers = failures.list()
 			return finish(ReplayUnproven, ReasonStateUnavailable,
-				"no provider could prove the slot %s of %s at any of the newest %d blocks (settlement block %d, newest seen %d) within %s",
-				slot.Hex(), contract.Hex(), replayAfterCandidates, n, latestSeen, cfg.budget())
-		}
-		if !sleepCtx(ctx, cfg.poll()) {
-			return finish(ReplayUnproven, ReasonStateUnavailable, "cancelled before the slot was proven: %v", ctx.Err())
+				"no provider could prove the slot %s of %s at any of the newest %d blocks (settlement block %d, newest seen %d) before %s",
+				slot.Hex(), contract.Hex(), replayAfterCandidates, n, latestSeen, ended())
 		}
 	}
 
 	proof := &ReplayGuardProof{
-		Version: ReplayGuardDomain, ChainID: cfg.ChainID, Generation: AccountGenerationV7_3, Contract: contract,
+		Version: ReplayGuardDomain, ChainID: cfg.ChainID, Generation: gen, Contract: contract,
 		Slot:            ReplaySlot{Key: leaf, Base: layout.base, Derivation: ReplayDerivation, Slot: slot},
 		SettlementBlock: BlockRef{Number: n, Hash: headerN.Hash()},
 		ProvenAt:        BlockRef{Number: provenAt.Number.Uint64(), Hash: provenAt.Hash()},
@@ -366,42 +369,50 @@ func CaptureReplayGuard(ctx context.Context, cfg ReplayCaptureConfig, txHash com
 		proof.Headers = append(proof.Headers, raw)
 	}
 
-	// Before: the same slot in the state of the settlement block's parent, when any provider still serves it.
-	beforeFailures := map[string]string{}
-	var beforeOrder []string
-	parent, perr := agreedHeaderByHash(ctx, src, headerN.ParentHash, deadline, cfg.poll())
+	// Before: the same slot in the state of the settlement block's parent, asked of every provider in turn and asked
+	// again until the budget ends, as After is (RB10-F7: a provider's backends differ, and one that refuses the parent now
+	// can serve it seconds later).
+	before := newProviderFailures()
+	parent, perr := agreedHeaderByHash(bctx, src, headerN.ParentHash, deadline, cfg.poll())
 	if perr != nil {
-		beforeOrder = append(beforeOrder, "(agreeing providers)")
-		beforeFailures["(agreeing providers)"] = fmt.Sprintf("the parent header %s: %v", headerN.ParentHash.Hex(), perr)
+		before.note("(agreeing providers)", fmt.Sprintf("the parent header %s: %v", headerN.ParentHash.Hex(), perr))
 	} else {
 		parentRLP, _ := rlp.EncodeToBytes(parent)
-		for _, p := range src.StateProviders() {
-			sp, res, berr := proveAt(ctx, p, contract, slot, parent)
-			if berr != nil {
-				beforeOrder = append(beforeOrder, p.Name())
-				beforeFailures[p.Name()] = fmt.Sprintf("block %d: %v", parent.Number.Uint64(), berr)
-				continue
+		for proof.Before == nil && bctx.Err() == nil {
+			for _, p := range providers {
+				if bctx.Err() != nil {
+					break
+				}
+				sp, res, berr := proveAt(bctx, p, contract, slot, parent)
+				if berr != nil {
+					before.note(p.Name(), fmt.Sprintf("block %d: %v", parent.Number.Uint64(), berr))
+					continue
+				}
+				if res.Value == common.BigToHash(big.NewInt(1)) {
+					state.Before = &ReplayBefore{ParentHeader: parentRLP, Proof: *sp}
+					return finish(ReplayRefuted, ReasonSlotSetAtParent, "%s proves the slot %s already 1 at block %d, the settlement block's parent",
+						p.Name(), slot.Hex(), parent.Number.Uint64())
+				}
+				if res.Value != (common.Hash{}) {
+					before.note(p.Name(), fmt.Sprintf("block %d: serves the slot as %s, neither 0 nor 1", parent.Number.Uint64(), res.Value.Hex()))
+					continue
+				}
+				proof.Before = &ReplayBefore{ParentHeader: parentRLP, Proof: *sp}
+				break
 			}
-			if res.Value == common.BigToHash(big.NewInt(1)) {
-				state.Before = &ReplayBefore{ParentHeader: parentRLP, Proof: *sp}
-				return finish(ReplayRefuted, ReasonSlotSetAtParent, "%s proves the slot %s already 1 at block %d, the settlement block's parent",
-					p.Name(), slot.Hex(), parent.Number.Uint64())
+			if proof.Before == nil && !sleepCtx(bctx, cfg.poll()) {
+				break
 			}
-			if res.Value != (common.Hash{}) {
-				beforeOrder = append(beforeOrder, p.Name())
-				beforeFailures[p.Name()] = fmt.Sprintf("block %d: serves the slot as %s, neither 0 nor 1", parent.Number.Uint64(), res.Value.Hex())
-				continue
-			}
-			proof.Before = &ReplayBefore{ParentHeader: parentRLP, Proof: *sp}
-			break
+		}
+		if proof.Before == nil {
+			before.notAsked(providers, ended())
 		}
 	}
 	if proof.Before == nil {
-		un := &ReplayBeforeUnavailable{Reason: fmt.Sprintf("no provider served the state of block %d, the settlement block's parent", n-1)}
-		for _, h := range beforeOrder {
-			un.Providers = append(un.Providers, ReplayProviderFailure{Host: h, Error: beforeFailures[h]})
+		proof.BeforeUnavailable = &ReplayBeforeUnavailable{
+			Reason:    fmt.Sprintf("no provider served the state of block %d, the settlement block's parent, before %s", n-1, ended()),
+			Providers: before.list(),
 		}
-		proof.BeforeUnavailable = un
 	}
 
 	// The proof is checked here as a reader will, with what was observed; the proven settlement binds it later.
@@ -411,9 +422,41 @@ func CaptureReplayGuard(ctx context.Context, cfg ReplayCaptureConfig, txHash com
 		}
 		return finish(ReplayUnproven, ReasonProofDoesNotVerify, "%v", verr)
 	}
-	cfg.logf("🔎 [S6-REPLAY] chain %d tx %s: slot %s of %s proven consumed at block %d (settlement block %d, %d headers); before-state: %v",
-		cfg.ChainID, txHash.Hex(), slot.Hex(), contract.Hex(), proof.ProvenAt.Number, n, len(proof.Headers), proof.Before != nil)
+	cfg.logf("🔎 [S6-REPLAY] chain %d tx %s: %s slot %s of %s proven consumed at block %d (settlement block %d, %d headers); before-state: %v",
+		cfg.ChainID, txHash.Hex(), gen, slot.Hex(), contract.Hex(), proof.ProvenAt.Number, n, len(proof.Headers), proof.Before != nil)
 	return &ReplayGuardEvidence{Version: ReplayGuardDomain, Proof: proof}
+}
+
+// providerFailures is each provider's latest error, in the order the providers first failed.
+type providerFailures struct {
+	order []string
+	msg   map[string]string
+}
+
+func newProviderFailures() *providerFailures { return &providerFailures{msg: map[string]string{}} }
+
+func (f *providerFailures) note(host, msg string) {
+	if _, ok := f.msg[host]; !ok {
+		f.order = append(f.order, host)
+	}
+	f.msg[host] = msg
+}
+
+// notAsked names every provider without an error yet: the capture ended before asking it.
+func (f *providerFailures) notAsked(providers []ReplayStateProvider, why string) {
+	for _, p := range providers {
+		if _, ok := f.msg[p.Name()]; !ok {
+			f.note(p.Name(), "not asked: "+why)
+		}
+	}
+}
+
+func (f *providerFailures) list() []ReplayProviderFailure {
+	var out []ReplayProviderFailure
+	for _, h := range f.order {
+		out = append(out, ReplayProviderFailure{Host: h, Error: f.msg[h]})
+	}
+	return out
 }
 
 // agreedHeaderByHash reads a header by hash from the agreeing providers, asking again until the deadline.
@@ -435,27 +478,38 @@ func agreedHeaderByHash(ctx context.Context, src ReplayCaptureSource, hash commo
 	}
 }
 
-// linkedHeaders are the agreed headers of the blocks after headerN up to number h, each linked to the one before by
-// parentHash. Empty when h is headerN's number.
-func linkedHeaders(ctx context.Context, src ReplayCaptureSource, headerN *types.Header, h uint64) ([]*types.Header, error) {
-	n := headerN.Number.Uint64()
+// linkedHeaderChain is the agreed headers of the blocks after the settlement block (base), each linked to the one before
+// by parentHash: read once each, and extended as later blocks are asked for.
+type linkedHeaderChain struct {
+	src   ReplayCaptureSource
+	base  *types.Header
+	chain []*types.Header // base+1 .. base+len(chain)
+}
+
+// upTo is the linked headers after base up to number h (empty when h is base's number). A header that does not follow
+// the chain held (a reorg) drops the chain held, which the next ask reads again.
+func (c *linkedHeaderChain) upTo(ctx context.Context, h uint64) ([]*types.Header, error) {
+	n := c.base.Number.Uint64()
 	if h < n {
 		return nil, fmt.Errorf("block %d is before the settlement block %d", h, n)
 	}
-	var out []*types.Header
-	prev := headerN
-	for i := n + 1; i <= h; i++ {
-		hd, err := src.HeaderByNumber(ctx, new(big.Int).SetUint64(i))
+	for uint64(len(c.chain)) < h-n {
+		i := n + uint64(len(c.chain)) + 1
+		prev := c.base
+		if len(c.chain) > 0 {
+			prev = c.chain[len(c.chain)-1]
+		}
+		hd, err := c.src.HeaderByNumber(ctx, new(big.Int).SetUint64(i))
 		if err != nil {
 			return nil, fmt.Errorf("header %d: %w", i, err)
 		}
 		if hd == nil || hd.Number == nil || hd.Number.Uint64() != i || hd.ParentHash != prev.Hash() {
+			c.chain = nil
 			return nil, fmt.Errorf("the agreed header %d does not follow the settlement block's chain (reorg)", i)
 		}
-		out = append(out, hd)
-		prev = hd
+		c.chain = append(c.chain, hd)
 	}
-	return out, nil
+	return append([]*types.Header(nil), c.chain[:h-n]...), nil
 }
 
 // =============================================================================

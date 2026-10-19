@@ -262,15 +262,13 @@ func TestCapture_NoProviderIsAUnprovenStateNamingEachFailure(t *testing.T) {
 }
 
 func TestCapture_NamedStatesWithoutAskingForState(t *testing.T) {
-	// An older account generation: named, and no provider is asked for a proof.
+	// The older account generation is pinned (RB10-F3): its settlement is proven with its own layout and names it,
+	// never answered with the V7_3 layout (TestCapture_V7_2SettlementIsProvenWithItsLayout holds both entry points).
 	f := newChain(t, worldOpts{after: 0, selector: []byte{0x57, 0xf8, 0x56, 0x7d}}, testN) // CertenAccountV7_2.executeGovernanceProofDirect
 	p := f.add("p", testN, testN)
 	ev := ethproof.CaptureReplayGuard(context.Background(), cfgFor(f), f.w.tx.Hash())
-	if ev.State == nil || ev.State.State != ethproof.ReplayUnproven || ev.State.Reason != ethproof.ReasonAccountGeneration || atomic.LoadInt32(&p.calls) != 0 {
-		t.Fatalf("%+v calls=%d", ev.State, p.calls)
-	}
-	if !strings.Contains(ev.State.Detail, ethproof.AccountGenerationV7_2) {
-		t.Fatalf("the generation is named: %s", ev.State.Detail)
+	if ev.Proof == nil || ev.Proof.Generation != ethproof.AccountGenerationV7_2 || atomic.LoadInt32(&p.calls) == 0 {
+		t.Fatalf("%+v calls=%d", ev, p.calls)
 	}
 	// A transaction that is no account settlement of any generation makes no S6 claim.
 	fo := newChain(t, worldOpts{after: 0, selector: []byte{0x12, 0x34, 0x56, 0x78}}, testN)

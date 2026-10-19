@@ -278,13 +278,13 @@ func TestReplayGuard_TheSettlementMustHaveExecuted(t *testing.T) {
 }
 
 func TestReplayGuard_OnlyThePinnedGenerationIsProven(t *testing.T) {
-	// A CertenAccountV7_2 settlement (another selector): never proven against the V7_3 layout, never omitted.
+	// A settlement call of no pinned generation (another selector): never proven against a pinned layout, never omitted.
 	w := newWorld(t, worldOpts{after: 0, selector: []byte{0xde, 0xad, 0xbe, 0xef}})
 	_, err := w.proof.Verify(w.settlement)
 	refusedAs(t, "a calldata selector of no pinned generation", err, ethproof.ReplayUnproven, ethproof.ReasonAccountGeneration)
 	w2 := newWorld(t, worldOpts{after: 0})
 	p := w2.clone()
-	p.Generation = "CertenAccountV7_2"
+	p.Generation = "CertenAccountV7_1" // V7_2 and V7_3 are pinned (RB10-F3); a generation without a pinned layout is refused
 	_, err = p.Verify(w2.settlement)
 	refusedAs(t, "an unpinned generation", err, ethproof.ReplayUnproven, ethproof.ReasonAccountGeneration)
 }
