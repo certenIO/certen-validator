@@ -71,9 +71,10 @@ func (p *StateProof) Verify(stateRoot common.Hash) bool {
 	if len(p.AccountProof) == 0 || len(p.StorageProof) == 0 {
 		return false
 	}
-	// One implementation (pkg/ethproof, RB10): the account proof from the state root, the storage proof from that
-	// account's storageRoot. An absent account is no account here: a committed slot of one is not a held value.
-	res, err := ethproof.VerifyStorage(stateRoot, p.Account, p.AccountProof, p.Slot, p.StorageProof)
+	// One implementation (pkg/ethproof, RB10), under the committed-state rule this proof applied at validator main
+	// 5565d98 (its answer is consensus-reachable, V-R10B D4): the account proof from the state root, the storage proof
+	// from that account's storageRoot. An absent account is no account here: a committed slot of one is not a held value.
+	res, err := ethproof.VerifyStorageUnder(ethproof.RuleCommittedState, stateRoot, p.Account, p.AccountProof, p.Slot, p.StorageProof)
 	if err != nil || !res.Account.Exists {
 		return false
 	}
@@ -88,7 +89,7 @@ func (p *StateProof) Verify(stateRoot common.Hash) bool {
 // state: the part of Verify that needs no storage slot. The boot probe uses it, so that an eth_getProof answer that is
 // empty, null, of another account or of another state is not taken as a provider serving proofs.
 func verifyAccountProof(stateRoot common.Hash, account common.Address, proof [][]byte) bool {
-	acc, err := ethproof.VerifyAccount(stateRoot, account, proof)
+	acc, err := ethproof.VerifyAccountUnder(ethproof.RuleCommittedState, stateRoot, account, proof)
 	return err == nil && acc.Exists
 }
 

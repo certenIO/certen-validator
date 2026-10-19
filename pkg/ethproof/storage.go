@@ -67,6 +67,28 @@ func proofDB(nodes [][]byte) (*memorydb.Database, error) {
 // VerifyAccount verifies an account proof against stateRoot: the path for keccak256(account) resolves from stateRoot
 // either to the account's leaf, or - an exclusion proof - to a verified absence. Every node is keyed by its own hash.
 func VerifyAccount(stateRoot common.Hash, account common.Address, proof [][]byte) (*AccountState, error) {
+	return VerifyAccountUnder(RuleReplayGuard, stateRoot, account, proof)
+}
+
+// Rule names the acceptance rule a state-proof verification applies. Both rules walk the same Merkle-Patricia proof
+// (every node keyed by its own hash, the path from the stated root); they differ only in which edge cases they accept.
+type Rule uint8
+
+const (
+	// RuleReplayGuard is the S6 replay-guard rule (SPEC §4): an exclusion proof is a proven absence, an empty storage
+	// root needs no node (or only the empty node 0x80), a code hash is exactly 32 bytes, and a storage leaf is a
+	// trimmed value of at most 32 bytes.
+	RuleReplayGuard Rule = iota
+	// RuleCommittedState is the acceptance rule of the opt-in committed-state proof (pkg/execution.StateProof) exactly as
+	// validator main 5565d98 applied it, kept because that answer is consensus-reachable (slotsHoldAt feeds the hashed
+	// EffectsHash): an absent account is refused, a storage proof always needs a node and is always walked from the
+	// storage root (no empty-root short-circuit), a code hash of any length is accepted, and a storage leaf is read as its
+	// last 32 bytes, leading zeros allowed.
+	RuleCommittedState
+)
+
+// VerifyAccountUnder is VerifyAccount under the named rule.
+func VerifyAccountUnder(rule Rule, stateRoot common.Hash, account common.Address, proof [][]byte) (*AccountState, error) {
 	if len(proof) == 0 {
 		return nil, storageInvalid("no account proof")
 	}
@@ -85,7 +107,7 @@ func VerifyAccount(stateRoot common.Hash, account common.Address, proof [][]byte
 	if err := rlp.DecodeBytes(enc, &acc); err != nil {
 		return nil, storageInvalid("account %s does not decode: %v", account.Hex(), err)
 	}
-	if len(acc.CodeHash) != common.HashLength {
+	if rule != RuleCommittedState && len(acc.CodeHash) != common.HashLength {
 		return nil, storageInvalid("account %s has a %d-byte code hash", account.Hex(), len(acc.CodeHash))
 	}
 	if acc.Balance == nil {
@@ -98,7 +120,12 @@ func VerifyAccount(stateRoot common.Hash, account common.Address, proof [][]byte
 // trie does not hold is verified absent and is 0. An empty storage root (an account with no storage, or no account) needs
 // no node: every slot of it is 0 and the proof must hold none, or only the empty node.
 func VerifySlot(storageRoot common.Hash, slot common.Hash, proof [][]byte) (common.Hash, error) {
-	if storageRoot == types.EmptyRootHash {
+	return VerifySlotUnder(RuleReplayGuard, storageRoot, slot, proof)
+}
+
+// VerifySlotUnder is VerifySlot under the named rule.
+func VerifySlotUnder(rule Rule, storageRoot common.Hash, slot common.Hash, proof [][]byte) (common.Hash, error) {
+	if rule != RuleCommittedState && storageRoot == types.EmptyRootHash {
 		switch {
 		case len(proof) == 0:
 			return common.Hash{}, nil
@@ -128,6 +155,9 @@ func VerifySlot(storageRoot common.Hash, slot common.Hash, proof [][]byte) (comm
 	}
 	// A client never stores a zero (it deletes the slot); a leaf holding an empty value is read as 0, as the opt-in
 	// committed-state proof always read it.
+	if rule == RuleCommittedState {
+		return common.BytesToHash(trimmed), nil
+	}
 	if len(trimmed) > common.HashLength || (len(trimmed) > 0 && trimmed[0] == 0) {
 		return common.Hash{}, storageInvalid("slot %s: the proven leaf is not a trimmed value of at most 32 bytes", slot.Hex())
 	}
@@ -144,9 +174,17 @@ type StorageResult struct {
 // account proof resolves from stateRoot, and the storage proof resolves from THAT account's storageRoot to the slot.
 // It is the single implementation behind pkg/execution.StateProof and ReplayGuardProof.
 func VerifyStorage(stateRoot common.Hash, account common.Address, accountProof [][]byte, slot common.Hash, storageProof [][]byte) (*StorageResult, error) {
-	acc, err := VerifyAccount(stateRoot, account, accountProof)
+	return VerifyStorageUnder(RuleReplayGuard, stateRoot, account, accountProof, slot, storageProof)
+}
+
+// VerifyStorageUnder is VerifyStorage under the named rule.
+func VerifyStorageUnder(rule Rule, stateRoot common.Hash, account common.Address, accountProof [][]byte, slot common.Hash, storageProof [][]byte) (*StorageResult, error) {
+	acc, err := VerifyAccountUnder(rule, stateRoot, account, accountProof)
 	if err != nil {
 		return nil, err
+	}
+	if !acc.Exists && rule == RuleCommittedState {
+		return nil, storageInvalid("account %s is proven absent, and the committed-state rule states values of existing accounts only", account.Hex())
 	}
 	if !acc.Exists {
 		// A verified absence holds no storage: nothing may be claimed in it.
@@ -155,7 +193,7 @@ func VerifyStorage(stateRoot common.Hash, account common.Address, accountProof [
 		}
 		return &StorageResult{Account: *acc}, nil
 	}
-	v, err := VerifySlot(acc.StorageRoot, slot, storageProof)
+	v, err := VerifySlotUnder(rule, acc.StorageRoot, slot, storageProof)
 	if err != nil {
 		return nil, err
 	}
