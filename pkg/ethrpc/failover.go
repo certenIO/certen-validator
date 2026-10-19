@@ -191,10 +191,13 @@ func (p *Pool) markSuccess(e *endpoint) {
 }
 
 func (p *Pool) markFailure(e *endpoint, err error) {
+	// The reason is computed before the lock is taken: redacting a provider's text is work on text the provider controls (bounded,
+	// but never free), and every endpoint's calls wait on this mutex (RB10-B15).
+	reason := RedactText(err.Error())
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	e.failures++
-	e.lastReason = RedactText(err.Error())
+	e.lastReason = reason
 	// Back off further the more consecutively an endpoint fails, capped so a recovered provider is
 	// still retried within a few minutes.
 	mult := time.Duration(e.failures)

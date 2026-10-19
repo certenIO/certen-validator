@@ -8,14 +8,17 @@ import (
 	"net/url"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"unicode/utf8"
+
+	"github.com/certen/independant-validator/pkg/supportedchains"
 )
 
 // =============================================================================
-// One redactor for provider text (RB10-B14a)
+// One redactor for provider text (RB10-B14a, bounded in RB10-B15)
 // =============================================================================
 //
 // Go's HTTP errors embed the full request URL (Post "https://eth-sepolia.g.alchemy.com/v2/<KEY>": ...), a provider's body
@@ -28,21 +31,60 @@ import (
 //     character, a JSON-escaped newline or tab are all decoded for the purpose of finding the token (the text that is
 //     kept is the original, byte for byte, outside the token), and a URL inside a quote may be wrapped at white space.
 //  2. The LITERAL pass replaces every registered secret literal wherever it occurs. A pattern cannot know a key; the
-//     configured provider URLs are known, so their userinfo, long path segments, query values and fragment are registered
+//     configured provider URLs are known, so their userinfo, path segments, query values and fragment are registered
 //     (RegisterProviderURL) when a client or pool is constructed, in raw, URL-encoded and JSON-escaped spellings. This
-//     catches the echoes that are not URLs (a path-only echo, a bare user:key@host, a header).
+//     catches the echoes that are not URLs (a path-only echo, a header).
 //
 // It is idempotent, linear in the length of the text (RE2, no backtracking), and text with no URL and no registered literal
-// is returned byte for byte. What it does not claim: a secret that is neither inside a URL token nor a registered literal
-// (a bare key in prose from a provider that was never configured here), a key used as a host label (the host is kept by
-// design so the provider is named), a fragment-only echo (host#KEY) of a URL that was not registered, and look-alike
-// characters (a fullwidth solidus) that no HTTP stack produces.
+// is returned byte for byte.
+//
+// THE BOUND (RB10-B15). A provider's text is not bounded by anything but the provider: go-ethereum reads a whole non-2xx
+// body into an error. RedactText therefore never works on more than the first MaxRedactedText (64 KiB) of its input, and
+// never returns more: the input is cut, then redacted, then ended at a token boundary, and a cut text says so with the
+// visible suffix "…(truncated N bytes)" (BoundRedacted is the same rule at any limit; ethproof.BoundProviderText is it at
+// 1024). The cut text is ended where no secret can straddle it: before the last token of the text (a user:password in the
+// middle of being read), before a URL that has no path yet, before a quoted URL whose closing quote is not in the prefix,
+// and before any registered literal whose first bytes end the prefix; so no fragment of a URL or of a literal survives the
+// cut, and the result is a fixed point (RedactText of it is itself). The suffix is separated from the text by a space, so no
+// URL token runs into it. N counts the bytes of the input not shown, plus the bytes of the redacted prefix dropped to fit the
+// limit. No caller may hold a lock while it calls RedactText on text it does not control; the pool and the provider health
+// compute the text first and lock after.
+//
+// WHAT IT DOES NOT CLAIM (the honest limits; pkg/ethrpc/REDACTION.md has the same list):
+//
+//   - a bare key that is neither inside a URL nor a registered literal (a provider that was never configured here);
+//   - a key used as a host label: the host stays, by design, so that the provider is named;
+//   - a fragment-only echo (host#KEY) of a URL that was not registered;
+//   - a base64 Basic-authorization header: the encoding hides the user:password from the pattern, and the decoded pair is
+//     not registered as such;
+//   - an UNQUOTED URL hard-wrapped at a newline inside its key: the token ends at the newline and the second half stays
+//     (a quoted URL wrapped at white space is handled);
+//   - a secret shorter than the registration thresholds (a path segment under 8, a query value under 6, a userinfo under 8
+//     characters, an all-digit path segment under 16) is removed only when it stands inside a URL; as a bare word it stays,
+//     because a literal that short would rewrite ordinary words, chain names and pieces of hashes;
+//   - a registered literal that is also a catalogued chain name is not applied (it would rewrite the chain name);
+//   - an unbalanced quote makes the redaction over-redact (the text after it is read as one wrapped URL), never under-redact;
+//   - the registry only grows in a process (production never unregisters), and a literal registered after a wrapper was built
+//     with fmt.Errorf("...%w", RedactError(err)) is NOT applied to that wrapper: the wrapper froze the text when it was made;
+//   - look-alike characters (a fullwidth solidus) that no HTTP stack produces;
+//   - everything past the 64 KiB prefix, and the last token or URL start of the prefix (see the bound above): that text is
+//     not shown at all.
 
 // RedactedMarker replaces what is hidden.
 const RedactedMarker = "<redacted>"
 
 // redactedPath replaces everything of a URL after its host.
 const redactedPath = "/" + RedactedMarker
+
+// MaxRedactedText is the most bytes of a text RedactText reads and the most it returns (64 KiB). Redaction is regular-
+// expression work at about a megabyte a second on URL-dense text, so it is bounded where the text enters.
+const MaxRedactedText = 64 << 10
+
+const (
+	// TruncatedPrefix and TruncatedSuffix surround the number of bytes not shown: "…(truncated 4096 bytes)".
+	TruncatedPrefix = "…(truncated "
+	TruncatedSuffix = " bytes)"
+)
 
 // bs is a backslash. It is a constant so that no source text has to spell an escape sequence.
 const bs = '\x5c'
@@ -53,8 +95,8 @@ const trailingPunctuation = ".,;:!?)]}"
 // maxQuotedURL is the most bytes a quoted URL may span (a URL wrapped at white space inside its quotes).
 const maxQuotedURL = 2048
 
-// minSecretLiteral is the shortest literal registered: anything shorter is a word, and replacing it everywhere would
-// destroy the text. A shorter secret is still removed by the pattern pass wherever it stands in a URL.
+// minSecretLiteral is the shortest spelling of a registered literal: a decoded spelling shorter than this is a word, and
+// replacing it everywhere would destroy the text. (Registration has its own, higher, thresholds: see providerSecrets.)
 const minSecretLiteral = 4
 
 // urlBody is the rest of an unquoted URL token: it ends at white space, a quote, a backquote, an angle bracket or a
@@ -70,13 +112,33 @@ var bareURL = regexp.MustCompile(`(?i)(?:[^\s"'\x60<>\x5c/]+@)?` +
 	`(?:/` + urlBody + `|\?[a-z0-9_.%-]+=` + urlBody + `)`)
 
 // RedactText is the one sanitiser of text that came from a provider, a transport or a provider URL before it is stored,
-// returned in an error or logged. See the package comment above.
+// returned in an error or logged: BoundRedacted at MaxRedactedText. See the package comment above, which also lists what it
+// does not claim.
 func RedactText(s string) string {
+	return BoundRedacted(s, MaxRedactedText)
+}
+
+// BoundRedacted is s redacted and at most limit bytes long. The first MaxRedactedText bytes of s are read (never more), cut
+// where no secret can straddle the cut (see above), redacted by the pattern and literal passes, and, when the result does
+// not fit limit, ended at a token boundary of the redacted text and followed by " …(truncated N bytes)". Text within both
+// bounds is returned as the redaction returns it. The result is a fixed point: BoundRedacted(BoundRedacted(s, n), n) is
+// itself. limit must leave room for the suffix; a smaller limit gets the suffix alone.
+func BoundRedacted(s string, limit int) string {
 	if s == "" {
 		return s
 	}
-	// Applied until nothing changes (at most four times): what one pass leaves (a userinfo glued in front of a host that a
-	// replacement then exposed as a URL) the next removes, so the result is a fixed point and a second call changes nothing.
+	read, unread := readPrefix(s)
+	r := redactAll(read)
+	if unread == 0 && len(r) <= limit {
+		return r
+	}
+	return cutRedacted(r, unread, limit)
+}
+
+// redactAll is the two passes on text already within the read bound.
+func redactAll(s string) string {
+	// The pattern pass is applied until nothing changes (at most four times): what one pass leaves (a userinfo glued in front
+	// of a host that a replacement then exposed as a URL) the next removes, so the result is a fixed point.
 	for i := 0; i < maxRedactPasses; i++ {
 		t := redactBareURLs(redactSchemeURLs(s))
 		if t == s {
@@ -90,10 +152,161 @@ func RedactText(s string) string {
 // maxRedactPasses bounds the pattern passes.
 const maxRedactPasses = 4
 
+// tailWindow is how many bytes at the end of a cut text are searched for an open structure (twice the longest quoted URL).
+const tailWindow = 2 * maxQuotedURL
+
+// readPrefix is the part of s that is read and how many bytes of s are not: s itself when it is within MaxRedactedText,
+// otherwise a prefix of at most MaxRedactedText bytes that ends where nothing is open (see endOfClosed).
+func readPrefix(s string) (read string, unread int) {
+	if len(s) <= MaxRedactedText {
+		return s, 0
+	}
+	cut := MaxRedactedText
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	end := endOfClosed(s[:cut])
+	return s[:end], len(s) - end
+}
+
+// endOfClosed is the end, at most len(p), of the longest prefix of the cut text p that no secret straddles: the prefix does
+// not end inside a token (the last run of bytes with no white space, quote or angle bracket may be the userinfo of a URL
+// whose @ was cut off), inside a URL with no path yet, inside a quoted URL whose closing quote was cut off (its wrapped
+// pieces are not yet recognised as the URL), or inside a registered literal. Each rule only moves the end left, and the
+// rules are applied until none does.
+func endOfClosed(p string) int {
+	end := len(p)
+	for {
+		e := min(end, openTokenStart(p[:end]), openLiteralStart(p[:end]))
+		if e == end {
+			return end
+		}
+		end = e
+	}
+}
+
+// openTokenStart is the start of the part of p that the cut may have left open: the last token of p, and a quoted URL whose
+// closing quote is not in p. The last token is the run after the last white space, quote, angle bracket or backslash that is
+// not an escape, read the way the pattern pass reads text (escapes decoded): a run that ends the prefix may be the
+// user:password of a URL whose @ and host were cut off. It is searched for in the last tailWindow bytes; a run with no
+// delimiter in them is cut at the window's start (a user:password longer than that is not a credential any provider
+// issues). len(p) when p ends in a delimiter and holds no open quoted URL.
+func openTokenStart(p string) int {
+	w := min(tailWindow, len(p))
+	base := len(p) - w
+	norm, off := decodeURLEscapes(p[base:])
+	start := len(p)
+	last := -1
+	for i := len(norm) - 1; i >= 0; i-- {
+		if endsToken(norm[i]) {
+			last = i
+			break
+		}
+	}
+	switch {
+	case last < 0:
+		start = base
+	case last+1 < len(norm):
+		start = base + original(off, last+1)
+	}
+	if s := openQuotedURLStart(norm, off, base); s < start {
+		start = s
+	}
+	return start
+}
+
+// openQuotedURLStart is the earliest start, in p, of the scheme of a quoted URL in the decoded tail norm (whose offsets are off,
+// norm[0] being p[base]) that has no closing quote in the text (the cut is after the opening quote, so that it still closes the
+// URL before it): the pattern pass reads such a URL as an unquoted one, which ends at
+// the first white space, so the pieces of a URL wrapped at white space after it are not recognised. len(p) when none.
+func openQuotedURLStart(norm string, off []int32, base int) int {
+	best := base + original(off, len(norm))
+	for pos := 0; pos < len(norm); {
+		loc := schemeStart.FindStringIndex(norm[pos:])
+		if loc == nil {
+			break
+		}
+		start, bodyStart := pos+loc[0], pos+loc[1]
+		pos = bodyStart
+		if start > 0 && isQuote(norm[start-1]) && strings.IndexByte(norm[bodyStart:], norm[start-1]) < 0 {
+			if at := base + original(off, start); at < best {
+				best = at
+			}
+		}
+	}
+	return best
+}
+
+// openLiteralStart is the start of the longest suffix of p that is a proper prefix of a registered literal (any spelling),
+// and len(p) when there is none: a literal whose first bytes end the prefix is not a literal in it.
+func openLiteralStart(p string) int {
+	set := currentSecrets()
+	if set == nil {
+		return len(p)
+	}
+	best := len(p)
+	for _, lit := range set.lits {
+		for i := max(0, len(p)-(len(lit)-1)); i < best; i++ {
+			if strings.HasPrefix(lit, p[i:]) {
+				best = i
+				break
+			}
+		}
+	}
+	return best
+}
+
+// cutRedacted ends the redacted prefix r at a token boundary so that the result, with the suffix, is at most limit bytes.
+func cutRedacted(r string, unread, limit int) string {
+	overhead := len(TruncatedPrefix) + len(TruncatedSuffix)
+	for digits := 1; ; digits++ {
+		budget := limit - overhead - 1 - digits // the kept text, the space, the number
+		keep := 0
+		if budget > 0 {
+			keep = tokenBoundary(r, budget)
+		}
+		n := len(r) - keep + unread
+		if len(strconv.Itoa(n)) > digits {
+			continue
+		}
+		suffix := TruncatedPrefix + strconv.Itoa(n) + TruncatedSuffix
+		if keep == 0 {
+			return suffix
+		}
+		return r[:keep] + " " + suffix
+	}
+}
+
+// tokenBoundary is the length of the longest prefix of r, at most max, that ends a token: not inside a UTF-8 character, not
+// inside a run with no white space, quote or angle bracket (when such a delimiter is within 256 bytes), and with no trailing
+// white space. A run longer than that is cut where it is.
+func tokenBoundary(r string, max int) int {
+	keep := len(r)
+	if max < keep {
+		keep = max
+		for keep > 0 && !utf8.RuneStart(r[keep]) {
+			keep--
+		}
+		if keep > 0 && !endsToken(r[keep]) && !endsToken(r[keep-1]) {
+			for i := keep - 1; i >= 0 && keep-i <= 256; i-- {
+				if endsToken(r[i]) {
+					keep = i
+					break
+				}
+			}
+		}
+	}
+	for keep > 0 && isSpace(r[keep-1]) {
+		keep--
+	}
+	return keep
+}
+
 // RedactError is err with its text redacted: Error() is RedactText of the original's, and Unwrap returns the original, so
 // errors.Is, errors.As and every classification by type or code see the original error. An error whose text has nothing to
-// redact is returned itself (a sentinel is still the sentinel). The text is redacted when Error is called, so a literal
-// registered after the error was made is covered too.
+// redact is returned itself (a sentinel is still the sentinel). The text is redacted once, when Error is first called, and
+// kept: a literal registered between RedactError and the first Error is applied, one registered after is not, and a wrapper
+// built from the result (fmt.Errorf("...%w", RedactError(err))) holds the text it was made with.
 func RedactError(err error) error {
 	if err == nil {
 		return nil
@@ -104,9 +317,16 @@ func RedactError(err error) error {
 	return &redactedError{err: err}
 }
 
-type redactedError struct{ err error }
+type redactedError struct {
+	err  error
+	once sync.Once
+	text string
+}
 
-func (e *redactedError) Error() string { return RedactText(e.err.Error()) }
+func (e *redactedError) Error() string {
+	e.once.Do(func() { e.text = RedactText(e.err.Error()) })
+	return e.text
+}
 func (e *redactedError) Unwrap() error { return e.err }
 
 // RedactArgs is args with every string and error redacted, for a log call whose format is the caller's.
@@ -391,18 +611,39 @@ func redactSchemeToken(core string) (string, bool) {
 	return scheme + host + redactedPath, true
 }
 
+// bareDelimiter: the bytes no part of a bare URL (its userinfo, host, port, path or query) can hold: RE2 white space (not
+// vertical tab), a quote, a backquote, an angle bracket, a backslash. A match lies inside one run between them.
+func bareDelimiter(c byte) bool {
+	return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || isQuote(c) || c == '<' || c == '>' || c == bs
+}
+
+// redactBareURLs: the expression is run on the runs of text that hold a '/' or a '?' - a bare URL cannot match without one,
+// and a match never spans a delimiter - so that text with few URLs costs little however long it is (RB10-B15).
 func redactBareURLs(s string) string {
 	norm, off := decodeURLEscapes(s)
 	if !strings.ContainsAny(norm, "/?") {
 		return s
 	}
 	var spans []span
-	for _, loc := range bareURL.FindAllStringIndex(norm, -1) {
-		tok := norm[loc[0]:loc[1]]
-		core := strings.TrimRight(tok, trailingPunctuation)
-		if rep, ok := redactBareToken(core); ok {
-			spans = append(spans, span{from: original(off, loc[0]), to: original(off, loc[0]+len(core)), with: rep})
+	for i := 0; i < len(norm); {
+		for i < len(norm) && bareDelimiter(norm[i]) {
+			i++
 		}
+		j, marked := i, false
+		for j < len(norm) && !bareDelimiter(norm[j]) {
+			marked = marked || norm[j] == '/' || norm[j] == '?'
+			j++
+		}
+		if marked {
+			run := norm[i:j]
+			for _, loc := range bareURL.FindAllStringIndex(run, -1) {
+				core := strings.TrimRight(run[loc[0]:loc[1]], trailingPunctuation)
+				if rep, ok := redactBareToken(core); ok {
+					spans = append(spans, span{from: original(off, i+loc[0]), to: original(off, i+loc[0]+len(core)), with: rep})
+				}
+			}
+		}
+		i = j
 	}
 	return applySpans(s, spans)
 }
@@ -434,18 +675,38 @@ type secretSet struct {
 }
 
 var secrets struct {
-	mu      sync.Mutex
-	lits    map[string]int // literal -> registrations holding it
-	hosts   map[string]int // lower-case host -> registrations holding it
+	mu    sync.Mutex
+	lits  map[string]int // literal -> registrations holding it
+	hosts map[string]int // lower-case host -> registrations holding it
+	// dirty is set (under mu) by a registration or an undo and cleared by the rebuild that follows the first use: the set
+	// is built once per change that is used, never once per registration, so registering N URLs costs N.
+	dirty   atomic.Bool
 	current atomic.Pointer[secretSet]
 }
 
-// RegisterProviderURL registers the secrets a provider URL carries - the userinfo user and password, every path segment of
-// at least 12 bytes, every query value of at least 6, the fragment (each at least minSecretLiteral long) - together with
-// their URL-encoded and JSON-escaped spellings, so that RedactText removes them wherever they occur. It is called where a
-// provider URL is configured (every client, pool and reader constructor); public segments like rpc, v2 and v3 are shorter
-// and stay. The returned function undoes exactly this registration (tests); production ignores it. A literal that is a
-// part of any registered host name is not applied (it would rewrite the host, which is kept so the provider is named).
+// currentSecrets is the set of registered literals in force, rebuilt first when a registration changed it.
+func currentSecrets() *secretSet {
+	if secrets.dirty.Load() {
+		secrets.mu.Lock()
+		if secrets.dirty.Load() {
+			rebuildSecretsLocked()
+			secrets.dirty.Store(false)
+		}
+		secrets.mu.Unlock()
+	}
+	return secrets.current.Load()
+}
+
+// RegisterProviderURL registers the secrets a provider URL carries - the userinfo user and password (each at least 8
+// bytes), the path segments (12 bytes, or 8 with a letter and a digit that are not a hex number, or 16 digits), the query
+// values and the fragment (8 bytes, or 6 with a letter and a digit) - together with their URL-encoded and JSON-escaped
+// spellings, so that RedactText removes them wherever they occur. It is called where a provider URL is configured (every
+// client, pool and reader constructor); public segments like rpc, v2 and v3 are shorter and stay, and so does anything that
+// is a catalogued chain name. A shorter secret is still removed wherever it stands inside a URL (the pattern pass). The
+// thresholds keep a registered literal from rewriting ordinary words ("admin", "root"), chain names ("sepolia",
+// "arbitrum") or the pieces of a hash ("beef"). The returned function undoes exactly this registration (tests); production
+// ignores it. A literal that is a part of any registered host name is not applied (it would rewrite the host, which is kept
+// so the provider is named).
 func RegisterProviderURL(raw string) (unregister func()) {
 	lits, host := providerSecrets(raw)
 	secrets.mu.Lock()
@@ -465,7 +726,7 @@ func RegisterProviderURL(raw string) (unregister func()) {
 		}
 	}
 	if added {
-		rebuildSecretsLocked()
+		secrets.dirty.Store(true)
 	}
 	var once sync.Once
 	return func() {
@@ -486,7 +747,7 @@ func RegisterProviderURL(raw string) (unregister func()) {
 				}
 			}
 			if removed {
-				rebuildSecretsLocked()
+				secrets.dirty.Store(true)
 			}
 		})
 	}
@@ -500,22 +761,24 @@ func RegisterProviderURLs(raws ...string) {
 }
 
 func rebuildSecretsLocked() {
+	var blob strings.Builder // every registered host between NULs: a literal inside it is inside one host
+	blob.WriteByte(0)
+	for h := range secrets.hosts {
+		blob.WriteString(h)
+		blob.WriteByte(0)
+	}
+	hostBlob := blob.String()
+	marker := strings.ToLower(RedactedMarker)
 	var lits []string
 	for l := range secrets.lits {
 		lower := strings.ToLower(l)
-		if strings.Contains(RedactedMarker, lower) || strings.Contains(lower, strings.ToLower(RedactedMarker)) {
+		if strings.Contains(marker, lower) || strings.Contains(lower, marker) {
 			continue
 		}
-		inHost := false
-		for h := range secrets.hosts {
-			if strings.Contains(h, lower) {
-				inHost = true
-				break
-			}
+		if len(secrets.hosts) > 0 && strings.Contains(hostBlob, lower) {
+			continue
 		}
-		if !inHost {
-			lits = append(lits, l)
-		}
+		lits = append(lits, l)
 	}
 	if len(lits) == 0 {
 		secrets.current.Store(nil)
@@ -535,12 +798,115 @@ func rebuildSecretsLocked() {
 }
 
 func redactLiterals(s string) string {
-	set := secrets.current.Load()
+	set := currentSecrets()
 	if set == nil {
 		return s
 	}
 	return set.rep.Replace(s)
 }
+
+// A literal is registered by where it stands in the URL; each place has its own floor, because a short word is common in
+// text and a long one is not.
+type literalPlace int
+
+const (
+	placeUserinfo literalPlace = iota
+	placePathSegment
+	placeQueryOrFragment
+)
+
+// Registration thresholds (RB10-B15, V-R10B7 D4.1/D4.3).
+const (
+	minUserinfoLiteral     = 8  // a user or a password
+	minPathLiteral         = 12 // a path segment
+	minMixedPathLiteral    = 8  // a path segment holding a letter and a digit and not being a hex number
+	minDigitsPathLiteral   = 16 // an all-digit path segment (a chain id, a block number, a timestamp are shorter)
+	minQueryLiteral        = 8  // a query value or the fragment
+	minMixedQueryLiteral   = 6  // ... holding a letter and a digit
+	maxHexNumberLiteralLen = 11 // an all-hex run up to this long is read as a block or chain number
+)
+
+// worthRegistering reports whether l, standing in place, is a secret to register.
+func worthRegistering(place literalPlace, l string) bool {
+	letter, digit := false, false
+	for i := 0; i < len(l); i++ {
+		switch c := l[i]; {
+		case c >= '0' && c <= '9':
+			digit = true
+		case c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z':
+			letter = true
+		}
+	}
+	mixed := letter && digit
+	switch place {
+	case placeUserinfo:
+		return len(l) >= minUserinfoLiteral
+	case placePathSegment:
+		if allDigits(l) {
+			return len(l) >= minDigitsPathLiteral
+		}
+		if len(l) >= minPathLiteral {
+			return true
+		}
+		return len(l) >= minMixedPathLiteral && mixed && !(isHexNumber(l) && len(l) <= maxHexNumberLiteralLen)
+	default:
+		return len(l) >= minQueryLiteral || len(l) >= minMixedQueryLiteral && mixed
+	}
+}
+
+// isHexNumber: l is hexadecimal digits, with or without a leading 0x.
+func isHexNumber(l string) bool {
+	s := strings.TrimPrefix(strings.TrimPrefix(l, "0x"), "0X")
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if hexVal(s[i]) < 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func allDigits(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return s != ""
+}
+
+// chainWords are the words the supported-chain catalogue uses for its chains (names, networks, aliases, families, display
+// names and the parts of each): a provider URL often repeats them in a path or a query ("network=arbitrum-sepolia"), and a
+// literal that is one of them would rewrite the chain's name wherever the text names it.
+var chainWords = func() func() map[string]bool {
+	var once sync.Once
+	var words map[string]bool
+	return func() map[string]bool {
+		once.Do(func() {
+			words = map[string]bool{}
+			add := func(s string) {
+				s = strings.ToLower(strings.TrimSpace(s))
+				if s == "" {
+					return
+				}
+				words[s] = true
+				for _, part := range strings.FieldsFunc(s, func(r rune) bool { return r == '-' || r == '_' || r == ' ' }) {
+					words[part] = true
+				}
+			}
+			for _, id := range supportedchains.IDs() {
+				if c, ok := supportedchains.Lookup(id); ok {
+					for _, s := range append([]string{c.Name, c.Network, c.RPCKey, c.Family, c.DisplayName}, c.Aliases...) {
+						add(s)
+					}
+				}
+			}
+		})
+		return words
+	}
+}()
 
 // providerSecrets are the literals a provider URL carries (in every spelling) and its lower-case host.
 func providerSecrets(raw string) (lits []string, host string) {
@@ -554,8 +920,8 @@ func providerSecrets(raw string) (lits []string, host string) {
 		authority, tail = rest[:j], rest[j:]
 	}
 	seen := map[string]bool{}
-	add := func(l string, min int) {
-		if len(l) < min {
+	add := func(l string, place literalPlace) {
+		if !worthRegistering(place, l) || chainWords()[strings.ToLower(l)] {
 			return
 		}
 		for _, v := range spellings(l) {
@@ -569,9 +935,9 @@ func providerSecrets(raw string) (lits []string, host string) {
 	if at := strings.LastIndex(authority, "@"); at >= 0 {
 		host = authority[at+1:]
 		user, pass, hasPass := strings.Cut(authority[:at], ":")
-		add(user, minSecretLiteral)
+		add(user, placeUserinfo)
 		if hasPass {
-			add(pass, minSecretLiteral)
+			add(pass, placeUserinfo)
 		}
 	}
 	host = strings.ToLower(host)
@@ -584,16 +950,16 @@ func providerSecrets(raw string) (lits []string, host string) {
 		path, query = tail[:k], tail[k+1:]
 	}
 	for _, seg := range strings.Split(path, "/") {
-		add(seg, 12)
+		add(seg, placePathSegment)
 	}
 	for _, kv := range strings.FieldsFunc(query, func(r rune) bool { return r == '&' || r == ';' }) {
 		_, val, has := strings.Cut(kv, "=")
 		if !has {
 			val = kv
 		}
-		add(val, 6)
+		add(val, placeQueryOrFragment)
 	}
-	add(fragment, minSecretLiteral)
+	add(fragment, placeQueryOrFragment)
 	return lits, host
 }
 

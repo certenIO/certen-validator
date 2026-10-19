@@ -294,8 +294,8 @@ func TestB14a_ClassificationIsUnchangedByRedaction(t *testing.T) {
 func TestB14a_D2_TheConstructorsRegisterTheirURLsSecrets(t *testing.T) {
 	echo := func(key string) string { return "The requested URL /v2/" + key + " was not found; user:" + key + "@h" }
 	t.Run("RegisterProviderURL derives userinfo, long segments, query values and the fragment", func(t *testing.T) {
-		undo := RegisterProviderURL("https://opuser:pw-SECRET-9f@rpc.example.org/v2/SECRETSEGMENT-12345/ws?apikey=QUERYVALUE-7&n=ab#FRAGMENT-3")
-		for _, lit := range []string{"opuser", "pw-SECRET-9f", "SECRETSEGMENT-12345", "QUERYVALUE-7", "FRAGMENT-3"} {
+		undo := RegisterProviderURL("https://opuser-ab12:pw-SECRET-9f@rpc.example.org/v2/SECRETSEGMENT-12345/ws?apikey=QUERYVALUE-7&n=ab#FRAGMENT-3")
+		for _, lit := range []string{"opuser-ab12", "pw-SECRET-9f", "SECRETSEGMENT-12345", "QUERYVALUE-7", "FRAGMENT-3"} {
 			if got := RedactText("x " + lit + " y"); got != "x "+RedactedMarker+" y" {
 				t.Errorf("%q: %q", lit, got)
 			}

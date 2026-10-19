@@ -50,7 +50,7 @@ var neverRetried = map[string]bool{
 func DialRetrying(ctx context.Context, rawurl string) (*ethclient.Client, error) {
 	c, err := DialRPCRetrying(ctx, rawurl)
 	if err != nil {
-		return nil, err
+		return nil, RedactError(err) // a malformed URL comes back in a *url.Error that holds it whole (RB10-B15)
 	}
 	return ethclient.NewClient(c), nil
 }
@@ -62,9 +62,14 @@ func DialRPCRetrying(ctx context.Context, rawurl string) (*rpc.Client, error) {
 	hint := &retryAfterHint{}
 	httpClient := &http.Client{Transport: &retryingTransport{base: http.DefaultTransport, host: host, hint: hint}}
 	// Dialling HTTP makes no request; a websocket endpoint connects here, and a transient failure to connect is retried.
-	return retryTransient(ctx, host, hint, queryRetryBudget, 0, func(c context.Context) (*rpc.Client, error) {
+	c, err := retryTransient(ctx, host, hint, queryRetryBudget, 0, func(c context.Context) (*rpc.Client, error) {
 		return rpc.DialOptions(c, rawurl, rpc.WithHTTPClient(httpClient))
 	})
+	if err != nil {
+		// A URL that does not parse comes back as a *url.Error holding the configured URL whole, key and all (RB10-B15).
+		return nil, RedactError(err)
+	}
+	return c, nil
 }
 
 type retryingTransport struct {

@@ -118,7 +118,9 @@ func (e *TransientError) Error() string {
 	if e.Stopped != nil {
 		stop = fmt.Sprintf("; stopped by %v", e.Stopped)
 	}
-	return RedactText(fmt.Sprintf("%v (provider %s, %d attempts over %s%s)", e.Err, e.Host, e.Attempts, e.Elapsed.Round(time.Millisecond), stop))
+	// The provider's own error is the unbounded part: it is bounded and redacted on its own, so that what follows it (the provider, the
+	// attempts) is never the part a cut removes (RB10-B15).
+	return RedactText(fmt.Sprint(e.Err)) + RedactText(fmt.Sprintf(" (provider %s, %d attempts over %s%s)", e.Host, e.Attempts, e.Elapsed.Round(time.Millisecond), stop))
 }
 
 func (e *TransientError) Unwrap() []error {
@@ -202,7 +204,7 @@ func dialProvider(ctx context.Context, host, rawurl string, timeout, budget time
 		return rpc.DialOptions(c, rawurl, rpc.WithHTTPClient(httpClient))
 	})
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, RedactError(err)
 	}
 	return ethclient.NewClient(c), hint, nil
 }
