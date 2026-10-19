@@ -106,9 +106,9 @@ func (p ProofOutcomeEvidence) AttachOutcomeEvidence(ctx context.Context, c Outco
 // decideOutcomeLayer compares a proof's standing outcome evidence with new evidence of it. The two must state the same
 // outcome, bar two parts that depend on who built the evidence and when: the BLS aggregate only the recording validator
 // holds, and the S6 replay-guard evidence, whose bytes depend on which provider still served the state (RB10-F1). Evidence
-// with the aggregate supersedes evidence without it; a replay guard that verifies as proven supersedes none, a named state
-// or one that does not verify; a replay guard that does not verify never supersedes; anything else that differs is a
-// contradiction.
+// with the aggregate supersedes evidence without it, and a better replay guard (ranked: one that does not verify, none, a
+// named state, proven) supersedes a worse one; when each holds the better of one part, their union is attached (V-R10B
+// D1), so a worse guard never ends up attached over a better one; anything else that differs is a contradiction.
 func decideOutcomeLayer(standing []byte, ev *OutcomeEvidence) (database.OutcomeLayerDecision, string, error) {
 	d, reason, _, err := decideOutcomeLayerMerge(standing, ev)
 	return d, reason, err
@@ -137,15 +137,17 @@ func decideOutcomeLayerMerge(standing []byte, ev *OutcomeEvidence) (database.Out
 	aggUp := old.Quorum.AggregateSignature == "" && ev.Quorum.AggregateSignature != ""
 	aggDown := old.Quorum.AggregateSignature != "" && ev.Quorum.AggregateSignature == ""
 	oldRG, newRG := old.replayGuardStanding(), ev.replayGuardStanding()
-	guardUp := newRG == replayGuardProven && oldRG != replayGuardProven
-	guardDown := oldRG == replayGuardProven && newRG != replayGuardProven
+	// V-R10B D1: the guards are ranked (a guard that does not verify refuses the whole layer, so it ranks below none);
+	// whichever way the aggregate moves, the attached row keeps the better guard.
+	guardUp := newRG.order() > oldRG.order()
+	guardDown := newRG.order() < oldRG.order()
 	switch {
 	case aggUp && guardUp:
-		return database.OutcomeLayerSupersede, "completed with the BLS aggregate the recording validator holds and the proven S6 replay guard", nil, nil
+		return database.OutcomeLayerSupersede, fmt.Sprintf("completed with the BLS aggregate the recording validator holds and a better S6 replay guard (%s over the standing row's %s)", newRG, oldRG), nil, nil
 	case aggUp && !guardDown:
 		return database.OutcomeLayerSupersede, "completed with the BLS aggregate the recording validator holds", nil, nil
 	case guardUp && !aggDown:
-		return database.OutcomeLayerSupersede, fmt.Sprintf("completed with the proven S6 replay guard (the standing row's: %s)", oldRG), nil, nil
+		return database.OutcomeLayerSupersede, fmt.Sprintf("completed with a better S6 replay guard (%s over the standing row's %s)", newRG, oldRG), nil, nil
 	case aggUp && guardDown:
 		m := *ev
 		m.Member.ReplayGuard = old.Member.ReplayGuard

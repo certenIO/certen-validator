@@ -108,6 +108,13 @@ var s6Execute = []byte{0x60, 0x6f, 0x2c, 0x8d} // CertenAccountV7_3.executeGover
 
 func newS6Member(t *testing.T) *s6Member {
 	t.Helper()
+	return newS6MemberProving(t, nil)
+}
+
+// newS6MemberProving is newS6Member; with other set, the receipt also holds, before the member's, a LeafConsumed of
+// the leaf other from the same account, both slots are 1 after the block, and the proof is of other's slot (V-R10B D5).
+func newS6MemberProving(t *testing.T, other *common.Hash) *s6Member {
+	t.Helper()
 	event := outcomeTreeEvent{Contract: common.HexToAddress("0x00000000000000000000000000000000000000aa"), Topic0: common.Hash{0xe1},
 		DataHash: crypto.Keccak256Hash([]byte("paid"))}
 	emitted := &types.Log{Address: event.Contract, Topics: []common.Hash{event.Topic0}, Data: []byte("paid")}
@@ -115,10 +122,19 @@ func newS6Member(t *testing.T) *s6Member {
 	m := newSynthMember(t, []outcomeTreeEvent{event}).asV4(t)
 	account := common.HexToAddress(m.ev.Account)
 	key := common.Hash(m.leaf.BatchLeaf)
+	afterValues := map[common.Hash]*big.Int{{0x03}: big.NewInt(8), ethproof.ReplaySlotFor(key, 4): big.NewInt(1)}
+	logs := []*types.Log{m.consumedLog(m.anchor.bundleID)}
+	if other != nil {
+		afterValues[ethproof.ReplaySlotFor(*other, 4)] = big.NewInt(1)
+		otherLog := m.consumedLog(m.anchor.bundleID)
+		otherLog.Topics = []common.Hash{otherLog.Topics[0], otherLog.Topics[1], *other}
+		logs = append([]*types.Log{otherLog}, logs...)
+		key = *other
+	}
 	slot := ethproof.ReplaySlotFor(key, 4)
 	code := []byte{0x60, 0x80, 0x60, 0x40, 0x52, 0x73}
 	before := newS6State(t, account, code, map[common.Hash]*big.Int{{0x03}: big.NewInt(7)})
-	after := newS6State(t, account, code, map[common.Hash]*big.Int{{0x03}: big.NewInt(8), slot: big.NewInt(1)})
+	after := newS6State(t, account, code, afterValues)
 
 	parent := &types.Header{Number: big.NewInt(99), Time: 990, Difficulty: big.NewInt(0), Root: before.root}
 	pk, _ := crypto.ToECDSA(bytes.Repeat([]byte{0x07}, 32))
@@ -128,7 +144,7 @@ func newS6Member(t *testing.T) *s6Member {
 		t.Fatal(err)
 	}
 	txBytes, _ := tx.MarshalBinary()
-	r := &types.Receipt{Type: types.DynamicFeeTxType, Status: 1, CumulativeGasUsed: 50_000, Logs: []*types.Log{m.consumedLog(m.anchor.bundleID), emitted}}
+	r := &types.Receipt{Type: types.DynamicFeeTxType, Status: 1, CumulativeGasUsed: 50_000, Logs: append(logs, emitted)}
 	r.Bloom = types.CreateBloom(r)
 	rBytes, _ := r.MarshalBinary()
 	h := &types.Header{ParentHash: parent.Hash(), Number: big.NewInt(100), Time: 1000, Difficulty: big.NewInt(0), Root: after.root,

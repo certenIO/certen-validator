@@ -104,7 +104,8 @@ func TestOutcomeEvidenceThatDiffersOnlyInTheReplayGuardIsOneOutcome(t *testing.T
 		}, database.OutcomeLayerKeep},
 		{"none, then not verifying: never supersedes", none, m.notVerifying, database.OutcomeLayerKeep},
 		{"named, then not verifying: never supersedes", m.named, m.notVerifying, database.OutcomeLayerKeep},
-		{"none, then named: kept", none, m.named, database.OutcomeLayerKeep},
+		{"none, then named: the disclosure supersedes (V-R10B D1: named ranks above none)", none, m.named, database.OutcomeLayerSupersede},
+		{"not verifying, then none: supersedes (a guard that does not verify refuses the layer)", m.notVerifying, none, database.OutcomeLayerSupersede},
 		{"named, then none: kept", m.named, none, database.OutcomeLayerKeep},
 	}
 	for _, c := range cases {

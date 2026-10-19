@@ -985,7 +985,7 @@ func (m OutcomeMemberEvidence) verifyExecuted(chainID int64, a *anchorFacts, lea
 		len(unset), leaf.Status, leaf.EffectsHash[:8])
 	chk.unproven("that the LeafConsumed log's emitter %s runs %s code (an account consumes a leaf only by "+
 		"executing exactly the calls it recomputes into it)", account.Hex(), m.accountGeneration())
-	return m.verifyReplayGuard(hdr, settlementTx, rcpt, chk)
+	return m.verifyReplayGuard(chainID, account, leaf, hdr, settlementTx, rcpt, chk)
 }
 
 // accountGeneration is the account generation the member's leaf version names (RB10-F2): absent or v3 is
@@ -1001,16 +1001,35 @@ func (m OutcomeMemberEvidence) accountGeneration() string {
 	return v.AccountGeneration()
 }
 
+// bindReplayGuard holds verified S6 evidence to the member it rides beside (V-R10B D5): a proof's key must be the member's
+// leaf (a receipt may hold another leaf's LeafConsumed) and its contract the member's account; a named state must be of
+// the member's account and of the outcome's chain.
+func bindReplayGuard(rg *ethproof.ReplayGuardCheck, chainID int64, account common.Address, leaf [32]byte) error {
+	if rg.Contract != account {
+		return fmt.Errorf("%s{contract_mismatch}: the evidence is of contract %s, not the member's account %s", ethproof.ReplayUnproven, rg.Contract.Hex(), account.Hex())
+	}
+	if rg.ChainID != chainID {
+		return fmt.Errorf("%s{contract_mismatch}: the evidence is of chain %d, the outcome of chain %d", ethproof.ReplayUnproven, rg.ChainID, chainID)
+	}
+	if rg.State == ethproof.ReplayProven && rg.Slot.Key != common.Hash(leaf) {
+		return fmt.Errorf("%s{slot_mismatch}: the proof is of key %s, not the member's leaf %s", ethproof.ReplayUnproven, rg.Slot.Key.Hex(), common.Hash(leaf).Hex())
+	}
+	return nil
+}
+
 // verifyReplayGuard holds the S6 evidence to the settlement just proven (RB10). Evidence that is carried and does not
 // verify refuses the member's evidence; evidence not carried, or a named state, is stated as not established - never as
 // established.
-func (m OutcomeMemberEvidence) verifyReplayGuard(hdr *types.Header, tx *types.Transaction, rcpt *types.Receipt, chk *OutcomeEvidenceCheck) error {
+func (m OutcomeMemberEvidence) verifyReplayGuard(chainID int64, account common.Address, leaf OutcomeLeaf, hdr *types.Header, tx *types.Transaction, rcpt *types.Receipt, chk *OutcomeEvidenceCheck) error {
 	if m.ReplayGuard == nil {
 		chk.unproven("S6: that the settlement's replay-guard slot was consumed (storage proof): this evidence carries no replay-guard proof")
 		return nil
 	}
 	rg, err := m.ReplayGuard.VerifyAgainst(hdr, tx, rcpt.Status == types.ReceiptStatusSuccessful, rcpt.Logs)
 	if err != nil {
+		return evidenceFail("the replay-guard evidence: %v", err)
+	}
+	if err := bindReplayGuard(rg, chainID, account, leaf.BatchLeaf); err != nil {
 		return evidenceFail("the replay-guard evidence: %v", err)
 	}
 	if rg.State != ethproof.ReplayProven {
@@ -1154,6 +1173,22 @@ const (
 	replayGuardProven  replayGuardRank = "proven"
 )
 
+// order ranks the replay guards for decideOutcomeLayer (V-R10B D1): a guard that does not verify refuses the whole layer,
+// so it ranks below none; then none, a named state, proven.
+func (r replayGuardRank) order() int {
+	switch r {
+	case replayGuardInvalid:
+		return 0
+	case replayGuardAbsent:
+		return 1
+	case replayGuardNamed:
+		return 2
+	case replayGuardProven:
+		return 3
+	}
+	return 0
+}
+
 // replayGuardStanding verifies the member's replay-guard evidence against its proven settlement and ranks it.
 func (ev OutcomeEvidence) replayGuardStanding() replayGuardRank {
 	m := ev.Member
@@ -1176,6 +1211,9 @@ func (ev OutcomeEvidence) replayGuardStanding() replayGuardRank {
 	if err != nil {
 		return replayGuardInvalid
 	}
+	if bindReplayGuard(rg, ev.ChainID, common.HexToAddress(m.Account), leaf.BatchLeaf) != nil {
+		return replayGuardInvalid
+	}
 	if rg.State == ethproof.ReplayProven {
 		return replayGuardProven
 	}
@@ -1187,6 +1225,9 @@ func (ev OutcomeEvidence) replayGuardStanding() replayGuardRank {
 // refused by name). Every path that reads layer 6 decodes through here. The member's hashed fields are untouched: the
 // replay guard is evidence beside the outcome leaf, never an input of it.
 func (m *OutcomeMemberEvidence) UnmarshalJSON(b []byte) error {
+	if err := checkReplayGuardKey(b); err != nil {
+		return evidenceFail("member.replayGuard: %v", err)
+	}
 	type plain OutcomeMemberEvidence
 	var aux struct {
 		*plain
@@ -1205,5 +1246,43 @@ func (m *OutcomeMemberEvidence) UnmarshalJSON(b []byte) error {
 		return evidenceFail("member.replayGuard: %v", err)
 	}
 	m.ReplayGuard = rg
+	return nil
+}
+
+// checkReplayGuardKey reads the member object's keys (V-R10B D3): encoding/json matches keys case-insensitively and lets
+// the last duplicate win, so a "replayguard" or a second "replayGuard" would silently replace the first. A key equal to
+// replayGuard under case folding must be exactly "replayGuard" and appear once.
+func checkReplayGuardKey(b []byte) error {
+	dec := json.NewDecoder(bytes.NewReader(b))
+	tok, err := dec.Token()
+	if err != nil {
+		return err
+	}
+	if d, ok := tok.(json.Delim); !ok || d != '{' {
+		return nil // not an object: encoding/json refuses it by its type
+	}
+	seen := 0
+	for dec.More() {
+		kt, err := dec.Token()
+		if err != nil {
+			return err
+		}
+		key, ok := kt.(string)
+		if !ok {
+			return fmt.Errorf("object key %v is not a string", kt)
+		}
+		if strings.EqualFold(key, "replayGuard") {
+			if key != "replayGuard" {
+				return fmt.Errorf("the key %q is a case variant of replayGuard and is refused", key)
+			}
+			if seen++; seen > 1 {
+				return fmt.Errorf("the key replayGuard appears more than once")
+			}
+		}
+		var skip json.RawMessage
+		if err := dec.Decode(&skip); err != nil {
+			return err
+		}
+	}
 	return nil
 }
