@@ -154,7 +154,7 @@ func TestSplitEnvelopeGroupsSignaturesByTheirPartition(t *testing.T) {
 // The scenario intent declares the book and page it is given, and the shape of the signature-type run's intent is unchanged.
 func TestBuildIntentSpecDeclaresTheGivenBookAndPage(t *testing.T) {
 	blobs, err := buildIntentSpec(intentSpec{ADI: "acc://pv2-cust-508.acme", By: "g1-cross", Desc: "d", Book: "acc://pv2-cust-508.acme/book",
-		Page: "acc://pv2-cust-508.acme/book/1", From: "0x0000000000000000000000000000000000000001", Tags: []string{"rb9-e"}})
+		Page: "acc://pv2-cust-508.acme/book/1", From: "0x0000000000000000000000000000000000000001", Tags: []string{"rb9-e"}, Leg: testLeg(t, "base-sepolia")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +171,7 @@ func TestBuildIntentSpecDeclaresTheGivenBookAndPage(t *testing.T) {
 	if gov.Authorization.Book != "acc://pv2-cust-508.acme/book" || gov.Authorization.Page != "acc://pv2-cust-508.acme/book/1" || gov.Authorization.Hash != blobs.OperationID {
 		t.Fatalf("governance blob %+v, operation %s", gov.Authorization, blobs.OperationID)
 	}
-	old, err := buildIntent("acc://pv2-sig-1.acme", liveCases()[1], "0x0000000000000000000000000000000000000001")
+	old, err := buildIntent("acc://pv2-sig-1.acme", liveCases()[1], "0x0000000000000000000000000000000000000001", testLeg(t, "base-sepolia"))
 	if err != nil {
 		t.Fatal(err)
 	}

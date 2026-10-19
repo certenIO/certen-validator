@@ -43,7 +43,7 @@ func main() {
 		keysDir  = fs.String("keys", "keys", "key directory root (gitignored)")
 		outDir   = fs.String("out", "captures", "where captured evidence is written")
 		cases    = fs.String("cases", "", "comma-separated case names (default: all)")
-		chain    = fs.String("chain", "base-sepolia", "target chain of the intent leg")
+		chain    = fs.String("chain", "base-sepolia", "target chain of the intent leg: a chain of pkg/supportedchains (sepolia, base-sepolia, arbitrum-sepolia, adiri); its anchor is read from CERTEN_ANCHOR_V8_<chainId>")
 		account  = fs.String("account", "", "CertenAccount(s), the leg's from: tag=0x..,tag=0x.. (each case's governing key book has its own account), or one bare address for a single selected case")
 		accounts = fs.String("accounts", filepath.Join("captures", "accounts.json"), "accounts file written by `accounts` (tag -> address); -account is merged over it")
 		factory  = fs.String("factory", factoryV11Address, "accounts: CertenAccountFactoryV11 on the target chain")
@@ -69,6 +69,14 @@ func main() {
 		ks:  keyStore{dir: filepath.Join(*keysDir, fmt.Sprintf("pv2-sig-%d", *n))},
 	}
 	live := liveConfig{Chain: *chain, RPC: *rpc, Out: *outDir, Wait: *wait, Cases: *cases, Base: *base, SSH: *ssh, Verify: *verify}
+	if cmd == "submit" || cmd == "rerun" || cmd == "accounts" {
+		// The leg's chain, chain id, anchor and chain nonce come from -chain (legchain.go), never a compiled-in chain.
+		leg, err := legChainFromEnv(*chain)
+		if err != nil {
+			fatal("%v", err)
+		}
+		live.Leg = leg
+	}
 	if cmd == "submit" || cmd == "rerun" {
 		sel, err := live.selected()
 		if err != nil {

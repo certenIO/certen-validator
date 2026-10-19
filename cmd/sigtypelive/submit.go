@@ -23,6 +23,7 @@ import (
 
 type liveConfig struct {
 	Chain, RPC, Out, Cases, Base, SSH, Verify string
+	Leg                                       legChain          // -chain resolved (legchain.go): the leg every intent declares
 	Accounts                                  map[string]string // case tag -> the CertenAccount whose governing book is that case's key book
 	Wait                                      time.Duration
 }
@@ -111,7 +112,7 @@ func (a *app) submitOne(ctx context.Context, c liveCase, l liveConfig) (*capture
 	if err != nil {
 		return nil, err
 	}
-	blobs, err := buildIntent(a.adi, c, from)
+	blobs, err := buildIntent(a.adi, c, from, l.Leg)
 	if err != nil {
 		return nil, err
 	}

@@ -102,7 +102,7 @@ func TestCanonicalSaltIsKeccakOfTheADI(t *testing.T) {
 // the one buildIntent emits, so the scripts and this tool cannot drift apart unseen.
 func TestLocalScriptsDeclareTheLiveBatchSelector(t *testing.T) {
 	const live = "createBatchAnchor(bytes32,bytes32,uint256,bytes32,uint256,bytes32,bytes32)"
-	in, err := buildIntent("acc://pv2-sig-1.acme", liveCases()[0], addrA)
+	in, err := buildIntent("acc://pv2-sig-1.acme", liveCases()[0], addrA, testLeg(t, "base-sepolia"))
 	if err != nil {
 		t.Fatal(err)
 	}

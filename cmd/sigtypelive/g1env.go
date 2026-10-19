@@ -574,9 +574,9 @@ type g1Capture struct {
 }
 
 // submit writes the plan's intent and waits for the network to deliver it.
-func (e *g1Env) submit(ctx context.Context, t g1Topo, plan *g1Plan, from string, wait time.Duration, out string) (*g1Capture, error) {
+func (e *g1Env) submit(ctx context.Context, t g1Topo, plan *g1Plan, from string, leg legChain, wait time.Duration, out string) (*g1Capture, error) {
 	blobs, err := buildIntentSpec(intentSpec{
-		ADI: plan.Cust.url, By: "g1-" + t.Kind, Book: plan.Book, Page: plan.Page, From: from,
+		ADI: plan.Cust.url, By: "g1-" + t.Kind, Book: plan.Book, Page: plan.Page, From: from, Leg: leg,
 		Desc: fmt.Sprintf("RB9-E live G1 case %s-%d: %s", t.Kind, t.N, strings.Join(plan.Notes, "; ")),
 		Tags: []string{"rb9-e", "g1", t.Kind},
 	})
