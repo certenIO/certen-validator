@@ -32,6 +32,10 @@ func main() {
 		usage()
 	}
 	cmd := os.Args[1]
+	if strings.HasPrefix(cmd, "g1") { // the RB9-E cross-identity / cross-partition / delegation scenarios (g1main.go)
+		runG1(cmd, os.Args[2:])
+		return
+	}
 	fs := flag.NewFlagSet(cmd, flag.ExitOnError)
 	var (
 		n        = fs.Int("n", 1, "identity number: acc://pv2-sig-<n>.acme")

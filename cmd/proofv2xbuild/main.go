@@ -106,7 +106,7 @@ func run(endpoint, account, tx, book, page, incPath, pinHex, archivePath, out st
 	var ev *proofv2.Evidence
 	var rep *proofv2.Report
 	for {
-		ev, rep, err = b.Build21(ctx, 0, account, tx, "bvn1", asm)
+		ev, rep, err = b.Build21(ctx, 0, account, tx, strings.ToLower(cp.Partition), asm)
 		// A minor-root record served before its validator signatures arrived is not a refusal: retry (RB9-C1b-2-B1).
 		if !errors.Is(err, proofv2.ErrNotYetCertified) && !(err != nil && strings.Contains(err.Error(), "quorum not met: 0 of")) {
 			break

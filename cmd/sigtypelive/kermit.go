@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/certen/independant-validator/pkg/proof"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/api/v3"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/api/v3/jsonrpc"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/types/messaging"
@@ -29,6 +30,7 @@ const kermitV3 = "https://kermit.accumulatenetwork.io/v3"
 type kermit struct {
 	endpoint string
 	c        *jsonrpc.Client
+	table    *protocol.RoutingTable // the network's routing table, read on first use (split)
 }
 
 func newKermit(endpoint string) *kermit {
@@ -88,8 +90,59 @@ func (k *kermit) oracle(ctx context.Context) (uint64, error) {
 	return ns.Oracle.Price, nil
 }
 
-// submit sends an envelope and returns an error unless every submission was accepted.
+// submit sends an envelope and returns an error unless every submission was accepted. An envelope whose signatures route to more
+// than one partition is refused by the API ("conflicting routes"), so it is sent as one envelope per partition (split).
 func (k *kermit) submit(ctx context.Context, env *messaging.Envelope) error {
+	envs, err := k.split(ctx, env)
+	if err != nil {
+		return err
+	}
+	for _, e := range envs {
+		if err := k.submitOne(ctx, e); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// split groups an envelope's signatures by the partition they route to (the network's routing table applied to each signature's
+// routing location). Every group carries the transaction: a signature-only envelope is completed with a placeholder transaction that
+// the signer's partition does not hold ("load transaction ... not found"), whereas the full transaction lets it process the
+// signature and send the transaction on to the principal's partition. The first group is the initiator's (envelope puts it first).
+func (k *kermit) split(ctx context.Context, env *messaging.Envelope) ([]*messaging.Envelope, error) {
+	if len(env.Signatures) < 2 {
+		return []*messaging.Envelope{env}, nil
+	}
+	if k.table == nil {
+		t, err := k.liveRoutingTable(ctx)
+		if err != nil {
+			return nil, err
+		}
+		k.table = t
+	}
+	var order []string
+	groups := map[string][]protocol.Signature{}
+	for _, sig := range env.Signatures {
+		part, err := proof.RoutePartition(k.table, sig.RoutingLocation().String())
+		if err != nil {
+			return nil, err
+		}
+		if _, ok := groups[part]; !ok {
+			order = append(order, part)
+		}
+		groups[part] = append(groups[part], sig)
+	}
+	if len(order) == 1 {
+		return []*messaging.Envelope{env}, nil
+	}
+	var out []*messaging.Envelope
+	for _, part := range order {
+		out = append(out, &messaging.Envelope{Transaction: env.Transaction, Signatures: groups[part]})
+	}
+	return out, nil
+}
+
+func (k *kermit) submitOne(ctx context.Context, env *messaging.Envelope) error {
 	subs, err := k.c.Submit(ctx, env, api.SubmitOptions{})
 	if err != nil {
 		return err
