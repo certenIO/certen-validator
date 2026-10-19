@@ -3,7 +3,7 @@
 // Command s6replayvectors writes an S6 replay-guard conformance set (certen:s6-replay:v1) - the vectors, the bounded
 // mutation corpus with Go's verdicts, manifest.json and MANIFEST - to pkg/ethproof/testdata/<set> (or -out). -set
 // s6replay1 (the default) is the first set, kept byte-identical; -set s6replay2 is the CertenAccountV7_2 set (RB10-F3); -set s6replay3 the
-// named-state binding, canonical-header, envelope and escaped-hex set (RB10-B7).
+// named-state binding, canonical-header, envelope and escaped-hex set (RB10-B7); -set s6replay4 the deep-nesting set (RB10-B9, V-R10C2).
 // It is deterministic and uses no network: regenerating gives byte-identical files (TestS6Replay1Deterministic,
 // TestS6Replay2Deterministic).
 package main
@@ -18,10 +18,11 @@ import (
 	"github.com/certen/independant-validator/pkg/ethproof/s6replay1"
 	"github.com/certen/independant-validator/pkg/ethproof/s6replay2"
 	"github.com/certen/independant-validator/pkg/ethproof/s6replay3"
+	"github.com/certen/independant-validator/pkg/ethproof/s6replay4"
 )
 
 func main() {
-	set := flag.String("set", "s6replay1", "the set to write: s6replay1, s6replay2 or s6replay3")
+	set := flag.String("set", "s6replay1", "the set to write: s6replay1, s6replay2, s6replay3 or s6replay4")
 	out := flag.String("out", "", "directory to write the set to (default pkg/ethproof/testdata/<set>)")
 	flag.Parse()
 	var files map[string][]byte
@@ -32,8 +33,10 @@ func main() {
 		files = s6replay2.Files()
 	case "s6replay3":
 		files = s6replay3.Files()
+	case "s6replay4":
+		files = s6replay4.Files()
 	default:
-		fmt.Fprintf(os.Stderr, "unknown set %q: s6replay1, s6replay2 or s6replay3\n", *set)
+		fmt.Fprintf(os.Stderr, "unknown set %q: s6replay1, s6replay2, s6replay3 or s6replay4\n", *set)
 		os.Exit(2)
 	}
 	if *out == "" {
