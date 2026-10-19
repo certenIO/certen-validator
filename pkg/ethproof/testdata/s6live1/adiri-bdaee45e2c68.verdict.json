@@ -5,27 +5,32 @@
   "blockNumber": 513643,
   "blockHash": "0xd156a3a26a0fcd49bd4016630c9e66cfa3fa6f51e0625e1b1a2982a46ac1fb38",
   "settlement": "verified",
-  "state": "s6_replay_unproven",
-  "reason": "state_unavailable",
+  "state": "proven",
   "contract": "0xB6D37A09f7069Ca9715223C9b794354366D1Fa2F",
-  "providerErrors": [
-    {
-      "host": "(agreeing providers)",
-      "error": "no agreed latest header: header 513643: 1 of 3 providers answered, 2 needed (rpc.telcoin.network: context deadline exceeded; node2.telcoin.network: context deadline exceeded)"
-    },
-    {
-      "host": "rpc.telcoin.network",
-      "error": "not asked: the capture budget of 1ms ended"
-    },
-    {
-      "host": "node1.telcoin.network",
-      "error": "not asked: the capture budget of 1ms ended"
-    },
-    {
-      "host": "node2.telcoin.network",
-      "error": "not asked: the capture budget of 1ms ended"
-    }
+  "slot": "0xd08e132ca8c32b69989951f174a1f9d94c155909f52044e841fd77e54f13f3e8",
+  "provenAt": 513643,
+  "before": "s6_before_unavailable",
+  "beforeUnavailable": {
+    "reason": "no provider served the state of block 513642, the settlement block's parent, before the capture budget of 2m0s ended",
+    "providers": [
+      {
+        "host": "rpc.telcoin.network",
+        "error": "block 513642: distance to target block exceeds maximum proof window"
+      },
+      {
+        "host": "node1.telcoin.network",
+        "error": "block 513642: distance to target block exceeds maximum proof window"
+      },
+      {
+        "host": "node2.telcoin.network",
+        "error": "block 513642: distance to target block exceeds maximum proof window"
+      }
+    ]
+  },
+  "servedAfter": [
+    "rpc.telcoin.network",
+    "node1.telcoin.network",
+    "node2.telcoin.network"
   ],
-  "detail": "no provider could prove the slot 0xd08e132ca8c32b69989951f174a1f9d94c155909f52044e841fd77e54f13f3e8 of 0xB6D37A09f7069Ca9715223C9b794354366D1Fa2F at any of the newest 4 blocks (settlement block 513643, newest seen 0) before the capture budget of 1ms ended",
   "live": "proven at block 513643, s6_before_unavailable"
 }

@@ -5,23 +5,17 @@
   "blockNumber": 320818474,
   "blockHash": "0x0ce4d5e8b747b19d52e12173e3527ccc390df81d8dc7f69a47bd6fc90a6ae8d7",
   "settlement": "verified",
-  "state": "s6_replay_unproven",
-  "reason": "state_unavailable",
+  "state": "proven",
   "contract": "0xB6D37A09f7069Ca9715223C9b794354366D1Fa2F",
-  "providerErrors": [
-    {
-      "host": "(agreeing providers)",
-      "error": "no agreed latest header: header 320818479: 0 of 2 providers answered, 2 needed (sepolia-rollup.arbitrum.io: not in the recorded world: this provider was not asked this at capture time; arbitrum-sepolia-rpc.publicnode.com: not in the recorded world: this provider was not asked this at capture time)"
-    },
-    {
-      "host": "sepolia-rollup.arbitrum.io",
-      "error": "not asked: the capture budget of 1ms ended"
-    },
-    {
-      "host": "arbitrum-sepolia-rpc.publicnode.com",
-      "error": "not asked: the capture budget of 1ms ended"
-    }
+  "slot": "0x4aee024398becc1888d4d455b6c8bf061222b7caf58bd49d86a5a5fcb6b117af",
+  "provenAt": 320818477,
+  "before": "proven",
+  "servedAfter": [
+    "sepolia-rollup.arbitrum.io"
   ],
-  "detail": "no provider could prove the slot 0x4aee024398becc1888d4d455b6c8bf061222b7caf58bd49d86a5a5fcb6b117af of 0xB6D37A09f7069Ca9715223C9b794354366D1Fa2F at any of the newest 4 blocks (settlement block 320818474, newest seen 0) before the capture budget of 1ms ended",
+  "servedBefore": [
+    "sepolia-rollup.arbitrum.io",
+    "arbitrum-sepolia-rpc.publicnode.com"
+  ],
   "live": "proven at block 320818477, before proven"
 }

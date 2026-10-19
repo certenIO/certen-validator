@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -58,6 +59,21 @@ func TestS6LiveWorldsReverifyOffline(t *testing.T) {
 			if got.Settlement != "verified" {
 				t.Fatalf("the settlement's inclusion proof does not verify: %s", got.Settlement)
 			}
+			// RB10-F15: the offline verdict must state what the live capture established, not only what an earlier
+			// offline judge wrote beside it.
+			name := strings.TrimSuffix(filepath.Base(path), ".world.json.gz")
+			off := offlineSummary(got)
+			if d, known := liveSummaryDiffers[name]; known {
+				if want.Live != d.live || off != d.offline {
+					t.Fatalf("the pinned live/offline difference (%s) no longer holds\n live: %q (pinned %q)\n offline: %q (pinned %q)",
+						d.why, want.Live, d.live, off, d.offline)
+				}
+				if len(got.ServedBefore) == 0 {
+					t.Fatalf("offline before proven, but no recorded provider answer of the parent's state verifies: %+v", got)
+				}
+			} else if off != want.Live {
+				t.Fatalf("the offline verdict disagrees with the live capture\n offline: %q\n    live: %q", off, want.Live)
+			}
 			switch got.State {
 			case ethproof.ReplayProven:
 				if ev.Proof == nil || got.Before == "" || got.ProvenAt < got.BlockNumber || len(got.ServedAfter) == 0 {
@@ -75,6 +91,27 @@ func TestS6LiveWorldsReverifyOffline(t *testing.T) {
 			}
 		})
 	}
+}
+
+// offlineSummary states an offline verdict in the live capture's summary form (main.go summarize).
+func offlineSummary(v *Verdict) string {
+	if v.State == ethproof.ReplayProven {
+		return fmt.Sprintf("proven at block %d, %s", v.ProvenAt, map[bool]string{true: "before proven", false: "s6_before_unavailable"}[v.Before == "proven"])
+	}
+	return fmt.Sprintf("%s{%s}: %s", v.State, v.Reason, v.Detail)
+}
+
+// liveSummaryDiffers lists the recorded worlds whose offline verdict differs from their live one, each with exactly the
+// difference and its cause; every other world must agree word for word.
+var liveSummaryDiffers = map[string]struct{ live, offline, why string }{
+	// Captured by the RB10-B3 capture, which asked the parent's state once (RB10-F7). The live ask of block 0x12e03cc8 got
+	// null from both hosts (exchanges 3080, 3081, 3085); the world's later ask of the same block (exchange 3088,
+	// sepolia-rollup.arbitrum.io) was served, and the fixed capture, which asks again, proves the before-state from it.
+	"arbitrum-sepolia-b46171b58f49": {
+		live:    "proven at block 316686023, s6_before_unavailable",
+		offline: "proven at block 316686023, before proven",
+		why:     "RB10-F7: the live capture asked the parent's state once",
+	},
 }
 
 // A provider answer altered after capture is caught: the recorded world with every storage proof's nodes of the

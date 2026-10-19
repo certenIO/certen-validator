@@ -1,31 +1,56 @@
 {
   "version": "certen:s6-replay:v1",
-  "state": {
-    "state": "s6_replay_unproven",
-    "reason": "state_unavailable",
+  "proof": {
+    "version": "certen:s6-replay:v1",
     "chainId": 2017,
-    "txHash": "0xbdaee45e2c68b7a980046bc1d73067b4c437e3567fb25feb0634414a79ecdfce",
-    "blockNumber": 513643,
-    "blockHash": "0xd156a3a26a0fcd49bd4016630c9e66cfa3fa6f51e0625e1b1a2982a46ac1fb38",
+    "generation": "CertenAccountV7_3",
     "contract": "0xb6d37a09f7069ca9715223c9b794354366d1fa2f",
-    "providers": [
-      {
-        "host": "(agreeing providers)",
-        "error": "no agreed latest header: header 513643: 1 of 3 providers answered, 2 needed (rpc.telcoin.network: context deadline exceeded; node2.telcoin.network: context deadline exceeded)"
-      },
-      {
-        "host": "rpc.telcoin.network",
-        "error": "not asked: the capture budget of 1ms ended"
-      },
-      {
-        "host": "node1.telcoin.network",
-        "error": "not asked: the capture budget of 1ms ended"
-      },
-      {
-        "host": "node2.telcoin.network",
-        "error": "not asked: the capture budget of 1ms ended"
-      }
-    ],
-    "detail": "no provider could prove the slot 0xd08e132ca8c32b69989951f174a1f9d94c155909f52044e841fd77e54f13f3e8 of 0xB6D37A09f7069Ca9715223C9b794354366D1Fa2F at any of the newest 4 blocks (settlement block 513643, newest seen 0) before the capture budget of 1ms ended"
+    "slot": {
+      "key": "0xf58b4ec36ff26f690727a42fab750ba181e2bfd03c15c51846b5d43f455305ee",
+      "base": 4,
+      "derivation": "keccak256(abi.encode(bytes32 key, uint256 base))",
+      "slot": "0xd08e132ca8c32b69989951f174a1f9d94c155909f52044e841fd77e54f13f3e8"
+    },
+    "settlementBlock": {
+      "number": 513643,
+      "hash": "0xd156a3a26a0fcd49bd4016630c9e66cfa3fa6f51e0625e1b1a2982a46ac1fb38"
+    },
+    "provenAt": {
+      "number": 513643,
+      "hash": "0xd156a3a26a0fcd49bd4016630c9e66cfa3fa6f51e0625e1b1a2982a46ac1fb38"
+    },
+    "headers": [],
+    "after": {
+      "accountProof": [
+        "0xf90211a0bb2d4e6aef87fb370235753908d859ecaa09b7f5b76bb6d8d74f061c88501751a028af4a4bdb2207dc132f0e10dfe0537bbcf160aff93abc831b9130297e03771da07442cb45310fed1bc8fcde66bbdf1fb8e185653929e1da370f725fcd3f7ae30ba0da52ee8b3c91b416d4bb4e92d448be1fa2ccd7b95817683e76f9bfe47b2367d9a0c48a92eb2f6d0fd2b164c7e7cf6ac4f27e66c410a2a20ff6cf9087b742da83fca0049592cf26de073d188af480b7c7492f9c1bc7d0bb5c438ba2af1f82f9d68796a07515329ba792758ba0fd1a68d145a009d8eba20ef347c6e77a21ffac4e38321da003747b31559814b9cccd9364757eb84b31545b781aba6a67a1b65c65b8853081a089f4cb444bec917b43d3ab4f88110ec26f9a7ac773dc451c79619a3297f5adf6a00ffdf4e41bac40828d5ec0b0cfd742368c566408c0b0b3720fb3b9ef1aa5affca0fa5c9ec5cdb72f577164069afb00e2a24e444e0aca9d1cc17c48c6a1af3034aba0e83c5e83dae94456dbb750f8f34b773d3d39755dc91ab761cb4904c1633d325ca031528ea288ce370aaea55797149a8f4c58e88c93f5ef498acd29bc05f1492ce7a000fe66568c6c48f80736b628843d6bc01116660129b2321a4fc8e1264b72d9b2a0452e3c13a4da7bc96b7113f53db45ca4b7e41cff8a51d4c475f3236bb43417c0a0ad3c664867f066a054e40b1556df3b450b8b240385a9a78649061b5be739852180",
+        "0xf901f1a0a35bb375c9f7cc6d92a300476a93349761e2825ae1a11c8c54fcc0fde1cf8fc4a0e5602651e717119e6b173bad63711ccc6db2190a811e9081187b0ea22fd098f8a0f223335a1732c1cabd511d1b2caa83be865c04e235ec3cf837cca3eaa342c36da097e0a66fe0b99a5902bede503d1d1935dea095d87b3b3537ee6c1f9790225f66a0e7e47309fce9622839bfc5df23f05db5387414ec2db644bf93e1a4270d1ada1580a053b048f54d806000dfbecba4b2135c198b8638ce0b877778c0fd7115a080d1e6a03d7abaf41cbdc518acc84f94b76c05b1e96a5f2ba62eb027fe5663a8ed14af84a0a13afb0348a7739dc7850bf68f8d07e1214c0b26620be55824a286c90708a842a0682f195468feaa546907e8982a0d9109b0f8d451bf3bb4e6ee4dd8a700a187cca0bf7798b85b66c70355fe506094d133b9c3452681c9314939425e6664f200424aa0d7c9b89da92404bfaa54be4e201273cd47ccf8ac44c41085d2f3f1999c69ad94a0b93651bda45dc3fc6560206cb1c250b578881136709c00a451f0078d2a4618d4a032556a93766f68d22be2de8932fa6f62f464288a40abadbc0af44275b1bc7c19a053b55cb09fa575aa55a317fa73c0bfc6b1a7df34f4fb08493e41f4047a0c25bba0e75d831dba521391817d7f2100ebe7e8b0852472515129351804b1163e51ea1480",
+        "0xf8d1808080a0d80073328b7ad6eeeb7ce1daabf35b5515126ef085f4d492665eae622184a16980a0b8c3e08057c7a1a0c53bca2fef13410c1e9394b59e5cbbf4df11275da715f1e1a063fc8991e947a6af4e5f374bd6eaf9a2b655cbf274d0569258c3dfb8c441a1b8a043635f04b4445e75f18e4b14e185c3d3ac65e253a6be3cf3e4a96919ac9c0810808080a02d04600378a3c92c2f61967a928f748167c7c40b5640457a1eb8fa827fe0054c8080a0eba8a5677a521bffbdf8ec9689806ef1cde071d87cae68853627f75c0a1261048080",
+        "0xf86e9f3d46e6b5a83a8e9810cdfe0fb216dd964786e57f5e6ae5ea6e1f6f33e37961b84cf84a018609184e729fffa0855e22d92055e6dbf4574a8f5692a7c8264dca0f614837a637872a37eb559daea0469fb51cd8a843d31fdc8ebde40e9c150bd04249d7b000040b3d452c50ea31ba"
+      ],
+      "storageHash": "0x855e22d92055e6dbf4574a8f5692a7c8264dca0f614837a637872a37eb559dae",
+      "codeHash": "0x469fb51cd8a843d31fdc8ebde40e9c150bd04249d7b000040b3d452c50ea31ba",
+      "storageProof": [
+        "0xf90131a0f3a47b4aff828d298f3f3c79caa32764695786d3a1aa3406670309fe2f4d116480a0d7021cb6e54c7f32a3a3f0c5761b605348b7a95e07ce1f6b23f214ee64958fbe80a0a3e11d25277ef71d70c77471a304ef62be72008fe27beacabdcf5e6546545788a01fbdd034b2b972eb6ffa44311934889edef767969c01cbb5ec953d936e53d04da08f591109bf7d61aaa2d0b3dad91ba50faab6f70f7df2e4bc4f4654fecb1a4086a025d7d3d56e44e76e1fe1a708e8ac14968d6bc21862a82a8a90930138ac714df580a07db384e0298a69e1ad27cca4c30bf61d8478d8bf141878b024097f8c9e3403148080a013674f92f711a51bfd038a63208ef702497ccbf468405a9ad9378a57e03ab67b8080a0e96d58003f836420b19b88880a1948d813df7136f6abad78584594b6e88e69b680",
+        "0xe2a03b5924cab7ae75c5eebae87dbdcacf12066270f40747859309bd916547f6730e01"
+      ],
+      "value": "0x0000000000000000000000000000000000000000000000000000000000000001"
+    },
+    "beforeUnavailable": {
+      "reason": "no provider served the state of block 513642, the settlement block's parent, before the capture budget of 2m0s ended",
+      "providers": [
+        {
+          "host": "rpc.telcoin.network",
+          "error": "block 513642: distance to target block exceeds maximum proof window"
+        },
+        {
+          "host": "node1.telcoin.network",
+          "error": "block 513642: distance to target block exceeds maximum proof window"
+        },
+        {
+          "host": "node2.telcoin.network",
+          "error": "block 513642: distance to target block exceeds maximum proof window"
+        }
+      ]
+    }
   }
 }
