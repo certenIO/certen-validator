@@ -39,7 +39,7 @@ These are the irreducible assumptions; no design can remove them. Stated residua
 | | statement | evidence (all carried in the proof) |
 |---|---|---|
 | S1 | The intent's exact bytes are in Accumulate | L1 + account-state leg; one continuous receipt to a Directory root (§4.2) |
-| S2 | That Directory root was certified by >2/3 of the set in force | L4 signatures; the set derived by induction from the incarnation along the spine, every window checked (§4.3) |
+| S2 | That Directory root was certified by >2/3 of the set in force | L4 signatures; the set derived by induction from the incarnation along the spine; evidence 2.0 checks every window, evidence 2.1 every set-changing window, the certified window, and a Merkle link for each kept window (§4.3) |
 | S3 | The intent was authorized by the principal's key pages **as they were** at execution | G1(a) pages served `ForHeight`, proven into certified roots; G1(b) the authority set is complete; delegation on every partition at its own block (§5) |
 | S4 | Accumulate's status/outcome for it | G2 bound to certified roots (§5) |
 | S5 | The target transaction is exactly what was authorized | chain, target, value, calldata, nonce recomputed from S1's bytes = the execution commitment = the fields of the proven tx |
@@ -62,11 +62,24 @@ The verifier outputs one verdict per statement plus an overall verdict. A missin
      `dn.acme/network` and `dn.acme/globals` (including their main-chain roots and heights) is proven against the
      certified root; every update the walk applied must be an entry of that main chain, and the walk must have applied
      every entry (count = height − genesis). This closes update omission, stale-globals replay and window skipping using
-     only state at the target block, which is inside retention when the proof is built. Each update's window is checked
-     against the block its main-chain entry was recorded in; [Evidence 2.1 only. What the code establishes today: the root-chain
-     position of the main-chain anchor the receipt is proven into lies in (the previous RootChainIndex, this RootChainIndex]; a
-     later main-chain anchor re-proving an older entry is not excluded. The stronger binding, and the wording of this sentence,
-     are an owner decision (pr/proof-v2-a8-wording-draft.md, OWNER_QUEUE.md).]
+     only state at the target block, which is inside retention when the proof is built. In evidence 2.0 each update's window
+     is checked against the block its main-chain entry was recorded in. In evidence 2.1 (the anchored form) each update's
+     receipt must be proven into a main-chain anchor whose root-chain position lies in the window of the anchor that carries
+     it, that is in (the previous RootChainIndex, this RootChainIndex]. A later main-chain anchor re-proving an older entry
+     is not excluded: a submitter can re-prove an old main-chain entry into a later anchor of the same window, which changes
+     WHICH record of the document the write is applied in, not the final set, because the distinct-hash replay set, the
+     height equality and the content equality of the proven accounts keep the final set exact. The check applies to the
+     minor-root records of `certify` and `check.hops`; the major-record walk is not window-checked in 2.1. A stronger binding
+     (the entry's own main-chain index against the proven account height) would be a consensus-format change and is not part
+     of 2.1.
+   - **Evidence 2.1 anchored form.** The certify run is not carried whole: the verifier checks every set-changing window,
+     the certified window, and a Merkle link for each kept window (a minor-root record that carries a network update, the
+     final window, and any window the builder keeps continuous). Each anchored record carries one link, a Merkle receipt from
+     the previously verified root-chain anchor to its own, validated against the Directory's `anchor(directory)-root` chain.
+     Records are ordered by the signed `MinorBlockIndex` and updates by version (network) or content (globals); a duplicated
+     update is refused by name (`certify_update_replayed`). The open window (checkpoint, certified block] is covered by the
+     set in force at the checkpoint, and the checkpoint the document names must be fresh (`checkpoint_stale`). The S2
+     guarantee, that more than 2/3 of the validator set in force signed the certified root, is unchanged.
    - **the chain identity** [Evidence 2.1 only; RB9-F6, owner decision 2026-10-19]: every evidence 2.1 document carries a `genesisLink`, the receipt
      from the pinned incarnation's genesis root chain anchor to the certified root, whether its certification is anchored (with `links`) or continuous.
      Without it a complete chain of ANOTHER incarnation that shares the pinned genesis records would pass the pin, because the walk from the genesis
@@ -188,6 +201,9 @@ tool, never a proof).
    slot (`certen:l1:v3`, `certen:l2:v3`, `certen:l3:v3`, `certen:l4gov:v3`, `certen:g0:v3`, `certen:g1:v3`,
    `certen:g2:v3`, root `certen:govroot:v3`); Phase B adds `certen:finality:v1` and `certen:contract-identity:v1`. New evidence beside hashed summaries, never inside them.
 4. govRoot changes → atomic fleet switch after shadow; v2 goldens are new files.
+   **Evidence 2.1 freeze.** After the 2.1 activation any change to what `Spine.AdvanceAnchored` accepts is consensus-breaking
+   and needs rules v16. A binary older than the activation cannot replay anchored blocks, so there is no rollback to one
+   after the activation; before it, rollback is safe because a 2.1 certificate is refused first.
 5. Named states include: `g1_historical_unavailable`, `l4_spine_unavailable`, `historical_state_unavailable`,
    `g1_completeness_unproven`, `finality_pending` (with the level reached), `consensus_engine_unsupported`.
 
