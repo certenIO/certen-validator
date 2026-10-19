@@ -1,11 +1,18 @@
 // Copyright 2026 Certen Protocol
 //
-// The window of an update (V-E A2(c), PROOF_V2 s4.3): "each update's window is checked against the block its main-chain entry was recorded
-// in". An update the Directory serves carries a combined receipt, from the transaction through the network or globals account's main chain
-// into that chain's anchor, and from that anchor through the root chain to the root the anchor signs. The anchor entry is a leaf of the root
-// chain, appended in the block the transaction executed in, so its position lies in (the previous anchor's RootChainIndex, this anchor's
-// RootChainIndex]. The position is not a field the signed anchor carries and Receipt.StartIndex is not authenticated by anything the receipt
-// hashes; it is read from the shape of the receipt (which side each sibling is on) given the signed tree size n = RootChainIndex + 1.
+// The window of an update (V-E A2(c), PROOF_V2 s4.3). What this establishes, exactly: the root-chain position of the main-chain anchor the
+// update's combined receipt is proven into lies in (the previous anchor's RootChainIndex, this anchor's RootChainIndex]. An update the
+// Directory serves carries a combined receipt, from the transaction through the network or globals account's main chain into that chain's
+// anchor, and from that anchor through the root chain to the root the anchor signs; the anchor is a leaf of the root chain. The position is
+// not a field the signed anchor carries and Receipt.StartIndex is not authenticated by anything the receipt hashes; it is read from the shape
+// of the receipt (which side each sibling is on) given the signed tree size n = RootChainIndex + 1.
+//
+// What it does NOT establish: that the update's own main-chain entry was recorded in that block. A later main-chain anchor re-proving an older
+// entry is not excluded (a combined receipt of an old entry into a later anchor decodes inside the later window and passes; pinned by
+// TestWindowResidualALateProofOfAnOldEntryIsNotExcluded). What keeps the final set exact is not this check but the distinct-hash replay set,
+// the height equality of the proven accounts and the content equality of the proven accounts (evidence.go). Binding the entry itself (decoding
+// its main-chain index against the proven account height and requiring applied entries to be the next unaccounted ones, in order) is a
+// consensus-format decision, queued for the owner and not implemented.
 
 package proofv2
 

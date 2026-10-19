@@ -26,7 +26,7 @@ func wantUnproven(t *testing.T, err error, block string) {
 
 // V-E A2(c): an update's root-chain position, read from its receipt's shape and the signed tree size, must lie in (the previous anchor's
 // RootChainIndex, this anchor's]. The verdicts, on the walk of the anchored form.
-func TestUpdateWindowIsJudgedAgainstTheBlockItWasRecordedIn(t *testing.T) {
+func TestUpdateWindowBoundsTheRootChainPositionOfTheAnchorTheReceiptEndsIn(t *testing.T) {
 	g := func(leaf string) xworld.ChainItem { return leafItem(xworld.UpdateGlobalsB, leaf) }
 	h := func(leaf string) xworld.ChainItem { return leafItem(xworld.UpdateGenesisGlobals, leaf) }
 	cases := []struct {

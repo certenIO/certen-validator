@@ -1615,7 +1615,7 @@
     },
     {
       "name": "update-before-its-window",
-      "description": "an update recorded in an earlier block than the window it is presented in: its position is not above the previous anchor's RootChainIndex",
+      "description": "an update whose root chain leaf lies in an earlier window than the one it is presented in: its position is not above the previous anchor's RootChainIndex (the check is on the root chain position of the anchor the receipt is proven into, not on the block the main chain entry itself was recorded in)",
       "world": "chain-window-before",
       "edit": "none (the second item presents a write whose root chain leaf lies in the first item's window)",
       "file": "update-before-its-window.json",

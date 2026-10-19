@@ -93,9 +93,13 @@ func TestRootChainLeafIndexRefusesWhatDoesNotDecompose(t *testing.T) {
 	}
 }
 
-// V-E A2(c) on the live Kermit archive: every update a real major header record carries (its combined receipt, as the Directory serves it:
-// main chain steps first, then the root chain path) decodes to a root chain position inside (the previous record's RootChainIndex, this
-// record's], and the check the 2.1 spine makes accepts it. The count of updates seen is reported so a fixture without any cannot pass silently.
+// V-E A2(c) on the live Kermit archive, and what that does and does not exercise. The archive holds 2 real updates in its 491 major block
+// records; both are in major block 1, principal acc://ACME, with an 11-step combined receipt (10 steps inside the leaf's subtree and 1 Right
+// step: the whole root chain path of a leaf of a 1314-leaf tree, so ZERO main-chain steps), window (0, 1313], decoded positions 5 and 4. So the
+// decode of a REAL root chain path (the end of the receipt, given the signed tree size) holds on real data and the check the 2.1 spine makes
+// accepts both. Live data does NOT exercise: the main-chain prefix handling (no live receipt has one; synthetic real-tree chains and Accumulate's
+// own Hasher receipts cover it), a mid-life network or globals update, or the lower bound (the first window starts at 0). The test builds the
+// window by hand and does not go through Advance or AdvanceEpoch. The count of updates seen is asserted so a fixture without any cannot pass.
 func TestUpdateWindowHoldsOnTheLiveKermitArchive(t *testing.T) {
 	fx := load(t)
 	seen := 0
