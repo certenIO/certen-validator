@@ -148,7 +148,7 @@ func writeXSuite(out, format string, cases []xworld.Case) error {
 				return fmt.Errorf("%s: the Go verifier refused a verified case: %w", c.Name, verr)
 			}
 			xc.Report = xreport(rep)
-			if format == XManifestFormat4 {
+			if format == XManifestFormat4 || format == XManifestFormat6 {
 				for _, d := range rep.Disclosures {
 					xc.Report.Disclosures = append(xc.Report.Disclosures, d.Code)
 				}
