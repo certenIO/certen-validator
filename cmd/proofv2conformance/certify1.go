@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 
 	proofv2 "github.com/certen/independant-validator/pkg/proof/v2"
@@ -50,8 +51,10 @@ type Certify1Case struct {
 	Wording string `json:"wording,omitempty"`
 	Prefix  string `json:"prefix,omitempty"`
 	// SameReportAs names a verified vector whose report this one must equal exactly (the continuous and anchored forms of one chain).
-	SameReportAs string   `json:"sameReportAs,omitempty"`
-	Report       *XReport `json:"report,omitempty"`
+	SameReportAs string `json:"sameReportAs,omitempty"`
+	// Note says why a vector is what it is when that is not its description: a frozen document of an earlier suite and what moved (certify1_frozen.go).
+	Note   string   `json:"note,omitempty"`
+	Report *XReport `json:"report,omitempty"`
 }
 
 // Certify1Manifest lists the suite; its own hash is the content of MANIFEST.sha256, beside it.
@@ -423,8 +426,108 @@ func certify1Specs() []certify1Spec {
 	}
 }
 
+// verdictMatches is whether the Go verifier's verdict on a document is the one the case states.
+func verdictMatches(c Certify1Case, verr error) bool {
+	switch c.Expect {
+	case "verified":
+		return verr == nil
+	case "refused":
+		if verr == nil || strings.HasPrefix(verr.Error(), "PANIC") {
+			return false
+		}
+		var cs *proofv2.CertifyState
+		named := errors.As(verr, &cs)
+		if c.State == "" && named || c.State != "" && (!named || cs.Code != c.State || !reflect.DeepEqual(cs.Fields, c.Fields)) {
+			return false
+		}
+		return (c.Wording == "" || verr.Error() == c.Wording) && (c.Prefix == "" || strings.HasPrefix(verr.Error(), c.Prefix))
+	}
+	return false
+}
+
+// judgeCertify1 checks the Go verifier's verdict on a document against the case, completes the case (the report of a verified vector, the
+// wording and prefix of a refused one) and records every disagreement in problems.
+func judgeCertify1(xc *Certify1Case, rep *proofv2.Report, verr error, problems *[]string, reports map[string]*XReport) error {
+	switch xc.Expect {
+	case "refused":
+		switch {
+		case verr == nil:
+			*problems = append(*problems, fmt.Sprintf("%s: the Go verifier accepted a refused vector", xc.Name))
+		case strings.HasPrefix(verr.Error(), "PANIC"):
+			*problems = append(*problems, fmt.Sprintf("%s: %v", xc.Name, verr))
+		default:
+			var cs *proofv2.CertifyState
+			named := errors.As(verr, &cs)
+			switch {
+			case xc.State == "" && named:
+				*problems = append(*problems, fmt.Sprintf("%s: refused with the certify state %v, the vector names none", xc.Name, cs))
+			case xc.State != "" && (!named || cs.Code != xc.State || !reflect.DeepEqual(cs.Fields, xc.Fields)):
+				*problems = append(*problems, fmt.Sprintf("%s: refused with %v, the vector says %s%v", xc.Name, verr, xc.State, xc.Fields))
+			}
+			if xc.Wording != "" && verr.Error() != xc.Wording {
+				*problems = append(*problems, fmt.Sprintf("%s: refused with %q, the vector's wording is %q", xc.Name, verr.Error(), xc.Wording))
+			}
+			if xc.Wording == "" {
+				xc.Wording = verr.Error()
+			}
+			if xc.Prefix == "" {
+				xc.Prefix = xc.Wording
+			}
+			if !strings.HasPrefix(verr.Error(), xc.Prefix) {
+				*problems = append(*problems, fmt.Sprintf("%s: refused with %q, which does not begin %q", xc.Name, verr.Error(), xc.Prefix))
+			}
+		}
+	case "verified":
+		if verr != nil {
+			*problems = append(*problems, fmt.Sprintf("%s: the Go verifier refused a verified vector: %v", xc.Name, verr))
+			break
+		}
+		xc.Report = xreport(rep)
+		reports[xc.Name] = xc.Report
+	default:
+		return fmt.Errorf("%s: expect %q", xc.Name, xc.Expect)
+	}
+	return nil
+}
+
+// frozenCertify1 is the case of a frozen F5-1 document: the file in out (never written here) must hash to the pin, and it is judged by the
+// current verifier. Its expectation is the spec's (which the regenerated sibling is judged by) unless the verifier now refuses it with
+// certify_link_missing{genesis}, the one verdict the F5-3 requirement moves; any other disagreement is a problem.
+func frozenCertify1(out string, spec Certify1Case, pin string, problems *[]string, reports map[string]*XReport) (Certify1Case, error) {
+	xc := spec
+	xc.File, xc.SHA256, xc.SameReportAs, xc.Report = spec.Name+".json", pin, "", nil
+	raw, err := os.ReadFile(filepath.Join(out, xc.File))
+	if err != nil {
+		*problems = append(*problems, fmt.Sprintf("%s: the frozen F5-1 document is not in %s: %v", spec.Name, out, err))
+		return xc, nil
+	}
+	if sum := sha256.Sum256(raw); hex.EncodeToString(sum[:]) != pin {
+		*problems = append(*problems, fmt.Sprintf("%s: the frozen F5-1 document hashes to %x, not the pinned %s: it is never rewritten", spec.Name, sum, pin))
+		return xc, nil
+	}
+	rep, verr := verifyGuarded(bytes.TrimSuffix(raw, []byte{0x0a}))
+	xc.Note = certify1FrozenUnmovedNote
+	if !verdictMatches(xc, verr) {
+		// The two requirements that moved verdicts of unreleased 2.1 documents: the genesis link of an anchored document (F5-3), decided after
+		// the certify runs are walked, and the update window (F5-3b), decided in the walk. Nothing else may move.
+		var cs *proofv2.CertifyState
+		switch {
+		case errors.As(verr, &cs) && cs.Code == proofv2.StateCertifyLinkMissing && reflect.DeepEqual(cs.Fields, []string{"genesis"}):
+			xc.Note = certify1FrozenMovedNote
+		case errors.As(verr, &cs) && cs.Code == proofv2.StateCertifyUpdateUnproven && len(cs.Fields) == 3:
+			xc.Note = certify1FrozenWindowNote
+		default:
+			*problems = append(*problems, fmt.Sprintf("%s: the frozen document is judged %v, which is neither the spec's verdict nor certify_link_missing{genesis} nor certify_update_unproven", spec.Name, verr))
+			return xc, nil
+		}
+		x := certify1State(cs.Code, cs.Fields...)
+		xc.Expect, xc.State, xc.Fields, xc.Wording, xc.Prefix = x.Expect, x.State, x.Fields, x.Wording, ""
+	}
+	return xc, judgeCertify1(&xc, rep, verr, problems, reports)
+}
+
 // writeCertify1 writes the suite into out and refuses to write a vector the Go verifier does not judge as the suite says; every vector that
-// does not is reported, not only the first.
+// does not is reported, not only the first. The frozen documents of the F5-1 suite (certify1_frozen.go) must already be in out and are not written.
 func writeCertify1(out string) error {
 	if err := os.MkdirAll(out, 0o755); err != nil {
 		return err
@@ -438,6 +541,8 @@ func writeCertify1(out string) error {
 	worlds := certify1Worlds()
 	var problems []string
 	reports := map[string]*XReport{}
+	renamed := map[string]string{} // frozen name -> the name of its regenerated sibling
+	siblings := map[string]bool{}
 	for _, s := range certify1Specs() {
 		doc, built, err := certify1Doc(s.World, worlds)
 		if err != nil {
@@ -480,57 +585,42 @@ func writeCertify1(out string) error {
 				problems = append(problems, fmt.Sprintf("%s: judged %v, its base %v", s.Name, verr, baseErr))
 			}
 		}
-		switch xc.Expect {
-		case "refused":
-			switch {
-			case verr == nil:
-				problems = append(problems, fmt.Sprintf("%s: the Go verifier accepted a refused vector", s.Name))
-			case strings.HasPrefix(verr.Error(), "PANIC"):
-				problems = append(problems, fmt.Sprintf("%s: %v", s.Name, verr))
-			default:
-				var cs *proofv2.CertifyState
-				named := errors.As(verr, &cs)
-				switch {
-				case xc.State == "" && named:
-					problems = append(problems, fmt.Sprintf("%s: refused with the certify state %v, the vector names none", s.Name, cs))
-				case xc.State != "" && (!named || cs.Code != xc.State || !reflect.DeepEqual(cs.Fields, xc.Fields)):
-					problems = append(problems, fmt.Sprintf("%s: refused with %v, the vector says %s%v", s.Name, verr, xc.State, xc.Fields))
-				}
-				if xc.Wording != "" && verr.Error() != xc.Wording {
-					problems = append(problems, fmt.Sprintf("%s: refused with %q, the vector's wording is %q", s.Name, verr.Error(), xc.Wording))
-				}
-				if xc.Wording == "" {
-					xc.Wording = verr.Error()
-				}
-				if xc.Prefix == "" {
-					xc.Prefix = xc.Wording
-				}
-				if !strings.HasPrefix(verr.Error(), xc.Prefix) {
-					problems = append(problems, fmt.Sprintf("%s: refused with %q, which does not begin %q", s.Name, verr.Error(), xc.Prefix))
-				}
-			}
-		case "verified":
-			if verr != nil {
-				problems = append(problems, fmt.Sprintf("%s: the Go verifier refused a verified vector: %v", s.Name, verr))
-				break
-			}
-			xc.Report = xreport(rep)
-			reports[xc.Name] = xc.Report
-		default:
-			return fmt.Errorf("%s: expect %q", s.Name, xc.Expect)
-		}
 		edited = append(edited, 0x0a)
 		sum := sha256.Sum256(edited) // the hash of the file's exact bytes
+		// A vector of the frozen F5-1 suite whose regenerated document is not the frozen one: the frozen document keeps the name (and moves only
+		// its expectation); the regenerated one goes beside it under the sibling's name.
+		if pin, frozen := certify1Frozen[s.Name]; frozen && hex.EncodeToString(sum[:]) != pin {
+			fc, err := frozenCertify1(out, xc, pin, &problems, reports)
+			if err != nil {
+				return err
+			}
+			m.Cases = append(m.Cases, fc)
+			xc.Name, xc.File = s.Name+certify1GenesisSuffix, s.Name+certify1GenesisSuffix+".json"
+			renamed[s.Name], siblings[xc.Name] = xc.Name, true
+		}
+		if err := judgeCertify1(&xc, rep, verr, &problems, reports); err != nil {
+			return err
+		}
 		xc.SHA256 = hex.EncodeToString(sum[:])
 		if err := os.WriteFile(filepath.Join(out, xc.File), edited, 0o644); err != nil {
 			return err
 		}
 		m.Cases = append(m.Cases, xc)
 	}
+	for _, name := range sortedFrozenNames() {
+		if !hasCase(m.Cases, name) {
+			problems = append(problems, fmt.Sprintf("%s: a frozen F5-1 vector the suite no longer has", name))
+		}
+	}
 	for i := range m.Cases {
 		c := &m.Cases[i]
 		if c.SameReportAs == "" {
 			continue
+		}
+		if siblings[c.Name] {
+			if r, ok := renamed[c.SameReportAs]; ok {
+				c.SameReportAs = r // a regenerated sibling is the same report as the sibling of the vector it names
+			}
 		}
 		if want, okw := reports[c.SameReportAs]; !okw || c.Report == nil || !reflect.DeepEqual(want, c.Report) {
 			problems = append(problems, fmt.Sprintf("%s: its report is not the report of %s", c.Name, c.SameReportAs))
@@ -554,4 +644,22 @@ func writeCertify1(out string) error {
 	}
 	h := sha256.Sum256(mj)
 	return os.WriteFile(filepath.Join(out, "MANIFEST.sha256"), []byte(hex.EncodeToString(h[:])+"  manifest.json\n"), 0o644)
+}
+
+func hasCase(cases []Certify1Case, name string) bool {
+	for _, c := range cases {
+		if c.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func sortedFrozenNames() []string {
+	out := make([]string, 0, len(certify1Frozen))
+	for k := range certify1Frozen {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }

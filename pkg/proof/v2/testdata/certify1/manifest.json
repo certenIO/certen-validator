@@ -11,6 +11,24 @@
       "world": "chain-continuous",
       "edit": "none",
       "file": "continuous-chain-verified.json",
+      "sha256": "b718fad48518de8dc8637f6447f083e2ea5dcb7180ffe54a2dd1c37901697331",
+      "expect": "refused",
+      "state": "certify_update_unproven",
+      "fields": [
+        "acc://dn.acme/globals",
+        "28ae41e0a0d8e5aeb3e4dd8559c4e384534a247d10db100c07db37ad89cf6eea",
+        "110"
+      ],
+      "wording": "certify_update_unproven{acc://dn.acme/globals,28ae41e0a0d8e5aeb3e4dd8559c4e384534a247d10db100c07db37ad89cf6eea,110}: the update's root chain position does not lie between the previous and this anchor's root chain index",
+      "prefix": "certify_update_unproven{acc://dn.acme/globals,28ae41e0a0d8e5aeb3e4dd8559c4e384534a247d10db100c07db37ad89cf6eea,110}: the update's root chain position does not lie between the previous and this anchor's root chain index",
+      "note": "frozen F5-1 document; verdict moved by the F5-3b update-window requirement (2.1 unreleased): its synthetic update receipts are not the root chain path of any leaf"
+    },
+    {
+      "name": "continuous-chain-verified-g",
+      "description": "two continuous update-bearing items and a continuous closing item: the form every earlier document has",
+      "world": "chain-continuous",
+      "edit": "none",
+      "file": "continuous-chain-verified-g.json",
       "sha256": "0637a20d5620b4b3ad7edc10fb92039836e6274b75738992783296a6d1aef861",
       "expect": "verified",
       "report": {
@@ -85,9 +103,27 @@
       "world": "chain-anchored",
       "edit": "none",
       "file": "anchored-chain-verified.json",
+      "sha256": "560403f135b730e40b8e42360bd6f08341bb8c0d6e4814f861486e2100f5670b",
+      "expect": "refused",
+      "state": "certify_update_unproven",
+      "fields": [
+        "acc://dn.acme/globals",
+        "28ae41e0a0d8e5aeb3e4dd8559c4e384534a247d10db100c07db37ad89cf6eea",
+        "110"
+      ],
+      "wording": "certify_update_unproven{acc://dn.acme/globals,28ae41e0a0d8e5aeb3e4dd8559c4e384534a247d10db100c07db37ad89cf6eea,110}: the update's root chain position does not lie between the previous and this anchor's root chain index",
+      "prefix": "certify_update_unproven{acc://dn.acme/globals,28ae41e0a0d8e5aeb3e4dd8559c4e384534a247d10db100c07db37ad89cf6eea,110}: the update's root chain position does not lie between the previous and this anchor's root chain index",
+      "note": "frozen F5-1 document; verdict moved by the F5-3b update-window requirement (2.1 unreleased): its synthetic update receipts are not the root chain path of any leaf"
+    },
+    {
+      "name": "anchored-chain-verified-g",
+      "description": "the same chain as continuous-chain-verified with every item anchored (no root proof) and three links: the same report",
+      "world": "chain-anchored",
+      "edit": "none",
+      "file": "anchored-chain-verified-g.json",
       "sha256": "0e974a0010dcd19d66514ce589f0773c9f04cd21bfcd786bfeb85cb939b2a86c",
       "expect": "verified",
-      "sameReportAs": "continuous-chain-verified",
+      "sameReportAs": "continuous-chain-verified-g",
       "report": {
         "version": "2.1",
         "tag": "certen:g1:v4",
@@ -160,9 +196,27 @@
       "world": "chain-mixed",
       "edit": "none",
       "file": "mixed-chain-verified.json",
+      "sha256": "b4915f1fae6d0011b3eae9ceab3bb442e3e1aafa9f99f6dff2625b9d82cc73c4",
+      "expect": "refused",
+      "state": "certify_update_unproven",
+      "fields": [
+        "acc://dn.acme/globals",
+        "28ae41e0a0d8e5aeb3e4dd8559c4e384534a247d10db100c07db37ad89cf6eea",
+        "110"
+      ],
+      "wording": "certify_update_unproven{acc://dn.acme/globals,28ae41e0a0d8e5aeb3e4dd8559c4e384534a247d10db100c07db37ad89cf6eea,110}: the update's root chain position does not lie between the previous and this anchor's root chain index",
+      "prefix": "certify_update_unproven{acc://dn.acme/globals,28ae41e0a0d8e5aeb3e4dd8559c4e384534a247d10db100c07db37ad89cf6eea,110}: the update's root chain position does not lie between the previous and this anchor's root chain index",
+      "note": "frozen F5-1 document; verdict moved by the F5-3b update-window requirement (2.1 unreleased): its synthetic update receipts are not the root chain path of any leaf"
+    },
+    {
+      "name": "mixed-chain-verified-g",
+      "description": "the same chain with an anchored first item, a continuous second item and an anchored closing item, two links: the same report",
+      "world": "chain-mixed",
+      "edit": "none",
+      "file": "mixed-chain-verified-g.json",
       "sha256": "36dfece7e9be2da7039e3a8c556ccfb80a02fc9b4043c9721eacd9a3d0e395e4",
       "expect": "verified",
-      "sameReportAs": "continuous-chain-verified",
+      "sameReportAs": "continuous-chain-verified-g",
       "report": {
         "version": "2.1",
         "tag": "certen:g1:v4",
@@ -235,6 +289,22 @@
       "world": "chain-final-only",
       "edit": "none",
       "file": "anchored-final-only-verified.json",
+      "sha256": "62b1a4c9516d5cfcf576840dae420ddaabf2870afdf4c510782138e2783dc365",
+      "expect": "refused",
+      "state": "certify_link_missing",
+      "fields": [
+        "genesis"
+      ],
+      "wording": "certify_link_missing{genesis}: an anchored item has no link",
+      "prefix": "certify_link_missing{genesis}: an anchored item has no link",
+      "note": "frozen F5-1 document; verdict moved by the F5-3 genesis-link requirement (2.1 unreleased)"
+    },
+    {
+      "name": "anchored-final-only-verified-g",
+      "description": "one anchored closing item and one link: an anchored item with no update is allowed as the last of its sequence",
+      "world": "chain-final-only",
+      "edit": "none",
+      "file": "anchored-final-only-verified-g.json",
       "sha256": "08b1a600a0dabf53a1bd0587a9383499082b75396d418081b0ec2bb3150b3e4b",
       "expect": "verified",
       "report": {
@@ -309,6 +379,22 @@
       "world": "chain-final-only",
       "edit": "evidence/links removed",
       "file": "link-absent.json",
+      "sha256": "2f44b85b99e194491f656555ae4d758e09ea0fe66deddd4d26f553fb20bb0ba3",
+      "expect": "refused",
+      "state": "certify_link_missing",
+      "fields": [
+        "0"
+      ],
+      "wording": "certify_link_missing{0}: an anchored item has no link",
+      "prefix": "certify_link_missing{0}: an anchored item has no link",
+      "note": "frozen F5-1 document; verdict unchanged"
+    },
+    {
+      "name": "link-absent-g",
+      "description": "the anchored item has no link",
+      "world": "chain-final-only",
+      "edit": "evidence/links removed",
+      "file": "link-absent-g.json",
       "sha256": "e45be217e7427937dd5f8c5911e03f8c29071aed76e5d50b2d5cc332f4ce35ef",
       "expect": "refused",
       "state": "certify_link_missing",
@@ -324,6 +410,22 @@
       "world": "chain-final-only",
       "edit": "evidence/links/0/start first byte flipped",
       "file": "link-start-altered.json",
+      "sha256": "7a89d3f5b463a95d8b5a35af4a5f72591597ff7d0aa225b8c667b98c0f28c71c",
+      "expect": "refused",
+      "state": "certify_link_start",
+      "fields": [
+        "0"
+      ],
+      "wording": "certify_link_start{0}: the link does not start at the previous verified root chain anchor",
+      "prefix": "certify_link_start{0}: the link does not start at the previous verified root chain anchor",
+      "note": "frozen F5-1 document; verdict unchanged"
+    },
+    {
+      "name": "link-start-altered-g",
+      "description": "the link starts somewhere other than the previous verified root chain anchor",
+      "world": "chain-final-only",
+      "edit": "evidence/links/0/start first byte flipped",
+      "file": "link-start-altered-g.json",
       "sha256": "970dc3061decc057af332adb7a59b8b5c4d6e84b84fd46788b9144066025a745",
       "expect": "refused",
       "state": "certify_link_start",
@@ -339,6 +441,22 @@
       "world": "chain-final-only",
       "edit": "evidence/links/0/anchor first byte flipped",
       "file": "link-end-altered.json",
+      "sha256": "2af029d96f5466c94dac88f69a9a9227602ac49bd4f4a2af4f40e68fcccbabb7",
+      "expect": "refused",
+      "state": "certify_link_end",
+      "fields": [
+        "0"
+      ],
+      "wording": "certify_link_end{0}: the link does not end at the item's root chain anchor",
+      "prefix": "certify_link_end{0}: the link does not end at the item's root chain anchor",
+      "note": "frozen F5-1 document; verdict unchanged"
+    },
+    {
+      "name": "link-end-altered-g",
+      "description": "the link ends somewhere other than the item's root chain anchor",
+      "world": "chain-final-only",
+      "edit": "evidence/links/0/anchor first byte flipped",
+      "file": "link-end-altered-g.json",
       "sha256": "fd2730690081a1465995869b089015c66f398a43dc1b9e36bdda61e55b2df173",
       "expect": "refused",
       "state": "certify_link_end",
@@ -354,6 +472,22 @@
       "world": "chain-final-only",
       "edit": "evidence/links/0/entries/0/hash first byte flipped",
       "file": "link-step-altered.json",
+      "sha256": "c071129eb1aefc30aa84542c8116233ef295d4e49f1a463ff13c0bc0a83fa9c2",
+      "expect": "refused",
+      "state": "certify_link_invalid",
+      "fields": [
+        "0"
+      ],
+      "wording": "certify_link_invalid{0}: the link is not a valid receipt of an anchored item",
+      "prefix": "certify_link_invalid{0}: the link is not a valid receipt of an anchored item",
+      "note": "frozen F5-1 document; verdict unchanged"
+    },
+    {
+      "name": "link-step-altered-g",
+      "description": "the link starts and ends where it must but its path does not recompute: not a valid receipt",
+      "world": "chain-final-only",
+      "edit": "evidence/links/0/entries/0/hash first byte flipped",
+      "file": "link-step-altered-g.json",
       "sha256": "21b70465e162df10a3923f392b8c782f9330cc2012626eb3f5b43f5a2dd5023c",
       "expect": "refused",
       "state": "certify_link_invalid",
@@ -369,6 +503,22 @@
       "world": "chain-mixed",
       "edit": "evidence/links/0 and /1 exchanged",
       "file": "link-of-a-different-item.json",
+      "sha256": "dea245ba06677f17f6e581b2c429f2f2a26856f27e68d6b7053e3bc8ef4e9c63",
+      "expect": "refused",
+      "state": "certify_link_start",
+      "fields": [
+        "0"
+      ],
+      "wording": "certify_link_start{0}: the link does not start at the previous verified root chain anchor",
+      "prefix": "certify_link_start{0}: the link does not start at the previous verified root chain anchor",
+      "note": "frozen F5-1 document; verdict unchanged"
+    },
+    {
+      "name": "link-of-a-different-item-g",
+      "description": "the first anchored item takes the closing item's link, which starts at another root",
+      "world": "chain-mixed",
+      "edit": "evidence/links/0 and /1 exchanged",
+      "file": "link-of-a-different-item-g.json",
       "sha256": "35c40943b44da0b993d6ecb9cb732cb66d2558ab3beb1e70260540b507bd8cd2",
       "expect": "refused",
       "state": "certify_link_start",
@@ -384,6 +534,22 @@
       "world": "chain-final-only",
       "edit": "evidence/links/1 = a copy of links/0",
       "file": "link-surplus.json",
+      "sha256": "740ce12de6f7aa80de181fd2d01059c264a192a962574d6088ce594c1c186eda",
+      "expect": "refused",
+      "state": "certify_link_missing",
+      "fields": [
+        "genesis"
+      ],
+      "wording": "certify_link_missing{genesis}: an anchored item has no link",
+      "prefix": "certify_link_missing{genesis}: an anchored item has no link",
+      "note": "frozen F5-1 document; verdict moved by the F5-3 genesis-link requirement (2.1 unreleased)"
+    },
+    {
+      "name": "link-surplus-g",
+      "description": "a link no anchored item takes: the same chain would have two encodings",
+      "world": "chain-final-only",
+      "edit": "evidence/links/1 = a copy of links/0",
+      "file": "link-surplus-g.json",
       "sha256": "ee4ab316449e0a98a1e50bf8d8478a93a51b803601d14f8fa969039372c4ed68",
       "expect": "refused",
       "state": "certify_link_invalid",
@@ -399,6 +565,24 @@
       "world": "chain-anchored",
       "edit": "evidence/links/1 removed",
       "file": "link-of-the-second-item-missing.json",
+      "sha256": "9b446698412d983873f37a6074ee13757149fc390248b2144e4189110cea94b4",
+      "expect": "refused",
+      "state": "certify_update_unproven",
+      "fields": [
+        "acc://dn.acme/globals",
+        "28ae41e0a0d8e5aeb3e4dd8559c4e384534a247d10db100c07db37ad89cf6eea",
+        "110"
+      ],
+      "wording": "certify_update_unproven{acc://dn.acme/globals,28ae41e0a0d8e5aeb3e4dd8559c4e384534a247d10db100c07db37ad89cf6eea,110}: the update's root chain position does not lie between the previous and this anchor's root chain index",
+      "prefix": "certify_update_unproven{acc://dn.acme/globals,28ae41e0a0d8e5aeb3e4dd8559c4e384534a247d10db100c07db37ad89cf6eea,110}: the update's root chain position does not lie between the previous and this anchor's root chain index",
+      "note": "frozen F5-1 document; verdict moved by the F5-3b update-window requirement (2.1 unreleased): its synthetic update receipts are not the root chain path of any leaf"
+    },
+    {
+      "name": "link-of-the-second-item-missing-g",
+      "description": "the second anchored item has no link of its own: it would take the third's, which starts elsewhere",
+      "world": "chain-anchored",
+      "edit": "evidence/links/1 removed",
+      "file": "link-of-the-second-item-missing-g.json",
       "sha256": "90091ed4f2f566d15c3e913c12a20dba72a5465a9d3f03a4af6638ac659e8ae9",
       "expect": "refused",
       "state": "certify_link_start",
@@ -414,6 +598,23 @@
       "world": "chain-no-effect",
       "edit": "none (the world's first item is anchored and carries no update, and is not the last)",
       "file": "anchored-item-without-update-not-last.json",
+      "sha256": "f017e1ffa2b51927438d24e584f7f6c944c8f986f91138abc29d48cb88e074ce",
+      "expect": "refused",
+      "state": "certify_item_without_effect",
+      "fields": [
+        "0",
+        "110"
+      ],
+      "wording": "certify_item_without_effect{0,110}: an anchored item that is not the last of its sequence applies no update",
+      "prefix": "certify_item_without_effect{0,110}: an anchored item that is not the last of its sequence applies no update",
+      "note": "frozen F5-1 document; verdict unchanged"
+    },
+    {
+      "name": "anchored-item-without-update-not-last-g",
+      "description": "an anchored item that changes nothing is only allowed as the last of its sequence",
+      "world": "chain-no-effect",
+      "edit": "none (the world's first item is anchored and carries no update, and is not the last)",
+      "file": "anchored-item-without-update-not-last-g.json",
       "sha256": "5d767f8c452d7311391a4c92e4b56178be805ac83ca22fb3dbe87e801fc07fce",
       "expect": "refused",
       "state": "certify_item_without_effect",
@@ -430,6 +631,24 @@
       "world": "chain-junk-update",
       "edit": "none (the world's first item is anchored and carries one update, a write to acc://dn.acme/oracle with a valid receipt, which the walk does not apply; it is not the last)",
       "file": "anchored-item-with-only-an-unapplied-update-not-last.json",
+      "sha256": "11e2006adda65a2ed3cacb12b185e697912c9a6ff77c8bec986f59bd146b8bc0",
+      "expect": "refused",
+      "state": "certify_update_unproven",
+      "fields": [
+        "acc://dn.acme/oracle",
+        "f78037c5e762bd659cb58220ef5b42d2a7de24c554e92894776b7c9f71c612f1",
+        "110"
+      ],
+      "wording": "certify_update_unproven{acc://dn.acme/oracle,f78037c5e762bd659cb58220ef5b42d2a7de24c554e92894776b7c9f71c612f1,110}: the update's root chain position does not lie between the previous and this anchor's root chain index",
+      "prefix": "certify_update_unproven{acc://dn.acme/oracle,f78037c5e762bd659cb58220ef5b42d2a7de24c554e92894776b7c9f71c612f1,110}: the update's root chain position does not lie between the previous and this anchor's root chain index",
+      "note": "frozen F5-1 document; verdict moved by the F5-3b update-window requirement (2.1 unreleased): its synthetic update receipts are not the root chain path of any leaf"
+    },
+    {
+      "name": "anchored-item-with-only-an-unapplied-update-not-last-g",
+      "description": "the canonical form is about effect, not about the updates member: an anchored item padded with an update that changes nothing is refused like one without updates",
+      "world": "chain-junk-update",
+      "edit": "none (the world's first item is anchored and carries one update, a write to acc://dn.acme/oracle with a valid receipt, which the walk does not apply; it is not the last)",
+      "file": "anchored-item-with-only-an-unapplied-update-not-last-g.json",
       "sha256": "a5ec9a4a5ec28656d96a47bf6aecc220d79fcb25222c0a4305b169ea95cff060",
       "expect": "refused",
       "state": "certify_item_without_effect",
@@ -446,6 +665,24 @@
       "world": "chain-non-monotone",
       "edit": "none (the second item's block, 120, does not pass the first's, 130)",
       "file": "non-monotone-block.json",
+      "sha256": "4be9ceda79fcfd6e9bc38305baa64320ecb5a76635c5b191f70d9d6e7aff6d44",
+      "expect": "refused",
+      "state": "certify_update_unproven",
+      "fields": [
+        "acc://dn.acme/globals",
+        "28ae41e0a0d8e5aeb3e4dd8559c4e384534a247d10db100c07db37ad89cf6eea",
+        "130"
+      ],
+      "wording": "certify_update_unproven{acc://dn.acme/globals,28ae41e0a0d8e5aeb3e4dd8559c4e384534a247d10db100c07db37ad89cf6eea,130}: the update's root chain position does not lie between the previous and this anchor's root chain index",
+      "prefix": "certify_update_unproven{acc://dn.acme/globals,28ae41e0a0d8e5aeb3e4dd8559c4e384534a247d10db100c07db37ad89cf6eea,130}: the update's root chain position does not lie between the previous and this anchor's root chain index",
+      "note": "frozen F5-1 document; verdict moved by the F5-3b update-window requirement (2.1 unreleased): its synthetic update receipts are not the root chain path of any leaf"
+    },
+    {
+      "name": "non-monotone-block-g",
+      "description": "anchored items whose Directory minor blocks do not increase",
+      "world": "chain-non-monotone",
+      "edit": "none (the second item's block, 120, does not pass the first's, 130)",
+      "file": "non-monotone-block-g.json",
       "sha256": "09778a7f0fd1a16c947496a18732af17b8c05937b779e43a4b6cf8da8d680665",
       "expect": "refused",
       "wording": "certify run 1: anchor for minor block 120 does not advance past 130",
@@ -457,6 +694,24 @@
       "world": "chain-duplicated-update",
       "edit": "none (the anchored item carries the same globals write twice)",
       "file": "duplicated-update.json",
+      "sha256": "42b7bc3b2040cf19bb828bdad881e3fd4a447ba26832da13369fb6379b64466f",
+      "expect": "refused",
+      "state": "certify_update_unproven",
+      "fields": [
+        "acc://dn.acme/globals",
+        "57b7ace2b33e5851a709a3c29b3d3642fb137669e9ecf8a9cfec95ba31278a42",
+        "110"
+      ],
+      "wording": "certify_update_unproven{acc://dn.acme/globals,57b7ace2b33e5851a709a3c29b3d3642fb137669e9ecf8a9cfec95ba31278a42,110}: the update's root chain position does not lie between the previous and this anchor's root chain index",
+      "prefix": "certify_update_unproven{acc://dn.acme/globals,57b7ace2b33e5851a709a3c29b3d3642fb137669e9ecf8a9cfec95ba31278a42,110}: the update's root chain position does not lie between the previous and this anchor's root chain index",
+      "note": "frozen F5-1 document; verdict moved by the F5-3b update-window requirement (2.1 unreleased): its synthetic update receipts are not the root chain path of any leaf"
+    },
+    {
+      "name": "duplicated-update-g",
+      "description": "an update the walk already applied: refused, so a count of the network's writes is injective",
+      "world": "chain-duplicated-update",
+      "edit": "none (the anchored item carries the same globals write twice)",
+      "file": "duplicated-update-g.json",
       "sha256": "26ebd617a7978d0c5f53ce9855860bf578abdcf293524cad9fd4b180a95fc6ee",
       "expect": "refused",
       "state": "certify_update_replayed",
@@ -472,6 +727,18 @@
       "world": "chain-continuous-then-end",
       "edit": "evidence/certify/0/rootProof/merkleState/pending/0 first byte flipped",
       "file": "continuous-item-wrongly-rooted-then-anchored.json",
+      "sha256": "cf394e10ed3803e494f02a3f441104750f825ca368da48f4c803b37b6544b025",
+      "expect": "refused",
+      "wording": "certify run 0: root proof does not start at the verified root",
+      "prefix": "certify run 0: root proof does not start at the verified root",
+      "note": "frozen F5-1 document; verdict unchanged"
+    },
+    {
+      "name": "continuous-item-wrongly-rooted-then-anchored-g",
+      "description": "a continuous item whose proof starts at another root, then an anchored closing item",
+      "world": "chain-continuous-then-end",
+      "edit": "evidence/certify/0/rootProof/merkleState/pending/0 first byte flipped",
+      "file": "continuous-item-wrongly-rooted-then-anchored-g.json",
       "sha256": "a99096a74d3e2e0b9f25c506d1b0ae41dd1e7fbcd4ee0257df931375ed2b5d0b",
       "expect": "refused",
       "wording": "certify run 0: root proof does not start at the verified root",
@@ -483,6 +750,24 @@
       "world": "chain-anchored-then-end",
       "edit": "evidence/certify/1/rootProof/merkleState/pending/0 first byte flipped",
       "file": "anchored-then-continuous-item-wrongly-rooted.json",
+      "sha256": "2d10ed47f1cfa79ba6762016716a2057dacec3e63aab5054ed16c93e1974ea95",
+      "expect": "refused",
+      "state": "certify_update_unproven",
+      "fields": [
+        "acc://dn.acme/globals",
+        "28ae41e0a0d8e5aeb3e4dd8559c4e384534a247d10db100c07db37ad89cf6eea",
+        "110"
+      ],
+      "wording": "certify_update_unproven{acc://dn.acme/globals,28ae41e0a0d8e5aeb3e4dd8559c4e384534a247d10db100c07db37ad89cf6eea,110}: the update's root chain position does not lie between the previous and this anchor's root chain index",
+      "prefix": "certify_update_unproven{acc://dn.acme/globals,28ae41e0a0d8e5aeb3e4dd8559c4e384534a247d10db100c07db37ad89cf6eea,110}: the update's root chain position does not lie between the previous and this anchor's root chain index",
+      "note": "frozen F5-1 document; verdict moved by the F5-3b update-window requirement (2.1 unreleased): its synthetic update receipts are not the root chain path of any leaf"
+    },
+    {
+      "name": "anchored-then-continuous-item-wrongly-rooted-g",
+      "description": "an anchored item, then a continuous closing item whose proof starts at another root",
+      "world": "chain-anchored-then-end",
+      "edit": "evidence/certify/1/rootProof/merkleState/pending/0 first byte flipped",
+      "file": "anchored-then-continuous-item-wrongly-rooted-g.json",
       "sha256": "b772ceb1d7a946012b2c4383966f29797b4851d95d66eeffcd00897ddcef9fae",
       "expect": "refused",
       "wording": "certify run 1: root proof does not start at the verified root",
@@ -494,6 +779,22 @@
       "world": "chain-final-only",
       "edit": "evidence/certify/0 and links/0 replaced by a record of another chain signed by the genesis set, with that chain's own link",
       "file": "anchor-of-another-chain-genuinely-signed.json",
+      "sha256": "42ac383413bccf484b88f91addf355d978554ba1a979d0082b752989c99e7df6",
+      "expect": "refused",
+      "state": "certify_link_start",
+      "fields": [
+        "0"
+      ],
+      "wording": "certify_link_start{0}: the link does not start at the previous verified root chain anchor",
+      "prefix": "certify_link_start{0}: the link does not start at the previous verified root chain anchor",
+      "note": "frozen F5-1 document; verdict unchanged"
+    },
+    {
+      "name": "anchor-of-another-chain-genuinely-signed-g",
+      "description": "a genuine anchor of another chain: the signatures are intact and the link is valid in its own chain, but it does not start at the verified root",
+      "world": "chain-final-only",
+      "edit": "evidence/certify/0 and links/0 replaced by a record of another chain signed by the genesis set, with that chain's own link",
+      "file": "anchor-of-another-chain-genuinely-signed-g.json",
       "sha256": "123ab1a4c9e341e208944c447124b9b702a0098d836e178d9ce8c86fbcde8833",
       "expect": "refused",
       "state": "certify_link_start",
@@ -509,6 +810,22 @@
       "world": "chain-final-only",
       "edit": "evidence/certify/0, links/0 and genesisLink replaced by a record of another chain signed by the genesis set, linked from the verified root",
       "file": "anchor-re-rooted-off-the-verified-root.json",
+      "sha256": "a7f14920653480b9c7a7b9f6566eeb0268e327d87ceb333d65758b4e75fc8df7",
+      "expect": "refused",
+      "state": "certify_link_missing",
+      "fields": [
+        "genesis"
+      ],
+      "wording": "certify_link_missing{genesis}: an anchored item has no link",
+      "prefix": "certify_link_missing{genesis}: an anchored item has no link",
+      "note": "frozen F5-1 document; verdict moved by the F5-3 genesis-link requirement (2.1 unreleased)"
+    },
+    {
+      "name": "anchor-re-rooted-off-the-verified-root-g",
+      "description": "the link starts at the verified root and ends at the foreign anchor's root, which the genesis set signed, and the genesis link is the same receipt: the walk accepts it and the transaction's receipt, which ends at the world's own root, is refused",
+      "world": "chain-final-only",
+      "edit": "evidence/certify/0, links/0 and genesisLink replaced by a record of another chain signed by the genesis set, linked from the verified root",
+      "file": "anchor-re-rooted-off-the-verified-root-g.json",
       "sha256": "e02d8d68899144c4a731db6ab38606f3ab65833b29ccb8d16668edd983530cb2",
       "expect": "refused",
       "wording": "receipt ends at 4b5bb5147f4ecfcfb3ef2e772d1038990c61697e24620fb97c9224a22b15e2ba, not the root 174a338c9842e470aaa4f0c1ea0db5116aa21a31aed54b666d998cec5ec98495 certified at DN 110",
@@ -520,6 +837,18 @@
       "world": "chain-final-only",
       "edit": "evidence/certify/0 and links/0 replaced by a record signed by a validator set the genesis does not hold, linked from the verified root",
       "file": "anchor-of-another-incarnation.json",
+      "sha256": "70757388f7e975c64e460ba35a623756e23c95f8f23e0377c4977ff8d203f92a",
+      "expect": "refused",
+      "wording": "certify run 0: block 110: signer is not an active directory validator",
+      "prefix": "certify run 0: block 110: signer is not an active directory validator",
+      "note": "frozen F5-1 document; verdict unchanged"
+    },
+    {
+      "name": "anchor-of-another-incarnation-g",
+      "description": "a cross-incarnation anchor: the link is valid and starts at the verified root, the signers are not in the set in force",
+      "world": "chain-final-only",
+      "edit": "evidence/certify/0 and links/0 replaced by a record signed by a validator set the genesis does not hold, linked from the verified root",
+      "file": "anchor-of-another-incarnation-g.json",
       "sha256": "ce62e9abdf05b3eadf03df6c6e5213c34b4f5c54e69454e479eb9a617446c941",
       "expect": "refused",
       "wording": "certify run 0: block 110: signer is not an active directory validator",
@@ -531,6 +860,22 @@
       "world": "chain-final-only",
       "edit": "evidence/certify/0/rootProof = null",
       "file": "root-proof-null-is-absent.json",
+      "sha256": "8bc6ca827651424310a93021e410c9317455c764fd798af0a6deb7d86b976a26",
+      "expect": "refused",
+      "state": "certify_link_missing",
+      "fields": [
+        "genesis"
+      ],
+      "wording": "certify_link_missing{genesis}: an anchored item has no link",
+      "prefix": "certify_link_missing{genesis}: an anchored item has no link",
+      "note": "frozen F5-1 document; verdict moved by the F5-3 genesis-link requirement (2.1 unreleased)"
+    },
+    {
+      "name": "root-proof-null-is-absent-g",
+      "description": "a null rootProof is no rootProof: the item is anchored and takes its link",
+      "world": "chain-final-only",
+      "edit": "evidence/certify/0/rootProof = null",
+      "file": "root-proof-null-is-absent-g.json",
       "sha256": "ca207a0ad092702e2adb8e960b63d9954b3a607f70e8ca3463e3b686f470782a",
       "expect": "verified",
       "report": {
@@ -605,6 +950,18 @@
       "world": "chain-final-only",
       "edit": "evidence/certify/0/rootProof = {}",
       "file": "root-proof-empty-object.json",
+      "sha256": "e2e0c166757dbdcf17727a841c38528d9600aea1926d8894d2173a90c564024d",
+      "expect": "refused",
+      "wording": "certify run 0: incomplete root proof",
+      "prefix": "certify run 0: incomplete root proof",
+      "note": "frozen F5-1 document; verdict unchanged"
+    },
+    {
+      "name": "root-proof-empty-object-g",
+      "description": "an empty rootProof is a continuous item with an empty proof, not an anchored one",
+      "world": "chain-final-only",
+      "edit": "evidence/certify/0/rootProof = {}",
+      "file": "root-proof-empty-object-g.json",
       "sha256": "64e60e3ee0483f738182bd5a868843b8e951531e02394f5c37df149dee408214",
       "expect": "refused",
       "wording": "certify run 0: incomplete root proof",
@@ -616,6 +973,18 @@
       "world": "chain-final-only",
       "edit": "evidence/certify/0/rootProof = {merkleState: the chain's}",
       "file": "root-proof-merkle-state-only.json",
+      "sha256": "8a453804c69e3646f7fccbf3399e3347948cabf85904e7f0c9664d2330cdda08",
+      "expect": "refused",
+      "wording": "certify run 0: incomplete root proof",
+      "prefix": "certify run 0: incomplete root proof",
+      "note": "frozen F5-1 document; verdict unchanged"
+    },
+    {
+      "name": "root-proof-merkle-state-only-g",
+      "description": "a rootProof without its receipt is a continuous item with an incomplete proof",
+      "world": "chain-final-only",
+      "edit": "evidence/certify/0/rootProof = {merkleState: the chain's}",
+      "file": "root-proof-merkle-state-only-g.json",
       "sha256": "10093414cf773acb0fcd6afffb398c98dbafe2d3ce9e596f410b95c9508751db",
       "expect": "refused",
       "wording": "certify run 0: incomplete root proof",
@@ -627,6 +996,22 @@
       "world": "chain-final-only",
       "edit": "evidence/certify/0/$epilogue = field 5",
       "file": "record-with-an-unknown-trailing-field.json",
+      "sha256": "d88be9ebb6567634095afe629996ab45c64ff124a583cc1733cb34bc9edb70df",
+      "expect": "refused",
+      "state": "certify_link_missing",
+      "fields": [
+        "genesis"
+      ],
+      "wording": "certify_link_missing{genesis}: an anchored item has no link",
+      "prefix": "certify_link_missing{genesis}: an anchored item has no link",
+      "note": "frozen F5-1 document; verdict moved by the F5-3 genesis-link requirement (2.1 unreleased)"
+    },
+    {
+      "name": "record-with-an-unknown-trailing-field-g",
+      "description": "a record carrying a field the decoder does not know (Accumulate keeps it as its epilogue): the verdict is the unmodified document's",
+      "world": "chain-final-only",
+      "edit": "evidence/certify/0/$epilogue = field 5",
+      "file": "record-with-an-unknown-trailing-field-g.json",
       "sha256": "ac971ad50b50ad88b7802ff237ce27cc7b9ee68377d8db36ad2e6a7aa74640d7",
       "expect": "verified",
       "report": {
@@ -701,6 +1086,22 @@
       "world": "chain-final-only",
       "edit": "evidence/links/0/$epilogue = field 5",
       "file": "link-with-an-unknown-trailing-field.json",
+      "sha256": "956bd983cd7c0107ba592fe1da07eae8f455074079a63037a65bd81b64178fce",
+      "expect": "refused",
+      "state": "certify_link_invalid",
+      "fields": [
+        "0"
+      ],
+      "wording": "certify_link_invalid{0}: the link is not a valid receipt of an anchored item",
+      "prefix": "certify_link_invalid{0}: the link is not a valid receipt of an anchored item",
+      "note": "frozen F5-1 document; verdict unchanged"
+    },
+    {
+      "name": "link-with-an-unknown-trailing-field-g",
+      "description": "a link is a receipt, not a record: unlike a record, whose unknown trailing field leaves the verdict unchanged, a receipt carrying one is refused as an invalid link at its ordinal",
+      "world": "chain-final-only",
+      "edit": "evidence/links/0/$epilogue = field 5",
+      "file": "link-with-an-unknown-trailing-field-g.json",
       "sha256": "77a0e4ab9a1590a325cce7174b4bc01ea7721cab3e1f8218d1c719bdf1e2fd17",
       "expect": "refused",
       "state": "certify_link_invalid",
@@ -716,6 +1117,22 @@
       "world": "chain-two-anchored",
       "edit": "evidence/links/1/$epilogue = field 5 and evidence/certify/0/signatures = []",
       "file": "link-undecodable-before-an-earlier-items-refusal.json",
+      "sha256": "c329eecf152c28baf5a30483b54526ac1af38a1ebf46a6134606b46d8eedd15b",
+      "expect": "refused",
+      "state": "certify_link_invalid",
+      "fields": [
+        "1"
+      ],
+      "wording": "certify_link_invalid{1}: the link is not a valid receipt of an anchored item",
+      "prefix": "certify_link_invalid{1}: the link is not a valid receipt of an anchored item",
+      "note": "frozen F5-1 document; verdict unchanged"
+    },
+    {
+      "name": "link-undecodable-before-an-earlier-items-refusal-g",
+      "description": "every link is decoded before any item is judged: link 1 does not decode, and item 0, which comes first, has no quorum; the verdict is the link's, at its ordinal, never item 0's",
+      "world": "chain-two-anchored",
+      "edit": "evidence/links/1/$epilogue = field 5 and evidence/certify/0/signatures = []",
+      "file": "link-undecodable-before-an-earlier-items-refusal-g.json",
       "sha256": "369955ae561dbe245f3def5ad9f311226b3220834d7c5648791f0254929d2bd9",
       "expect": "refused",
       "state": "certify_link_invalid",
@@ -731,6 +1148,22 @@
       "world": "chain-hops-anchored",
       "edit": "none",
       "file": "hops-anchored-verified.json",
+      "sha256": "f542adb05f61ed07d7d6fe1241f67597ef4fc356f6fe3dc72017fa7bb73f5b94",
+      "expect": "refused",
+      "state": "certify_link_missing",
+      "fields": [
+        "genesis"
+      ],
+      "wording": "certify_link_missing{genesis}: an anchored item has no link",
+      "prefix": "certify_link_missing{genesis}: an anchored item has no link",
+      "note": "frozen F5-1 document; verdict moved by the F5-3 genesis-link requirement (2.1 unreleased)"
+    },
+    {
+      "name": "hops-anchored-verified-g",
+      "description": "an anchored closing certify item and two anchored hops, three links in the order certify then hops",
+      "world": "chain-hops-anchored",
+      "edit": "none",
+      "file": "hops-anchored-verified-g.json",
       "sha256": "42a5a9959a92c837324483aa6d5c32a2c4e85a7df2bd900180c1982c5ef91e4a",
       "expect": "verified",
       "report": {
@@ -805,6 +1238,22 @@
       "world": "chain-hops-anchored",
       "edit": "evidence/links/2 removed",
       "file": "hop-link-absent.json",
+      "sha256": "dcae2cd254aca09fd84f32b280f66ab4d5ad353a89dcc2e41661d551f1c52ee7",
+      "expect": "refused",
+      "state": "certify_link_missing",
+      "fields": [
+        "genesis"
+      ],
+      "wording": "certify_link_missing{genesis}: an anchored item has no link",
+      "prefix": "certify_link_missing{genesis}: an anchored item has no link",
+      "note": "frozen F5-1 document; verdict moved by the F5-3 genesis-link requirement (2.1 unreleased)"
+    },
+    {
+      "name": "hop-link-absent-g",
+      "description": "the last hop has no link: the ordinal is counted across certify and hops",
+      "world": "chain-hops-anchored",
+      "edit": "evidence/links/2 removed",
+      "file": "hop-link-absent-g.json",
       "sha256": "5b8d49838978da73d73dcc9de1b03b41f2ae97c2bcacaceea5aebc933ec2a125",
       "expect": "refused",
       "state": "certify_link_missing",
@@ -820,6 +1269,22 @@
       "world": "chain-hops-anchored",
       "edit": "evidence/links/1/start first byte flipped",
       "file": "hop-link-start-altered.json",
+      "sha256": "509d756543105de484bb7915eb8d903d8a4da3010ef75e77b280aa12fb458859",
+      "expect": "refused",
+      "state": "certify_link_missing",
+      "fields": [
+        "genesis"
+      ],
+      "wording": "certify_link_missing{genesis}: an anchored item has no link",
+      "prefix": "certify_link_missing{genesis}: an anchored item has no link",
+      "note": "frozen F5-1 document; verdict moved by the F5-3 genesis-link requirement (2.1 unreleased)"
+    },
+    {
+      "name": "hop-link-start-altered-g",
+      "description": "the first hop's link starts somewhere other than the checkpoint's root chain anchor",
+      "world": "chain-hops-anchored",
+      "edit": "evidence/links/1/start first byte flipped",
+      "file": "hop-link-start-altered-g.json",
       "sha256": "6859345ba4a876b6a2f0867c723529eee5cb568253c70b600b955847a1fb2c36",
       "expect": "refused",
       "state": "certify_link_start",
@@ -835,6 +1300,22 @@
       "world": "chain-hops-no-effect",
       "edit": "none (the first hop is anchored, carries no update and is not the last)",
       "file": "hop-anchored-item-without-update-not-last.json",
+      "sha256": "b7fb40aff4242a1cf85d08429a0a88f8535db5b4812c6d02dea66f322949085a",
+      "expect": "refused",
+      "state": "certify_link_missing",
+      "fields": [
+        "genesis"
+      ],
+      "wording": "certify_link_missing{genesis}: an anchored item has no link",
+      "prefix": "certify_link_missing{genesis}: an anchored item has no link",
+      "note": "frozen F5-1 document; verdict moved by the F5-3 genesis-link requirement (2.1 unreleased)"
+    },
+    {
+      "name": "hop-anchored-item-without-update-not-last-g",
+      "description": "the canonical form holds for the set check's hops; the item is numbered across certify and hops",
+      "world": "chain-hops-no-effect",
+      "edit": "none (the first hop is anchored, carries no update and is not the last)",
+      "file": "hop-anchored-item-without-update-not-last-g.json",
       "sha256": "c13d66eef63e75eede3025e5bd2eb34f7fd2ad4af6332e6f386d988b4a802345",
       "expect": "refused",
       "state": "certify_item_without_effect",
@@ -851,6 +1332,22 @@
       "world": "chain-hops-duplicated",
       "edit": "none (the first hop carries the same globals write twice)",
       "file": "hop-duplicated-update.json",
+      "sha256": "01753d5090c0e381625c45c11abaf6c3f6798a01714e9a35ddcbf3ff735387f0",
+      "expect": "refused",
+      "state": "certify_link_missing",
+      "fields": [
+        "genesis"
+      ],
+      "wording": "certify_link_missing{genesis}: an anchored item has no link",
+      "prefix": "certify_link_missing{genesis}: an anchored item has no link",
+      "note": "frozen F5-1 document; verdict moved by the F5-3 genesis-link requirement (2.1 unreleased)"
+    },
+    {
+      "name": "hop-duplicated-update-g",
+      "description": "the replay refusal holds for the set check's hops",
+      "world": "chain-hops-duplicated",
+      "edit": "none (the first hop carries the same globals write twice)",
+      "file": "hop-duplicated-update-g.json",
       "sha256": "53b035e83e80ace98d257e9850caf80c9192b61b3927aeeba95940c4c728e8a0",
       "expect": "refused",
       "state": "certify_update_replayed",
