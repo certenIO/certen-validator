@@ -14,6 +14,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/rpc"
 
@@ -103,6 +104,16 @@ type ReplayCaptureConfig struct {
 	Poll    time.Duration // default 2s
 	Clock   ReplayClock   // default WallClock; a replay clock over a recorded world (RB10-F9)
 	Logf    func(string, ...interface{})
+	// Concurrent is the most captures of this chain that run at once (default DefaultReplayCaptureConcurrency): the rest wait
+	// for a slot and spend their budget doing so. The size is fixed by the first capture of the chain in a store.
+	Concurrent int
+}
+
+func (c *ReplayCaptureConfig) concurrent() int {
+	if c.Concurrent <= 0 {
+		return DefaultReplayCaptureConcurrency
+	}
+	return c.Concurrent
 }
 
 func (c *ReplayCaptureConfig) budget() time.Duration {
@@ -315,18 +326,26 @@ func CaptureReplayGuard(ctx context.Context, cfg ReplayCaptureConfig, txHash com
 				low = top - replayAfterCandidates + 1
 			}
 		pass:
-			for _, p := range providers {
-				for h := top; ; h-- {
-					if bctx.Err() != nil {
-						break pass
-					}
-					hdrs, herr := headers.upTo(bctx, h)
-					if herr != nil {
+			// V-R10B2 note: the newest candidate block is asked of every provider before an older one is asked of any, and
+			// the first verified proof ends the pass, so a provider that cannot serve costs one request, not one per
+			// candidate, before the provider that can.
+			for h := top; ; h-- {
+				if bctx.Err() != nil {
+					break pass
+				}
+				hdrs, herr := headers.upTo(bctx, h)
+				if herr != nil {
+					for _, p := range providers {
 						failures.note(p.Name(), fmt.Sprintf("block %d: %v", h, herr))
-					} else {
-						hdrH := headerN
-						if len(hdrs) > 0 {
-							hdrH = hdrs[len(hdrs)-1]
+					}
+				} else {
+					hdrH := headerN
+					if len(hdrs) > 0 {
+						hdrH = hdrs[len(hdrs)-1]
+					}
+					for _, p := range providers {
+						if bctx.Err() != nil {
+							break pass
 						}
 						sp, res, perr := proveAt(bctx, p, contract, slot, hdrH)
 						switch {
@@ -338,13 +357,11 @@ func CaptureReplayGuard(ctx context.Context, cfg ReplayCaptureConfig, txHash com
 							failures.note(p.Name(), fmt.Sprintf("block %d: %s holds no code", h, contract.Hex()))
 						default:
 							after, chain, provenAt = sp, hdrs, hdrH
+							break pass
 						}
 					}
-					if after != nil || h == low {
-						break
-					}
 				}
-				if after != nil {
+				if h == low {
 					break
 				}
 			}
@@ -562,6 +579,7 @@ type ReplayGuardStore struct {
 	bytes    int
 	order    []replayKey
 	m        map[replayKey]*replayEntry
+	slots    map[int64]chan struct{}
 }
 
 // DefaultReplayGuardBytes bounds the evidence bytes a store holds (V-R10B note: a proof may carry 512 headers, so a
@@ -732,10 +750,32 @@ func (s *ReplayGuardStore) Wait(ctx context.Context, chain int64, tx common.Hash
 	return ev, bound, nil
 }
 
+// DefaultReplayCaptureConcurrency is how many captures of one chain run at once when the configuration does not say.
+const DefaultReplayCaptureConcurrency = 4
+
+// captureSlots is the semaphore bounding the captures of one chain that run at once (V-R10B2 note: each pass of a capture
+// asks every provider, and a restart backlog of settlements would otherwise multiply that load on the providers the
+// observation itself uses). The size is fixed by the first capture of the chain.
+func (s *ReplayGuardStore) captureSlots(chain int64, n int) chan struct{} {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.slots == nil {
+		s.slots = map[int64]chan struct{}{}
+	}
+	ch, ok := s.slots[chain]
+	if !ok {
+		ch = make(chan struct{}, n)
+		s.slots[chain] = ch
+	}
+	return ch
+}
+
 // ReplayGuardCapturer starts captures at inclusion and binds them to the proven settlement; both calls return at once.
 type ReplayGuardCapturer struct {
 	cfg   ReplayCaptureConfig
 	store *ReplayGuardStore
+	// verifySettlement is the one verification of a proven settlement this capturer makes per Bind or Resolve.
+	verifySettlement func(*Settlement) (*types.Header, *ReceiptLeaf, error)
 }
 
 // NewReplayGuardCapturer returns a capturer writing to store (DefaultReplayGuards when nil).
@@ -743,16 +783,20 @@ func NewReplayGuardCapturer(cfg ReplayCaptureConfig, store *ReplayGuardStore) *R
 	if store == nil {
 		store = DefaultReplayGuards
 	}
-	return &ReplayGuardCapturer{cfg: cfg, store: store}
+	return &ReplayGuardCapturer{cfg: cfg, store: store, verifySettlement: (*Settlement).Verify}
 }
 
 // Begin starts the capture of txHash's replay guard in the background, once per transaction. It never blocks and never
-// fails the caller: whatever happens is stored as evidence or as a named state.
+// fails the caller: whatever happens is stored as evidence or as a named state. At most the configured number of captures
+// of the chain run at once; one waiting for a slot has begun spending its budget, and names the wait when the budget ends
+// before a slot frees.
 func (c *ReplayGuardCapturer) Begin(txHash common.Hash) {
 	e, first := c.store.begin(c.cfg.ChainID, txHash)
 	if !first {
 		return
 	}
+	clock := c.cfg.clock()
+	deadline := clock.Now().Add(c.cfg.budget())
 	go func() {
 		var ev *ReplayGuardEvidence
 		defer func() {
@@ -769,7 +813,30 @@ func (c *ReplayGuardCapturer) Begin(txHash common.Hash) {
 		}()
 		ctx, cancel := context.WithTimeout(context.Background(), c.cfg.budget()+time.Minute)
 		defer cancel()
-		ev = CaptureReplayGuard(ctx, c.cfg, txHash)
+		slots := c.store.captureSlots(c.cfg.ChainID, c.cfg.concurrent())
+		select {
+		case slots <- struct{}{}:
+		default:
+			wctx, wcancel := clock.WithDeadline(ctx, deadline)
+			select {
+			case slots <- struct{}{}:
+				wcancel()
+			case <-wctx.Done():
+				wcancel()
+				c.cfg.logf("⚠️ [S6-REPLAY] chain %d tx %s: no capture slot freed within the budget of %s", c.cfg.ChainID, txHash.Hex(), c.cfg.budget())
+				ev = &ReplayGuardEvidence{Version: ReplayGuardDomain, State: &ReplayNamedState{State: ReplayUnproven, Reason: ReasonStateUnavailable,
+					ChainID: c.cfg.ChainID, TxHash: txHash, Detail: fmt.Sprintf("the capture waited for one of the %d capture slots of chain %d and none freed within its budget of %s (the settlements observed at once exceed what the providers are asked for at once)",
+						cap(slots), c.cfg.ChainID, c.cfg.budget())}}
+				return
+			}
+		}
+		defer func() { <-slots }()
+		cfg := c.cfg
+		cfg.Budget = deadline.Sub(clock.Now()) // the budget not spent waiting for the slot
+		if cfg.Budget <= 0 {
+			cfg.Budget = time.Nanosecond
+		}
+		ev = CaptureReplayGuard(ctx, cfg, txHash)
 	}()
 }
 
@@ -806,17 +873,18 @@ func (c *ReplayGuardCapturer) Bind(s *Settlement) {
 	}
 	go func() {
 		var e *replayEntry
-		// V-R10B note: whatever fails in here is the settlement's named state, never a crash of the observer.
+		// V-R10B note: whatever fails in here is the settlement's named state, never a crash of the observer. V-R10B2: the
+		// state is built from what is known without verifying the settlement again, which may be what failed.
 		defer func() {
 			if r := recover(); r != nil && e != nil {
-				c.store.put(e, c.settlementState(s, ReplayUnproven, ReasonStateUnavailable, fmt.Sprintf("the bind failed: %v", r)), true)
+				c.store.put(e, c.panicState(s, r), true)
 			}
 		}()
 		ctx, cancel := context.WithTimeout(context.Background(), c.cfg.budget()+2*time.Minute)
 		defer cancel()
 		e, first := c.store.begin(c.cfg.ChainID, s.TxHash)
 		if first {
-			c.store.put(e, c.settlementState(s, ReplayUnproven, ReasonCaptureNotAttempted,
+			c.store.put(e, c.namedState(c.look(s), s, ReplayUnproven, ReasonCaptureNotAttempted,
 				"the settlement was first observed at finality; no proof of the replay guard was captured at inclusion, and no provider serves that state any longer"), true)
 			close(e.done)
 			return
@@ -824,7 +892,7 @@ func (c *ReplayGuardCapturer) Bind(s *Settlement) {
 		select {
 		case <-e.done:
 		case <-ctx.Done():
-			c.store.put(e, c.settlementState(s, ReplayUnproven, ReasonStateUnavailable, "the capture did not finish: "+ctx.Err().Error()), true)
+			c.store.put(e, c.namedState(c.look(s), s, ReplayUnproven, ReasonStateUnavailable, "the capture did not finish: "+ctx.Err().Error()), true)
 			return
 		}
 		c.store.mu.Lock()
@@ -833,57 +901,173 @@ func (c *ReplayGuardCapturer) Bind(s *Settlement) {
 		if ev == nil {
 			return
 		}
-		if _, err := ev.Verify(s); err != nil {
-			st, reason := ReplayUnproven, ReasonProofDoesNotVerify
-			detail := err.Error()
-			if re, ok := err.(*ReplayError); ok {
-				st, reason, detail = re.State, re.Reason, re.Detail
-			}
-			c.cfg.logf("⚠️ [S6-REPLAY] chain %d tx %s: the captured evidence does not hold against the proven settlement: %s{reason=%s}: %s",
-				c.cfg.ChainID, s.TxHash.Hex(), st, reason, detail)
-			c.store.put(e, c.refusalState(s, ev, st, reason, detail), true)
-			return
+		out, refusal := c.holdTo(ev, s)
+		if refusal != "" {
+			c.cfg.logf("⚠️ [S6-REPLAY] chain %d tx %s: the captured evidence does not hold against the proven settlement: %s",
+				c.cfg.ChainID, s.TxHash.Hex(), refusal)
 		}
-		c.store.put(e, ev, true)
+		c.store.put(e, out, true)
 	}()
 }
 
 // Resolve is the evidence of the proven settlement s as the capture stands now, held to s: nil while the capture has not
-// finished (or none was begun), the verified evidence, or the named state saying why it does not hold. It never waits.
-func (c *ReplayGuardCapturer) Resolve(s *Settlement) *ReplayGuardEvidence {
+// finished (or none was begun), the verified evidence, or the named state saying why it does not hold. It never waits, and
+// it never panics: it runs in the observation's own path.
+func (c *ReplayGuardCapturer) Resolve(s *Settlement) (out *ReplayGuardEvidence) {
 	if s == nil || s.Tx == nil {
 		return nil
 	}
+	defer func() {
+		if r := recover(); r != nil {
+			out = c.panicState(s, r)
+		}
+	}()
 	ev, _, ok := c.store.Get(c.cfg.ChainID, s.TxHash)
 	if !ok {
 		return nil
 	}
-	if _, err := ev.Verify(s); err != nil {
-		st, reason, detail := ReplayUnproven, ReasonProofDoesNotVerify, err.Error()
-		if re, ok := err.(*ReplayError); ok {
-			st, reason, detail = re.State, re.Reason, re.Detail
-		}
-		return c.refusalState(s, ev, st, reason, detail)
-	}
-	return ev
+	out, _ = c.holdTo(ev, s)
+	return out
 }
 
-func (c *ReplayGuardCapturer) settlementState(s *Settlement, state, reason, detail string) *ReplayGuardEvidence {
-	st := &ReplayNamedState{State: state, Reason: reason, ChainID: c.cfg.ChainID, TxHash: s.TxHash, BlockHash: s.BlockHash, Detail: detail}
-	if hdr, _, err := s.Verify(); err == nil {
-		st.BlockNumber = hdr.Number.Uint64()
+// settlementLook is the one look at a proven settlement a Bind or a Resolve takes: its verified header and receipt, its
+// transaction, and why they cannot be had.
+type settlementLook struct {
+	hdr    *types.Header
+	rcpt   *ReceiptLeaf
+	tx     *types.Transaction // decoded from the settlement's transaction leaf, whether or not the settlement verified
+	err    error              // why the settlement does not verify, a panic in its verification included
+	number uint64             // the settlement block's number, when it is known
+}
+
+// look verifies the settlement once. A panic in the verification is its error: it is neither raised nor repeated.
+func (c *ReplayGuardCapturer) look(s *Settlement) (l settlementLook) {
+	l.tx = settlementTx(s)
+	defer func() {
+		if r := recover(); r != nil {
+			l.hdr, l.rcpt = nil, nil
+			l.err = fmt.Errorf("verifying the settlement panicked: %v", r)
+			l.number = settledNumber(s)
+		}
+	}()
+	hdr, rcpt, err := c.verifySettlement(s)
+	if err != nil {
+		l.err = err
+		return l
 	}
-	var tx types.Transaction
-	if s.Tx != nil && tx.UnmarshalBinary(s.Tx.LeafValue) == nil && tx.To() != nil {
-		st.Contract = *tx.To()
+	l.hdr, l.rcpt, l.number = hdr, rcpt, hdr.Number.Uint64()
+	return l
+}
+
+// settlementTx is the transaction the settlement carries, nil when it does not decode.
+func settlementTx(s *Settlement) (tx *types.Transaction) {
+	defer func() {
+		if recover() != nil {
+			tx = nil
+		}
+	}()
+	if s == nil || s.Tx == nil {
+		return nil
+	}
+	var t types.Transaction
+	if t.UnmarshalBinary(s.Tx.LeafValue) != nil {
+		return nil
+	}
+	return &t
+}
+
+// settledNumber is the number of the settlement block, read without verifying the settlement: only a header that hashes
+// to the block the settlement names states it, and 0 otherwise.
+func settledNumber(s *Settlement) (n uint64) {
+	defer func() {
+		if recover() != nil {
+			n = 0
+		}
+	}()
+	if s == nil || len(s.Header) == 0 || crypto.Keccak256Hash(s.Header) != s.BlockHash {
+		return 0
+	}
+	var h types.Header
+	if rlp.DecodeBytes(s.Header, &h) != nil || h.Number == nil {
+		return 0
+	}
+	return h.Number.Uint64()
+}
+
+// holdTo holds the captured evidence to the proven settlement s. It returns the evidence to keep: the capture's own when it
+// holds; the capture's named state with the block and contract it could not state at the time filled in from the proven
+// settlement (never replacing a block or contract it did state), when that holds; else the named state of why it does not
+// hold, with a note of it. The settlement is verified once, and a panic anywhere in here is a named state built from what is
+// already known.
+func (c *ReplayGuardCapturer) holdTo(ev *ReplayGuardEvidence, s *Settlement) (out *ReplayGuardEvidence, refusal string) {
+	l := c.look(s)
+	defer func() {
+		if r := recover(); r != nil {
+			refusal = fmt.Sprintf("verifying the evidence panicked: %v", r)
+			out = c.namedState(l, s, ReplayUnproven, ReasonProofDoesNotVerify, refusal)
+		}
+	}()
+	if l.err != nil {
+		refusal = fmt.Sprintf("the settlement does not verify: %v", l.err)
+		return c.namedState(l, s, ReplayUnproven, ReasonSettlementUnproven, refusal), refusal
+	}
+	if l.tx == nil {
+		refusal = "the proven transaction does not decode"
+		return c.namedState(l, s, ReplayUnproven, ReasonSettlementUnproven, refusal), refusal
+	}
+	cand := restateUnknowns(ev, l)
+	if _, err := cand.VerifyAgainst(l.hdr, l.tx, l.rcpt.Succeeded(), l.rcpt.Logs); err != nil {
+		state, reason, detail := ReplayUnproven, ReasonProofDoesNotVerify, err.Error()
+		if re, ok := err.(*ReplayError); ok {
+			state, reason, detail = re.State, re.Reason, re.Detail
+		}
+		return c.refusalState(l, s, ev, state, reason, detail), fmt.Sprintf("%s{reason=%s}: %s", state, reason, detail)
+	}
+	return cand, ""
+}
+
+// restateUnknowns is the capture's named state about this transaction with what the capture could not state - the block
+// (it never saw the receipt) and the contract (it never read the transaction) - taken from the proven settlement (RB10-B8
+// D2): the capture keeps its reason, detail and providers. A block or contract it did state is never replaced, so a state of
+// another block or contract is still the mismatch the verifier names. Any other evidence is returned as it is.
+func restateUnknowns(ev *ReplayGuardEvidence, l settlementLook) *ReplayGuardEvidence {
+	if ev == nil || ev.State == nil || l.hdr == nil || l.tx == nil || ev.State.TxHash != l.tx.Hash() {
+		return ev
+	}
+	st := *ev.State
+	changed := false
+	if st.BlockNumber == 0 && st.BlockHash == (common.Hash{}) {
+		st.BlockNumber, st.BlockHash, changed = l.hdr.Number.Uint64(), l.hdr.Hash(), true
+	}
+	if st.Contract == (common.Address{}) && l.tx.To() != nil {
+		st.Contract, changed = *l.tx.To(), true
+	}
+	if !changed {
+		return ev
+	}
+	return &ReplayGuardEvidence{Version: ev.Version, State: &st}
+}
+
+// namedState is the named state of the settlement s, stating the block and contract as the look found them.
+func (c *ReplayGuardCapturer) namedState(l settlementLook, s *Settlement, state, reason, detail string) *ReplayGuardEvidence {
+	st := &ReplayNamedState{State: state, Reason: reason, ChainID: c.cfg.ChainID, TxHash: s.TxHash, BlockHash: s.BlockHash, BlockNumber: l.number, Detail: detail}
+	if l.tx != nil && l.tx.To() != nil {
+		st.Contract = *l.tx.To()
 	}
 	return &ReplayGuardEvidence{Version: ReplayGuardDomain, State: st}
 }
 
+// panicState is the named state of a panic in a Bind or a Resolve, built without verifying the settlement (which may be
+// what panicked): its block is read from the header only when that hashes to the block the settlement names.
+func (c *ReplayGuardCapturer) panicState(s *Settlement, r interface{}) *ReplayGuardEvidence {
+	l := settlementLook{tx: settlementTx(s), number: settledNumber(s)}
+	return c.namedState(l, s, ReplayUnproven, ReasonStateUnavailable, fmt.Sprintf("the replay-guard evidence could not be held to the settlement: %v", r))
+}
+
 // refusalState is the named state of evidence that does not hold against the proven settlement s. A refutation
 // slot_set_at_parent carries the Before that refutes, so that a reader verifies it (V-R10B note).
-func (c *ReplayGuardCapturer) refusalState(s *Settlement, ev *ReplayGuardEvidence, state, reason, detail string) *ReplayGuardEvidence {
-	out := c.settlementState(s, state, reason, detail)
+func (c *ReplayGuardCapturer) refusalState(l settlementLook, s *Settlement, ev *ReplayGuardEvidence, state, reason, detail string) *ReplayGuardEvidence {
+	out := c.namedState(l, s, state, reason, detail)
 	if state == ReplayRefuted && reason == ReasonSlotSetAtParent && ev != nil {
 		switch {
 		case ev.Proof != nil && ev.Proof.Before != nil:

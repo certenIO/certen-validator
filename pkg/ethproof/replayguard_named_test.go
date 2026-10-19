@@ -137,12 +137,13 @@ func TestAPanicInBindIsANamedState(t *testing.T) {
 			}
 		}}
 	c := ethproof.NewReplayGuardCapturer(cfg, store)
-	c.Begin(w.Tx.Hash()) // no source: a named state about no block, which does not hold against the settlement
+	// RB10-B8 D2: a capture that stated no block is now re-stated from the proven settlement and holds, so the evidence that
+	// does not hold is one that states another block (a state of block 7, the settlement is in another).
+	store.Put(replayworld.ChainID, w.Tx.Hash(), &ethproof.ReplayGuardEvidence{Version: ethproof.ReplayGuardDomain, State: &ethproof.ReplayNamedState{
+		State: ethproof.ReplayUnproven, Reason: ethproof.ReasonStateUnavailable, ChainID: replayworld.ChainID, TxHash: w.Tx.Hash(),
+		BlockNumber: 7, BlockHash: common.Hash{7}, Contract: w.Contract, Detail: "captured at another block"}}, false)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if _, _, err := store.Wait(ctx, replayworld.ChainID, w.Tx.Hash()); err != nil {
-		t.Fatal(err)
-	}
 	c.Bind(w.Settlement)
 	for {
 		ev, bound, ok := store.Get(replayworld.ChainID, w.Tx.Hash())
