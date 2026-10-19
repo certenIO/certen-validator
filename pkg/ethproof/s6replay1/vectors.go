@@ -179,6 +179,18 @@ func settlementOf(w *replayworld.World) Settlement {
 	return s
 }
 
+// SettlementOf is the settlement inputs of a world.
+func SettlementOf(w *replayworld.World) Settlement { return settlementOf(w) }
+
+// ProofEvidence is the evidence bytes of a proof, as the generator writes them.
+func ProofEvidence(p *ethproof.ReplayGuardProof) []byte { return proofEvidence(p) }
+
+// StateEvidence is the evidence bytes of a named state, as the generator writes them.
+func StateEvidence(st *ethproof.ReplayNamedState) []byte { return stateEvidence(st) }
+
+// CloneProof is a deep copy of a proof.
+func CloneProof(p *ethproof.ReplayGuardProof) *ethproof.ReplayGuardProof { return cloneProof(p) }
+
 func marshal(v interface{}) []byte {
 	var b bytes.Buffer
 	enc := json.NewEncoder(&b)
@@ -484,13 +496,19 @@ func wrongType(n *node) *node {
 
 // BuildMutations builds the bounded corpus from the valid vectors with the fixed seed.
 func BuildMutations(vectors []Vector) []Mutation {
+	return BuildMutationsOf(vectors, mutationBases)
+}
+
+// BuildMutationsOf is the bounded mutation corpus of the named base vectors (the same seed, edits and bound as
+// BuildMutations); a later set (s6replay2) mutates its own bases with it.
+func BuildMutationsOf(vectors []Vector, bases []string) []Mutation {
 	rng := rand.New(rand.NewSource(MutationSeed))
 	byName := map[string]Vector{}
 	for _, v := range vectors {
 		byName[v.Name] = v
 	}
 	var out []Mutation
-	for _, bn := range mutationBases {
+	for _, bn := range bases {
 		v, ok := byName[bn]
 		if !ok {
 			panic("s6replay1: no base vector " + bn)
@@ -636,6 +654,11 @@ func BuildMutations(vectors []Vector) []Mutation {
 // Files are the suite's files by name: one JSON per vector, mutations.json.gz, manifest.json and MANIFEST.
 func Files() map[string][]byte {
 	vectors := BuildVectors()
+	return SuiteFiles(vectors, BuildMutations(vectors), "cmd/s6replayvectors")
+}
+
+// SuiteFiles are a suite's files by name from its vectors and mutations; generator is the command that writes them.
+func SuiteFiles(vectors []Vector, muts []Mutation, generator string) map[string][]byte {
 	files := map[string][]byte{}
 	type entry struct {
 		File   string `json:"file"`
@@ -650,7 +673,7 @@ func Files() map[string][]byte {
 		MutationCount int     `json:"mutationCount"`
 		MutationsJSON string  `json:"mutationsJsonSha256"`
 		MutationSeed  string  `json:"mutationSeed"`
-	}{Domain: ethproof.ReplayGuardDomain, Generator: "cmd/s6replayvectors", Spec: "SPEC.md"}
+	}{Domain: ethproof.ReplayGuardDomain, Generator: generator, Spec: "SPEC.md"}
 	sum := func(b []byte) string { s := sha256.Sum256(b); return hex.EncodeToString(s[:]) }
 	for _, v := range vectors {
 		enc, err := json.MarshalIndent(v, "", "  ")
@@ -662,7 +685,6 @@ func Files() map[string][]byte {
 		files[name] = enc
 		manifest.Vectors = append(manifest.Vectors, entry{File: name, Sha256: sum(enc)})
 	}
-	muts := BuildMutations(vectors)
 	mj := append(marshal(muts), '\n')
 	var gz bytes.Buffer
 	zw, err := gzip.NewWriterLevel(&gz, gzip.BestCompression)

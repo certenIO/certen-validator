@@ -21,6 +21,25 @@ import (
 
 const s6Dir = "testdata/s6replay1"
 
+// s6Replay1Superseded are the s6replay1 vectors testdata/s6replay1/SUPERSEDED.md names (RB10-F3: CertenAccountV7_2's
+// layout is pinned): the expectation each file records, the verdict the code gives now, and the s6replay2 vectors that
+// state what holds instead. The files are never edited.
+var s6Replay1Superseded = map[string]struct {
+	recorded, now s6replay1.Expect
+	by            []string
+}{
+	"029_generation_v7_2_unpinned": {
+		recorded: s6replay1.Expect{Result: s6replay1.ResultRefused, State: ethproof.ReplayUnproven, Reason: ethproof.ReasonAccountGeneration, Established: []string{}},
+		now:      s6replay1.Expect{Result: s6replay1.ResultRefused, State: ethproof.ReplayUnproven, Reason: ethproof.ReasonAccountGeneration, Established: []string{}},
+		by:       []string{"005_v7_2_proof_of_a_v7_3_call", "001_v7_2_valid_execute"},
+	},
+	"047_state_unproven_account_generation": {
+		recorded: s6replay1.Expect{Result: s6replay1.ResultStated, State: ethproof.ReplayUnproven, Reason: ethproof.ReasonAccountGeneration, Established: []string{}},
+		now:      s6replay1.Expect{Result: s6replay1.ResultStated, State: ethproof.ReplayUnproven, Reason: ethproof.ReasonAccountGeneration, Established: []string{}},
+		by:       []string{"001_v7_2_valid_execute", "002_v7_2_valid_batch"},
+	},
+}
+
 type s6Manifest struct {
 	Vectors []struct {
 		File   string `json:"file"`
@@ -71,7 +90,21 @@ func TestS6Replay1Vectors(t *testing.T) {
 			t.Fatal(err)
 		}
 		byName[v.Name] = v
-		if got := s6replay1.Judge(v.Settlement, []byte(v.Evidence)); !reflect.DeepEqual(got, v.Expect) {
+		if sup, ok := s6Replay1Superseded[v.Name]; ok {
+			// A superseded vector (SUPERSEDED.md) is judged only through the list: its recorded expectation, and the
+			// verdict the code gives now, both stated there.
+			if !reflect.DeepEqual(v.Expect, sup.recorded) {
+				t.Errorf("%s: the file records %+v, the superseded list %+v", v.Name, v.Expect, sup.recorded)
+			}
+			if got := s6replay1.Judge(v.Settlement, []byte(v.Evidence)); !reflect.DeepEqual(got, sup.now) {
+				t.Errorf("%s (superseded): judged %+v, the superseded list states %+v now", v.Name, got, sup.now)
+			}
+			for _, by := range sup.by {
+				if _, err := os.Stat(filepath.Join(s6Dir2, by+".json")); err != nil {
+					t.Errorf("%s is superseded by s6replay2 %s, which is not committed: %v", v.Name, by, err)
+				}
+			}
+		} else if got := s6replay1.Judge(v.Settlement, []byte(v.Evidence)); !reflect.DeepEqual(got, v.Expect) {
 			t.Errorf("%s: judged %+v, the vector expects %+v", v.Name, got, v.Expect)
 		}
 		seen[v.Expect.Result+" "+v.Expect.State+" "+v.Expect.Reason] = true
@@ -146,7 +179,7 @@ func TestS6Replay1Deterministic(t *testing.T) {
 	}
 	onDisk := map[string]bool{}
 	for _, e := range entries {
-		if e.Name() == "SPEC.md" || e.Name() == ".gitattributes" {
+		if e.Name() == "SPEC.md" || e.Name() == ".gitattributes" || e.Name() == "SUPERSEDED.md" {
 			continue
 		}
 		onDisk[e.Name()] = true
