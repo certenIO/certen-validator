@@ -151,14 +151,14 @@ func (c *ReplayCaptureConfig) logf(format string, args ...interface{}) {
 	if c.Logf == nil {
 		return
 	}
-	// Whatever a provider said may carry its URL, and so its API key (RB10-B11): the text arguments are sanitised, the format is the caller's.
+	// Whatever a provider said may carry its URL, and so its API key (RB10-B11), and may be many MB (RB10-B13): the text arguments are sanitised and bounded, the format is the caller's.
 	clean := make([]interface{}, len(args))
 	for i, a := range args {
 		switch v := a.(type) {
 		case string:
-			clean[i] = RedactEndpoints(v)
+			clean[i] = BoundProviderText(v)
 		case error:
-			clean[i] = RedactEndpoints(v.Error())
+			clean[i] = BoundProviderText(v.Error())
 		default:
 			clean[i] = a
 		}
@@ -236,6 +236,16 @@ func proveAt(ctx context.Context, p ReplayStateProvider, contract common.Address
 // after the settlement block are read once each: the linked chain is extended, never read again for another candidate
 // block, provider or pass.
 func CaptureReplayGuard(ctx context.Context, cfg ReplayCaptureConfig, txHash common.Hash) *ReplayGuardEvidence {
+	ev := captureReplayGuard(ctx, cfg, txHash)
+	// RB10-B13: the capture never returns evidence its own verifier refuses for length.
+	if out := BoundReplayEvidence(ev, cfg.ChainID, txHash); out != ev {
+		cfg.logf("⚠️ [S6-REPLAY] chain %d tx %s: %s", cfg.ChainID, txHash.Hex(), out.State.Detail)
+		return out
+	}
+	return ev
+}
+
+func captureReplayGuard(ctx context.Context, cfg ReplayCaptureConfig, txHash common.Hash) *ReplayGuardEvidence {
 	src := cfg.Source
 	clock := cfg.clock()
 	deadline := clock.Now().Add(cfg.budget())
@@ -250,7 +260,7 @@ func CaptureReplayGuard(ctx context.Context, cfg ReplayCaptureConfig, txHash com
 	defer afterOver()
 	state := &ReplayNamedState{ChainID: cfg.ChainID, TxHash: txHash}
 	finish := func(st, reason, format string, args ...interface{}) *ReplayGuardEvidence {
-		state.State, state.Reason, state.Detail = st, reason, RedactEndpoints(fmt.Sprintf(format, args...))
+		state.State, state.Reason, state.Detail = st, reason, BoundProviderText(fmt.Sprintf(format, args...))
 		cfg.logf("⚠️ [S6-REPLAY] chain %d tx %s: %s{reason=%s}: %s", cfg.ChainID, txHash.Hex(), st, reason, state.Detail)
 		return &ReplayGuardEvidence{Version: ReplayGuardDomain, State: state}
 	}
@@ -294,13 +304,19 @@ func CaptureReplayGuard(ctx context.Context, cfg ReplayCaptureConfig, txHash com
 	var tx *types.Transaction
 	var txErrs []string
 	providers := src.StateProviders()
+	// The detail naming each provider's error is one bounded text: each provider's share of it is bounded first, so the first
+	// to answer with a 10 MB page does not cut the others' hosts out of it (RB10-B13).
+	perProvider := MaxReplayTextBytes / (len(providers) + 1)
+	if perProvider < 128 {
+		perProvider = 128
+	}
 	for _, p := range providers {
 		t, _, err := p.TransactionByHash(bctx, txHash)
 		if err == nil && t != nil && t.Hash() == txHash {
 			tx = t
 			break
 		}
-		txErrs = append(txErrs, fmt.Sprintf("%s: %v", p.Name(), err))
+		txErrs = append(txErrs, boundProviderTextTo(fmt.Sprintf("%s: %v", p.Name(), err), perProvider))
 	}
 	if tx == nil {
 		return finish(ReplayUnproven, ReasonReceiptUnavailable, "no provider served the settlement transaction (%s)", strings.Join(txErrs, "; "))
@@ -488,7 +504,7 @@ func CaptureReplayGuard(ctx context.Context, cfg ReplayCaptureConfig, txHash com
 	}
 	if proof.Before == nil {
 		proof.BeforeUnavailable = &ReplayBeforeUnavailable{
-			Reason:    RedactEndpoints(fmt.Sprintf("no provider served the state of block %d, the settlement block's parent, before %s", n-1, ended())),
+			Reason:    BoundProviderText(fmt.Sprintf("no provider served the state of block %d, the settlement block's parent, before %s", n-1, ended())),
 			Providers: before.list(),
 		}
 	}
@@ -514,8 +530,9 @@ type providerFailures struct {
 func newProviderFailures() *providerFailures { return &providerFailures{msg: map[string]string{}} }
 
 func (f *providerFailures) note(host, msg string) {
-	// The text is a provider's error and may carry its URL: only the host is kept (RB10-B11).
-	host, msg = RedactEndpoints(host), RedactEndpoints(msg)
+	// The text is a provider's error: it may carry its URL, of which only the host is kept (RB10-B11), and be many MB, of which
+	// MaxReplayTextBytes are kept (RB10-B13).
+	host, msg = BoundProviderText(host), BoundProviderText(msg)
 	if _, ok := f.msg[host]; !ok {
 		f.order = append(f.order, host)
 	}
@@ -531,9 +548,15 @@ func (f *providerFailures) notAsked(providers []ReplayStateProvider, why string)
 	}
 }
 
+// list is the failures in the order the providers first failed: the first MaxReplayProviderFailures, then one entry naming how many
+// more providers there were (RB10-B13: a pool is configured, but what is stored beside a settlement is bounded whatever it is).
 func (f *providerFailures) list() []ReplayProviderFailure {
 	var out []ReplayProviderFailure
-	for _, h := range f.order {
+	for i, h := range f.order {
+		if i == MaxReplayProviderFailures {
+			out = append(out, ReplayProviderFailure{Host: fmt.Sprintf("(%d more providers)", len(f.order)-i), Error: "their errors are not listed"})
+			break
+		}
 		out = append(out, ReplayProviderFailure{Host: h, Error: f.msg[h]})
 	}
 	return out
@@ -762,6 +785,9 @@ func (s *ReplayGuardStore) putCaptured(e *replayEntry, ev *ReplayGuardEvidence) 
 }
 
 func (s *ReplayGuardStore) putIf(e *replayEntry, ev *ReplayGuardEvidence, bound, unlessBound bool) {
+	// RB10-B13: the store never holds evidence longer than the format allows. Encoding it is the long part, so it is done before
+	// the lock; the entry's key is fixed when it is made.
+	ev = BoundReplayEvidence(ev, e.key.chain, e.key.tx)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if unlessBound && e.bound {
@@ -864,7 +890,7 @@ func (c *ReplayGuardCapturer) Begin(txHash common.Hash) {
 		defer func() {
 			if r := recover(); r != nil {
 				ev = &ReplayGuardEvidence{Version: ReplayGuardDomain, State: &ReplayNamedState{State: ReplayUnproven, Reason: ReasonStateUnavailable,
-					ChainID: c.cfg.ChainID, TxHash: txHash, Detail: RedactEndpoints(fmt.Sprintf("the capture failed: %v", r))}}
+					ChainID: c.cfg.ChainID, TxHash: txHash, Detail: BoundProviderText(fmt.Sprintf("the capture failed: %v", r))}}
 			}
 			if ev == nil {
 				c.store.discard(c.cfg.ChainID, txHash) // no S6 claim: not an account settlement
@@ -880,7 +906,7 @@ func (c *ReplayGuardCapturer) Begin(txHash common.Hash) {
 		slotWait := func(why string) *ReplayGuardEvidence {
 			c.cfg.logf("⚠️ [S6-REPLAY] chain %d tx %s: %s", c.cfg.ChainID, txHash.Hex(), why)
 			return &ReplayGuardEvidence{Version: ReplayGuardDomain, State: &ReplayNamedState{State: ReplayUnproven, Reason: ReasonStateUnavailable,
-				ChainID: c.cfg.ChainID, TxHash: txHash, Detail: RedactEndpoints(why) + " (the settlements observed at once exceed what the providers are asked for at once)"}}
+				ChainID: c.cfg.ChainID, TxHash: txHash, Detail: BoundProviderText(why + " (the settlements observed at once exceed what the providers are asked for at once)")}}
 		}
 		waited := false
 		select {
@@ -1113,6 +1139,21 @@ func settledNumber(s *Settlement) (n uint64) {
 // hold, with a note of it. The settlement is verified once, and a panic anywhere in here is a named state built from what is
 // already known.
 func (c *ReplayGuardCapturer) holdTo(ev *ReplayGuardEvidence, s *Settlement) (out *ReplayGuardEvidence, refusal string) {
+	out, refusal = c.holdToUnbounded(ev, s)
+	// RB10-B13: whatever is returned - the evidence that holds, or a named state of why it does not - is within the format's bound,
+	// else it is the named state saying so, built from the settlement without verifying it again.
+	if why := replayEmitProblem(out); why != "" {
+		l := settlementLook{tx: settlementTx(s), number: settledNumber(s)}
+		if refusal != "" {
+			why = refusal + "; " + why
+		}
+		return c.namedState(l, s, ReplayUnproven, ReasonStateUnavailable, why), why
+	}
+	return out, refusal
+}
+
+// holdToUnbounded is holdTo before the size of what it returns is checked.
+func (c *ReplayGuardCapturer) holdToUnbounded(ev *ReplayGuardEvidence, s *Settlement) (out *ReplayGuardEvidence, refusal string) {
 	l := c.look(s)
 	defer func() {
 		if r := recover(); r != nil {
@@ -1165,7 +1206,7 @@ func restateUnknowns(ev *ReplayGuardEvidence, l settlementLook) *ReplayGuardEvid
 
 // namedState is the named state of the settlement s, stating the block and contract as the look found them.
 func (c *ReplayGuardCapturer) namedState(l settlementLook, s *Settlement, state, reason, detail string) *ReplayGuardEvidence {
-	st := &ReplayNamedState{State: state, Reason: reason, ChainID: c.cfg.ChainID, TxHash: s.TxHash, BlockHash: s.BlockHash, BlockNumber: l.number, Detail: RedactEndpoints(detail)}
+	st := &ReplayNamedState{State: state, Reason: reason, ChainID: c.cfg.ChainID, TxHash: s.TxHash, BlockHash: s.BlockHash, BlockNumber: l.number, Detail: BoundProviderText(detail)}
 	if l.tx != nil && l.tx.To() != nil {
 		st.Contract = *l.tx.To()
 	}
