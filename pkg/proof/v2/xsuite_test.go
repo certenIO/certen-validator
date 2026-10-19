@@ -36,13 +36,15 @@ func TestXPartition2SharedVectors(t *testing.T) {
 		Domain         string `json:"domain"`
 		PortableFormat string `json:"portableFormat"`
 		Cases          []struct {
-			Name      string `json:"name"`
-			File      string `json:"file"`
-			SHA256    string `json:"sha256"`
-			Expect    string `json:"expect"`
-			State     string `json:"state"`
-			Partition string `json:"partition"`
-			Block     uint64 `json:"block"`
+			Name      string   `json:"name"`
+			File      string   `json:"file"`
+			SHA256    string   `json:"sha256"`
+			Expect    string   `json:"expect"`
+			State     string   `json:"state"`
+			Fields    []string `json:"fields"`
+			Note      string   `json:"note"`
+			Partition string   `json:"partition"`
+			Block     uint64   `json:"block"`
 			Report    *struct {
 				Version       string `json:"version"`
 				Tag           string `json:"tag"`
@@ -88,6 +90,11 @@ func TestXPartition2SharedVectors(t *testing.T) {
 			rep, err := proofv2.VerifyPortable(p)
 			switch c.Expect {
 			case "refused":
+				if len(c.Fields) > 0 { // F-VE-2 (b): a frozen document that verified before the genesis link was required
+					refused++
+					wantMovedByGenesis(t, err, c.State, c.Fields, c.Note)
+					return
+				}
 				refused++
 				if err == nil {
 					t.Fatal("a refused case was accepted")

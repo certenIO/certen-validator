@@ -24,6 +24,12 @@ import (
 var _ ProofV2CrossChecker = (*proofv2shadow.Lazy)(nil)
 var _ ProofV2CrossChecker = (*proofv2shadow.Shadow)(nil)
 
+// RB9-F6 (B1): captureV2 reaches the activation-aware capture through two runtime type assertions, which fall back to Capture silently for a type that
+// drifts from the interface. The shadow main.go installs (Lazy), the shadow itself and the gate (the validator app) must satisfy them: a drift is a compile error.
+var _ ProofV2G1Capturer = (*proofv2shadow.Lazy)(nil)
+var _ ProofV2G1Capturer = (*proofv2shadow.Shadow)(nil)
+var _ ProofV2G1Gate = (*consensus.ValidatorApp)(nil)
+
 // C5-D2: the proof v2 shadow's page cross-check (v1's replayed pages against v2's captured pages) is the instrument of the owner's
 // shadow-exit rule (PROOF_V2 section 11: zero v1/v2 page disagreements). It needs v1's vote evidence, and that evidence is first set on
 // the CertenProof by the BFT stage (BFTValidator, certenProof.GovVoteEvidence), which runs AFTER proveV2 on the same *proof.CertenProof.

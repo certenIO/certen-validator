@@ -111,6 +111,8 @@ func certify1Worlds() map[string]xworld.Options {
 			Final: xworld.ChainItem{Anchored: true}, Omit: []int{0}}},
 		// A complete chain of another incarnation: it shares the pinned genesis records and the genesis set, and starts at a root of its own.
 		"chain-foreign-genesis": {Chain: &xworld.Chain{Final: xworld.ChainItem{Anchored: true}, Start: xworld.ForeignGenesis()}},
+		// A complete CONTINUOUS chain of another incarnation (RB9-F6, F-VE-2 option b): no link of its own, the pinned genesis records and genesis set.
+		"chain-continuous-foreign-genesis": {Chain: &xworld.Chain{Items: []xworld.ChainItem{eff(false), eff(false)}, Start: xworld.ForeignGenesis()}},
 		// The window of an update (V-E A2(c)): the update's root chain position, read from its receipt's shape and the signed tree size, must lie
 		// in (the previous anchor's RootChainIndex, this anchor's].
 		"chain-window-in": {Chain: &xworld.Chain{Items: []xworld.ChainItem{{Anchored: true, Update: xworld.UpdateGlobals}}, Final: xworld.ChainItem{Anchored: true}}},
@@ -397,6 +399,18 @@ func certify1Specs() []certify1Spec {
 				return setMember(d, []any{"evidence", "genesisLink", "$epilogue"}, "05010a")
 			}},
 		{Certify1Case: c("genesis-link-of-another-incarnation", "chain-foreign-genesis", "none (the world's chain, major block and genesis link start at a root of another incarnation that shares the pinned genesis records)", "a complete chain of another incarnation, signed by the genesis set, with its own genesis link: it does not start at the pinned genesis root chain anchor", certify1State(proofv2.StateCertifyLinkStart, "genesis")), apply: noEdit},
+
+		// RB9-F6, F-VE-2 option (b) (owner decision 2026-10-19): the genesis link is required of EVERY evidence 2.1 document the offline walk judges, the
+		// continuous form (no links) included. A continuous document is refused for its missing link after everything it does carry has been judged.
+		{Certify1Case: c("continuous-genesis-link-absent", "chain-continuous", "evidence/genesisLink removed", "a document in the continuous form (no links) without the chain identity: the offline walk requires the genesis link of every evidence 2.1 document, not only of one that has links", certify1State(proofv2.StateCertifyLinkMissing, "genesis")),
+			apply: func(d map[string]any, _ *xworld.Built) error {
+				return deleteMember(d, []any{"evidence", "genesisLink"})
+			}},
+		{Certify1Case: c("continuous-chain-of-another-incarnation-without-a-link", "chain-continuous-foreign-genesis", "evidence/genesisLink removed", "a complete continuous chain of another incarnation (the pinned genesis records and genesis set, its own root chain) with no genesis link: before F-VE-2 option (b) it passed the pin; now it is refused for the missing link", certify1State(proofv2.StateCertifyLinkMissing, "genesis")),
+			apply: func(d map[string]any, _ *xworld.Built) error {
+				return deleteMember(d, []any{"evidence", "genesisLink"})
+			}},
+		{Certify1Case: c("continuous-chain-of-another-incarnation-with-its-own-link", "chain-continuous-foreign-genesis", "none (the world's chain, major block and genesis link start at a root of another incarnation)", "the same continuous chain with its own, self-consistent genesis link: it does not start at the pinned genesis root chain anchor", certify1State(proofv2.StateCertifyLinkStart, "genesis")), apply: noEdit},
 
 		// The accounting (V-E A2(b), A3): every write to the network and the globals accounts, counted against their main chains.
 		{Certify1Case: c("accounted-set-change-verified", "chain-accounted", "none", "updates in the minor run: the globals are rewritten (B, then the genesis content again) and the network to version 2 (a fourth validator); the proven accounts hold 3 and 2 main chain entries, the walk applied every write: the set check is verified, not asserted", ok), apply: noEdit},

@@ -135,7 +135,7 @@ func runWindow(ctx context.Context, dsn, since, until, fixturesDir string, incRe
 		if gev == nil {
 			// no v1 evidence: only a fixture (cmd/g1fixture) can give the comparison
 			if f, ok := byTx[strings.ToLower(r.Tx)]; ok {
-				res := compareOne(ctx, f, env.incRep)
+				res := compareOne(ctx, f, env)
 				printResult(res)
 				dis, fail, notRun, pages = dis+len(res.Disagree), fail+len(res.Failures), notRun+len(res.NotRun), pages+res.Pages
 				compared++
@@ -180,7 +180,7 @@ func runWindow(ctx context.Context, dsn, since, until, fixturesDir string, incRe
 		fmt.Println(line)
 		v15Ran := false
 		if f, ok := byTx[strings.ToLower(r.Tx)]; ok {
-			res := compareOne(ctx, f, env.incRep)
+			res := compareOne(ctx, f, env)
 			fmt.Printf("   v15: %s\n", res.V15)
 			diffs, fails = append(diffs, res.Disagree...), append(fails, res.Failures...)
 			for _, d := range res.NotRun {
@@ -242,7 +242,10 @@ func windowExit(rows, compared, dis, fail, notRun, notComparable int) int {
 	return 0
 }
 
-type fixtureEnv struct{ incRep *proof.IncarnationReport }
+type fixtureEnv struct {
+	incRep  *proof.IncarnationReport
+	answers *genesisAnswers // recorded answers to the genesis question for fixtures captured without the link (nil: none given)
+}
 
 func printResult(r *result) {
 	fmt.Printf("== %s  %s  tx %s\n   v14 (live rule) : %s\n   v15 (G1 rule)   : %s\n   pages compared  : %d\n", r.Name, r.Account, short(r.Tx), r.V14, r.V15, r.Pages)

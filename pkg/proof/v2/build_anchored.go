@@ -217,12 +217,11 @@ func AnchorEvidence(ctx context.Context, ev *Evidence, ar *Archive, in proof.Inc
 		links = append(links, hl...)
 	}
 	out.Links = links
-	// The chain identity (V-E A1b, F-VE-2): a document with any link also carries the receipt from the pinned incarnation's genesis root chain
-	// anchor to the certified root, asked of the same account chain (entry 0, the genesis root, at the certified anchor's height).
-	if len(links) > 0 {
-		if out.GenesisLink, err = genesisLinkOf(ctx, src, in.GenesisRootChainAnchor, out.Certify[len(out.Certify)-1]); err != nil {
-			return nil, err
-		}
+	// The chain identity (V-E A1b, F-VE-2): every evidence 2.1 document carries the receipt from the pinned incarnation's genesis root chain
+	// anchor to the certified root, asked of the same account chain (entry 0, the genesis root, at the certified anchor's height) - one with no
+	// link of its own (every run had to be emitted continuous) included, because the offline walk requires it of the continuous form too (RB9-F6).
+	if out.GenesisLink, err = genesisLinkOf(ctx, src, in.GenesisRootChainAnchor, out.Certify[len(out.Certify)-1]); err != nil {
+		return nil, err
 	}
 	return &out, nil
 }
@@ -287,12 +286,10 @@ func genesisLinkOf(ctx context.Context, src LinkSource, genesis [32]byte, lastRu
 	return hex.EncodeToString(gb), nil
 }
 
-// addGenesisLink gives an anchored document the chain identity, asked of the live Directory.
-func (b *Builder) addGenesisLink(ctx context.Context, ev *Evidence) error {
-	ir, err := b.incEv.Verify()
-	if err != nil {
-		return err
-	}
-	ev.GenesisLink, err = genesisLinkOf(ctx, NewClientLinks(b.C), ir.Inputs.GenesisRootChainAnchor, ev.Certify[len(ev.Certify)-1])
+// addGenesisLink gives an evidence 2.1 document the chain identity, asked of the live Directory: the receipt from genesis (the pinned incarnation's
+// genesis root chain anchor) to the certified root.
+func (b *Builder) addGenesisLink(ctx context.Context, ev *Evidence, genesis [32]byte) error {
+	var err error
+	ev.GenesisLink, err = genesisLinkOf(ctx, NewClientLinks(b.C), genesis, ev.Certify[len(ev.Certify)-1])
 	return err
 }

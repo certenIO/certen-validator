@@ -179,7 +179,11 @@ func TestJudgeProofV2RefusesEveryCraftedMemberOfARealCertificate(t *testing.T) {
 		case o.V.Report[:64] != baseRoot:
 			committed++ // accepted, and over a different govRoot: the claim the proposer signed no longer matches
 		case o.V.Report[64:] == baseReport:
-			unread[o.M.Path.Shape()] = where
+			key := o.M.Path.Shape()
+			if craftedUnreadByMutation[key] {
+				key += "!" + o.M.Kind // the excuse is for THIS mutation of the member, not for the member (V-P D5)
+			}
+			unread[key] = where
 		default:
 			byClass["Accepted over the same govRoot with a different report"] = append(byClass["Accepted over the same govRoot with a different report"], where)
 		}
@@ -211,6 +215,10 @@ func TestJudgeProofV2RefusesEveryCraftedMemberOfARealCertificate(t *testing.T) {
 // craftedUnread are the members of the crafted document that judgeProofV2 does not read: a certificate judged with one of them removed,
 // nulled or replaced is accepted over the same govRoot and the same report. Each is a member shape (array indices are *); the value is the
 // reason it does not matter to this judgement.
+// craftedUnreadByMutation lists the members whose entry in craftedUnread is per MUTATION ("<shape>!<mutation kind>"): another mutation of the same member that is
+// accepted fails. (V-P D5.)
+var craftedUnreadByMutation = map[string]bool{"certificate/proof_v2/genesisLink": true}
+
 var craftedUnread = unreadTable(
 	ug("the Anchors entry for the transaction's own partition must equal Evidence.Anchor and is set aside when it does "+
 		"(xverify.go verify21): a document whose only entries are its own carries nothing that field does not",
@@ -219,6 +227,11 @@ var craftedUnread = unreadTable(
 		"a minor-root run's merkle state keeps a HashList the verifier does not read, and a validator signature's TransactionHash is not read "+
 		"(the quorum check verifies each signature over the delivered anchor message)",
 		"certificate/proof_v2/certify/*"),
+	ug("the genesis link is a merkle.Receipt and every evidence 2.1 document needs it: it is NOT excused as a member. Only the mutation hollow-receipt.End (the receipt "+
+		"re-encoded with its End position field zeroed) leaves the certificate accepted over the same govRoot, because Validate recomputes Start through Entries to "+
+		"Anchor and reads no position field; removal, null, an empty or wrong-typed value and every change to Start, Entries or Anchor are refused "+
+		"(proofv2 TestGenesisLinkMutationsAreRefusedExceptTheReceiptEndField)",
+		"certificate/proof_v2/genesisLink!hollow-receipt.End"),
 	ug("ChainRoot.Anchor is a restatement recomputed from Pending (an empty one is not compared); a chain's Name is read only to find "+
 		"the main chain, and for a page the chains the timeline looks up by name (the names are not covered by the chain component of the "+
 		"state hash: a finding); the account URL of the network and globals proofs is a label - the set check reads the account by its bytes, "+

@@ -20,6 +20,7 @@ import (
 
 func runX(t *testing.T, o xworld.Options, mut func(*proofv2.Evidence)) (*proofv2.Report, error) {
 	t.Helper()
+	o.GenesisLinked = o.Chain == nil && len(o.MajorUpdates) == 0 // the document the offline walk requires (F-VE-2 (b)); the verdicts under test are the world's own
 	b, err := xworld.Build(o)
 	if err != nil {
 		t.Fatal(err)
@@ -56,7 +57,7 @@ func at(t *testing.T, ev *proofv2.Evidence, u string) int {
 // The valid mixed-partition document: every page is proven through its own partition's anchor, the report lists each as
 // (partition, block, role), and what it could not establish is named, not implied.
 func TestXMixedPartitionDocumentVerifies(t *testing.T) {
-	b, err := xworld.Build(xworld.Options{})
+	b, err := xworld.Build(xworld.Options{GenesisLinked: true})
 	if err != nil {
 		t.Fatal(err)
 	}

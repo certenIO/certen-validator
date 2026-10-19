@@ -48,6 +48,50 @@
       "description": "an UpdateAccountAuth disables the voter's own book: a disabled authority is still required by this type, the voter accepted, the mode is authorities_required",
       "file": "update-account-auth-disable-op-voted.json",
       "sha256": "66684c572b1c5b9af7f92d54de8fd58b42c1ce7de5626a496553567c8be4f1ff",
+      "expect": "refused",
+      "state": "certify_link_missing",
+      "fields": [
+        "genesis"
+      ],
+      "note": "frozen document; verdict moved by F-VE-2 (b) (2.1 unreleased)"
+    },
+    {
+      "name": "update-account-auth-enable-op-voted",
+      "description": "an UpdateAccountAuth enables the voter's book (it was disabled before): required before and after alike, the voter accepted",
+      "file": "update-account-auth-enable-op-voted.json",
+      "sha256": "835302686fdb60c060f19f0499b6ac79d670720cc787de250cf8727d13a1076f",
+      "expect": "refused",
+      "state": "certify_link_missing",
+      "fields": [
+        "genesis"
+      ],
+      "note": "frozen document; verdict moved by F-VE-2 (b) (2.1 unreleased)"
+    },
+    {
+      "name": "update-account-auth-disable-op-authority-did-not-vote",
+      "description": "an UpdateAccountAuth disables the delegate book, which never voted: it was required before (enabled) and is required after (disabled, by RequireAuthorization)",
+      "file": "update-account-auth-disable-op-authority-did-not-vote.json",
+      "sha256": "effe16d3830577d1c403efd39dad27a250f4374d3b65ed15f621ab57c3be8cab",
+      "expect": "refused",
+      "state": "g1_authority_not_ready",
+      "partition": "BVN1",
+      "block": 50
+    },
+    {
+      "name": "update-account-auth-enable-op-authority-did-not-vote",
+      "description": "an UpdateAccountAuth enables the delegate book, which never voted: it was required before (disabled, by RequireAuthorization) and after",
+      "file": "update-account-auth-enable-op-authority-did-not-vote.json",
+      "sha256": "aeddac7738341333c655ac35c625ae81eec5a56e1e7c800455e41dcef2e807c4",
+      "expect": "refused",
+      "state": "g1_authority_not_ready",
+      "partition": "BVN1",
+      "block": 50
+    },
+    {
+      "name": "update-account-auth-disable-op-voted-g",
+      "description": "an UpdateAccountAuth disables the voter's own book: a disabled authority is still required by this type, the voter accepted, the mode is authorities_required (the sibling of the frozen document update-account-auth-disable-op-voted that carries the genesis link: F-VE-2 (b))",
+      "file": "update-account-auth-disable-op-voted-g.json",
+      "sha256": "288933223c16738ff40af9fb3f225f98e58eda8a7c656641f0582d09a7612230",
       "expect": "verified",
       "report": {
         "version": "2.1",
@@ -124,10 +168,10 @@
       }
     },
     {
-      "name": "update-account-auth-enable-op-voted",
-      "description": "an UpdateAccountAuth enables the voter's book (it was disabled before): required before and after alike, the voter accepted",
-      "file": "update-account-auth-enable-op-voted.json",
-      "sha256": "835302686fdb60c060f19f0499b6ac79d670720cc787de250cf8727d13a1076f",
+      "name": "update-account-auth-enable-op-voted-g",
+      "description": "an UpdateAccountAuth enables the voter's book (it was disabled before): required before and after alike, the voter accepted (the sibling of the frozen document update-account-auth-enable-op-voted that carries the genesis link: F-VE-2 (b))",
+      "file": "update-account-auth-enable-op-voted-g.json",
+      "sha256": "702f9b60a6bcee6a3ce219d42702693e9cac9d0998a166b0fb531fb8e17bb849",
       "expect": "verified",
       "report": {
         "version": "2.1",
@@ -202,26 +246,6 @@
           }
         ]
       }
-    },
-    {
-      "name": "update-account-auth-disable-op-authority-did-not-vote",
-      "description": "an UpdateAccountAuth disables the delegate book, which never voted: it was required before (enabled) and is required after (disabled, by RequireAuthorization)",
-      "file": "update-account-auth-disable-op-authority-did-not-vote.json",
-      "sha256": "effe16d3830577d1c403efd39dad27a250f4374d3b65ed15f621ab57c3be8cab",
-      "expect": "refused",
-      "state": "g1_authority_not_ready",
-      "partition": "BVN1",
-      "block": 50
-    },
-    {
-      "name": "update-account-auth-enable-op-authority-did-not-vote",
-      "description": "an UpdateAccountAuth enables the delegate book, which never voted: it was required before (disabled, by RequireAuthorization) and after",
-      "file": "update-account-auth-enable-op-authority-did-not-vote.json",
-      "sha256": "aeddac7738341333c655ac35c625ae81eec5a56e1e7c800455e41dcef2e807c4",
-      "expect": "refused",
-      "state": "g1_authority_not_ready",
-      "partition": "BVN1",
-      "block": 50
     }
   ]
 }

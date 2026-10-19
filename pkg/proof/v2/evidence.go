@@ -76,9 +76,14 @@ type Evidence struct {
 	// document that claims 2.0 the member is not read.
 	Links []string `json:"links,omitempty"`
 	// GenesisLink (evidence 2.1 only; RB9-F5 V-E A1b, F-VE-2) is the chain identity of an anchored document, binary merkle.Receipt, hex: a
-	// receipt from the pinned incarnation's GenesisRootChainAnchor (consensus: the spine log's Genesis.RootChainAnchor) to the certified root,
-	// which proves the certified root extends the very chain the pin names, not another incarnation's that shares its genesis records.
-	// Required by a document that has links (any anchored item); absent otherwise; in a document that claims 2.0 the member is not read.
+	// receipt from the pinned incarnation's GenesisRootChainAnchor (consensus: the spine log's Genesis.RootChainAnchor) to the certified root.
+	// What it proves, exactly: the pinned genesis root chain anchor is covered by the certified root, an entry of the tree the certified root
+	// commits to by a path that validates from Start to Anchor; so a complete chain of another incarnation that merely shares the pinned genesis
+	// records, and so passes the walk from those records, is refused. What it does not prove: WHERE in the certified tree that entry sits - the
+	// receipt's StartIndex is unauthenticated and nothing derives the position from the path's Right flags (as window.go does for an update's leaf).
+	// Required of EVERY evidence 2.1 document, the continuous form included (RB9-F6, F-VE-2 option b), by the offline walk (VerifyPortable,
+	// Verify21FromGenesis) and by the spine-log walk consensus runs (VerifyEvidence21FromSpine) alike: certify_link_missing{genesis}. In a document that
+	// claims 2.0 the member is not read.
 	GenesisLink string `json:"genesisLink,omitempty"`
 
 	// Check proves the validator set in force at a certified block at or after the certified one.
@@ -308,11 +313,18 @@ func verifyFromSpine(ev *Evidence, l *ledger.AccumulateSpineLog, pinned [32]byte
 		}
 		at[n] = sp
 	}
+	// Consensus judges exactly what the offline walk judges, the genesis link of every evidence 2.1 document included (RB9-F6: consensus must not
+	// accept as a certificate's proof a document no independent auditor can verify offline). Until the rules v15 activation intentInputs refuses a
+	// 2.1 certificate before this function runs.
 	return verifyFrom(ev, &Report{Incarnation: pinned, Majors: need}, at, pinned, genesisRoot)
 }
 
 // verifyFrom checks everything after the spine's starting points: at holds the spine after ev.Majors and after
-// ev.Check.Majors major blocks.
+// ev.Check.Majors major blocks. The genesis link (V-E A1b, F-VE-2) is a requirement of EVERY evidence 2.1 document, the continuous form included
+// (RB9-F6, owner decision 2026-10-19), by the offline walk (verifyFromGenesis) and by the spine-log walk consensus runs (verifyFromSpine) alike:
+// offline, `NewSpine(g, 1)` binds the pinned incarnation's genesis records but not its root chain, so without the link a complete chain of
+// ANOTHER incarnation that shares those records would pass the pin; and consensus must accept as a certificate's proof exactly the documents an
+// independent auditor can verify offline.
 func verifyFrom(ev *Evidence, rep *Report, at map[uint64]*Spine, pinned, genesisRoot [32]byte) (*Report, error) {
 	var err error
 	is21 := ev.Version == Version21
@@ -353,7 +365,8 @@ func verifyFrom(ev *Evidence, rep *Report, at map[uint64]*Spine, pinned, genesis
 	if err := walkRuns(cert, ev.Certify, "certify run", is21, links, &used, 0); err != nil {
 		return nil, err
 	}
-	// The chain identity (V-E A1b, F-VE-2): a document with links ties the certified root to the genesis root of the pinned incarnation.
+	// The chain identity (V-E A1b, F-VE-2): a document with links, or with a genesis link, ties the certified root to the genesis root of the
+	// pinned incarnation. (A continuous document with neither is judged at the end of this function.)
 	if is21 && (len(links) > 0 || genesisLink != nil) {
 		if err := checkGenesisLink(genesisLink, genesisRoot, cert.RootChainAnchor); err != nil {
 			return nil, err
@@ -506,6 +519,12 @@ func verifyFrom(ev *Evidence, rep *Report, at map[uint64]*Spine, pinned, genesis
 		xin.network = chk.Globals().Network.NetworkName
 		if err := verify21(ev, rep, xin); err != nil {
 			return nil, err
+		}
+		// RB9-F6 / F-VE-2 (b): a document in the continuous form that carries no genesis link (a document with links, or with a genesis link,
+		// was judged above) is refused here, by the same name, after everything it does carry has been judged: a document that fails for
+		// another reason keeps that refusal. Nothing is accepted without the link, offline or by consensus.
+		if len(links) == 0 && genesisLink == nil {
+			return nil, certifyState(StateCertifyLinkMissing, genesisLinkIndex)
 		}
 	}
 	return rep, nil

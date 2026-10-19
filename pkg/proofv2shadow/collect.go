@@ -130,6 +130,13 @@ type Collector struct {
 	// captured and the evidence says so by name (g1_completeness_unproven).
 	Chains proofv2.ChainSource
 
+	// G1InForce says whether the rules v15 cross-partition activation is in force for the next block: the signal planBuild takes as allow21 (the
+	// proposer's own view of the committed state, consensus G1ActivationContext, read through intent.ProofV2G1Gate). It is read once, when the
+	// capture is complete and its closure budget is judged, so the budget is judged for the document form the build and the signing will
+	// produce (RB9-F6, B1). Nil - a tool with no chain - judges the form a capture has without the activation (BudgetVersion); an activation that
+	// cannot be read is the capture's soft error, never an assumed form.
+	G1InForce func() (bool, error)
+
 	// PositionWait bounds the wait for Position; Poll is the interval.
 	PositionWait time.Duration
 	Poll         time.Duration
@@ -606,29 +613,51 @@ func (c *Collector) collect(ctx context.Context, st *runState, account, tx strin
 	// The evidence travels in one consensus transaction: a closure whose pages and votes cannot fit the budget is a named state, after the
 	// capture is kept (proofv2 xbudget.go).
 	if softErr == nil {
-		softErr = out.checkClosureBudget()
+		softErr = c.checkClosureBudget(out)
 	}
 	return out, softErr
 }
 
-// BudgetVersion is the evidence version the closure budget judges this capture as: a capture with pages on other partitions is evidence 2.1
-// whatever the rules in force (HasForeignPages); a capture of the transaction's own partition only is evidence 2.0, judged exactly as it was
-// before the anchored form existed (proofv2 xbudget.go, RB9-F5 invariant 2).
-func (cp *Capture) BudgetVersion() string {
-	if cp.HasForeignPages() {
+// checkClosureBudget judges the capture's budget for the document form the activation in force makes of it (Capture.BudgetVersionFor).
+func (c *Collector) checkClosureBudget(out *Capture) error {
+	in := false
+	if c.G1InForce != nil {
+		var err error
+		if in, err = c.G1InForce(); err != nil {
+			return &proofv2.NamedState{Code: proofv2.StateActivationUnreadable, Partition: out.Partition, Block: out.Block,
+				Detail: fmt.Sprintf("the closure budget is not judged: whether the rules v15 activation is in force could not be read: %v", err)}
+		}
+	}
+	return out.checkClosureBudgetFor(in)
+}
+
+// BudgetVersion is the evidence version the closure budget judges this capture as when the rules v15 activation is not in force: a capture with
+// pages on other partitions is evidence 2.1 whatever the rules in force (HasForeignPages); a capture of the transaction's own partition only is
+// evidence 2.0, judged exactly as it was before the anchored form existed (proofv2 xbudget.go, RB9-F5 invariant 2).
+func (cp *Capture) BudgetVersion() string { return cp.BudgetVersionFor(false) }
+
+// BudgetVersionFor is the evidence version the closure budget judges this capture as, given whether the rules v15 activation is in force for the
+// next block (RB9-F6, B1): from the activation a certificate's proof is evidence 2.1 for every capture, one partition or several (planBuild
+// with prove and allow21), so the capture is judged in the form the build and the signing will produce; before it, as BudgetVersion says. It is
+// planBuild's decision as a predicate (TestBudgetVersionForIsPlanBuildsForm pins that they agree on every combination).
+func (cp *Capture) BudgetVersionFor(g1InForce bool) string {
+	if g1InForce || cp.HasForeignPages() {
 		return proofv2.Version21
 	}
 	return proofv2.Version
 }
 
-// checkClosureBudget is the capture's budget check for the document form it becomes (BudgetVersion): g1_closure_exceeds_budget for the pages and
-// votes, and for evidence 2.1 also certificate_budget for the whole certificate they imply.
-func (cp *Capture) checkClosureBudget() error {
+// checkClosureBudget is the capture's budget check for the document form it becomes before the activation (BudgetVersion).
+func (cp *Capture) checkClosureBudget() error { return cp.checkClosureBudgetFor(false) }
+
+// checkClosureBudgetFor is the capture's budget check for the document form it becomes (BudgetVersionFor): g1_closure_exceeds_budget for the
+// pages and votes, and for evidence 2.1 also certificate_budget for the whole certificate they imply.
+func (cp *Capture) checkClosureBudgetFor(g1InForce bool) error {
 	pages := make([]proofv2.PageState, len(cp.Pages))
 	for i := range cp.Pages {
 		pages[i] = cp.Pages[i].PageState
 	}
-	return proofv2.CheckClosureBudget(cp.BudgetVersion(), pages, cp.Votes, cp.Partition, cp.Block)
+	return proofv2.CheckClosureBudget(cp.BudgetVersionFor(g1InForce), pages, cp.Votes, cp.Partition, cp.Block)
 }
 
 func isDirectory(partition string) bool { return strings.EqualFold(partition, protocol.Directory) }

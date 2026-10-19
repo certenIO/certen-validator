@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	proofv2 "github.com/certen/independant-validator/pkg/proof/v2"
+	"github.com/certen/independant-validator/pkg/proof/v2/xworld"
 )
 
 // The two-voter UpdateAccountAuth vectors (RB9-K-F1) (testdata/xpartition6, written by `go run ./cmd/proofv2conformance -xpartition6 ...`) are what
@@ -47,6 +48,17 @@ var xs6Want = map[string]struct {
 	"add-op-second-vote-not-in-the-principal-chain":              {expect: "refused", state: proofv2.StateBlockBeforeArrival, partition: "BVN1", block: 50},
 }
 
+// xs6Verified is the number of table cases that verify: each has a frozen entry (refused certify_link_missing{genesis}) and a -g sibling that verifies.
+func xs6Verified() int {
+	n := 0
+	for _, w := range xs6Want {
+		if w.expect == "verified" {
+			n++
+		}
+	}
+	return n
+}
+
 func TestXPartition6SharedVectors(t *testing.T) {
 	mj, err := os.ReadFile("testdata/xpartition6/manifest.json")
 	if err != nil {
@@ -64,13 +76,15 @@ func TestXPartition6SharedVectors(t *testing.T) {
 		Format string `json:"format"`
 		Domain string `json:"domain"`
 		Cases  []struct {
-			Name      string `json:"name"`
-			File      string `json:"file"`
-			SHA256    string `json:"sha256"`
-			Expect    string `json:"expect"`
-			State     string `json:"state"`
-			Partition string `json:"partition"`
-			Block     uint64 `json:"block"`
+			Name      string   `json:"name"`
+			File      string   `json:"file"`
+			SHA256    string   `json:"sha256"`
+			Expect    string   `json:"expect"`
+			State     string   `json:"state"`
+			Fields    []string `json:"fields"`
+			Note      string   `json:"note"`
+			Partition string   `json:"partition"`
+			Block     uint64   `json:"block"`
 			Report    *struct {
 				Version           string   `json:"version"`
 				Tag               string   `json:"tag"`
@@ -102,17 +116,40 @@ func TestXPartition6SharedVectors(t *testing.T) {
 	if err := json.Unmarshal(mj, &m); err != nil {
 		t.Fatal(err)
 	}
-	if m.Format != "certen-xpartition6-conformance/1" || m.Domain != proofv2.DomainG1V4 || len(m.Cases) != len(xs6Want) {
-		t.Fatalf("manifest %q %q with %d cases, want %d", m.Format, m.Domain, len(m.Cases), len(xs6Want))
+	if m.Format != "certen-xpartition6-conformance/1" || m.Domain != proofv2.DomainG1V4 || len(m.Cases) != len(xs6Want)+xs6Verified() {
+		t.Fatalf("manifest %q %q with %d cases, want %d (the table's, and a -g sibling of each that verified: F-VE-2 (b))", m.Format, m.Domain, len(m.Cases), len(xs6Want)+xs6Verified())
 	}
 	seen := map[string]bool{}
 	for _, c := range m.Cases {
-		w, ok := xs6Want[c.Name]
+		base := strings.TrimSuffix(c.Name, xworld.GenesisSiblingSuffix) // a -g sibling is judged as the case it is the sibling of
+		w, ok := xs6Want[base]
+		if ok && strings.HasSuffix(c.Name, xworld.GenesisSiblingSuffix) && w.expect != "verified" {
+			ok = false // only a case that verified has a sibling
+		}
 		if !ok || seen[c.Name] {
 			t.Fatalf("case %q is not in the table, or listed twice", c.Name)
 		}
 		seen[c.Name] = true
 		t.Run(c.Name, func(t *testing.T) {
+			if len(c.Fields) > 0 { // F-VE-2 (b): the frozen document of a case that verified, refused for the missing genesis link
+				if w.expect != "verified" || c.Expect != "refused" || c.Report != nil {
+					t.Fatalf("a frozen moved entry for a case the table says %s: %+v", w.expect, c)
+				}
+				doc, err := os.ReadFile("testdata/xpartition6/" + c.File)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if h := sha256.Sum256(doc); hex.EncodeToString(h[:]) != c.SHA256 {
+					t.Fatalf("%s does not hash to the manifest's %s", c.File, c.SHA256)
+				}
+				p := new(proofv2.Portable)
+				if err := json.Unmarshal(doc, p); err != nil {
+					t.Fatal(err)
+				}
+				_, err = proofv2.VerifyPortable(p)
+				wantMovedByGenesis(t, err, c.State, c.Fields, c.Note)
+				return
+			}
 			if c.Expect != w.expect || c.State != w.state || c.Partition != w.partition || c.Block != w.block {
 				t.Fatalf("the manifest says %s %s{%s,%d}; the executor semantics (this table) say %s %s{%s,%d}",
 					c.Expect, c.State, c.Partition, c.Block, w.expect, w.state, w.partition, w.block)

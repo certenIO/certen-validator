@@ -149,6 +149,8 @@ func loadReal21Case(t *testing.T) *real21Case {
 	}
 	c.trust, c.incEvidence = kermitTrust(t, ar)
 	c.inc = c.incEvidence.Incarnation
+	// The document as the builder emits it since RB9-F6: with the genesis link the offline walk requires of every evidence 2.1 document.
+	c.ev.GenesisLink = recordedGenesisLink(t, c.trust.Inputs.GenesisRootChainAnchor)
 	// The report by the genesis verifier of evidence 2.1 (what the offline check must reach).
 	if c.rep, err = proofv2.Verify21FromGenesis(c.ev, ar, c.trust.Inputs, c.inc); err != nil {
 		t.Fatalf("the real 2.1 verifier refuses the real stored document: %v", err)
@@ -341,4 +343,35 @@ func TestCheckProofV2StillTakesTheVersion20PathForA20Document(t *testing.T) {
 	if _, _, err := checkProofV2(c.inputs(two), c.trust, c.inc, c.op, c.rep.AccumulateSetRoot, c.g0, c.g1, c.g2, c.voteEvid); err == nil {
 		t.Fatal("an unknown evidence version is accepted by the offline check")
 	}
+}
+
+// recordedGenesisLink is Kermit's recorded answer to the genesis question for the stored real document (pkg/proof/v2/testdata/certify1-live/links.json,
+// label genesis): the receipt from the pinned genesis root chain anchor to the real certified root, hex. Every evidence 2.1 document needs it of the
+// offline walk (RB9-F6, F-VE-2 option b); the committed fixture is the continuous document without it, unchanged.
+func recordedGenesisLink(t *testing.T, genesis [32]byte) string {
+	t.Helper()
+	raw, err := os.ReadFile("../proof/v2/testdata/certify1-live/links.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rec struct {
+		Links []struct {
+			Label   string `json:"label"`
+			Prev    string `json:"prev"`
+			Receipt string `json:"receipt"`
+		} `json:"links"`
+	}
+	if err := json.Unmarshal(raw, &rec); err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range rec.Links {
+		if l.Label == "genesis" {
+			if l.Prev != hex.EncodeToString(genesis[:]) || l.Receipt == "" {
+				t.Fatalf("the recorded genesis answer starts at %s (want %x) or is a refusal", l.Prev, genesis)
+			}
+			return l.Receipt
+		}
+	}
+	t.Fatal("no recorded answer labelled genesis")
+	return ""
 }

@@ -13,5 +13,5 @@ import "github.com/certen/independant-validator/pkg/proof/v2/xworld"
 const XManifestFormat3 = "certen-xpartition3-conformance/1"
 
 func writeXPartition3(out string) error {
-	return writeXSuite(out, XManifestFormat3, xworld.Cases3())
+	return writeXSuite(out, XManifestFormat3, xworld.GenesisRequired(xworld.Cases3()))
 }

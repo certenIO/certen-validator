@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 
 	proofv2 "github.com/certen/independant-validator/pkg/proof/v2"
 	"github.com/certen/independant-validator/pkg/proof/v2/xworld"
@@ -59,15 +60,19 @@ type XArrival struct {
 
 // XCase is one manifest entry.
 type XCase struct {
-	Name        string   `json:"name"`
-	Description string   `json:"description"`
-	File        string   `json:"file"`
-	SHA256      string   `json:"sha256"`
-	Expect      string   `json:"expect"` // "verified" or "refused"
-	State       string   `json:"state,omitempty"`
-	Partition   string   `json:"partition,omitempty"`
-	Block       uint64   `json:"block,omitempty"`
-	Report      *XReport `json:"report,omitempty"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	File        string `json:"file"`
+	SHA256      string `json:"sha256"`
+	Expect      string `json:"expect"` // "verified" or "refused"
+	State       string `json:"state,omitempty"`
+	// Fields are the fields of a refusal that is a certify state (certify_link_missing{genesis}, names.json of the certify1 suite); empty for a
+	// named G1 state, which carries Partition and Block instead. Note says why a frozen document is refused when it was not (RB9-F6).
+	Fields    []string `json:"fields,omitempty"`
+	Partition string   `json:"partition,omitempty"`
+	Block     uint64   `json:"block,omitempty"`
+	Note      string   `json:"note,omitempty"`
+	Report    *XReport `json:"report,omitempty"`
 }
 
 // XManifest lists the suite. Its own hash is the content of MANIFEST.sha256, beside it.
@@ -110,7 +115,7 @@ func xreport(rep *proofv2.Report) *XReport {
 
 // writeXPartition2 writes the suite into out and refuses to write a case the Go verifier does not judge as the manifest says.
 func writeXPartition2(out string) error {
-	return writeXSuite(out, XManifestFormat, xworld.Cases())
+	return writeXSuite(out, XManifestFormat, xworld.GenesisRequired(xworld.Cases()))
 }
 
 // XManifestFormat2b names the certified-timeline suite (RB9 Phase C1b-1): new files, their own manifest and hash.
@@ -118,7 +123,7 @@ const XManifestFormat2b = "certen-xpartition2b-conformance/1"
 
 // writeXPartition2b writes the certified-timeline suite; the first suite's files and manifest are never touched.
 func writeXPartition2b(out string) error {
-	return writeXSuite(out, XManifestFormat2b, xworld.Cases2())
+	return writeXSuite(out, XManifestFormat2b, xworld.GenesisRequired(xworld.Cases2()))
 }
 
 func writeXSuite(out, format string, cases []xworld.Case) error {
@@ -141,7 +146,7 @@ func writeXSuite(out, format string, cases []xworld.Case) error {
 			return fmt.Errorf("%s: %w", c.Name, err)
 		}
 		rep, verr := proofv2.VerifyPortable(back)
-		xc := XCase{Name: c.Name, Description: c.Description, File: c.Name + ".json", Expect: c.Expect, State: c.State, Partition: c.Partition, Block: c.Block}
+		xc := XCase{Name: c.Name, Description: c.Description, File: c.Name + ".json", Expect: c.Expect, State: c.State, Fields: c.Fields, Partition: c.Partition, Block: c.Block, Note: c.Note}
 		switch c.Expect {
 		case "verified":
 			if verr != nil {
@@ -164,7 +169,12 @@ func writeXSuite(out, format string, cases []xworld.Case) error {
 				return fmt.Errorf("%s: the Go verifier accepted a refused case", c.Name)
 			}
 			var ns *proofv2.NamedState
+			var cs *proofv2.CertifyState
 			switch {
+			case len(c.Fields) > 0: // a certify state (RB9-F6: certify_link_missing{genesis})
+				if !errors.As(verr, &cs) || cs.Code != c.State || !reflect.DeepEqual(cs.Fields, c.Fields) {
+					return fmt.Errorf("%s: refused with %v, the case says %s%v", c.Name, verr, c.State, c.Fields)
+				}
 			case c.State == "":
 				if errors.As(verr, &ns) {
 					return fmt.Errorf("%s: refused with the named state %v, the case names none", c.Name, ns)

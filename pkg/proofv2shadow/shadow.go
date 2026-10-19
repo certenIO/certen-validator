@@ -116,10 +116,16 @@ const captureWait = 30 * time.Minute
 // Capture reads the governing pages as of the transaction's block, and of each other partition's block (design D2). It
 // returns at once; the work runs in the background and its result, or the named reason it failed, is stored.
 func (s *Shadow) Capture(intentID, account, tx, keyBook, keyPage string) {
+	s.CaptureG1(intentID, account, tx, keyBook, keyPage, nil)
+}
+
+// CaptureG1 is Capture for a chain that knows the rules v15 activation: g1InForce is read once, when the capture is complete, and the closure
+// budget is judged for the document form the build and the signing will produce (Collector.G1InForce, RB9-F6 B1). Nil is Capture.
+func (s *Shadow) CaptureG1(intentID, account, tx, keyBook, keyPage string, g1InForce func() (bool, error)) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), captureWait)
 		defer cancel()
-		cp, err := s.capture(ctx, account, tx, keyBook, keyPage)
+		cp, err := s.capture(ctx, account, tx, keyBook, keyPage, g1InForce)
 		msg := ""
 		result := "ok"
 		if err != nil {
@@ -138,11 +144,12 @@ func (s *Shadow) Capture(intentID, account, tx, keyBook, keyPage string) {
 	}()
 }
 
-func (s *Shadow) capture(ctx context.Context, account, tx, keyBook, keyPage string) (*Capture, error) {
+func (s *Shadow) capture(ctx context.Context, account, tx, keyBook, keyPage string, g1InForce func() (bool, error)) (*Capture, error) {
 	col, err := s.collector(ctx, keyBook, keyPage)
 	if err != nil {
 		return nil, err
 	}
+	col.G1InForce = g1InForce
 	return col.Collect(ctx, account, tx)
 }
 
@@ -458,6 +465,15 @@ func (l *Lazy) Start(endpoint string, pin [32]byte) {
 func (l *Lazy) Capture(intentID, account, tx, keyBook, keyPage string) {
 	if s := l.p.Load(); s != nil {
 		s.Capture(intentID, account, tx, keyBook, keyPage)
+		return
+	}
+	l.notReady(intentID, account, tx)
+}
+
+// CaptureG1 implements intent.ProofV2G1Capturer: Capture for a chain that knows the rules v15 activation (RB9-F6 B1).
+func (l *Lazy) CaptureG1(intentID, account, tx, keyBook, keyPage string, g1InForce func() (bool, error)) {
+	if s := l.p.Load(); s != nil {
+		s.CaptureG1(intentID, account, tx, keyBook, keyPage, g1InForce)
 		return
 	}
 	l.notReady(intentID, account, tx)

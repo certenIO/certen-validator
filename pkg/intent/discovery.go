@@ -500,6 +500,25 @@ type ProofV2G1Prover interface {
 	ProveG1(ctx context.Context, intentID, account, tx, bvn string, maxMajors uint64, g1InForce bool) (*proofv2.Evidence, error)
 }
 
+// ProofV2G1Capturer is implemented by a shadow whose capture can judge its closure budget for the document form the rules v15 activation makes of
+// it (RB9-F6, B1): g1InForce is the gate's ProofV2G1Gate.G1CrossPartitionRequired, read by the shadow once, when the capture is complete. A shadow
+// without it captures as before and judges the form a capture has without the activation.
+type ProofV2G1Capturer interface {
+	CaptureG1(intentID, account, tx, keyBook, keyPage string, g1InForce func() (bool, error))
+}
+
+// captureV2 starts an intent's capture with the activation signal proveV2 builds the certificate with, when the shadow and the gate both have one: the
+// capture-time budget check is then judged for the document form the build and the signing will produce. Otherwise it is Capture, as it was.
+func (id *IntentDiscovery) captureV2(intentID, account, tx, keyBook, keyPage string) {
+	if c, ok := id.v2Shadow.(ProofV2G1Capturer); ok {
+		if gg, ok := id.v2Gate.(ProofV2G1Gate); ok {
+			c.CaptureG1(intentID, account, tx, keyBook, keyPage, gg.G1CrossPartitionRequired)
+			return
+		}
+	}
+	id.v2Shadow.Capture(intentID, account, tx, keyBook, keyPage)
+}
+
 func (id *IntentDiscovery) SetRepositories(repos *database.Repositories) {
 	id.repos = repos
 	if repos != nil {
@@ -2166,7 +2185,7 @@ func (id *IntentDiscovery) processIntent(intent *CertenIntent, blockHeight uint6
 
 			if id.v2Shadow != nil {
 				keyBook, keyPage := declaredKeyPage(intent)
-				id.v2Shadow.Capture(intent.IntentID, accountURL, intent.TransactionHash, keyBook, keyPage)
+				id.captureV2(intent.IntentID, accountURL, intent.TransactionHash, keyBook, keyPage)
 			}
 			cp, perr := id.buildChainedCertenProof(ctx, accountURL, intent.TransactionHash, intent.ProofPartition, intent.IntentID, inlineAttempts)
 			if perr != nil {
@@ -2332,7 +2351,7 @@ func (id *IntentDiscovery) processMultiLegIntent(intent *CertenIntent, blockHeig
 
 			if id.v2Shadow != nil {
 				keyBook, keyPage := declaredKeyPage(intent)
-				id.v2Shadow.Capture(intent.IntentID, accountURL, intent.TransactionHash, keyBook, keyPage)
+				id.captureV2(intent.IntentID, accountURL, intent.TransactionHash, keyBook, keyPage)
 			}
 			cp, perr := id.buildChainedCertenProof(ctx, accountURL, intent.TransactionHash, intent.ProofPartition, intent.IntentID, inlineAttempts)
 			if perr != nil {

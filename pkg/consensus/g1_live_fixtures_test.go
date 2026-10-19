@@ -164,7 +164,8 @@ func g1LiveEvidence(t *testing.T, f *g1LiveFixture) *proofv2.Evidence {
 	if err := json.Unmarshal(f.ProofV2, ev); err != nil {
 		t.Fatal(err)
 	}
-	return ev
+	// The stored continuous document with the genesis link every evidence 2.1 document needs (RB9-F6); the fixture itself is unchanged.
+	return withRecordedGenesisLink(t, ev, f.Archive)
 }
 
 var g1LiveActivation = &ledger.G1ActivationRecord{Version: 1, Height: 100, ID: "g1-activation:rb9-e-live"}

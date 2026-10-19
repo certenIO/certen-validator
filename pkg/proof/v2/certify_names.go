@@ -67,9 +67,9 @@ func CertifyStateDetail(code string) string { return certifyDetails[code] }
 // links member.
 const genesisLinkIndex = "genesis"
 
-// checkGenesisLink judges the chain identity of an anchored document (V-E A1b): the genesis link must start at the pinned incarnation's
-// genesis root chain anchor, end at the certified root chain anchor and validate. Its refusals are the certify_link_* states at index
-// "genesis".
+// checkGenesisLink judges the genesis link of an evidence 2.1 document (V-E A1b, RB9-F6): it must start at the pinned incarnation's genesis root
+// chain anchor, end at the certified root chain anchor and validate - so the pinned root is covered by the certified root; its position in the
+// certified tree is not authenticated (see Evidence.GenesisLink). Its refusals are the certify_link_* states at index "genesis".
 func checkGenesisLink(link *merkle.Receipt, genesisRoot, certifiedRoot [32]byte) error {
 	switch {
 	case link == nil:

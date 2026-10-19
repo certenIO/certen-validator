@@ -24,8 +24,12 @@ type Case struct {
 	Unproven    []string
 	// Disclosures, for a verified document of the suite xpartition4, lists the codes the report must disclose (Report.Disclosures).
 	Disclosures []string
-	Opts        Options
-	Mutate      func(ev *proofv2.Evidence)
+	// Fields and Note (RB9-F6) are the fields of a refusal that is a certify state (certify_link_missing{genesis}) and the manifest note of a frozen
+	// document whose verdict moved (GenesisRequired).
+	Fields []string
+	Note   string
+	Opts   Options
+	Mutate func(ev *proofv2.Evidence)
 }
 
 func idx(ev *proofv2.Evidence, u string) int {

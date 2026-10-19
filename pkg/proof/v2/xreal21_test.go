@@ -52,6 +52,21 @@ func loadReal21(t *testing.T) real21 {
 	r.in = ir.Inputs
 	b, _ := hex.DecodeString(kermitPin)
 	copy(r.pin[:], b)
+	// The document as the builder emits it since RB9-F6: with the genesis link, Kermit's recorded answer to the genesis question (the receipt from the
+	// pinned genesis root chain anchor to the real certified anchor), which every evidence 2.1 document needs of the offline walk. The committed
+	// fixture itself is unchanged.
+	prev, height, link := loadLiveLinks(t).find(t, "genesis")
+	if prev != r.in.GenesisRootChainAnchor {
+		t.Fatalf("the recorded genesis answer starts at %x, the incarnation's genesis root chain anchor is %x", prev, r.in.GenesisRootChainAnchor)
+	}
+	if h, root, err := RunAnchor(r.ev.Certify[len(r.ev.Certify)-1]); err != nil || h != height || !bytesEq(link.Anchor, root[:]) {
+		t.Fatalf("the recorded genesis answer is at height %d ending %x, the fixture's certified anchor is at %d: %v", height, link.Anchor, h, err)
+	}
+	lb, err := link.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.ev.GenesisLink = hex.EncodeToString(lb)
 	return r
 }
 
