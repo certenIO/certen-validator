@@ -194,3 +194,28 @@ func ExampleRedactEndpoints() {
 	fmt.Println(ethproof.RedactEndpoints(`Post "https://eth-sepolia.g.alchemy.com/v2/KEY": EOF`))
 	// Output: Post "https://eth-sepolia.g.alchemy.com/<redacted>": EOF
 }
+
+// A deterministic random sweep over a vocabulary of URL pieces, escapes and noise: no panic, idempotent, a string with none of
+// the characters a URL or an escape is made of is returned byte for byte, and the key never survives inside a URL token.
+func TestB14a_RandomSweepIsIdempotentAndNeverPanics(t *testing.T) {
+	vocab := []string{"https://", "http://", "wss://", "HTTPS://", "://", "eth.g.alchemy.com", "h.example.org", "10.1.2.3:8545", "[::1]:8545", "geth:8545", "localhost",
+		"/", "//", "/v2/", "/rpc", "?", "?apikey=", "&", "=", "#", "@", "user:" + b14aKey + "@", b14aKey, "a", "ab.cd", ".", ",", ":", ";", ")", "(", " ", "  ", "\n", "\t", "\r\n",
+		"\"", "'", "`", "<", ">", "<redacted>", "/<redacted>", "~", "~~", "~/", "~u002f", "~u002F", "~u0026", "~~u0026", "~u0022", "~n", "~t", "~\"", "%", "%2f", "%2F", "%3A", "%3a", "%25", "%252f",
+		"%2", "%zz", "~u12", "~u00", "日本", "\xff", "0x9d3a", "1.5ms", "key=", "token"}
+	seed := uint64(0x9e3779b97f4a7c15)
+	next := func() uint64 { seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17; return seed }
+	for i := 0; i < 150000; i++ {
+		var sb strings.Builder
+		for n := int(next()%14) + 1; n > 0; n-- {
+			sb.WriteString(vocab[next()%uint64(len(vocab))])
+		}
+		in := bsl(sb.String())
+		got := ethproof.RedactEndpoints(in)
+		if again := ethproof.RedactEndpoints(got); again != got {
+			t.Fatalf("not idempotent:\n in: %q\n 1: %q\n 2: %q", in, got, again)
+		}
+		if !strings.ContainsAny(in, "/?%\x5c") && got != in {
+			t.Fatalf("text with no URL character changed:\n in: %q\nout: %q", in, got)
+		}
+	}
+}

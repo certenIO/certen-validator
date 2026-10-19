@@ -75,10 +75,20 @@ func RedactText(s string) string {
 	if s == "" {
 		return s
 	}
-	s = redactSchemeURLs(s)
-	s = redactBareURLs(s)
+	// Applied until nothing changes (at most four times): what one pass leaves (a userinfo glued in front of a host that a
+	// replacement then exposed as a URL) the next removes, so the result is a fixed point and a second call changes nothing.
+	for i := 0; i < maxRedactPasses; i++ {
+		t := redactBareURLs(redactSchemeURLs(s))
+		if t == s {
+			break
+		}
+		s = t
+	}
 	return redactLiterals(s)
 }
+
+// maxRedactPasses bounds the pattern passes.
+const maxRedactPasses = 4
 
 // RedactError is err with its text redacted: Error() is RedactText of the original's, and Unwrap returns the original, so
 // errors.Is, errors.As and every classification by type or code see the original error. An error whose text has nothing to
@@ -372,6 +382,11 @@ func redactSchemeToken(core string) (string, bool) {
 	}
 	if !userinfo && (remainder == "" || remainder == "/") {
 		return "", false // nothing after the host
+	}
+	// A host never holds a character that ends or changes a token (a quoted token can hold any): what follows one is dropped,
+	// so that the result reads the same when it is redacted again.
+	if i := strings.IndexFunc(host, func(r rune) bool { return r < utf8.RuneSelf && (endsToken(byte(r))) }); i >= 0 {
+		host = host[:i]
 	}
 	return scheme + host + redactedPath, true
 }
