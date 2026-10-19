@@ -338,7 +338,7 @@ func summarize(ev *ethproof.ReplayGuardEvidence) string {
 		}
 		return fmt.Sprintf("proven at block %d, %s", ev.Proof.ProvenAt.Number, b)
 	default:
-		return fmt.Sprintf("%s{%s}: %s", ev.State.State, ev.State.Reason, ev.State.Detail)
+		return fmt.Sprintf("%s{%s}: %s", ev.State.State, ev.State.Reason, ethproof.RedactEndpoints(ev.State.Detail))
 	}
 }
 
@@ -364,14 +364,14 @@ func Judge(ctx context.Context, w *World) (*Verdict, *ethproof.ReplayGuardEviden
 	}
 	rc, err := src.TransactionReceipt(ctx, tx)
 	if err != nil {
-		v.Settlement = "receipt not agreed in the recorded world: " + err.Error()
+		v.Settlement = ethproof.RedactEndpoints("receipt not agreed in the recorded world: " + err.Error())
 		v.State, v.Reason = ev.State.State, ev.State.Reason
 		return v, ev, nil
 	}
 	v.BlockNumber, v.BlockHash = rc.BlockNumber.Uint64(), rc.BlockHash.Hex()
 	s, err := ethproof.Build(ctx, src, rc.BlockHash, tx, uint64(rc.TransactionIndex))
 	if err != nil {
-		v.Settlement = err.Error()
+		v.Settlement = ethproof.RedactEndpoints(err.Error())
 	} else {
 		v.Settlement = "verified"
 	}
@@ -382,7 +382,7 @@ func Judge(ctx context.Context, w *World) (*Verdict, *ethproof.ReplayGuardEviden
 		err = fmt.Errorf("no settlement proof to hold the evidence to")
 	}
 	if err != nil {
-		v.State, v.Detail = "verify_failed", err.Error()
+		v.State, v.Detail = "verify_failed", ethproof.RedactEndpoints(err.Error())
 		return v, ev, nil
 	}
 	v.State, v.Reason = chk.State, chk.Reason
@@ -409,7 +409,7 @@ func Judge(ctx context.Context, w *World) (*Verdict, *ethproof.ReplayGuardEviden
 			}
 		}
 	} else {
-		v.Providers, v.Detail = ev.State.Providers, ev.State.Detail
+		v.Providers, v.Detail = ev.State.Providers, ethproof.RedactEndpoints(ev.State.Detail)
 		v.Contract = ev.State.Contract.Hex()
 	}
 	return v, ev, nil

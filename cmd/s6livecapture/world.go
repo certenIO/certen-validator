@@ -10,9 +10,12 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/certen/independant-validator/pkg/ethproof"
 )
 
 // A World is every raw JSON-RPC exchange the capture had with the chain's public providers, exactly as the providers
@@ -101,15 +104,17 @@ type Recorder struct {
 	world *World
 }
 
-// NewRecorder starts a world.
+// NewRecorder starts a world. The providers' URLs are dialed as given but stored as scheme://host only (RB10-B11: a provider URL
+// may carry its API key in the path; the host is the key of the exchanges).
 func NewRecorder(chainID int64, chain string, providers []Provider) *Recorder {
-	return &Recorder{world: &World{Format: WorldFormat, ChainID: chainID, Chain: chain, Providers: providers,
+	return &Recorder{world: &World{Format: WorldFormat, ChainID: chainID, Chain: chain, Providers: scrubProviders(providers),
 		StartedUTC: time.Now().UTC().Format(time.RFC3339Nano)}}
 }
 
 func (r *Recorder) add(x Exchange) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	x = scrubExchange(x)
 	x.Seq = len(r.world.Exchanges)
 	x.AtUTC = time.Now().UTC().Format(time.RFC3339Nano)
 	r.world.Exchanges = append(r.world.Exchanges, x)
@@ -288,8 +293,10 @@ func (t *replayTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return mk(http.StatusOK, b), nil
 }
 
-// WriteWorldGz writes the world as gzipped, indented JSON.
+// WriteWorldGz writes the world as gzipped, indented JSON, scrubbed of every provider credential (a copy is written; the
+// caller's world is not changed).
 func WriteWorldGz(path string, w *World) error {
+	w = w.scrubbed()
 	var buf bytes.Buffer
 	zw, _ := gzip.NewWriterLevel(&buf, gzip.BestCompression)
 	enc := json.NewEncoder(zw)
@@ -322,4 +329,85 @@ func ReadWorldGz(path string) (*World, error) {
 		return nil, fmt.Errorf("%s: format %q is not %s", path, w.Format, WorldFormat)
 	}
 	return &w, nil
+}
+
+// scrubProviders is the providers with each URL reduced to scheme://host (and /<redacted> for anything after the host).
+func scrubProviders(in []Provider) []Provider {
+	out := make([]Provider, len(in))
+	for i, p := range in {
+		out[i] = Provider{Host: ethproof.RedactEndpoints(p.Host), URL: ethproof.RedactEndpoints(p.URL)}
+	}
+	return out
+}
+
+// scrubRaw is a JSON value with every string in it sanitised; JSON that does not decode is sanitised as text. A value with
+// nothing to sanitise is returned byte for byte.
+func scrubRaw(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 {
+		return raw
+	}
+	decode := func() (interface{}, error) {
+		dec := json.NewDecoder(bytes.NewReader(raw))
+		dec.UseNumber()
+		var v interface{}
+		err := dec.Decode(&v)
+		return v, err
+	}
+	orig, err := decode()
+	if err != nil {
+		return json.RawMessage(ethproof.RedactEndpoints(string(raw)))
+	}
+	clean, _ := decode()
+	clean = scrubValue(clean)
+	if reflect.DeepEqual(orig, clean) {
+		return raw
+	}
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(clean); err != nil {
+		return json.RawMessage(ethproof.RedactEndpoints(string(raw)))
+	}
+	return json.RawMessage(bytes.TrimSpace(buf.Bytes()))
+}
+
+func scrubValue(v interface{}) interface{} {
+	switch x := v.(type) {
+	case string:
+		return ethproof.RedactEndpoints(x)
+	case []interface{}:
+		for i := range x {
+			x[i] = scrubValue(x[i])
+		}
+		return x
+	case map[string]interface{}:
+		out := make(map[string]interface{}, len(x))
+		for k, e := range x {
+			out[ethproof.RedactEndpoints(k)] = scrubValue(e)
+		}
+		return out
+	}
+	return v
+}
+
+// scrubExchange is the exchange with the text a provider or a transport wrote in it sanitised: the transport error, the body
+// that was no JSON-RPC answer, and the JSON-RPC error. The result of a call is chain data and is kept as it is.
+func scrubExchange(x Exchange) Exchange {
+	x.Host = ethproof.RedactEndpoints(x.Host)
+	x.Transport = ethproof.RedactEndpoints(x.Transport)
+	x.Body = ethproof.RedactEndpoints(x.Body)
+	x.RPCError = scrubRaw(x.RPCError)
+	return x
+}
+
+// scrubbed is a copy of the world holding no provider credential.
+func (w *World) scrubbed() *World {
+	c := *w
+	c.Providers = scrubProviders(w.Providers)
+	c.Note = ethproof.RedactEndpoints(w.Note)
+	c.Exchanges = make([]Exchange, len(w.Exchanges))
+	for i, x := range w.Exchanges {
+		c.Exchanges[i] = scrubExchange(x)
+	}
+	return &c
 }
