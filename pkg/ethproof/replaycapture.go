@@ -306,8 +306,9 @@ func CaptureReplayGuard(ctx context.Context, cfg ReplayCaptureConfig, txHash com
 			if top < n {
 				top = n
 			}
+			pastBound := false
 			if top > n+MaxReplayHeaderChain {
-				top = n + MaxReplayHeaderChain
+				top, pastBound = n+MaxReplayHeaderChain, true
 			}
 			low := n
 			if top >= n+replayAfterCandidates {
@@ -346,6 +347,16 @@ func CaptureReplayGuard(ctx context.Context, cfg ReplayCaptureConfig, txHash com
 				if after != nil {
 					break
 				}
+			}
+			// V-R10B D2: past the bound the candidate blocks stay pinned at N+MaxReplayHeaderChain and only age as the head
+			// moves on: a later pass asks the same blocks of the same providers, so one complete pass that proves nothing
+			// decides the capture.
+			if after == nil && pastBound && bctx.Err() == nil {
+				failures.notAsked(providers, "the capture gave up after one pass")
+				state.Providers = failures.list()
+				return finish(ReplayUnproven, ReasonStateUnavailable,
+					"no provider could prove the slot %s of %s at blocks %d..%d, the newest a proof may reach (settlement block %d + %d headers); the head %d is past the header-chain bound by %d blocks, so no later pass can reach a newer block",
+					slot.Hex(), contract.Hex(), low, top, n, MaxReplayHeaderChain, latestSeen, latestSeen-top)
 			}
 		} else {
 			failures.note("(agreeing providers)", fmt.Sprintf("no agreed latest header: %v", lerr))
@@ -503,6 +514,10 @@ func (c *linkedHeaderChain) upTo(ctx context.Context, h uint64) ([]*types.Header
 		return nil, fmt.Errorf("block %d is before the settlement block %d", h, n)
 	}
 	for uint64(len(c.chain)) < h-n {
+		// V-R10B D2: the deadline is checked before every read, so a slow source cannot hold the capture for the chain.
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("header %d not read: %w", n+uint64(len(c.chain))+1, err)
+		}
 		i := n + uint64(len(c.chain)) + 1
 		prev := c.base
 		if len(c.chain) > 0 {
