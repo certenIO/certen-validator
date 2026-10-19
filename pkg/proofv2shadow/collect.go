@@ -606,13 +606,29 @@ func (c *Collector) collect(ctx context.Context, st *runState, account, tx strin
 	// The evidence travels in one consensus transaction: a closure whose pages and votes cannot fit the budget is a named state, after the
 	// capture is kept (proofv2 xbudget.go).
 	if softErr == nil {
-		pages := make([]proofv2.PageState, len(out.Pages))
-		for i := range out.Pages {
-			pages[i] = out.Pages[i].PageState
-		}
-		softErr = proofv2.CheckClosureBudget(pages, out.Votes, x, b)
+		softErr = out.checkClosureBudget()
 	}
 	return out, softErr
+}
+
+// BudgetVersion is the evidence version the closure budget judges this capture as: a capture with pages on other partitions is evidence 2.1
+// whatever the rules in force (HasForeignPages); a capture of the transaction's own partition only is evidence 2.0, judged exactly as it was
+// before the anchored form existed (proofv2 xbudget.go, RB9-F5 invariant 2).
+func (cp *Capture) BudgetVersion() string {
+	if cp.HasForeignPages() {
+		return proofv2.Version21
+	}
+	return proofv2.Version
+}
+
+// checkClosureBudget is the capture's budget check for the document form it becomes (BudgetVersion): g1_closure_exceeds_budget for the pages and
+// votes, and for evidence 2.1 also certificate_budget for the whole certificate they imply.
+func (cp *Capture) checkClosureBudget() error {
+	pages := make([]proofv2.PageState, len(cp.Pages))
+	for i := range cp.Pages {
+		pages[i] = cp.Pages[i].PageState
+	}
+	return proofv2.CheckClosureBudget(cp.BudgetVersion(), pages, cp.Votes, cp.Partition, cp.Block)
 }
 
 func isDirectory(partition string) bool { return strings.EqualFold(partition, protocol.Directory) }

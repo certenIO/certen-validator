@@ -1,0 +1,897 @@
+{
+  "format": "certen-certify1-conformance/1",
+  "domain": "certen:g1:v4",
+  "portableFormat": "certen-proof-v2-accumulate-portable/1",
+  "namesFile": "names.json",
+  "namesSha256": "b20bf59beb16b08e9a036075b0c7bf816df28e0b80dfb31f7e0839838986a3b1",
+  "cases": [
+    {
+      "name": "continuous-chain-verified",
+      "description": "two continuous update-bearing items and a continuous closing item: the form every earlier document has",
+      "world": "chain-continuous",
+      "edit": "none",
+      "file": "continuous-chain-verified.json",
+      "sha256": "b718fad48518de8dc8637f6447f083e2ea5dcb7180ffe54a2dd1c37901697331",
+      "expect": "verified",
+      "report": {
+        "version": "2.1",
+        "tag": "certen:g1:v4",
+        "partition": "acc://bvn-BVN1.acme",
+        "anchorBlock": 50,
+        "certifiedRoot": "657d313c9d895339df48c252984f5a47318a4a08f884795648c5eefcaf840ee9",
+        "checkBlock": 300,
+        "setVerdict": "verified",
+        "routingHeight": 1,
+        "proven": [
+          {
+            "url": "acc://pv2-cust-5.acme/data",
+            "partition": "acc://bvn-BVN1.acme",
+            "block": 50,
+            "roles": [
+              "principal-chain"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/1",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page",
+              "voter"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/2",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book/1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-page"
+            ]
+          }
+        ],
+        "pagesBound": 6,
+        "unproven": [
+          "g1_completeness_unproven"
+        ]
+      }
+    },
+    {
+      "name": "anchored-chain-verified",
+      "description": "the same chain as continuous-chain-verified with every item anchored (no root proof) and three links: the same report",
+      "world": "chain-anchored",
+      "edit": "none",
+      "file": "anchored-chain-verified.json",
+      "sha256": "560403f135b730e40b8e42360bd6f08341bb8c0d6e4814f861486e2100f5670b",
+      "expect": "verified",
+      "sameReportAs": "continuous-chain-verified",
+      "report": {
+        "version": "2.1",
+        "tag": "certen:g1:v4",
+        "partition": "acc://bvn-BVN1.acme",
+        "anchorBlock": 50,
+        "certifiedRoot": "657d313c9d895339df48c252984f5a47318a4a08f884795648c5eefcaf840ee9",
+        "checkBlock": 300,
+        "setVerdict": "verified",
+        "routingHeight": 1,
+        "proven": [
+          {
+            "url": "acc://pv2-cust-5.acme/data",
+            "partition": "acc://bvn-BVN1.acme",
+            "block": 50,
+            "roles": [
+              "principal-chain"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/1",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page",
+              "voter"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/2",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book/1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-page"
+            ]
+          }
+        ],
+        "pagesBound": 6,
+        "unproven": [
+          "g1_completeness_unproven"
+        ]
+      }
+    },
+    {
+      "name": "mixed-chain-verified",
+      "description": "the same chain with an anchored first item, a continuous second item and an anchored closing item, two links: the same report",
+      "world": "chain-mixed",
+      "edit": "none",
+      "file": "mixed-chain-verified.json",
+      "sha256": "b4915f1fae6d0011b3eae9ceab3bb442e3e1aafa9f99f6dff2625b9d82cc73c4",
+      "expect": "verified",
+      "sameReportAs": "continuous-chain-verified",
+      "report": {
+        "version": "2.1",
+        "tag": "certen:g1:v4",
+        "partition": "acc://bvn-BVN1.acme",
+        "anchorBlock": 50,
+        "certifiedRoot": "657d313c9d895339df48c252984f5a47318a4a08f884795648c5eefcaf840ee9",
+        "checkBlock": 300,
+        "setVerdict": "verified",
+        "routingHeight": 1,
+        "proven": [
+          {
+            "url": "acc://pv2-cust-5.acme/data",
+            "partition": "acc://bvn-BVN1.acme",
+            "block": 50,
+            "roles": [
+              "principal-chain"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/1",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page",
+              "voter"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/2",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book/1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-page"
+            ]
+          }
+        ],
+        "pagesBound": 6,
+        "unproven": [
+          "g1_completeness_unproven"
+        ]
+      }
+    },
+    {
+      "name": "anchored-final-only-verified",
+      "description": "one anchored closing item and one link: an anchored item with no update is allowed as the last of its sequence",
+      "world": "chain-final-only",
+      "edit": "none",
+      "file": "anchored-final-only-verified.json",
+      "sha256": "62b1a4c9516d5cfcf576840dae420ddaabf2870afdf4c510782138e2783dc365",
+      "expect": "verified",
+      "report": {
+        "version": "2.1",
+        "tag": "certen:g1:v4",
+        "partition": "acc://bvn-BVN1.acme",
+        "anchorBlock": 50,
+        "certifiedRoot": "4b5bb5147f4ecfcfb3ef2e772d1038990c61697e24620fb97c9224a22b15e2ba",
+        "checkBlock": 300,
+        "setVerdict": "verified",
+        "routingHeight": 1,
+        "proven": [
+          {
+            "url": "acc://pv2-cust-5.acme/data",
+            "partition": "acc://bvn-BVN1.acme",
+            "block": 50,
+            "roles": [
+              "principal-chain"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/1",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page",
+              "voter"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/2",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book/1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-page"
+            ]
+          }
+        ],
+        "pagesBound": 6,
+        "unproven": [
+          "g1_completeness_unproven"
+        ]
+      }
+    },
+    {
+      "name": "link-absent",
+      "description": "the anchored item has no link",
+      "world": "chain-final-only",
+      "edit": "evidence/links removed",
+      "file": "link-absent.json",
+      "sha256": "2f44b85b99e194491f656555ae4d758e09ea0fe66deddd4d26f553fb20bb0ba3",
+      "expect": "refused",
+      "state": "certify_link_missing",
+      "fields": [
+        "0"
+      ],
+      "wording": "certify_link_missing{0}: an anchored item has no link",
+      "prefix": "certify_link_missing{0}: an anchored item has no link"
+    },
+    {
+      "name": "link-start-altered",
+      "description": "the link starts somewhere other than the previous verified root chain anchor",
+      "world": "chain-final-only",
+      "edit": "evidence/links/0/start first byte flipped",
+      "file": "link-start-altered.json",
+      "sha256": "7a89d3f5b463a95d8b5a35af4a5f72591597ff7d0aa225b8c667b98c0f28c71c",
+      "expect": "refused",
+      "state": "certify_link_start",
+      "fields": [
+        "0"
+      ],
+      "wording": "certify_link_start{0}: the link does not start at the previous verified root chain anchor",
+      "prefix": "certify_link_start{0}: the link does not start at the previous verified root chain anchor"
+    },
+    {
+      "name": "link-end-altered",
+      "description": "the link ends somewhere other than the item's root chain anchor",
+      "world": "chain-final-only",
+      "edit": "evidence/links/0/anchor first byte flipped",
+      "file": "link-end-altered.json",
+      "sha256": "2af029d96f5466c94dac88f69a9a9227602ac49bd4f4a2af4f40e68fcccbabb7",
+      "expect": "refused",
+      "state": "certify_link_end",
+      "fields": [
+        "0"
+      ],
+      "wording": "certify_link_end{0}: the link does not end at the item's root chain anchor",
+      "prefix": "certify_link_end{0}: the link does not end at the item's root chain anchor"
+    },
+    {
+      "name": "link-step-altered",
+      "description": "the link starts and ends where it must but its path does not recompute: not a valid receipt",
+      "world": "chain-final-only",
+      "edit": "evidence/links/0/entries/0/hash first byte flipped",
+      "file": "link-step-altered.json",
+      "sha256": "c071129eb1aefc30aa84542c8116233ef295d4e49f1a463ff13c0bc0a83fa9c2",
+      "expect": "refused",
+      "state": "certify_link_invalid",
+      "fields": [
+        "0"
+      ],
+      "wording": "certify_link_invalid{0}: the link is not a valid receipt of an anchored item",
+      "prefix": "certify_link_invalid{0}: the link is not a valid receipt of an anchored item"
+    },
+    {
+      "name": "link-of-a-different-item",
+      "description": "the first anchored item takes the closing item's link, which starts at another root",
+      "world": "chain-mixed",
+      "edit": "evidence/links/0 and /1 exchanged",
+      "file": "link-of-a-different-item.json",
+      "sha256": "dea245ba06677f17f6e581b2c429f2f2a26856f27e68d6b7053e3bc8ef4e9c63",
+      "expect": "refused",
+      "state": "certify_link_start",
+      "fields": [
+        "0"
+      ],
+      "wording": "certify_link_start{0}: the link does not start at the previous verified root chain anchor",
+      "prefix": "certify_link_start{0}: the link does not start at the previous verified root chain anchor"
+    },
+    {
+      "name": "link-surplus",
+      "description": "a link no anchored item takes: the same chain would have two encodings",
+      "world": "chain-final-only",
+      "edit": "evidence/links/1 = a copy of links/0",
+      "file": "link-surplus.json",
+      "sha256": "740ce12de6f7aa80de181fd2d01059c264a192a962574d6088ce594c1c186eda",
+      "expect": "refused",
+      "state": "certify_link_invalid",
+      "fields": [
+        "1"
+      ],
+      "wording": "certify_link_invalid{1}: the link is not a valid receipt of an anchored item",
+      "prefix": "certify_link_invalid{1}: the link is not a valid receipt of an anchored item"
+    },
+    {
+      "name": "link-of-the-second-item-missing",
+      "description": "the second anchored item has no link of its own: it would take the third's, which starts elsewhere",
+      "world": "chain-anchored",
+      "edit": "evidence/links/1 removed",
+      "file": "link-of-the-second-item-missing.json",
+      "sha256": "9b446698412d983873f37a6074ee13757149fc390248b2144e4189110cea94b4",
+      "expect": "refused",
+      "state": "certify_link_start",
+      "fields": [
+        "1"
+      ],
+      "wording": "certify_link_start{1}: the link does not start at the previous verified root chain anchor",
+      "prefix": "certify_link_start{1}: the link does not start at the previous verified root chain anchor"
+    },
+    {
+      "name": "anchored-item-without-update-not-last",
+      "description": "an anchored item that changes nothing is only allowed as the last of its sequence",
+      "world": "chain-no-effect",
+      "edit": "none (the world's first item is anchored and carries no update, and is not the last)",
+      "file": "anchored-item-without-update-not-last.json",
+      "sha256": "f017e1ffa2b51927438d24e584f7f6c944c8f986f91138abc29d48cb88e074ce",
+      "expect": "refused",
+      "state": "certify_item_without_effect",
+      "fields": [
+        "0",
+        "110"
+      ],
+      "wording": "certify_item_without_effect{0,110}: an anchored item that is not the last of its sequence applies no update",
+      "prefix": "certify_item_without_effect{0,110}: an anchored item that is not the last of its sequence applies no update"
+    },
+    {
+      "name": "anchored-item-with-only-an-unapplied-update-not-last",
+      "description": "the canonical form is about effect, not about the updates member: an anchored item padded with an update that changes nothing is refused like one without updates",
+      "world": "chain-junk-update",
+      "edit": "none (the world's first item is anchored and carries one update, a write to acc://dn.acme/oracle with a valid receipt, which the walk does not apply; it is not the last)",
+      "file": "anchored-item-with-only-an-unapplied-update-not-last.json",
+      "sha256": "11e2006adda65a2ed3cacb12b185e697912c9a6ff77c8bec986f59bd146b8bc0",
+      "expect": "refused",
+      "state": "certify_item_without_effect",
+      "fields": [
+        "0",
+        "110"
+      ],
+      "wording": "certify_item_without_effect{0,110}: an anchored item that is not the last of its sequence applies no update",
+      "prefix": "certify_item_without_effect{0,110}: an anchored item that is not the last of its sequence applies no update"
+    },
+    {
+      "name": "non-monotone-block",
+      "description": "anchored items whose Directory minor blocks do not increase",
+      "world": "chain-non-monotone",
+      "edit": "none (the second item's block, 120, does not pass the first's, 130)",
+      "file": "non-monotone-block.json",
+      "sha256": "4be9ceda79fcfd6e9bc38305baa64320ecb5a76635c5b191f70d9d6e7aff6d44",
+      "expect": "refused",
+      "wording": "certify run 1: anchor for minor block 120 does not advance past 130",
+      "prefix": "certify run 1: anchor for minor block 120 does not advance past 130"
+    },
+    {
+      "name": "duplicated-update",
+      "description": "an update the walk already applied: refused, so a count of the network's writes is injective",
+      "world": "chain-duplicated-update",
+      "edit": "none (the anchored item carries the same globals write twice)",
+      "file": "duplicated-update.json",
+      "sha256": "42b7bc3b2040cf19bb828bdad881e3fd4a447ba26832da13369fb6379b64466f",
+      "expect": "refused",
+      "state": "certify_update_replayed",
+      "fields": [
+        "57b7ace2b33e5851a709a3c29b3d3642fb137669e9ecf8a9cfec95ba31278a42"
+      ],
+      "wording": "certify_update_replayed{57b7ace2b33e5851a709a3c29b3d3642fb137669e9ecf8a9cfec95ba31278a42}: the update was already applied earlier in the walk",
+      "prefix": "certify_update_replayed{57b7ace2b33e5851a709a3c29b3d3642fb137669e9ecf8a9cfec95ba31278a42}: the update was already applied earlier in the walk"
+    },
+    {
+      "name": "continuous-item-wrongly-rooted-then-anchored",
+      "description": "a continuous item whose proof starts at another root, then an anchored closing item",
+      "world": "chain-continuous-then-end",
+      "edit": "evidence/certify/0/rootProof/merkleState/pending/0 first byte flipped",
+      "file": "continuous-item-wrongly-rooted-then-anchored.json",
+      "sha256": "cf394e10ed3803e494f02a3f441104750f825ca368da48f4c803b37b6544b025",
+      "expect": "refused",
+      "wording": "certify run 0: root proof does not start at the verified root",
+      "prefix": "certify run 0: root proof does not start at the verified root"
+    },
+    {
+      "name": "anchored-then-continuous-item-wrongly-rooted",
+      "description": "an anchored item, then a continuous closing item whose proof starts at another root",
+      "world": "chain-anchored-then-end",
+      "edit": "evidence/certify/1/rootProof/merkleState/pending/0 first byte flipped",
+      "file": "anchored-then-continuous-item-wrongly-rooted.json",
+      "sha256": "2d10ed47f1cfa79ba6762016716a2057dacec3e63aab5054ed16c93e1974ea95",
+      "expect": "refused",
+      "wording": "certify run 1: root proof does not start at the verified root",
+      "prefix": "certify run 1: root proof does not start at the verified root"
+    },
+    {
+      "name": "anchor-of-another-chain-genuinely-signed",
+      "description": "a genuine anchor of another chain: the signatures are intact and the link is valid in its own chain, but it does not start at the verified root",
+      "world": "chain-final-only",
+      "edit": "evidence/certify/0 and links/0 replaced by a record of another chain signed by the genesis set, with that chain's own link",
+      "file": "anchor-of-another-chain-genuinely-signed.json",
+      "sha256": "42ac383413bccf484b88f91addf355d978554ba1a979d0082b752989c99e7df6",
+      "expect": "refused",
+      "state": "certify_link_start",
+      "fields": [
+        "0"
+      ],
+      "wording": "certify_link_start{0}: the link does not start at the previous verified root chain anchor",
+      "prefix": "certify_link_start{0}: the link does not start at the previous verified root chain anchor"
+    },
+    {
+      "name": "anchor-re-rooted-off-the-verified-root",
+      "description": "the link starts at the verified root and ends at the foreign anchor's root, which the genesis set signed: the walk accepts it and the transaction's receipt, which ends at the world's own root, is refused",
+      "world": "chain-final-only",
+      "edit": "evidence/certify/0 and links/0 replaced by a record of another chain signed by the genesis set, linked from the verified root",
+      "file": "anchor-re-rooted-off-the-verified-root.json",
+      "sha256": "a7f14920653480b9c7a7b9f6566eeb0268e327d87ceb333d65758b4e75fc8df7",
+      "expect": "refused",
+      "wording": "receipt ends at 4b5bb5147f4ecfcfb3ef2e772d1038990c61697e24620fb97c9224a22b15e2ba, not the root 174a338c9842e470aaa4f0c1ea0db5116aa21a31aed54b666d998cec5ec98495 certified at DN 110",
+      "prefix": "receipt ends at "
+    },
+    {
+      "name": "anchor-of-another-incarnation",
+      "description": "a cross-incarnation anchor: the link is valid and starts at the verified root, the signers are not in the set in force",
+      "world": "chain-final-only",
+      "edit": "evidence/certify/0 and links/0 replaced by a record signed by a validator set the genesis does not hold, linked from the verified root",
+      "file": "anchor-of-another-incarnation.json",
+      "sha256": "70757388f7e975c64e460ba35a623756e23c95f8f23e0377c4977ff8d203f92a",
+      "expect": "refused",
+      "wording": "certify run 0: block 110: signer is not an active directory validator",
+      "prefix": "certify run 0: block 110: signer is not an active directory validator"
+    },
+    {
+      "name": "root-proof-null-is-absent",
+      "description": "a null rootProof is no rootProof: the item is anchored and takes its link",
+      "world": "chain-final-only",
+      "edit": "evidence/certify/0/rootProof = null",
+      "file": "root-proof-null-is-absent.json",
+      "sha256": "8bc6ca827651424310a93021e410c9317455c764fd798af0a6deb7d86b976a26",
+      "expect": "verified",
+      "report": {
+        "version": "2.1",
+        "tag": "certen:g1:v4",
+        "partition": "acc://bvn-BVN1.acme",
+        "anchorBlock": 50,
+        "certifiedRoot": "4b5bb5147f4ecfcfb3ef2e772d1038990c61697e24620fb97c9224a22b15e2ba",
+        "checkBlock": 300,
+        "setVerdict": "verified",
+        "routingHeight": 1,
+        "proven": [
+          {
+            "url": "acc://pv2-cust-5.acme/data",
+            "partition": "acc://bvn-BVN1.acme",
+            "block": 50,
+            "roles": [
+              "principal-chain"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/1",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page",
+              "voter"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/2",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book/1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-page"
+            ]
+          }
+        ],
+        "pagesBound": 6,
+        "unproven": [
+          "g1_completeness_unproven"
+        ]
+      }
+    },
+    {
+      "name": "root-proof-empty-object",
+      "description": "an empty rootProof is a continuous item with an empty proof, not an anchored one",
+      "world": "chain-final-only",
+      "edit": "evidence/certify/0/rootProof = {}",
+      "file": "root-proof-empty-object.json",
+      "sha256": "e2e0c166757dbdcf17727a841c38528d9600aea1926d8894d2173a90c564024d",
+      "expect": "refused",
+      "wording": "certify run 0: incomplete root proof",
+      "prefix": "certify run 0: incomplete root proof"
+    },
+    {
+      "name": "root-proof-merkle-state-only",
+      "description": "a rootProof without its receipt is a continuous item with an incomplete proof",
+      "world": "chain-final-only",
+      "edit": "evidence/certify/0/rootProof = {merkleState: the chain's}",
+      "file": "root-proof-merkle-state-only.json",
+      "sha256": "8a453804c69e3646f7fccbf3399e3347948cabf85904e7f0c9664d2330cdda08",
+      "expect": "refused",
+      "wording": "certify run 0: incomplete root proof",
+      "prefix": "certify run 0: incomplete root proof"
+    },
+    {
+      "name": "record-with-an-unknown-trailing-field",
+      "description": "a record carrying a field the decoder does not know (Accumulate keeps it as its epilogue): the verdict is the unmodified document's",
+      "world": "chain-final-only",
+      "edit": "evidence/certify/0/$epilogue = field 5",
+      "file": "record-with-an-unknown-trailing-field.json",
+      "sha256": "d88be9ebb6567634095afe629996ab45c64ff124a583cc1733cb34bc9edb70df",
+      "expect": "verified",
+      "report": {
+        "version": "2.1",
+        "tag": "certen:g1:v4",
+        "partition": "acc://bvn-BVN1.acme",
+        "anchorBlock": 50,
+        "certifiedRoot": "4b5bb5147f4ecfcfb3ef2e772d1038990c61697e24620fb97c9224a22b15e2ba",
+        "checkBlock": 300,
+        "setVerdict": "verified",
+        "routingHeight": 1,
+        "proven": [
+          {
+            "url": "acc://pv2-cust-5.acme/data",
+            "partition": "acc://bvn-BVN1.acme",
+            "block": 50,
+            "roles": [
+              "principal-chain"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/1",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page",
+              "voter"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/2",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book/1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-page"
+            ]
+          }
+        ],
+        "pagesBound": 6,
+        "unproven": [
+          "g1_completeness_unproven"
+        ]
+      }
+    },
+    {
+      "name": "link-with-an-unknown-trailing-field",
+      "description": "a link is a receipt, not a record: unlike a record, whose unknown trailing field leaves the verdict unchanged, a receipt carrying one is refused as an invalid link at its ordinal",
+      "world": "chain-final-only",
+      "edit": "evidence/links/0/$epilogue = field 5",
+      "file": "link-with-an-unknown-trailing-field.json",
+      "sha256": "956bd983cd7c0107ba592fe1da07eae8f455074079a63037a65bd81b64178fce",
+      "expect": "refused",
+      "state": "certify_link_invalid",
+      "fields": [
+        "0"
+      ],
+      "wording": "certify_link_invalid{0}: the link is not a valid receipt of an anchored item",
+      "prefix": "certify_link_invalid{0}: the link is not a valid receipt of an anchored item"
+    },
+    {
+      "name": "link-undecodable-before-an-earlier-items-refusal",
+      "description": "every link is decoded before any item is judged: link 1 does not decode, and item 0, which comes first, has no quorum; the verdict is the link's, at its ordinal, never item 0's",
+      "world": "chain-two-anchored",
+      "edit": "evidence/links/1/$epilogue = field 5 and evidence/certify/0/signatures = []",
+      "file": "link-undecodable-before-an-earlier-items-refusal.json",
+      "sha256": "c329eecf152c28baf5a30483b54526ac1af38a1ebf46a6134606b46d8eedd15b",
+      "expect": "refused",
+      "state": "certify_link_invalid",
+      "fields": [
+        "1"
+      ],
+      "wording": "certify_link_invalid{1}: the link is not a valid receipt of an anchored item",
+      "prefix": "certify_link_invalid{1}: the link is not a valid receipt of an anchored item"
+    },
+    {
+      "name": "hops-anchored-verified",
+      "description": "an anchored closing certify item and two anchored hops, three links in the order certify then hops",
+      "world": "chain-hops-anchored",
+      "edit": "none",
+      "file": "hops-anchored-verified.json",
+      "sha256": "f542adb05f61ed07d7d6fe1241f67597ef4fc356f6fe3dc72017fa7bb73f5b94",
+      "expect": "verified",
+      "report": {
+        "version": "2.1",
+        "tag": "certen:g1:v4",
+        "partition": "acc://bvn-BVN1.acme",
+        "anchorBlock": 50,
+        "certifiedRoot": "4b5bb5147f4ecfcfb3ef2e772d1038990c61697e24620fb97c9224a22b15e2ba",
+        "checkBlock": 320,
+        "setVerdict": "verified",
+        "routingHeight": 1,
+        "proven": [
+          {
+            "url": "acc://pv2-cust-5.acme/data",
+            "partition": "acc://bvn-BVN1.acme",
+            "block": 50,
+            "roles": [
+              "principal-chain"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/1",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page",
+              "voter"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/2",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book/1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-page"
+            ]
+          }
+        ],
+        "pagesBound": 6,
+        "unproven": [
+          "g1_completeness_unproven"
+        ]
+      }
+    },
+    {
+      "name": "hop-link-absent",
+      "description": "the last hop has no link: the ordinal is counted across certify and hops",
+      "world": "chain-hops-anchored",
+      "edit": "evidence/links/2 removed",
+      "file": "hop-link-absent.json",
+      "sha256": "dcae2cd254aca09fd84f32b280f66ab4d5ad353a89dcc2e41661d551f1c52ee7",
+      "expect": "refused",
+      "state": "certify_link_missing",
+      "fields": [
+        "2"
+      ],
+      "wording": "certify_link_missing{2}: an anchored item has no link",
+      "prefix": "certify_link_missing{2}: an anchored item has no link"
+    },
+    {
+      "name": "hop-link-start-altered",
+      "description": "the first hop's link starts somewhere other than the checkpoint's root chain anchor",
+      "world": "chain-hops-anchored",
+      "edit": "evidence/links/1/start first byte flipped",
+      "file": "hop-link-start-altered.json",
+      "sha256": "509d756543105de484bb7915eb8d903d8a4da3010ef75e77b280aa12fb458859",
+      "expect": "refused",
+      "state": "certify_link_start",
+      "fields": [
+        "1"
+      ],
+      "wording": "certify_link_start{1}: the link does not start at the previous verified root chain anchor",
+      "prefix": "certify_link_start{1}: the link does not start at the previous verified root chain anchor"
+    },
+    {
+      "name": "hop-anchored-item-without-update-not-last",
+      "description": "the canonical form holds for the set check's hops; the item is numbered across certify and hops",
+      "world": "chain-hops-no-effect",
+      "edit": "none (the first hop is anchored, carries no update and is not the last)",
+      "file": "hop-anchored-item-without-update-not-last.json",
+      "sha256": "b7fb40aff4242a1cf85d08429a0a88f8535db5b4812c6d02dea66f322949085a",
+      "expect": "refused",
+      "state": "certify_item_without_effect",
+      "fields": [
+        "1",
+        "310"
+      ],
+      "wording": "certify_item_without_effect{1,310}: an anchored item that is not the last of its sequence applies no update",
+      "prefix": "certify_item_without_effect{1,310}: an anchored item that is not the last of its sequence applies no update"
+    },
+    {
+      "name": "hop-duplicated-update",
+      "description": "the replay refusal holds for the set check's hops",
+      "world": "chain-hops-duplicated",
+      "edit": "none (the first hop carries the same globals write twice)",
+      "file": "hop-duplicated-update.json",
+      "sha256": "01753d5090c0e381625c45c11abaf6c3f6798a01714e9a35ddcbf3ff735387f0",
+      "expect": "refused",
+      "state": "certify_update_replayed",
+      "fields": [
+        "57b7ace2b33e5851a709a3c29b3d3642fb137669e9ecf8a9cfec95ba31278a42"
+      ],
+      "wording": "certify_update_replayed{57b7ace2b33e5851a709a3c29b3d3642fb137669e9ecf8a9cfec95ba31278a42}: the update was already applied earlier in the walk",
+      "prefix": "certify_update_replayed{57b7ace2b33e5851a709a3c29b3d3642fb137669e9ecf8a9cfec95ba31278a42}: the update was already applied earlier in the walk"
+    },
+    {
+      "name": "anchored-item-in-an-evidence-2.0-document",
+      "description": "an item without a root proof in a document that claims 2.0: refused as it always was",
+      "world": "conformance:network-update",
+      "edit": "evidence/certify/0/rootProof removed",
+      "file": "anchored-item-in-an-evidence-2.0-document.json",
+      "sha256": "1596c11e6bb7a85704f7ac42c0d9b8448782e40ebda7b9141228ae4148766eef",
+      "expect": "refused",
+      "wording": "certify run 0: incomplete minor root record",
+      "prefix": "certify run 0: incomplete minor root record"
+    },
+    {
+      "name": "links-member-in-an-evidence-2.0-document",
+      "description": "a links member in a document that claims 2.0 is not read: the verdict is the unmodified document's, whatever the member holds",
+      "world": "conformance:network-update",
+      "edit": "evidence/links = a string",
+      "file": "links-member-in-an-evidence-2.0-document.json",
+      "sha256": "10f4676c9fae48a13038ec694045a9f1d0d24be7727f71689f3b7b9b7b8d3439",
+      "expect": "verified",
+      "report": {
+        "version": "",
+        "tag": "",
+        "partition": "acc://bvn-BVN1.acme",
+        "anchorBlock": 50,
+        "certifiedRoot": "47d273ec03a1c34ddb5a1ab9eec16411460926d55e433f5da5c00895aa40a30d",
+        "checkBlock": 300,
+        "setVerdict": "validator_set_asserted",
+        "routingHeight": 0,
+        "proven": null,
+        "pagesBound": 0,
+        "unproven": null
+      }
+    }
+  ]
+}

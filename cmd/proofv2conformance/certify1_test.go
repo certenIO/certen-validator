@@ -20,6 +20,17 @@ func TestCertify1VectorsAreReproducible(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(tmp, "names.json"), names, 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// The frozen F5-1 documents are inputs of the generator, never its outputs: it reads them from the directory it writes into, verifies each
+	// against its pinned hash and does not write them.
+	for name := range certify1Frozen {
+		b, err := os.ReadFile(filepath.Join(committed, name+".json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(tmp, name+".json"), b, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := writeCertify1(tmp); err != nil {
 		t.Fatal(err)
 	}
@@ -27,7 +38,7 @@ func TestCertify1VectorsAreReproducible(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(files) < 25 {
+	if len(files) < 75 {
 		t.Fatalf("only %d files", len(files))
 	}
 	for _, f := range files {

@@ -23,7 +23,7 @@ func encodedLen(t *testing.T, ev *Evidence) int {
 // transaction's partition and block; one byte under the budget passes. The budget is what CometBFT's max_tx_bytes (1 MiB) leaves after the
 // certificate's reserve (xbudget.go).
 func TestEvidenceBudgetIsExactlyTheConsensusTransactionLimitLessTheReserve(t *testing.T) {
-	if MaxEvidenceBytes != 950272 {
+	if MaxEvidenceBytes != 720896 {
 		t.Fatalf("budget %d", MaxEvidenceBytes)
 	}
 	x := xAnchor{id: "BVN1", block: 50}
@@ -43,7 +43,7 @@ func TestEvidenceBudgetIsExactlyTheConsensusTransactionLimitLessTheReserve(t *te
 	pad(MaxEvidenceBytes - base - overhead + 1)
 	err := CheckEvidenceBudget(ev, x)
 	var ns *NamedState
-	if !errors.As(err, &ns) || ns.Code != StateClosureExceedsBudget || ns.Partition != "BVN1" || ns.Block != 50 || !strings.Contains(ns.Detail, "pages=1 limit=950272") {
+	if !errors.As(err, &ns) || ns.Code != StateClosureExceedsBudget || ns.Partition != "BVN1" || ns.Block != 50 || !strings.Contains(ns.Detail, "pages=1 limit=720896") {
 		t.Fatalf("an evidence one byte over the budget: %v", err)
 	}
 }
@@ -51,14 +51,14 @@ func TestEvidenceBudgetIsExactlyTheConsensusTransactionLimitLessTheReserve(t *te
 // The capture's check, before the evidence exists.
 func TestClosureBudgetRefusesAClosureThatCannotFit(t *testing.T) {
 	small := []PageState{{URL: "acc://a.acme/book", State: strings.Repeat("ab", 600)}}
-	if err := CheckClosureBudget(small, nil, "BVN1", 50); err != nil {
+	if err := CheckClosureBudget(Version21, small, nil, "BVN1", 50); err != nil {
 		t.Fatalf("a small closure: %v", err)
 	}
 	room := MaxEvidenceBytes - FixedEvidenceBytes
 	big := []PageState{{URL: "acc://a.acme/book", State: hex.EncodeToString(make([]byte, room/2))}}
-	err := CheckClosureBudget(big, nil, "BVN1", 50)
+	err := CheckClosureBudget(Version21, big, nil, "BVN1", 50)
 	var ns *NamedState
-	if !errors.As(err, &ns) || ns.Code != StateClosureExceedsBudget || ns.Partition != "BVN1" || ns.Block != 50 || !strings.Contains(ns.Detail, "pages=1 limit=950272") {
+	if !errors.As(err, &ns) || ns.Code != StateClosureExceedsBudget || ns.Partition != "BVN1" || ns.Block != 50 || !strings.Contains(ns.Detail, "pages=1 limit=720896") {
 		t.Fatalf("a closure over the budget: %v", err)
 	}
 }

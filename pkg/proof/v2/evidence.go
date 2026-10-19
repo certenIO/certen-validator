@@ -75,6 +75,11 @@ type Evidence struct {
 	// link of an anchored item starts at the previously verified root chain anchor and ends at the item's own. Absent when empty; in a
 	// document that claims 2.0 the member is not read.
 	Links []string `json:"links,omitempty"`
+	// GenesisLink (evidence 2.1 only; RB9-F5 V-E A1b, F-VE-2) is the chain identity of an anchored document, binary merkle.Receipt, hex: a
+	// receipt from the pinned incarnation's GenesisRootChainAnchor (consensus: the spine log's Genesis.RootChainAnchor) to the certified root,
+	// which proves the certified root extends the very chain the pin names, not another incarnation's that shares its genesis records.
+	// Required by a document that has links (any anchored item); absent otherwise; in a document that claims 2.0 the member is not read.
+	GenesisLink string `json:"genesisLink,omitempty"`
 
 	// Check proves the validator set in force at a certified block at or after the certified one.
 	Check SetCheck `json:"check"`
@@ -231,7 +236,7 @@ func verifyFromGenesis(ev *Evidence, ar *Archive, in proof.IncarnationInputs, pi
 		}
 	}
 	rep.Majors = need
-	return verifyFrom(ev, rep, at, pinned)
+	return verifyFrom(ev, rep, at, pinned, in.GenesisRootChainAnchor)
 }
 
 // VerifyFromSpine verifies ev against the validator-set spine as CERTEN's consensus state holds it (the spine log a
@@ -274,6 +279,24 @@ func verifyFromSpine(ev *Evidence, l *ledger.AccumulateSpineLog, pinned [32]byte
 	if need > uint64(len(l.Checkpoints)) {
 		return nil, fmt.Errorf("evidence builds on %d major blocks; the chain has verified %d", need, len(l.Checkpoints))
 	}
+	// Evidence 2.1 only (consensus judges it only from the rules v15 activation): a document that builds on a checkpoint more than
+	// CheckpointLag major blocks behind the newest is refused by name (V-E F-VE-1), so keys that were in force at an old checkpoint cannot
+	// be named. Both checkpoints a document names are bounded - the certification's (ev.Majors) and the set check's (ev.Check.Majors, whose
+	// hop records and bound state tree a holder of retired keys would otherwise forge, V-J J2); the refusal names the certification's when
+	// both are stale. Evidence 2.0 is judged as ever.
+	if newest := uint64(len(l.Checkpoints)); ev.Version == Version21 {
+		for _, n := range []uint64{ev.Majors, ev.Check.Majors} {
+			if n+CheckpointLag < newest {
+				return nil, certifyState(StateCheckpointStale, strconv.FormatUint(n, 10), strconv.FormatUint(newest, 10), strconv.Itoa(CheckpointLag))
+			}
+		}
+	}
+	var genesisRoot [32]byte // read for evidence 2.1 only: a 2.0 verdict does not depend on the log's genesis root
+	if ev.Version == Version21 {
+		if err := hex32(l.Genesis.RootChainAnchor, genesisRoot[:]); err != nil {
+			return nil, fmt.Errorf("the chain's spine genesis root chain anchor: %w", err)
+		}
+	}
 	at := map[uint64]*Spine{}
 	for _, n := range []uint64{ev.Majors, ev.Check.Majors} {
 		if _, ok := at[n]; ok {
@@ -285,12 +308,12 @@ func verifyFromSpine(ev *Evidence, l *ledger.AccumulateSpineLog, pinned [32]byte
 		}
 		at[n] = sp
 	}
-	return verifyFrom(ev, &Report{Incarnation: pinned, Majors: need}, at, pinned)
+	return verifyFrom(ev, &Report{Incarnation: pinned, Majors: need}, at, pinned, genesisRoot)
 }
 
 // verifyFrom checks everything after the spine's starting points: at holds the spine after ev.Majors and after
 // ev.Check.Majors major blocks.
-func verifyFrom(ev *Evidence, rep *Report, at map[uint64]*Spine, pinned [32]byte) (*Report, error) {
+func verifyFrom(ev *Evidence, rep *Report, at map[uint64]*Spine, pinned, genesisRoot [32]byte) (*Report, error) {
 	var err error
 	is21 := ev.Version == Version21
 	if !is21 {
@@ -310,6 +333,7 @@ func verifyFrom(ev *Evidence, rep *Report, at map[uint64]*Spine, pinned [32]byte
 		return nil, fmt.Errorf("certify: no minor-root run")
 	}
 	var links []*merkle.Receipt // evidence 2.1: the links of the anchored items, certify first and then the set check's hops
+	var genesisLink *merkle.Receipt
 	if is21 {
 		cert.refuseReplay = true
 		for i, h := range ev.Links {
@@ -319,10 +343,21 @@ func verifyFrom(ev *Evidence, rep *Report, at map[uint64]*Spine, pinned [32]byte
 			}
 			links = append(links, l)
 		}
+		if ev.GenesisLink != "" {
+			if genesisLink, err = decodeReceipt(ev.GenesisLink); err != nil {
+				return nil, certifyState(StateCertifyLinkInvalid, genesisLinkIndex)
+			}
+		}
 	}
 	used := 0
 	if err := walkRuns(cert, ev.Certify, "certify run", is21, links, &used, 0); err != nil {
 		return nil, err
+	}
+	// The chain identity (V-E A1b, F-VE-2): a document with links ties the certified root to the genesis root of the pinned incarnation.
+	if is21 && (len(links) > 0 || genesisLink != nil) {
+		if err := checkGenesisLink(genesisLink, genesisRoot, cert.RootChainAnchor); err != nil {
+			return nil, err
+		}
 	}
 	r, err := decodeReceipt(ev.Receipt)
 	if err != nil {
@@ -415,11 +450,18 @@ func verifyFrom(ev *Evidence, rep *Report, at map[uint64]*Spine, pinned [32]byte
 		return nil, fmt.Errorf("set check: %w", err)
 	}
 	pinnedHex := hex.EncodeToString(pinned[:])
+	// Evidence 2.1 (V-E A2(b), A3): the walk must have applied every write to BOTH accounts, the network definition and the globals; when it
+	// has, the set's history is derived from the pinned genesis by induction and a main chain height above 1 is accounted, not asserted.
+	// Evidence 2.0 accounts the network account only and reports a changed set as asserted, as it always has.
+	netHeight, netOK := set.MainChainHeight()
+	globHeight, globOK := set.GlobalsMainChainHeight()
+	accounted := is21 && netOK && globOK && netHeight == 1+chk.NetworkUpdates() && globHeight == 1+chk.GlobalsUpdates()
 	verdict, err := set.Verify(proof.VerifyInput{
 		AssertedSet:          derived,
 		AssertedThreshold:    thr,
 		BoundStateTreeAnchor: hex.EncodeToString(chk.StateTreeAnchor[:]),
 		PinnedIncarnation:    &pinnedHex,
+		AccountedHistory:     accounted,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("set check: %w", err)
@@ -433,12 +475,25 @@ func verifyFrom(ev *Evidence, rep *Report, at map[uint64]*Spine, pinned [32]byte
 	if err := sameEntry(set.Globals.AccountState, chk.Globals().Globals.MarshalBinary); err != nil {
 		return nil, fmt.Errorf("set check: globals: %w", err)
 	}
-	height, ok := set.MainChainHeight()
+	height, ok := netHeight, netOK
 	if !ok {
 		return nil, fmt.Errorf("set check: no main chain on the network account")
 	}
 	applied := chk.NetworkUpdates()
-	if height != 1+applied {
+	if is21 {
+		// Named, with the account and the block it was judged at (certify_window_unaccounted): have is the entries the walk accounts for
+		// (1 + the writes it applied), want the proven main chain height.
+		checkBlock := strconv.FormatUint(chk.LastMinorBlock, 10)
+		if height != 1+applied {
+			return nil, certifyState(StateCertifyWindowUnaccounted, "network", checkBlock, strconv.FormatUint(1+applied, 10), strconv.FormatUint(height, 10))
+		}
+		if !globOK {
+			return nil, fmt.Errorf("set check: no main chain on the globals account")
+		}
+		if want := 1 + chk.GlobalsUpdates(); globHeight != want {
+			return nil, certifyState(StateCertifyWindowUnaccounted, "globals", checkBlock, strconv.FormatUint(want, 10), strconv.FormatUint(globHeight, 10))
+		}
+	} else if height != 1+applied {
 		return nil, fmt.Errorf("set check: the network account's main chain has %d entries but the walk applied %d updates after genesis", height, applied)
 	}
 	if rep.AccumulateSetRoot, err = accumulateset.AccumulateSetRoot(derived, thr, pinned); err != nil {

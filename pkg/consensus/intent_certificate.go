@@ -366,6 +366,11 @@ func buildIntentCertificate(vb *ValidatorBlock, chainID string, reg *ledger.BLSR
 	if ProofV3Required(spine, reg) {
 		vb.IntentCertificate.ProofV2 = pv2
 	}
+	// Before anything is verified or signed: evidence 2.1 whose whole block is over the transaction path limit is certificate_budget{size,limit}.
+	if err := checkCertificateFitsBeforeSigning(vb); err != nil {
+		vb.IntentCertificate = nil
+		return err
+	}
 	f, err := intentInputs(vb, chainID, reg, spine, g1, verify)
 	if err != nil {
 		vb.IntentCertificate = nil

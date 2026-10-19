@@ -403,7 +403,14 @@ func TestAnchoredRefusesGenuineAnchorOfAnotherChain(t *testing.T) {
 	b = buildChain(t, &xworld.Chain{Final: xworld.ChainItem{Anchored: true}})
 	b.Evidence.Certify = []string{recHex(t, rec)}
 	b.Evidence.Links = []string{receiptHexOf(t, link)}
+	// With the world's own genesis link the re-rooted document is refused earlier, by name: the genesis link ends at the world's root, not the
+	// certified one (F5-3: the chain identity).
 	_, err := proofv2.Verify21FromGenesis(b.Evidence, b.Archive, b.Inputs, b.Pin)
+	wantCertifyState(t, err, proofv2.StateCertifyLinkEnd, "genesis")
+	// A re-rooting that also re-roots the genesis link (it starts at the verified root, which is the pinned genesis root here) reaches the
+	// transaction's receipt, which is what refuses it.
+	b.Evidence.GenesisLink = receiptHexOf(t, link)
+	_, err = proofv2.Verify21FromGenesis(b.Evidence, b.Archive, b.Inputs, b.Pin)
 	if err == nil || !strings.HasPrefix(err.Error(), "receipt ends at ") {
 		t.Fatalf("got %v", err)
 	}

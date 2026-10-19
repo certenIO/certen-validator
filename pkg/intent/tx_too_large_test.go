@@ -14,8 +14,10 @@ package intent
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/certen/independant-validator/pkg/accumulate"
 	"github.com/certen/independant-validator/pkg/consensus"
@@ -54,17 +56,20 @@ func TestATxTooLargeIntentIsRecordedFailedAndStaysRedrivable(t *testing.T) {
 	const intentID = "tx-too-large-1"
 	tx := blockTx("dd44", intentID, 600)
 	failures := &failureLog{}
-	id := retryDiscovery(&blockClient{txs: []*accumulate.CertenTransaction{tx}}, nil, failures, 4)
+	id := retryDiscovery(&blockClient{txs: []*accumulate.CertenTransaction{tx}},
+		openJournal(t, filepath.Join(t.TempDir(), "r.json")), failures, 4)
 	id.blockProcess = func(*CertenIntent, uint64) (consensus.TargetChainOutcome, error) {
 		return consensus.TargetChainFailed, txTooLargeAsDiscoveryReceivesIt()
 	}
+	startIntentWorkers(t, id, 1) // the block job hands the intent to an intent worker (RB8-H)
 
 	if err := id.processBlock(&BlockProcessJob{BlockHeight: 600}, "test"); err != nil {
 		t.Fatalf("processBlock: %v", err)
 	}
-	if s, ok := failures.status(intentID); !ok || s != database.IntentLifecycleFailed {
-		t.Fatalf("the intent's lifecycle was not recorded failed (written: %v %q)", ok, s)
-	}
+	waitUntil(t, "the intent's lifecycle was recorded failed", 5*time.Second, func() bool {
+		s, ok := failures.status(intentID)
+		return ok && s == database.IntentLifecycleFailed
+	})
 	if n := len(id.retryCh); n != 0 {
 		t.Fatalf("%d retry job(s) queued for a refusal no resend can change", n)
 	}

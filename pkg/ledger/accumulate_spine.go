@@ -46,6 +46,14 @@ type AccumulateSpineCheckpoint struct {
 	SetHash         string `json:"set_hash"`
 	// NetworkUpdates counts the writes to the network definition applied from genesis up to this checkpoint.
 	NetworkUpdates uint64 `json:"network_updates"`
+	// GlobalsUpdates counts the writes to the globals account applied from the activation of evidence 2.1 (rules v15) up to this
+	// checkpoint (RB9-F5, V-E A2(b)). A checkpoint extended before the activation holds none, and the field is omitted when empty, so the
+	// bytes of a v13 or v14 checkpoint do not move.
+	GlobalsUpdates uint64 `json:"globals_updates,omitempty"`
+	// RootChainIndex is the root chain index of the Directory anchor this checkpoint's major block closed at, recorded from the activation of
+	// evidence 2.1 (rules v15; RB9-F5, V-E A2(c)): the lower bound of the first update window of a document that builds on this checkpoint.
+	// Omitted when empty (a checkpoint extended before the activation), so the bytes of a v13 or v14 checkpoint do not move.
+	RootChainIndex uint64 `json:"root_chain_index,omitempty"`
 }
 
 // AccumulateSpineSet is one validator set: the network definition and globals records in force, as encoded on chain.

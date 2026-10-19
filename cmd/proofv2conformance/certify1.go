@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 
 	proofv2 "github.com/certen/independant-validator/pkg/proof/v2"
@@ -50,8 +51,10 @@ type Certify1Case struct {
 	Wording string `json:"wording,omitempty"`
 	Prefix  string `json:"prefix,omitempty"`
 	// SameReportAs names a verified vector whose report this one must equal exactly (the continuous and anchored forms of one chain).
-	SameReportAs string   `json:"sameReportAs,omitempty"`
-	Report       *XReport `json:"report,omitempty"`
+	SameReportAs string `json:"sameReportAs,omitempty"`
+	// Note says why a vector is what it is when that is not its description: a frozen document of an earlier suite and what moved (certify1_frozen.go).
+	Note   string   `json:"note,omitempty"`
+	Report *XReport `json:"report,omitempty"`
 }
 
 // Certify1Manifest lists the suite; its own hash is the content of MANIFEST.sha256, beside it.
@@ -95,6 +98,26 @@ func certify1Worlds() map[string]xworld.Options {
 		"chain-hops-anchored":       {Chain: &xworld.Chain{Final: xworld.ChainItem{Anchored: true}, Hops: []xworld.ChainItem{eff(true), {Anchored: true}}}},
 		"chain-hops-no-effect":      {Chain: &xworld.Chain{Final: xworld.ChainItem{Anchored: true}, Hops: []xworld.ChainItem{{Anchored: true}, {Anchored: true}}}},
 		"chain-hops-duplicated":     {Chain: &xworld.Chain{Final: xworld.ChainItem{Anchored: true}, Hops: []xworld.ChainItem{{Anchored: true, Update: xworld.UpdateGlobals, Repeat: 2}, {Anchored: true}}}},
+		// The set changes in the minor run (V-E A3): the globals are rewritten (content B, then the genesis content again: an A -> B -> A
+		// sequence) and the network is rewritten to its version 2 (a fourth validator). The proven network account holds 2 entries and the
+		// globals account 3; the walk applies every write, so the set check reports verified.
+		"chain-accounted": {Chain: &xworld.Chain{Items: []xworld.ChainItem{
+			{Anchored: true, Update: xworld.UpdateGlobalsB}, {Anchored: true, Update: xworld.UpdateGenesisGlobals}, {Anchored: true, Update: xworld.UpdateNetworkV2}},
+			Final: xworld.ChainItem{Anchored: true}}},
+		// The same chain as the globals part of chain-accounted, with the first write left out of the document although the chain holds it: the
+		// globals end at the genesis content again, so a comparison of content cannot see the omission; only the count can.
+		"chain-globals-aba-omitted": {Chain: &xworld.Chain{Items: []xworld.ChainItem{
+			{Anchored: true, Update: xworld.UpdateGlobalsB}, {Anchored: true, Update: xworld.UpdateGenesisGlobals}},
+			Final: xworld.ChainItem{Anchored: true}, Omit: []int{0}}},
+		// A complete chain of another incarnation: it shares the pinned genesis records and the genesis set, and starts at a root of its own.
+		"chain-foreign-genesis": {Chain: &xworld.Chain{Final: xworld.ChainItem{Anchored: true}, Start: xworld.ForeignGenesis()}},
+		// The window of an update (V-E A2(c)): the update's root chain position, read from its receipt's shape and the signed tree size, must lie
+		// in (the previous anchor's RootChainIndex, this anchor's].
+		"chain-window-in": {Chain: &xworld.Chain{Items: []xworld.ChainItem{{Anchored: true, Update: xworld.UpdateGlobals}}, Final: xworld.ChainItem{Anchored: true}}},
+		"chain-window-before": {Chain: &xworld.Chain{Items: []xworld.ChainItem{{Anchored: true, Update: xworld.UpdateGlobalsB},
+			{Anchored: true, Update: xworld.UpdateGlobals, Leaf: xworld.LeafBefore}}, Final: xworld.ChainItem{Anchored: true}}},
+		"chain-window-after": {Chain: &xworld.Chain{Items: []xworld.ChainItem{{Anchored: true, Update: xworld.UpdateGlobals, Leaf: xworld.LeafAfter}}, Final: xworld.ChainItem{Anchored: true}}},
+		"chain-window-shape": {Chain: &xworld.Chain{Items: []xworld.ChainItem{{Anchored: true, Update: xworld.UpdateGlobals, Leaf: xworld.LeafShape}}, Final: xworld.ChainItem{Anchored: true}}},
 	}
 }
 
@@ -197,6 +220,16 @@ func certify1Specs() []certify1Spec {
 			return setMember(d, p, flipFirstByte(h))
 		}
 	}
+	flipGenesisLink := func(member ...any) edit {
+		return func(d map[string]any, _ *xworld.Built) error {
+			p := append([]any{"evidence", "genesisLink"}, member...)
+			h, okh := memberAt(d, p...).(string)
+			if !okh {
+				return fmt.Errorf("the base document has no hex at %v", p)
+			}
+			return setMember(d, p, flipFirstByte(h))
+		}
+	}
 	flipPending := func(i int) edit {
 		return func(d map[string]any, _ *xworld.Built) error {
 			p := append(certifyAt(i), "rootProof", "merkleState", "pending", 0)
@@ -292,10 +325,17 @@ func certify1Specs() []certify1Spec {
 				rec, link := xworld.ForeignItem(nil, 110, false)
 				return replaceItem(0, 0, rec, link)(d, nil)
 			}},
-		{Certify1Case: c("anchor-re-rooted-off-the-verified-root", "chain-final-only", "evidence/certify/0 and links/0 replaced by a record of another chain signed by the genesis set, linked from the verified root", "the link starts at the verified root and ends at the foreign anchor's root, which the genesis set signed: the walk accepts it and the transaction's receipt, which ends at the world's own root, is refused", Certify1Case{Expect: "refused", Prefix: "receipt ends at "}),
+		{Certify1Case: c("anchor-re-rooted-off-the-verified-root", "chain-final-only", "evidence/certify/0, links/0 and genesisLink replaced by a record of another chain signed by the genesis set, linked from the verified root", "the link starts at the verified root and ends at the foreign anchor's root, which the genesis set signed, and the genesis link is the same receipt: the walk accepts it and the transaction's receipt, which ends at the world's own root, is refused", Certify1Case{Expect: "refused", Prefix: "receipt ends at "}),
 			apply: func(d map[string]any, _ *xworld.Built) error {
 				rec, link := xworld.ForeignItem(xworld.GenesisRoot(), 110, false)
-				return replaceItem(0, 0, rec, link)(d, nil)
+				if err := replaceItem(0, 0, rec, link)(d, nil); err != nil {
+					return err
+				}
+				l, err := asValue(receiptJSONOf(link))
+				if err != nil {
+					return err
+				}
+				return setMember(d, []any{"evidence", "genesisLink"}, l)
 			}},
 		{Certify1Case: c("anchor-of-another-incarnation", "chain-final-only", "evidence/certify/0 and links/0 replaced by a record signed by a validator set the genesis does not hold, linked from the verified root", "a cross-incarnation anchor: the link is valid and starts at the verified root, the signers are not in the set in force", plain("certify run 0: block 110: signer is not an active directory validator")),
 			apply: func(d map[string]any, _ *xworld.Built) error {
@@ -341,7 +381,39 @@ func certify1Specs() []certify1Spec {
 		{Certify1Case: c("hop-anchored-item-without-update-not-last", "chain-hops-no-effect", "none (the first hop is anchored, carries no update and is not the last)", "the canonical form holds for the set check's hops; the item is numbered across certify and hops", certify1State(proofv2.StateCertifyItemWithoutEffect, "1", "310")), apply: noEdit},
 		{Certify1Case: c("hop-duplicated-update", "chain-hops-duplicated", "none (the first hop carries the same globals write twice)", "the replay refusal holds for the set check's hops", Certify1Case{Expect: "refused"}), apply: noEdit},
 
+		// The chain identity (V-E A1b, F-VE-2): a receipt from the pinned incarnation's genesis root chain anchor to the certified root.
+		{Certify1Case: c("genesis-link-absent", "chain-final-only", "evidence/genesisLink removed", "an anchored document without the chain identity", certify1State(proofv2.StateCertifyLinkMissing, "genesis")),
+			apply: func(d map[string]any, _ *xworld.Built) error {
+				return deleteMember(d, []any{"evidence", "genesisLink"})
+			}},
+		{Certify1Case: c("genesis-link-start-altered", "chain-final-only", "evidence/genesisLink/start first byte flipped", "the genesis link starts somewhere other than the pinned incarnation's genesis root chain anchor", certify1State(proofv2.StateCertifyLinkStart, "genesis")),
+			apply: flipGenesisLink("start")},
+		{Certify1Case: c("genesis-link-end-altered", "chain-final-only", "evidence/genesisLink/anchor first byte flipped", "the genesis link ends somewhere other than the certified root chain anchor", certify1State(proofv2.StateCertifyLinkEnd, "genesis")),
+			apply: flipGenesisLink("anchor")},
+		{Certify1Case: c("genesis-link-step-altered", "chain-final-only", "evidence/genesisLink/entries/0/hash first byte flipped", "the genesis link starts and ends where it must but its path does not recompute", certify1State(proofv2.StateCertifyLinkInvalid, "genesis")),
+			apply: flipGenesisLink("entries", 0, "hash")},
+		{Certify1Case: c("genesis-link-with-an-unknown-trailing-field", "chain-final-only", "evidence/genesisLink/$epilogue = field 5", "a genesis link is a receipt: one carrying a member the receipt does not know is refused as an invalid genesis link", certify1State(proofv2.StateCertifyLinkInvalid, "genesis")),
+			apply: func(d map[string]any, _ *xworld.Built) error {
+				return setMember(d, []any{"evidence", "genesisLink", "$epilogue"}, "05010a")
+			}},
+		{Certify1Case: c("genesis-link-of-another-incarnation", "chain-foreign-genesis", "none (the world's chain, major block and genesis link start at a root of another incarnation that shares the pinned genesis records)", "a complete chain of another incarnation, signed by the genesis set, with its own genesis link: it does not start at the pinned genesis root chain anchor", certify1State(proofv2.StateCertifyLinkStart, "genesis")), apply: noEdit},
+
+		// The accounting (V-E A2(b), A3): every write to the network and the globals accounts, counted against their main chains.
+		{Certify1Case: c("accounted-set-change-verified", "chain-accounted", "none", "updates in the minor run: the globals are rewritten (B, then the genesis content again) and the network to version 2 (a fourth validator); the proven accounts hold 3 and 2 main chain entries, the walk applied every write: the set check is verified, not asserted", ok), apply: noEdit},
+		{Certify1Case: c("omitted-globals-update", "chain-globals-aba-omitted", "none (the document leaves out the first globals write of an A -> B -> A sequence; the proven globals account holds 3 main chain entries and the genesis content)", "the content of the globals the walk derives equals the proven one, so only the count of writes shows the omission", certify1State(proofv2.StateCertifyWindowUnaccounted, "globals", "300", "2", "3")), apply: noEdit},
+
+		// The window of an update (V-E A2(c)).
+		{Certify1Case: c("update-inside-its-window-verified", "chain-window-in", "none", "the update's root chain position, read from the end of its combined receipt and the signed tree size, lies between the previous anchor's RootChainIndex and this anchor's: verified", ok), apply: noEdit},
+		{Certify1Case: c("update-before-its-window", "chain-window-before", "none (the second item presents a write whose root chain leaf lies in the first item's window)", "an update whose root chain leaf lies in an earlier window than the one it is presented in: its position is not above the previous anchor's RootChainIndex (the check is on the root chain position of the anchor the receipt is proven into, not on the block the main chain entry itself was recorded in)", certify1State(proofv2.StateCertifyUpdateUnproven, "acc://dn.acme/globals", "", "120")), apply: noEdit},
+		{Certify1Case: c("update-after-its-window", "chain-window-after", "none (the receipt is that of a tree one leaf larger than the signed RootChainIndex + 1)", "an update whose leaf lies beyond the root chain the anchor signs: its receipt does not decompose for the signed tree size", certify1State(proofv2.StateCertifyUpdateUnproven, "acc://dn.acme/globals", "", "110")), apply: noEdit},
+		{Certify1Case: c("update-receipt-shape-undecodable", "chain-window-shape", "none (the receipt's path is shorter than the root chain path of any leaf of the signed size)", "a receipt that hashes to the signed root but whose shape is the root chain path of no leaf of a tree of the signed size", certify1State(proofv2.StateCertifyUpdateUnproven, "acc://dn.acme/globals", "", "110")), apply: noEdit},
+
 		// Evidence 2.0 is frozen.
+		{Certify1Case: c("genesis-link-member-in-an-evidence-2.0-document", "conformance:network-update", "evidence/genesisLink = a string", "a genesisLink member in a document that claims 2.0 is not read: the verdict is the unmodified document's, whatever the member holds", Certify1Case{}),
+			sameAsBase: true,
+			apply: func(d map[string]any, _ *xworld.Built) error {
+				return setMember(d, []any{"evidence", "genesisLink"}, "not a receipt at all")
+			}},
 		{Certify1Case: c("anchored-item-in-an-evidence-2.0-document", "conformance:network-update", "evidence/certify/0/rootProof removed", "an item without a root proof in a document that claims 2.0: refused as it always was", plain("certify run 0: incomplete minor root record")),
 			apply: func(d map[string]any, _ *xworld.Built) error {
 				return deleteMember(d, append(certifyAt(0), "rootProof"))
@@ -354,8 +426,123 @@ func certify1Specs() []certify1Spec {
 	}
 }
 
+// verdictMatches is whether the Go verifier's verdict on a document is the one the case states.
+func verdictMatches(c Certify1Case, verr error) bool {
+	switch c.Expect {
+	case "verified":
+		return verr == nil
+	case "refused":
+		if verr == nil || strings.HasPrefix(verr.Error(), "PANIC") {
+			return false
+		}
+		var cs *proofv2.CertifyState
+		named := errors.As(verr, &cs)
+		if c.State == "" && named || c.State != "" && (!named || cs.Code != c.State || !reflect.DeepEqual(cs.Fields, c.Fields)) {
+			return false
+		}
+		return (c.Wording == "" || verr.Error() == c.Wording) && (c.Prefix == "" || strings.HasPrefix(verr.Error(), c.Prefix))
+	}
+	return false
+}
+
+// judgeCertify1 checks the Go verifier's verdict on a document against the case, completes the case (the report of a verified vector, the
+// wording and prefix of a refused one) and records every disagreement in problems.
+func judgeCertify1(xc *Certify1Case, rep *proofv2.Report, verr error, problems *[]string, reports map[string]*XReport) error {
+	switch xc.Expect {
+	case "refused":
+		switch {
+		case verr == nil:
+			*problems = append(*problems, fmt.Sprintf("%s: the Go verifier accepted a refused vector", xc.Name))
+		case strings.HasPrefix(verr.Error(), "PANIC"):
+			*problems = append(*problems, fmt.Sprintf("%s: %v", xc.Name, verr))
+		default:
+			var cs *proofv2.CertifyState
+			named := errors.As(verr, &cs)
+			switch {
+			case xc.State == "" && named:
+				*problems = append(*problems, fmt.Sprintf("%s: refused with the certify state %v, the vector names none", xc.Name, cs))
+			case xc.State != "" && (!named || cs.Code != xc.State || !reflect.DeepEqual(cs.Fields, xc.Fields)):
+				*problems = append(*problems, fmt.Sprintf("%s: refused with %v, the vector says %s%v", xc.Name, verr, xc.State, xc.Fields))
+			}
+			if xc.Wording != "" && verr.Error() != xc.Wording {
+				*problems = append(*problems, fmt.Sprintf("%s: refused with %q, the vector's wording is %q", xc.Name, verr.Error(), xc.Wording))
+			}
+			if xc.Wording == "" {
+				xc.Wording = verr.Error()
+			}
+			if xc.Prefix == "" {
+				xc.Prefix = xc.Wording
+			}
+			if !strings.HasPrefix(verr.Error(), xc.Prefix) {
+				*problems = append(*problems, fmt.Sprintf("%s: refused with %q, which does not begin %q", xc.Name, verr.Error(), xc.Prefix))
+			}
+		}
+	case "verified":
+		if verr != nil {
+			*problems = append(*problems, fmt.Sprintf("%s: the Go verifier refused a verified vector: %v", xc.Name, verr))
+			break
+		}
+		xc.Report = xreport(rep)
+		reports[xc.Name] = xc.Report
+	default:
+		return fmt.Errorf("%s: expect %q", xc.Name, xc.Expect)
+	}
+	return nil
+}
+
+// frozenCertify1 is the case of a frozen F5-1 document: the file in out (never written here) must hash to the pin, and it is judged by the
+// current verifier. Its expectation is the spec's (which the regenerated sibling is judged by) unless the verifier now refuses it with
+// certify_link_missing{genesis}, the one verdict the F5-3 requirement moves; any other disagreement is a problem.
+func frozenCertify1(out string, spec Certify1Case, pin string, problems *[]string, reports map[string]*XReport) (Certify1Case, error) {
+	xc := spec
+	xc.File, xc.SHA256, xc.SameReportAs, xc.Report = spec.Name+".json", pin, "", nil
+	// What the frozen document is comes from the pinned F5-1 text, never from the spec (which describes the genesis-link-carrying sibling).
+	txt, pinned := certify1FrozenTexts[spec.Name]
+	if !pinned {
+		*problems = append(*problems, fmt.Sprintf("%s: no pinned F5-1 text for a frozen vector", spec.Name))
+		return xc, nil
+	}
+	xc.Description, xc.World, xc.Edit = txt.Description, txt.World, txt.Edit
+	raw, err := os.ReadFile(filepath.Join(out, xc.File))
+	if err != nil {
+		*problems = append(*problems, fmt.Sprintf("%s: the frozen F5-1 document is not in %s: %v", spec.Name, out, err))
+		return xc, nil
+	}
+	if sum := sha256.Sum256(raw); hex.EncodeToString(sum[:]) != pin {
+		*problems = append(*problems, fmt.Sprintf("%s: the frozen F5-1 document hashes to %x, not the pinned %s: it is never rewritten", spec.Name, sum, pin))
+		return xc, nil
+	}
+	rep, verr := verifyGuarded(bytes.TrimSuffix(raw, []byte{0x0a}))
+	xc.Note = certify1FrozenUnmovedNote
+	if !verdictMatches(xc, verr) {
+		// The two requirements that moved verdicts of unreleased 2.1 documents: the genesis link of an anchored document (F5-3), decided after
+		// the certify runs are walked, and the update window (F5-3b), decided in the walk. Nothing else may move.
+		var cs *proofv2.CertifyState
+		switch {
+		case errors.As(verr, &cs) && cs.Code == proofv2.StateCertifyLinkMissing && reflect.DeepEqual(cs.Fields, []string{"genesis"}):
+			xc.Note = certify1FrozenMovedNote
+		case errors.As(verr, &cs) && cs.Code == proofv2.StateCertifyUpdateUnproven && len(cs.Fields) == 3:
+			xc.Note = certify1FrozenWindowNote
+		default:
+			*problems = append(*problems, fmt.Sprintf("%s: the frozen document is judged %v, which is neither the spec's verdict nor certify_link_missing{genesis} nor certify_update_unproven", spec.Name, verr))
+			return xc, nil
+		}
+		x := certify1State(cs.Code, cs.Fields...)
+		xc.Expect, xc.State, xc.Fields, xc.Wording, xc.Prefix = x.Expect, x.State, x.Fields, x.Wording, ""
+	}
+	if err := judgeCertify1(&xc, rep, verr, problems, reports); err != nil {
+		return xc, err
+	}
+	// The verdict is the F5-1 one or a fixed move of certify1_frozen_text.go; a verifier that moves any other frozen document, or moves one
+	// elsewhere, is a problem and not a re-baseline.
+	if err := checkCertify1FrozenEntry(xc, true); err != nil {
+		*problems = append(*problems, err.Error())
+	}
+	return xc, nil
+}
+
 // writeCertify1 writes the suite into out and refuses to write a vector the Go verifier does not judge as the suite says; every vector that
-// does not is reported, not only the first.
+// does not is reported, not only the first. The frozen documents of the F5-1 suite (certify1_frozen.go) must already be in out and are not written.
 func writeCertify1(out string) error {
 	if err := os.MkdirAll(out, 0o755); err != nil {
 		return err
@@ -369,6 +556,8 @@ func writeCertify1(out string) error {
 	worlds := certify1Worlds()
 	var problems []string
 	reports := map[string]*XReport{}
+	renamed := map[string]string{} // frozen name -> the name of its regenerated sibling
+	siblings := map[string]bool{}
 	for _, s := range certify1Specs() {
 		doc, built, err := certify1Doc(s.World, worlds)
 		if err != nil {
@@ -393,6 +582,10 @@ func writeCertify1(out string) error {
 		rep, verr := verifyGuarded(edited)
 		xc := s.Certify1Case
 		xc.File = s.Name + ".json"
+		if block, unproven := map[string]string{"update-before-its-window": "120", "update-after-its-window": "110", "update-receipt-shape-undecodable": "110"}[s.Name]; unproven {
+			x := certify1State(proofv2.StateCertifyUpdateUnproven, "acc://dn.acme/globals", xworld.UpdateTxHash(xworld.UpdateGlobals, built.Inputs.GlobalsRecord), block)
+			xc.Expect, xc.State, xc.Fields, xc.Wording = x.Expect, x.State, x.Fields, x.Wording
+		}
 		if s.Name == "duplicated-update" || s.Name == "hop-duplicated-update" {
 			x := certify1State(proofv2.StateCertifyUpdateReplayed, xworld.UpdateTxHash(xworld.UpdateGlobals, built.Inputs.GlobalsRecord))
 			xc.Expect, xc.State, xc.Fields, xc.Wording = x.Expect, x.State, x.Fields, x.Wording
@@ -407,57 +600,54 @@ func writeCertify1(out string) error {
 				problems = append(problems, fmt.Sprintf("%s: judged %v, its base %v", s.Name, verr, baseErr))
 			}
 		}
-		switch xc.Expect {
-		case "refused":
-			switch {
-			case verr == nil:
-				problems = append(problems, fmt.Sprintf("%s: the Go verifier accepted a refused vector", s.Name))
-			case strings.HasPrefix(verr.Error(), "PANIC"):
-				problems = append(problems, fmt.Sprintf("%s: %v", s.Name, verr))
-			default:
-				var cs *proofv2.CertifyState
-				named := errors.As(verr, &cs)
-				switch {
-				case xc.State == "" && named:
-					problems = append(problems, fmt.Sprintf("%s: refused with the certify state %v, the vector names none", s.Name, cs))
-				case xc.State != "" && (!named || cs.Code != xc.State || !reflect.DeepEqual(cs.Fields, xc.Fields)):
-					problems = append(problems, fmt.Sprintf("%s: refused with %v, the vector says %s%v", s.Name, verr, xc.State, xc.Fields))
-				}
-				if xc.Wording != "" && verr.Error() != xc.Wording {
-					problems = append(problems, fmt.Sprintf("%s: refused with %q, the vector's wording is %q", s.Name, verr.Error(), xc.Wording))
-				}
-				if xc.Wording == "" {
-					xc.Wording = verr.Error()
-				}
-				if xc.Prefix == "" {
-					xc.Prefix = xc.Wording
-				}
-				if !strings.HasPrefix(verr.Error(), xc.Prefix) {
-					problems = append(problems, fmt.Sprintf("%s: refused with %q, which does not begin %q", s.Name, verr.Error(), xc.Prefix))
-				}
-			}
-		case "verified":
-			if verr != nil {
-				problems = append(problems, fmt.Sprintf("%s: the Go verifier refused a verified vector: %v", s.Name, verr))
-				break
-			}
-			xc.Report = xreport(rep)
-			reports[xc.Name] = xc.Report
-		default:
-			return fmt.Errorf("%s: expect %q", s.Name, xc.Expect)
-		}
 		edited = append(edited, 0x0a)
 		sum := sha256.Sum256(edited) // the hash of the file's exact bytes
+		// A vector of the frozen F5-1 suite whose regenerated document is not the frozen one: the frozen document keeps the name (and moves only
+		// its expectation); the regenerated one goes beside it under the sibling's name.
+		if pin, frozen := certify1Frozen[s.Name]; frozen && hex.EncodeToString(sum[:]) != pin {
+			fc, err := frozenCertify1(out, xc, pin, &problems, reports)
+			if err != nil {
+				return err
+			}
+			m.Cases = append(m.Cases, fc)
+			xc.Name, xc.File = s.Name+certify1GenesisSuffix, s.Name+certify1GenesisSuffix+".json"
+			renamed[s.Name], siblings[xc.Name] = xc.Name, true
+		}
+		if err := judgeCertify1(&xc, rep, verr, &problems, reports); err != nil {
+			return err
+		}
 		xc.SHA256 = hex.EncodeToString(sum[:])
+		if _, frozen := certify1Frozen[s.Name]; frozen && !renamedHere(renamed, s.Name) {
+			// A frozen vector whose regenerated bytes are the frozen bytes: its entry is the F5-1 entry, with the same pinned text.
+			txt, pinned := certify1FrozenTexts[s.Name]
+			if !pinned {
+				problems = append(problems, fmt.Sprintf("%s: no pinned F5-1 text for a frozen vector", s.Name))
+			} else {
+				xc.Description, xc.World, xc.Edit = txt.Description, txt.World, txt.Edit
+				if err := checkCertify1FrozenEntry(xc, false); err != nil {
+					problems = append(problems, err.Error())
+				}
+			}
+		}
 		if err := os.WriteFile(filepath.Join(out, xc.File), edited, 0o644); err != nil {
 			return err
 		}
 		m.Cases = append(m.Cases, xc)
 	}
+	for _, name := range sortedFrozenNames() {
+		if !hasCase(m.Cases, name) {
+			problems = append(problems, fmt.Sprintf("%s: a frozen F5-1 vector the suite no longer has", name))
+		}
+	}
 	for i := range m.Cases {
 		c := &m.Cases[i]
 		if c.SameReportAs == "" {
 			continue
+		}
+		if siblings[c.Name] {
+			if r, ok := renamed[c.SameReportAs]; ok {
+				c.SameReportAs = r // a regenerated sibling is the same report as the sibling of the vector it names
+			}
 		}
 		if want, okw := reports[c.SameReportAs]; !okw || c.Report == nil || !reflect.DeepEqual(want, c.Report) {
 			problems = append(problems, fmt.Sprintf("%s: its report is not the report of %s", c.Name, c.SameReportAs))
@@ -481,4 +671,27 @@ func writeCertify1(out string) error {
 	}
 	h := sha256.Sum256(mj)
 	return os.WriteFile(filepath.Join(out, "MANIFEST.sha256"), []byte(hex.EncodeToString(h[:])+"  manifest.json\n"), 0o644)
+}
+
+func renamedHere(renamed map[string]string, name string) bool {
+	_, ok := renamed[name]
+	return ok
+}
+
+func hasCase(cases []Certify1Case, name string) bool {
+	for _, c := range cases {
+		if c.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func sortedFrozenNames() []string {
+	out := make([]string, 0, len(certify1Frozen))
+	for k := range certify1Frozen {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
