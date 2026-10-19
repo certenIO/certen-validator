@@ -143,9 +143,22 @@ func (c *ReplayCaptureConfig) poll() time.Duration {
 }
 
 func (c *ReplayCaptureConfig) logf(format string, args ...interface{}) {
-	if c.Logf != nil {
-		c.Logf(format, args...)
+	if c.Logf == nil {
+		return
 	}
+	// Whatever a provider said may carry its URL, and so its API key (RB10-B11): the text arguments are sanitised, the format is the caller's.
+	clean := make([]interface{}, len(args))
+	for i, a := range args {
+		switch v := a.(type) {
+		case string:
+			clean[i] = RedactEndpoints(v)
+		case error:
+			clean[i] = RedactEndpoints(v.Error())
+		default:
+			clean[i] = a
+		}
+	}
+	c.Logf(format, clean...)
 }
 
 func sleepCtx(ctx context.Context, d time.Duration) bool {
@@ -232,7 +245,7 @@ func CaptureReplayGuard(ctx context.Context, cfg ReplayCaptureConfig, txHash com
 	defer afterOver()
 	state := &ReplayNamedState{ChainID: cfg.ChainID, TxHash: txHash}
 	finish := func(st, reason, format string, args ...interface{}) *ReplayGuardEvidence {
-		state.State, state.Reason, state.Detail = st, reason, fmt.Sprintf(format, args...)
+		state.State, state.Reason, state.Detail = st, reason, RedactEndpoints(fmt.Sprintf(format, args...))
 		cfg.logf("⚠️ [S6-REPLAY] chain %d tx %s: %s{reason=%s}: %s", cfg.ChainID, txHash.Hex(), st, reason, state.Detail)
 		return &ReplayGuardEvidence{Version: ReplayGuardDomain, State: state}
 	}
@@ -462,7 +475,7 @@ func CaptureReplayGuard(ctx context.Context, cfg ReplayCaptureConfig, txHash com
 	}
 	if proof.Before == nil {
 		proof.BeforeUnavailable = &ReplayBeforeUnavailable{
-			Reason:    fmt.Sprintf("no provider served the state of block %d, the settlement block's parent, before %s", n-1, ended()),
+			Reason:    RedactEndpoints(fmt.Sprintf("no provider served the state of block %d, the settlement block's parent, before %s", n-1, ended())),
 			Providers: before.list(),
 		}
 	}
@@ -488,6 +501,8 @@ type providerFailures struct {
 func newProviderFailures() *providerFailures { return &providerFailures{msg: map[string]string{}} }
 
 func (f *providerFailures) note(host, msg string) {
+	// The text is a provider's error and may carry its URL: only the host is kept (RB10-B11).
+	host, msg = RedactEndpoints(host), RedactEndpoints(msg)
 	if _, ok := f.msg[host]; !ok {
 		f.order = append(f.order, host)
 	}
@@ -822,7 +837,7 @@ func (c *ReplayGuardCapturer) Begin(txHash common.Hash) {
 		defer func() {
 			if r := recover(); r != nil {
 				ev = &ReplayGuardEvidence{Version: ReplayGuardDomain, State: &ReplayNamedState{State: ReplayUnproven, Reason: ReasonStateUnavailable,
-					ChainID: c.cfg.ChainID, TxHash: txHash, Detail: fmt.Sprintf("the capture failed: %v", r)}}
+					ChainID: c.cfg.ChainID, TxHash: txHash, Detail: RedactEndpoints(fmt.Sprintf("the capture failed: %v", r))}}
 			}
 			if ev == nil {
 				c.store.discard(c.cfg.ChainID, txHash) // no S6 claim: not an account settlement
@@ -838,7 +853,7 @@ func (c *ReplayGuardCapturer) Begin(txHash common.Hash) {
 		slotWait := func(why string) *ReplayGuardEvidence {
 			c.cfg.logf("⚠️ [S6-REPLAY] chain %d tx %s: %s", c.cfg.ChainID, txHash.Hex(), why)
 			return &ReplayGuardEvidence{Version: ReplayGuardDomain, State: &ReplayNamedState{State: ReplayUnproven, Reason: ReasonStateUnavailable,
-				ChainID: c.cfg.ChainID, TxHash: txHash, Detail: why + " (the settlements observed at once exceed what the providers are asked for at once)"}}
+				ChainID: c.cfg.ChainID, TxHash: txHash, Detail: RedactEndpoints(why) + " (the settlements observed at once exceed what the providers are asked for at once)"}}
 		}
 		waited := false
 		select {
@@ -1119,7 +1134,7 @@ func restateUnknowns(ev *ReplayGuardEvidence, l settlementLook) *ReplayGuardEvid
 
 // namedState is the named state of the settlement s, stating the block and contract as the look found them.
 func (c *ReplayGuardCapturer) namedState(l settlementLook, s *Settlement, state, reason, detail string) *ReplayGuardEvidence {
-	st := &ReplayNamedState{State: state, Reason: reason, ChainID: c.cfg.ChainID, TxHash: s.TxHash, BlockHash: s.BlockHash, BlockNumber: l.number, Detail: detail}
+	st := &ReplayNamedState{State: state, Reason: reason, ChainID: c.cfg.ChainID, TxHash: s.TxHash, BlockHash: s.BlockHash, BlockNumber: l.number, Detail: RedactEndpoints(detail)}
 	if l.tx != nil && l.tx.To() != nil {
 		st.Contract = *l.tx.To()
 	}
