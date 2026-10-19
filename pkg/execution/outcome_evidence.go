@@ -5,6 +5,7 @@ package execution
 import (
 	"bytes"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
@@ -1179,4 +1180,30 @@ func (ev OutcomeEvidence) replayGuardStanding() replayGuardRank {
 		return replayGuardProven
 	}
 	return replayGuardNamed
+}
+
+// UnmarshalJSON decodes the member as encoding/json does, except member.replayGuard, which is decoded by the S6 format's
+// strict decoder (ethproof.DecodeReplayGuardEvidence: unknown or duplicate keys, wrong types and other versions are
+// refused by name). Every path that reads layer 6 decodes through here. The member's hashed fields are untouched: the
+// replay guard is evidence beside the outcome leaf, never an input of it.
+func (m *OutcomeMemberEvidence) UnmarshalJSON(b []byte) error {
+	type plain OutcomeMemberEvidence
+	var aux struct {
+		*plain
+		ReplayGuard json.RawMessage `json:"replayGuard,omitempty"`
+	}
+	aux.plain = (*plain)(m)
+	if err := json.Unmarshal(b, &aux); err != nil {
+		return err
+	}
+	m.ReplayGuard = nil
+	if len(aux.ReplayGuard) == 0 || string(bytes.TrimSpace(aux.ReplayGuard)) == "null" {
+		return nil
+	}
+	rg, err := ethproof.DecodeReplayGuardEvidence(aux.ReplayGuard)
+	if err != nil {
+		return evidenceFail("member.replayGuard: %v", err)
+	}
+	m.ReplayGuard = rg
+	return nil
 }
