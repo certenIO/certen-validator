@@ -329,12 +329,40 @@ func (g1 *G1Layer) collectViaEnumeration(ctx context.Context, keyPage string,
 	return ev, nil
 }
 
-// enumerateDelegatePages walks the key pages reachable from the principal's
-// through delegate entries, breadth first, and returns them in canonical order.
+// enumerateDelegatePages walks the key pages that may carry a vote - the declared
+// page, every page of every authority book the transaction needs (roots), and
+// every page reachable from any of them through delegate entries - breadth
+// first, and returns them in canonical order.
 //
 // This is the enumeration route's OWN discovery of the signer accounts: it reads
 // the key pages, where the signatureSet route reads the transaction. Two sources
 // that must agree is the whole value of running both.
+//
+// WHERE THE DELEGATE ENTRIES ARE READ FROM (C5-D3). Delegation starts at an
+// AUTHORITY PAGE, and a transaction needs the vote of every authority of its
+// principal (and of the authorities its header and body name): the delegating page
+// is a page of ANY of those books, on any identity and partition, not necessarily
+// the page G1 was handed. This walk read the delegate entries of the declared page
+// alone, so a bank book's page that delegates to a custodian was seeded as a
+// signer page and its own delegate entry never looked at - the delegated vote was
+// found by the signatureSet route (which follows the authority signatures on the
+// transaction) and not by this one, and G1 refused a proof the network had
+// executed (pv2-cust-537, live 2026-10-18). Every root's entries are now read.
+//
+// Delegation leads to a BOOK, and the executor accepts a signature by ANY page of
+// that book: the authority signature that carries it up names the signer's BOOK
+// and processDelegated checks only that the delegator page lists that book as a
+// delegate (sig_authority.go, EntryByDelegate), so every page of a delegate book
+// is a signer page, and any of them may delegate further.
+//
+// The declared page's entries are its replayed state at execution (the KPSW-EXEC
+// snapshot). The other pages' entries are queried, as the pages reached through
+// delegation always were: a page of another identity is on another partition's
+// clock, and replaying it to the principal's block would capture it at a block that
+// is not its own. A delegate entry removed from a page since the signature was
+// recorded is therefore not seen here; the signatureSet route still finds that
+// signature, the routes disagree, and G1 fails closed by name - it never passes on
+// the smaller set.
 //
 // The visited set is what makes it terminate: a delegation graph may cycle, and
 // corpus case H is one Kermit executes transactions over. The hop bound is
@@ -354,6 +382,7 @@ func (g1 *G1Layer) enumerateDelegatePages(ctx context.Context, keyPage string,
 	// begins. Delegate entries lead DOWNWARD from one authority; they never lead
 	// ACROSS to a sibling authority, so without this the second authority's page
 	// is not enumerated and its vote is not collected.
+	var authorityPages []string
 	for _, r := range roots {
 		p := uu.NormalizeURL(r)
 		if p == "" || visited[p] {
@@ -361,40 +390,75 @@ func (g1 *G1Layer) enumerateDelegatePages(ctx context.Context, keyPage string,
 		}
 		visited[p] = true
 		order = append(order, p)
+		authorityPages = append(authorityPages, p)
 	}
 
-	// The principal's own state comes from the KPSW-EXEC snapshot, which is
-	// replayed from genesis; pages reached through delegation are queried. The
-	// difference is recorded on resolution links rather than smoothed over here.
+	// The declared page's own state comes from the KPSW-EXEC snapshot, which is
+	// replayed from genesis; the other authority pages and the pages reached
+	// through delegation are queried. The difference is recorded on resolution
+	// links rather than smoothed over here.
 	frontier := delegateBooksOf(snapshot.StateExec.EntrySet())
 	fmt.Printf("[G1] [ENUMERATION] principal entries=%d delegate books=%v\n",
 		len(snapshot.StateExec.EntrySet()), frontier)
 
+	// The delegate entries of every other authority page.
+	for _, p := range authorityPages {
+		state, err := source.PageState(ctx, p)
+		if err != nil {
+			// NOT skipped: an authority page whose entries cannot be read is one
+			// whose delegations cannot be followed, and the signer accounts behind
+			// them are then not enumerated - a smaller counted set that reads as
+			// "the institution did not authorize this".
+			return nil, fmt.Errorf("authority page %s could not be read, so the delegate entries "+
+				"it carries cannot be followed and the signer accounts cannot be fully enumerated: %w", p, err)
+		}
+		if books := delegateBooksOf(state.EntrySet()); len(books) > 0 {
+			fmt.Printf("[G1] [ENUMERATION] authority page %s entries=%d delegate books=%v\n",
+				p, len(state.EntrySet()), books)
+			frontier = append(frontier, books...)
+		}
+	}
+
+	listed := map[string]bool{}
 	for hop := 0; hop < delegationEnumerationMaxHops && len(frontier) > 0; hop++ {
 		var next []string
 		for _, book := range frontier {
-			page := uu.NormalizeURL(book + "/1")
-			if visited[page] {
+			book = uu.NormalizeURL(book)
+			if listed[book] {
 				continue
 			}
-			state, err := source.PageState(ctx, page)
+			listed[book] = true
+			// Every page of the delegate book, not page 1: any one of them may be
+			// the signer (pageCount is read, never assumed).
+			pages, err := source.BookPages(ctx, book)
 			if err != nil {
-				// NOT skipped silently. A delegate page we cannot read is a
-				// signer account we cannot enumerate, and dropping it makes the
-				// counted set smaller than the authority - which surfaces as a
-				// threshold shortfall and reads as "the institution did not
-				// authorize this".
-				//
-				// This was a silent `continue` for one iteration of this code and
-				// it hid exactly that: every corpus delegate book reports no
-				// accept threshold field, the parse failed, the page was skipped,
-				// and the delegated signature became invisible.
-				return nil, fmt.Errorf("delegate page %s could not be read, so the signer "+
-					"accounts cannot be fully enumerated: %w", page, err)
+				return nil, fmt.Errorf("delegate book %s could not be listed, so its signer "+
+					"pages cannot be enumerated: %w", book, err)
 			}
-			visited[page] = true
-			order = append(order, page)
-			next = append(next, delegateBooksOf(state.EntrySet())...)
+			for _, page := range pages {
+				page = uu.NormalizeURL(page)
+				if visited[page] {
+					continue
+				}
+				state, err := source.PageState(ctx, page)
+				if err != nil {
+					// NOT skipped silently. A delegate page we cannot read is a
+					// signer account we cannot enumerate, and dropping it makes the
+					// counted set smaller than the authority - which surfaces as a
+					// threshold shortfall and reads as "the institution did not
+					// authorize this".
+					//
+					// This was a silent `continue` for one iteration of this code and
+					// it hid exactly that: every corpus delegate book reports no
+					// accept threshold field, the parse failed, the page was skipped,
+					// and the delegated signature became invisible.
+					return nil, fmt.Errorf("delegate page %s could not be read, so the signer "+
+						"accounts cannot be fully enumerated: %w", page, err)
+				}
+				visited[page] = true
+				order = append(order, page)
+				next = append(next, delegateBooksOf(state.EntrySet())...)
+			}
 		}
 		frontier = next
 	}
@@ -661,31 +725,9 @@ func (g1 *G1Layer) evaluateCandidate(ctx context.Context, cand sigCandidate, key
 	// sign when the signature was recorded - and whether its vote counted - is
 	// the authority vote's question, answered per page at the signature's own
 	// block (g1_votes.go), not here against the page at execution.
-	form, err := g1.signatureVerifier.VerifyAgainstAcceptedDigests(validated.Signature, txHash)
+	form, err := g1.signatureVerifier.VerifySignature(validated, txHash)
 	if err != nil {
-		if isInfrastructureDigestFailure(err) {
-			return evalResult{Outcome: SigUnavailable, Stage: "compute-digest", Reason: err.Error()}
-		}
-		// A capability limit is UNAVAILABLE, not REJECTED, and the difference is
-		// the whole of runbook rule 7.
-		//
-		// An unsupported key type is a real vote by a real key that really did
-		// authorize the transaction - corpus case K is one Kermit DELIVERED - and
-		// we cannot check it. Recording that as a rejection lets the threshold be
-		// computed over the remainder, which is a silent skip: the count comes up
-		// short and reads as "the institution did not authorize this". A false
-		// governance rejection is worse than an error, so this is an error.
-		// SigUnavailable is exactly that: not evidence, and no threshold may be
-		// computed while one is outstanding.
-		//
-		// The same holds for a delegation we have not resolved.
-		if u, ok := IsUnsupportedSignatureType(err); ok {
-			return evalResult{Outcome: SigUnavailable, Stage: u.Reason(), Reason: err.Error(), Permanent: true}
-		}
-		if d, ok := err.(DelegationNotResolved); ok {
-			return evalResult{Outcome: SigUnavailable, Stage: d.Reason(), Reason: err.Error()}
-		}
-		return evalResult{Outcome: SigRejected, Stage: "validate-signature", Reason: err.Error()}
+		return classifyVerificationError(err)
 	}
 	validated.Signature.DigestForm = form
 	validated.CryptographicallyVerified = true
@@ -710,11 +752,11 @@ func (g1 *G1Layer) classifyMessage(result map[string]interface{}, txHash string)
 	signature, err := g1.signatureVerifier.ExtractSignatureFromMessageResult(result)
 	if err != nil {
 		// The chain holds several message kinds (signatureRequest,
-		// creditPayment, ...). Those are not ed25519 signatures and are a
+		// creditPayment, ...). Those are not key signatures and are a
 		// legitimate rejection, not an outage. Anything else is an outage.
 		if isNotASignatureMessage(err) {
 			return SignatureData{}, evalResult{Outcome: SigRejected, Stage: "extract-signature",
-				Reason: "not an ed25519 signature message"}, messageRejected
+				Reason: "not a key signature message"}, messageRejected
 		}
 		_, capability := IsUnsupportedSignatureType(err)
 		return SignatureData{}, evalResult{Outcome: SigUnavailable, Stage: "extract-signature",
@@ -756,8 +798,8 @@ func (g1 *G1Layer) settleFromRangeBody(entry signatureChainEntry, messageID, txH
 }
 
 // isNotASignatureMessage reports whether an extraction error means the entry
-// simply is not an ed25519 signature over a transaction, as opposed to the
-// extraction itself failing.
+// simply is not a key signature over a transaction (of any of the nine types Accumulate's
+// executor accepts), as opposed to the extraction itself failing.
 //
 // A key page's P#signature chain legitimately carries several message kinds -
 // signatureRequest, creditPayment, authority signatures, and so on. Those are
@@ -821,4 +863,39 @@ func sanitizeLabel(s string) string {
 	r := strings.NewReplacer("://", "_", "/", "_", "@", "_", ":", "_")
 	out := r.Replace(s)
 	return SafeTruncate(out, 48)
+}
+
+// classifyVerificationError turns the error of verifying one candidate signature into the outcome the collectors act on.
+// Only a conclusion that the signature does not count is a rejection; everything that stopped a conclusion is
+// unavailable evidence, with the reason code of the state that stopped it.
+func classifyVerificationError(err error) evalResult {
+	if isInfrastructureDigestFailure(err) {
+		return evalResult{Outcome: SigUnavailable, Stage: "compute-digest", Reason: err.Error()}
+	}
+	// A signature that could not be judged is a NAMED STATE, never a rejection and never a skip: the executor
+	// version in force at its block is unproven, the transaction typedData needs is not at hand, the network's
+	// name is unknown, or its record cannot be rebuilt (RB8-B).
+	if stage, permanent, named := namedState(err); named {
+		return evalResult{Outcome: SigUnavailable, Stage: stage, Reason: err.Error(), Permanent: permanent}
+	}
+	// A capability limit is UNAVAILABLE, not REJECTED, and the difference is
+	// the whole of runbook rule 7.
+	//
+	// An unsupported key type is a real vote by a real key that really did
+	// authorize the transaction - corpus case K is one Kermit DELIVERED - and
+	// we cannot check it. Recording that as a rejection lets the threshold be
+	// computed over the remainder, which is a silent skip: the count comes up
+	// short and reads as "the institution did not authorize this". A false
+	// governance rejection is worse than an error, so this is an error.
+	// SigUnavailable is exactly that: not evidence, and no threshold may be
+	// computed while one is outstanding.
+	//
+	// The same holds for a delegation we have not resolved.
+	if u, ok := IsUnsupportedSignatureType(err); ok {
+		return evalResult{Outcome: SigUnavailable, Stage: u.Reason(), Reason: err.Error(), Permanent: true}
+	}
+	if d, ok := err.(DelegationNotResolved); ok {
+		return evalResult{Outcome: SigUnavailable, Stage: d.Reason(), Reason: err.Error()}
+	}
+	return evalResult{Outcome: SigRejected, Stage: "validate-signature", Reason: err.Error()}
 }

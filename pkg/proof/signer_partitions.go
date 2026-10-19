@@ -45,6 +45,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/govsig"
 	chained_proof "github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/working-proof_do_not_edit"
 )
 
@@ -109,9 +110,19 @@ func DiscoverSignerLegs(ctx context.Context, endpoint, txID string) ([]chained_p
 			// A user key signature, not an authority record, a signature request
 			// or a credit payment. Only a key signature is a vote, and only a
 			// vote needs its inclusion proven.
+			// Every signature type Accumulate's executor accepts on a key page is a vote that needs its leg (RB8-B):
+			// the nine key-signature types, directly or inside a delegation. Authority records, signature requests and
+			// credit payments are not votes (govsig.ClassNotKey). A name Accumulate defines no signature type for is
+			// refused by name, never dropped: dropping it would build a proof with a leg missing and call it complete.
 			st := strings.ToLower(rec.Message.Signature.Type)
-			if st != "ed25519" && st != "delegated" {
+			switch _, class := govsig.Classify(st); class {
+			case govsig.ClassKey, govsig.ClassDelegated:
+			case govsig.ClassNotKey:
 				continue
+			default:
+				return nil, fmt.Errorf("discover signer partitions: leg_dropped{signer=%s, type=%q}: %s is not a signature "+
+					"type Accumulate defines, so it cannot be a key's vote and its partition cannot be proven; %s",
+					set.Account.URL, st, st, govsig.TypeRule())
 			}
 			// And it must cover THIS transaction. A key page's signature chain
 			// carries its whole history; a signature for some other transaction

@@ -117,7 +117,10 @@ NON-NEGOTIABLE RULES
    steps and check at the end. Gate 2 (digest parity) is the one everything
    else rests on - if it is not green, nothing after it means anything.
 
-7. FAIL CLOSED, WITH A DISTINCT REASON. Unsupported signature types (RCD1,
+7. FAIL CLOSED, WITH A DISTINCT REASON. (SUPERSEDED in part by RB8-B, 2026-10-17: RCD1, BTC, ETH, RSA, EcdsaSha256
+   and TypedData are key-signature types Accumulate's executor accepts and are now VERIFIED; only a type Accumulate itself
+   does not accept is refused by this name, and a signature that cannot be judged is a named state.) Unsupported
+   signature types (RCD1,
    BTC, ETH, RSA, EcdsaSha256, TypedData) must be refused with their own
    reason code. A silently skipped signature reads as a threshold shortfall,
    which reads as "the institution did not authorize this" - a false
@@ -182,7 +185,7 @@ DEFINITION OF DONE
   [ ] Depth 21 refused; a cycle refused; a wrong delegator chain refused -
       each with its own readable reason.
   [ ] Unsupported signature types refused with an unsupported-type reason,
-      never a threshold reason.
+      never a threshold reason. (RB8-B: that now means a type Accumulate does not accept.)
   [ ] A proof whose signers span two BVNs builds, carries a leg per partition
       in canonical order, and VERIFIES WITH THE NETWORK DISABLED.
   [ ] Corrupting leg i fails for every i; cross-bind refused at N legs; the

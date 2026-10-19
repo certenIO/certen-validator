@@ -16,7 +16,12 @@ func (c *countingSigClient) Query(context.Context, string, map[string]interface{
 		"message": map[string]interface{}{
 			"type": "signature",
 			"signature": map[string]interface{}{
-				"type":            "ecdsaSha256",
+				// SUPERSEDED by RB8-B: this fixture used ecdsaSha256, the type G1 then refused (G-42). Accumulate accepts
+				// ecdsaSha256 on a key page and G1 now verifies it, so the capability-limit semantics this test pins
+				// (unavailable, permanent, not retried) are exercised with a name Accumulate defines no signature
+				// type for. The same semantics for the named states the new types can reach are pinned in
+				// rb8_namedstate_test.go.
+				"type":            "blsSignature",
 				"publicKey":       "04aa",
 				"signature":       "30bb",
 				"signer":          "acc://orchid-logistics-tcl1.acme/book/2",

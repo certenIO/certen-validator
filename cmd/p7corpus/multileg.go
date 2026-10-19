@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/govsig"
 	chained_proof "github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/working-proof_do_not_edit"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/api/v3/jsonrpc"
 )
@@ -69,7 +70,9 @@ func signatureMessageOn(ctx context.Context, endpoint, txID, page string) (strin
 			if err := json.Unmarshal(rec.Message.Signature, &probe); err != nil {
 				continue
 			}
-			if probe.Type != "delegated" && probe.Type != "ed25519" {
+			// Every signature type Accumulate's executor accepts on a key page is a vote the corpus captures, directly or
+			// delegated (RB8-B); authority records, signature requests and credit payments are not.
+			if !capturesVote(probe.Type) {
 				continue
 			}
 			h, err := hashOfAccURL(rec.ID)
@@ -216,4 +219,12 @@ func buildMultiLeg(ctx context.Context, endpoint string, raw map[string]json.Raw
 		fmt.Printf("recorded the proof at %s\n", proofOut)
 	}
 	return nil
+}
+
+// capturesVote reports whether a signature record's type is a vote the corpus captures: one of the nine key-signature
+// types Accumulate's executor accepts, or a delegation (govsig). It used to be "ed25519 or delegated", which silently
+// skipped every other accepted type (RB8-A finding).
+func capturesVote(sigType string) bool {
+	_, class := govsig.Classify(sigType)
+	return class == govsig.ClassKey || class == govsig.ClassDelegated
 }

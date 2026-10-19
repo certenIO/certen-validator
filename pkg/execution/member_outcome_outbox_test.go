@@ -140,3 +140,46 @@ func TestAnOutboxEntryFromBeforeReportersIsRecordedAsThisValidators(t *testing.T
 		t.Fatalf("the entry was recorded under %+v, want validator-6", rec.got)
 	}
 }
+
+// V-G D1: a start-failure report that was queued while its first record failed is replayed after the member has settled. The
+// store answers ErrMemberBeyondStart (it is not recorded and not owed); the entry is ended, not kept as Deferred for the life of
+// the outbox, and the settled row stands.
+func TestAQueuedStartFailureOverASettledMemberIsEndedNotReplayedForever(t *testing.T) {
+	db := s1OpenDB(t)
+	ctx := context.Background()
+	intentID := fmt.Sprintf("vgd1-%d", time.Now().UnixNano())
+	s1Seed(ctx, t, db, intentID)
+	t.Cleanup(func() { db.Exec(`DELETE FROM intent_member_outcomes WHERE intent_id=$1`, intentID) })
+	repos := database.NewRepositories(database.NewClientFromDB(db))
+
+	settled := database.MemberOutcome{IntentID: intentID, ChainID: 84532, MemberChains: []int64{84532}, Legs: 1,
+		Settlement: database.MemberSettlementSettled, ProofCycle: database.MemberProofCyclePending, SettlementTx: "0xaa",
+		CycleID: "cycle-first", ReportedBy: "validator-test"}
+	if _, err := repos.IntentLifecycle.RecordMemberOutcome(ctx, settled); err != nil {
+		t.Fatalf("seed the settled member: %v", err)
+	}
+	outbox, err := NewFileMemberOutcomeOutbox(filepath.Join(t.TempDir(), "outbox"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := outbox.Put(database.MemberOutcome{IntentID: intentID, ChainID: 84532, MemberChains: []int64{84532}, Legs: 1,
+		Settlement: database.MemberSettlementUnobserved, ProofCycle: database.MemberProofCycleFailed, CycleID: "cycle-second",
+		Reason: "proof cycle not started: boom", ReportedBy: "validator-test", NotStarted: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	rep, err := (&MemberOutcomeReconciler{Outbox: outbox, ValidatorID: "validator-test", Store: repos.IntentLifecycle, Logf: t.Logf}).RunOnce(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Deferred != 0 || rep.Remaining != 0 || rep.Ended != 1 {
+		t.Fatalf("a start failure over a settled member must end its entry: %+v", rep)
+	}
+	var settlement, cycle string
+	if err := db.QueryRowContext(ctx, `SELECT settlement, proof_cycle FROM intent_member_outcomes WHERE intent_id=$1 AND chain_id=84532`, intentID).Scan(&settlement, &cycle); err != nil {
+		t.Fatal(err)
+	}
+	if settlement != "settled" || cycle != "proof_pending" {
+		t.Fatalf("the settled member was overwritten: now %s / %s", settlement, cycle)
+	}
+}

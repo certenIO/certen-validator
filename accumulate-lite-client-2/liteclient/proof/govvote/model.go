@@ -80,6 +80,11 @@ type SigFact struct {
 	KeyHash string // lower hex
 	Vote    protocol.VoteType
 	Block   int64 // on the signer page's partition
+	// Partition is the partition the signer page lives on (lower case: "bvn1", "directory"), carried exactly for the
+	// signature types whose acceptance depends on the executor version in force at Block - rsaSha256, ecdsaSha256,
+	// typedData, and eth by the raw r||s rule. Empty for every other type, so every fact recorded before RB8-B keeps its
+	// bytes. A gated type with no partition is the named state g1_executor_version_unproven, never acceptance.
+	Partition string `json:",omitempty"`
 }
 
 // arrivalFact is one delegated vote, as the chain recorded it on the delegator
@@ -103,6 +108,13 @@ type RecordedVote struct {
 	Origin    string // the page that cast the book's vote, normalised
 	Vote      protocol.VoteType
 	Block     int64 // on the principal's partition
+	// ReleasedAt, for a vote of a transaction that was held (Facts.HoldUntil), is the block that PRODUCED the vote - the release - on the
+	// partition the book's pages are on; 0 when the production is not established. Core stores the authority signature of a held
+	// transaction as it was computed when the signature that completed it arrived (Origin and Vote are NOT asked again at the release:
+	// sig_common.go maybeSendAuthoritySignature -> recordOnHoldAuthSig, releaseHeldAuthSigs), and while the transaction is held keeps ONE
+	// per authority, replaced by an authority signature whose origin page is equal or lower in the book (comparePriority). So the page
+	// that cast a held vote is the lowest page of the book that decided before the release.
+	ReleasedAt int64
 }
 
 // voteFacts is what the model reads.
@@ -112,6 +124,9 @@ type Facts struct {
 	Arrivals []ArrivalFact
 	// Votes are the authorities' votes recorded on the principal.
 	Votes []RecordedVote
+	// HoldUntil is the transaction's HoldUntil minor block (0: not held). With it, a vote whose ReleasedAt is known is judged as core
+	// judges a held vote (see RecordedVote.ReleasedAt).
+	HoldUntil uint64
 }
 
 // timelineSource supplies page timelines (authority_history.go).
@@ -289,6 +304,23 @@ func (m *voteModel) bookVote(ctx context.Context, book string, path []string, de
 		if p == rec.origin {
 			continue
 		}
+		if m.facts.HoldUntil != 0 && rec.releasedAt > 0 {
+			// A held vote (see RecordedVote.ReleasedAt): core keeps one authority signature per authority while the transaction is
+			// held, and a page of the book that decided before the release replaces the stored one when it is equal or lower in the book.
+			// So a higher page that decided first was replaced - not a disagreement - and a LOWER page that decided before the release,
+			// before or after the recorded origin, would have won: the recorded origin is then impossible.
+			held, at, err := m.pageDecidedBefore(ctx, p, path, depth, rec.releasedAt)
+			if err != nil {
+				return nil, err
+			}
+			if held && pageIndex(p) < pageIndex(rec.origin) {
+				return nil, &VoteUnevaluable{Page: p, Reason: fmt.Sprintf(
+					"its signatures decide %s's vote at block %d, before the held vote was released at block %d, and it is a lower page than %s: "+
+						"core keeps the lowest page's authority signature while a transaction is held, yet the network records %s as the page that cast it",
+					book, at, rec.releasedAt, rec.origin, rec.origin)}
+			}
+			continue
+		}
 		earlier, at, err := m.pageDecidedBefore(ctx, p, path, depth, pv.DecidedAt)
 		if err != nil {
 			return nil, err
@@ -310,6 +342,8 @@ type bookRecord struct {
 	id     string
 	origin string
 	vote   protocol.VoteType
+	// releasedAt is RecordedVote.ReleasedAt of a held vote (0: not held or not established).
+	releasedAt int64
 }
 
 // recordedBookVote is the vote the network recorded for book on path: for the account's own authorities (an empty
@@ -320,7 +354,7 @@ func (m *voteModel) recordedBookVote(book string, path []string) (*bookRecord, e
 	if len(path) == 0 {
 		for _, v := range m.facts.Votes {
 			if normalizeAccURL(v.Authority) == book {
-				recs = append(recs, bookRecord{id: v.ID, origin: normalizeAccURL(v.Origin), vote: v.Vote})
+				recs = append(recs, bookRecord{id: v.ID, origin: normalizeAccURL(v.Origin), vote: v.Vote, releasedAt: v.ReleasedAt})
 			}
 		}
 	} else {

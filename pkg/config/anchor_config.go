@@ -499,7 +499,7 @@ func (c *AnchorConfig) applyDefaults() {
 
 	// Database defaults
 	if c.Database.MaxConnections == 0 {
-		c.Database.MaxConnections = 25
+		c.Database.MaxConnections = DefaultDatabaseMaxConns
 	}
 	if c.Database.MinConnections == 0 {
 		c.Database.MinConnections = 5
@@ -876,7 +876,7 @@ func loadAnchorConfigFromEnv() (*AnchorConfig, error) {
 
 		Database: DatabaseSettings{
 			URL:            getEnv("DATABASE_URL", ""),
-			MaxConnections: getEnvInt("DATABASE_MAX_CONNS", 25),
+			MaxConnections: getEnvInt("DATABASE_MAX_CONNS", DefaultDatabaseMaxConns),
 			MinConnections: getEnvInt("DATABASE_MIN_CONNS", 5),
 			MaxIdleTime:    Duration(5 * time.Minute),
 			MaxLifetime:    Duration(1 * time.Hour),

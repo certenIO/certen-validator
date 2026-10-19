@@ -1,0 +1,127 @@
+{
+ "format": "certen:sigtypes-vectors:v1",
+ "description": "signatures Kermit delivered, as the network served them",
+ "pinned": {
+  "accumulate": "gitlab.com/accumulatenetwork/accumulate v1.4.7-0.20260926030013-e1d1db9ebb7c",
+  "commit": "e1d1db9ebb7c75318b6652293d5c7008da76ecf4",
+  "network": "DevNet",
+  "chainId": "317849881"
+ },
+ "vectors": [
+  {
+   "id": "btc/kermit/case-k",
+   "source": "kermit-delivered",
+   "kind": "valid",
+   "type": "btc",
+   "description": "corpus case K: a btc signature Kermit delivered (tx 06195913...58f2, signer certen-p7k.acme/book/1, BVN2). The validator refused it as unsupported until RB8-B.",
+   "txHash": "06195913c2ee872b15c39aa3e845ab29d03aa68b369f6ea6b6be0c2cfe4558f2",
+   "signature": "01080221039d1c74200a8e95b73a699e22de2d7a2df50a07b2556825d8a903811b1e964b680346304402200db4b7d316e7664f97a6a32f4e220092e9a46a2627a7ef1dbb3b4cda0a55488d0220241f5a530d61f57f7042db890a20606ecfa58e911ef01d3b2a250e5bb6147153041c6163633a2f2f63657274656e2d70376b2e61636d652f626f6f6b2f31050206c0c38fabd2bc96030806195913c2ee872b15c39aa3e845ab29d03aa68b369f6ea6b6be0c2cfe4558f2",
+   "signatureJson": {
+    "type": "btc",
+    "publicKey": "039d1c74200a8e95b73a699e22de2d7a2df50a07b2556825d8a903811b1e964b68",
+    "signature": "304402200db4b7d316e7664f97a6a32f4e220092e9a46a2627a7ef1dbb3b4cda0a55488d0220241f5a530d61f57f7042db890a20606ecfa58e911ef01d3b2a250e5bb6147153",
+    "signer": "acc://certen-p7k.acme/book/1",
+    "signerVersion": 2,
+    "timestamp": 1787690569949632,
+    "transactionHash": "06195913c2ee872b15c39aa3e845ab29d03aa68b369f6ea6b6be0c2cfe4558f2"
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "994c154f7421eb10376251f86a3e883fa68c32d7",
+    "form": "metadata"
+   }
+  },
+  {
+   "id": "ecdsaSha256/kermit/northfield-inspection",
+   "source": "kermit-delivered",
+   "kind": "valid",
+   "type": "ecdsaSha256",
+   "description": "an ecdsaSha256 signature Kermit delivered (tcl1 tx d2338dac...ce2e, signer northfield-inspection-tcl1.acme/book/1 v6, recorded at local block 13,561,925, 2026-10-04T13:15:28Z). The validator refused it as unsupported until RB8-B (G-42, scene SP-14).",
+   "txHash": "d2338dacb8849cc96fae1928a01294c246408c0acca95323ae57a4b2156ace2e",
+   "signature": "010f025b3059301306072a8648ce3d020106082a8648ce3d03010703420004e4f697355c67b1555676809053087a0e3ae2eaccc9e2d73113513c1b965d45a7c9cbdb22711b980787ef7031e77c1fa8c806e1a87885b954276f9dd711f44cb303473045022100fa8872a4f89462e60f6f7b89a2b44f0a57d9204722715b126342debff421945202205d8fb34a4804717bf6ea5c1c109f108492a65a8797da27f6184621a323b5db4a042c6163633a2f2f6e6f7274686669656c642d696e7370656374696f6e2d74636c312e61636d652f626f6f6b2f3105060698a7d1f8b8a0970308d2338dacb8849cc96fae1928a01294c246408c0acca95323ae57a4b2156ace2e",
+   "signatureJson": {
+    "type": "ecdsaSha256",
+    "publicKey": "3059301306072a8648ce3d020106082a8648ce3d03010703420004e4f697355c67b1555676809053087a0e3ae2eaccc9e2d73113513c1b965d45a7c9cbdb22711b980787ef7031e77c1fa8c806e1a87885b954276f9dd711f44cb3",
+    "signature": "3045022100fa8872a4f89462e60f6f7b89a2b44f0a57d9204722715b126342debff421945202205d8fb34a4804717bf6ea5c1c109f108492a65a8797da27f6184621a323b5db4a",
+    "signer": "acc://northfield-inspection-tcl1.acme/book/1",
+    "signerVersion": 6,
+    "timestamp": 1791119727023000,
+    "transactionHash": "d2338dacb8849cc96fae1928a01294c246408c0acca95323ae57a4b2156ace2e"
+   },
+   "where": {
+    "partition": "bvn2",
+    "block": 13561925
+   },
+   "page": {
+    "entries": [
+     "2d35d3848f922e6095be4e78501cdff51dec7641194a77cc867bc7cc52b2a00e"
+    ]
+   },
+   "expect": {
+    "verdict": "accepted",
+    "keyHash": "2d35d3848f922e6095be4e78501cdff51dec7641194a77cc867bc7cc52b2a00e",
+    "form": "metadata"
+   }
+  },
+  {
+   "id": "ecdsaSha256/kermit/northfield-inspection-wrong-page",
+   "source": "kermit-delivered",
+   "kind": "adversarial",
+   "type": "ecdsaSha256",
+   "description": "the same Kermit-delivered signature judged against a page that does not hold its key",
+   "txHash": "d2338dacb8849cc96fae1928a01294c246408c0acca95323ae57a4b2156ace2e",
+   "signature": "010f025b3059301306072a8648ce3d020106082a8648ce3d03010703420004e4f697355c67b1555676809053087a0e3ae2eaccc9e2d73113513c1b965d45a7c9cbdb22711b980787ef7031e77c1fa8c806e1a87885b954276f9dd711f44cb303473045022100fa8872a4f89462e60f6f7b89a2b44f0a57d9204722715b126342debff421945202205d8fb34a4804717bf6ea5c1c109f108492a65a8797da27f6184621a323b5db4a042c6163633a2f2f6e6f7274686669656c642d696e7370656374696f6e2d74636c312e61636d652f626f6f6b2f3105060698a7d1f8b8a0970308d2338dacb8849cc96fae1928a01294c246408c0acca95323ae57a4b2156ace2e",
+   "signatureJson": {
+    "type": "ecdsaSha256",
+    "publicKey": "3059301306072a8648ce3d020106082a8648ce3d03010703420004e4f697355c67b1555676809053087a0e3ae2eaccc9e2d73113513c1b965d45a7c9cbdb22711b980787ef7031e77c1fa8c806e1a87885b954276f9dd711f44cb3",
+    "signature": "3045022100fa8872a4f89462e60f6f7b89a2b44f0a57d9204722715b126342debff421945202205d8fb34a4804717bf6ea5c1c109f108492a65a8797da27f6184621a323b5db4a",
+    "signer": "acc://northfield-inspection-tcl1.acme/book/1",
+    "signerVersion": 6,
+    "timestamp": 1791119727023000,
+    "transactionHash": "d2338dacb8849cc96fae1928a01294c246408c0acca95323ae57a4b2156ace2e"
+   },
+   "where": {
+    "partition": "bvn2",
+    "block": 13561925
+   },
+   "page": {
+    "entries": [
+     "0000000000000000000000000000000000000000000000000000000000000000"
+    ]
+   },
+   "expect": {
+    "verdict": "refused:key_not_on_page"
+   }
+  },
+  {
+   "id": "ecdsaSha256/kermit/northfield-inspection-before-activation",
+   "source": "kermit-delivered",
+   "kind": "adversarial",
+   "type": "ecdsaSha256",
+   "description": "the same signature presented as recorded before its partition's proven executor activation: the version is unproven",
+   "txHash": "d2338dacb8849cc96fae1928a01294c246408c0acca95323ae57a4b2156ace2e",
+   "signature": "010f025b3059301306072a8648ce3d020106082a8648ce3d03010703420004e4f697355c67b1555676809053087a0e3ae2eaccc9e2d73113513c1b965d45a7c9cbdb22711b980787ef7031e77c1fa8c806e1a87885b954276f9dd711f44cb303473045022100fa8872a4f89462e60f6f7b89a2b44f0a57d9204722715b126342debff421945202205d8fb34a4804717bf6ea5c1c109f108492a65a8797da27f6184621a323b5db4a042c6163633a2f2f6e6f7274686669656c642d696e7370656374696f6e2d74636c312e61636d652f626f6f6b2f3105060698a7d1f8b8a0970308d2338dacb8849cc96fae1928a01294c246408c0acca95323ae57a4b2156ace2e",
+   "signatureJson": {
+    "type": "ecdsaSha256",
+    "publicKey": "3059301306072a8648ce3d020106082a8648ce3d03010703420004e4f697355c67b1555676809053087a0e3ae2eaccc9e2d73113513c1b965d45a7c9cbdb22711b980787ef7031e77c1fa8c806e1a87885b954276f9dd711f44cb3",
+    "signature": "3045022100fa8872a4f89462e60f6f7b89a2b44f0a57d9204722715b126342debff421945202205d8fb34a4804717bf6ea5c1c109f108492a65a8797da27f6184621a323b5db4a",
+    "signer": "acc://northfield-inspection-tcl1.acme/book/1",
+    "signerVersion": 6,
+    "timestamp": 1791119727023000,
+    "transactionHash": "d2338dacb8849cc96fae1928a01294c246408c0acca95323ae57a4b2156ace2e"
+   },
+   "where": {
+    "partition": "bvn2",
+    "block": 12492056
+   },
+   "page": {
+    "entries": [
+     "2d35d3848f922e6095be4e78501cdff51dec7641194a77cc867bc7cc52b2a00e"
+    ]
+   },
+   "expect": {
+    "verdict": "named:g1_executor_version_unproven"
+   }
+  }
+ ]
+}

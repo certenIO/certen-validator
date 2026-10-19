@@ -73,6 +73,9 @@ func DeclaredGovernanceOfEvidence(ev *govvote.Evidence) (*DeclaredGovernance, er
 // blob declares none; an error when the declaration is present and malformed - a claim that cannot be read is not
 // an absent one.
 func DeclaredGovernanceOf(txn *protocol.Transaction) (*DeclaredGovernance, error) {
+	if txn == nil || txn.Body == nil { // a transaction decoded from bytes that hold no type has no body (RB9-L)
+		return nil, fmt.Errorf("the governed transaction holds no transaction body")
+	}
 	wd, ok := txn.Body.(*protocol.WriteData)
 	if !ok {
 		return nil, fmt.Errorf("the governed transaction is a %v, not an intent's writeData", txn.Body.Type())

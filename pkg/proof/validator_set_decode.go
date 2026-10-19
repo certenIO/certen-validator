@@ -24,6 +24,11 @@ func dataEntryOf(raw []byte, label string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%s: does not decode as an account: %w", label, err)
 	}
+	// Accumulate's union decoder returns neither an account nor an error for bytes that hold no type (a run of zeros): there is no account to
+	// read, and the set check decodes these states before it binds them to a root (RB9-L; the account's type was asked of a nil account).
+	if acct == nil {
+		return nil, fmt.Errorf("%s: does not decode as an account: it holds no account", label)
+	}
 	da, ok := acct.(*protocol.DataAccount)
 	if !ok {
 		return nil, fmt.Errorf("%s: expected a dataAccount, got %v", label, acct.Type())

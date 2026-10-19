@@ -25,6 +25,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/govsig"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/url"
 	"gitlab.com/accumulatenetwork/accumulate/protocol"
 )
@@ -81,20 +82,38 @@ func innerKeySig(sig protocol.Signature) (protocol.KeySignature, []*url.URL, err
 }
 
 // classify returns accumulate-core's verdict and the digest form that carried
-// it, refusing to return anything if the two disagree.
+// it, refusing to return anything if the two disagree. It knows only the transaction's hash, which every key type
+// except typedData signs; use classifyTxn when the transaction is at hand.
 func classify(sig protocol.Signature, txHash [32]byte) (verdict bool, form string, digest []byte, err error) {
+	return classifyTxn(sig, txHash, nil)
+}
+
+// classifyTxn is classify with the transaction, which typedData needs: it signs an EIP-712 encoding of the whole
+// transaction, so against a bare hash its verdict is always false (RB8-A finding).
+func classifyTxn(sig protocol.Signature, txHash [32]byte, txn *protocol.Transaction) (verdict bool, form string, digest []byte, err error) {
 	us, ok := sig.(protocol.UserSignature)
 	if !ok {
 		return false, formNone, nil, fmt.Errorf("%v is not a user signature", sig.Type())
 	}
-	verdict = protocol.VerifyUserSignature(us, protocol.SignableHash(txHash))
+	var msg protocol.Signable = protocol.SignableHash(txHash)
+	if ks, _, kerr := innerKeySig(sig); kerr == nil && ks.Type() == protocol.SignatureTypeTypedData {
+		if txn == nil {
+			return false, formNone, nil, fmt.Errorf("a typedData signature signs the whole transaction; none was supplied")
+		}
+		msg = txn
+	}
+	verdict = protocol.VerifyUserSignature(us, msg)
 
 	form, digest = formNone, nil
 	if ks, _, kerr := innerKeySig(sig); kerr == nil {
-		// Only ed25519 is re-derived here. Every other key type is refused by
-		// CERTEN with an unsupported-type reason (runbook rule 7), so recording
-		// "which digest form it used" for one would be recording a detail about
-		// a signature we will never count.
+		// Only ed25519 has its digest re-derived here (the mirror of verifySigSplit this file cross-checks). Every
+		// other accepted key type is labelled by govsig.Form, which asks the key's own Verify which digest carried
+		// it, and the verdict above is Accumulate's own Verify - nothing is recomputed.
+		if !isEd25519Rooted(sig) && verdict {
+			if f, ferr := govsig.Form(sig, msg); ferr == nil {
+				form = f
+			}
+		}
 		if ed, isEd := ks.(*protocol.ED25519Signature); isEd &&
 			len(ed.PublicKey) == ed25519.PublicKeySize && len(ed.Signature) == ed25519.SignatureSize {
 			md, mk := acceptedDigests(sig, txHash)

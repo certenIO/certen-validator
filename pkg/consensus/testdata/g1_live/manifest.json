@@ -1,0 +1,225 @@
+{
+  "format": "certen-g1live/1",
+  "archive": "archive.json.gz",
+  "archiveSha256": "56e15870f3188aa7e4003e7c5587e894e493ed55ba39acceddf45e1158b78d24",
+  "cases": [
+    {
+      "name": "cross-508",
+      "file": "cross-508.json.gz",
+      "sha256": "816e01d93041e07b3a41241c15204d180d38affc4acf1e99e997b890903e411d",
+      "captureFile": "cross-508.capture.json.gz",
+      "captureSha256": "03b8ba99849d4dc52573ca8703aec570bcbf7b5d42c1c0410aa081136daf909d",
+      "intentId": "5b8365b0-6925-4cac-8ee6-12c37d92c47f",
+      "operationId": "0x55e0dba314837c55d942161805a83ebce792f1adf14128300d3a3f62d75690ab",
+      "txHash": "ee2cca27bc60a0da42bcee2dd8bc778b4ef1f3565724c9d5127f38c237933395",
+      "principal": "acc://pv2-cust-508.acme/data",
+      "partitions": [
+        "acc://bvn-bvn2.acme",
+        "acc://bvn-bvn3.acme"
+      ],
+      "pages": 5,
+      "builtAt": "2026-10-18T12:15:09Z",
+      "submittedAt": "2026-10-18T12:12:56Z",
+      "signers": [
+        "acc://pv2-cust-508.acme/book/1",
+        "acc://pv2-bank-508.acme/book/1"
+      ]
+    },
+    {
+      "name": "cross-501",
+      "file": "cross-501.json.gz",
+      "sha256": "af2dc1c4a4ad825dcdb70358cb59158696f6b2c55a1d3607da54d74a52ffef51",
+      "captureFile": "cross-501.capture.json.gz",
+      "captureSha256": "08f4b8ecfc42532e25fb39a6c04533546f6673947af8f15a0a5e02f4ce097327",
+      "intentId": "33379848-f2c9-455c-a548-fa2948c284c8",
+      "operationId": "0x2fc277936e728582bf10ef987048aa9dc2ec628e13e1256c768fb1b81a52b04a",
+      "txHash": "92f6df1971c77556cbba784e3f699fdf699b1999d2758b4b39c0620a0d2a1a92",
+      "principal": "acc://pv2-cust-501.acme/data",
+      "partitions": [
+        "acc://bvn-bvn1.acme",
+        "acc://bvn-bvn2.acme"
+      ],
+      "pages": 5,
+      "builtAt": "2026-10-18T12:16:07Z",
+      "submittedAt": "2026-10-18T12:12:56Z",
+      "signers": [
+        "acc://pv2-cust-501.acme/book/1",
+        "acc://pv2-bank-501.acme/book/1"
+      ]
+    },
+    {
+      "name": "cross-505",
+      "file": "cross-505.json.gz",
+      "sha256": "6011551ab747432b1c4f15026ee6f975bb2027659b64a4ac2b663501aeb3c219",
+      "captureFile": "cross-505.capture.json.gz",
+      "captureSha256": "4427d0abe47a6a64a02b8ef1421eb8c2ccc7d45a1b5316fc1cad9e31364d7e1f",
+      "intentId": "7c484844-aef4-44d5-9e7d-98d718e0f827",
+      "operationId": "0xa78695e4ac517fda60977378e51c42553b0933aadd1b750b9cdf0c4461526a6b",
+      "txHash": "248aca6770ca98859daf0e782daf5fee7e13eae6dd24b26be60aec49baa6bbcb",
+      "principal": "acc://pv2-cust-505.acme/data",
+      "partitions": [
+        "acc://bvn-bvn2.acme"
+      ],
+      "pages": 5,
+      "builtAt": "2026-10-18T12:10:48Z",
+      "submittedAt": "2026-10-18T12:03:31Z",
+      "signers": [
+        "acc://pv2-cust-505.acme/book/1",
+        "acc://pv2-bank-505.acme/book/1"
+      ]
+    },
+    {
+      "name": "header-554",
+      "file": "header-554.json.gz",
+      "sha256": "11bcb488c0393bc0ec0366bc24c5fd7c2faebe61ce1bf7a83e958f61fb528532",
+      "captureFile": "header-554.capture.json.gz",
+      "captureSha256": "cf122acc13335be3855744977e6a30f282e39678445386223c6b2043dc344034",
+      "intentId": "649a9a29-c6ce-4060-a684-70281d83b86e",
+      "operationId": "0x83f41f8065c84832232a42b3f317af97ddea321d2170d212d85f63ff8e05f9b3",
+      "txHash": "2915a981f29fa8e14784ecf903c13870012b884d9c59d1ff5ae65ba14e815b90",
+      "principal": "acc://pv2-cust-554.acme/data",
+      "partitions": [
+        "acc://bvn-bvn2.acme",
+        "acc://bvn-bvn3.acme"
+      ],
+      "pages": 5,
+      "builtAt": "2026-10-18T12:15:08Z",
+      "submittedAt": "2026-10-18T12:12:56Z",
+      "signers": [
+        "acc://pv2-cust-554.acme/book/1",
+        "acc://pv2-bank-554.acme/book/1"
+      ],
+      "note": "header: the foreign book is a Header.Authorities entry, not an authority of the account"
+    },
+    {
+      "name": "disabled-566",
+      "file": "disabled-566.json.gz",
+      "sha256": "c1e791942463ca9a003a70f524ad30d54d802e1ac49faf8223606ef41bcf7dd0",
+      "captureFile": "disabled-566.capture.json.gz",
+      "captureSha256": "c396f5e5693913771aa784fa62d51a2ebbc27f13125af4bf21c787eb3af82fee",
+      "intentId": "10ee0ca1-29ba-40db-a988-944b5fc0f127",
+      "operationId": "0x75503140ff7e55d3faaa7ec1b470e145e84a41d45e58bfad2544ac19c47da57a",
+      "txHash": "d2fff450080cfb8f17f0ef6b45c68899bfc07dbbc0b2d7be3949acbf4212f7b5",
+      "principal": "acc://pv2-cust-566.acme/data",
+      "partitions": [
+        "acc://bvn-bvn2.acme",
+        "acc://bvn-bvn3.acme"
+      ],
+      "pages": 5,
+      "builtAt": "2026-10-18T12:15:01Z",
+      "submittedAt": "2026-10-18T12:12:56Z",
+      "signers": [
+        "acc://pv2-cust-566.acme/book/1"
+      ],
+      "note": "the foreign book is a DISABLED authority of the account"
+    },
+    {
+      "name": "disabled-voted-575",
+      "file": "disabled-voted-575.json.gz",
+      "sha256": "b58aaa85d7b462e30ee5d3c85c528e678916e728dd8e83fe0cdb03e100f2451a",
+      "captureFile": "disabled-voted-575.capture.json.gz",
+      "captureSha256": "9c7a461202c4a8e49e6bf7face39d1183c6fb588c7c5b5a747a6eb2fa96567e7",
+      "intentId": "d49b3aa1-be06-458c-ba88-050ec6f3d899",
+      "operationId": "0xe6c12732cfbcbc6ea335d41da53896917331d5f9f9dea7fbc5580679e402d564",
+      "txHash": "e07b2e5045b700224886e011f2f01cc06de1fbf61f59638ceffd27dbad3ca374",
+      "principal": "acc://pv2-cust-575.acme/data",
+      "partitions": [
+        "acc://bvn-bvn2.acme",
+        "acc://bvn-bvn3.acme"
+      ],
+      "pages": 5,
+      "builtAt": "2026-10-18T12:15:06Z",
+      "submittedAt": "2026-10-18T12:12:57Z",
+      "signers": [
+        "acc://pv2-cust-575.acme/book/1",
+        "acc://pv2-bank-575.acme/book/1"
+      ],
+      "note": "the foreign book is a DISABLED authority of the account; the disabled authority votes anyway"
+    },
+    {
+      "name": "bankonly-539",
+      "file": "bankonly-539.json.gz",
+      "sha256": "81b70043a1e54fda91affc4909ba5e8cca7ae3f2e3358757f8bc9cda34014e06",
+      "captureFile": "bankonly-539.capture.json.gz",
+      "captureSha256": "822a38145faecfae429830c62d66eac51e51f3670e383c4691db7a456ad26a61",
+      "intentId": "ba73f43f-1d66-4c8d-98cd-74f439c81eb2",
+      "operationId": "0xc4d5556ae0e8434b9d59124382f2829089a8958ca5979161fdb6b04a7bc319ea",
+      "txHash": "128ce77d0e64f95ddd69e77fa6c936f3a7d75cb82c2403c85b579d836c4a2baf",
+      "principal": "acc://pv2-cust-539.acme/data",
+      "partitions": [
+        "acc://bvn-bvn2.acme",
+        "acc://bvn-bvn3.acme"
+      ],
+      "pages": 3,
+      "builtAt": "2026-10-18T12:15:03Z",
+      "submittedAt": "2026-10-18T12:12:56Z",
+      "signers": [
+        "acc://pv2-bank-539.acme/book/1"
+      ],
+      "note": "bankonly: the declared key page is the foreign book's; no CertenAccount is governed by it, so it cannot settle"
+    },
+    {
+      "name": "after-585",
+      "file": "after-585.json.gz",
+      "sha256": "625ab98c7d3ca3f19606d3b7498a8295fddcf9bfb5ae59b33cf1334fcc442ff5",
+      "captureFile": "after-585.capture.json.gz",
+      "captureSha256": "7571568830d77d4ee4ba4d129e7ad912a4051aa96520187d67f9190694dfe10e",
+      "intentId": "af25cd9d-ca4f-46f5-9cc4-f005c3f27f87",
+      "operationId": "0x6ae318cd0732f4c283c7a869ec037d74fa42c2230455ab0cacd36e9b6d314222",
+      "txHash": "c02435d3e8121e9cf389cd73ad4317fe30847d4afc90c93fd4b85c6dc1245fdc",
+      "principal": "acc://pv2-cust-585.acme/data",
+      "partitions": [
+        "acc://bvn-bvn2.acme",
+        "acc://bvn-bvn3.acme"
+      ],
+      "pages": 5,
+      "builtAt": "2026-10-18T12:10:52Z",
+      "submittedAt": "2026-10-18T12:01:08Z",
+      "signers": [
+        "acc://pv2-cust-585.acme/book/1",
+        "acc://pv2-bank-585.acme/book/1"
+      ],
+      "note": "a key is added to the foreign voting page right after the intent is delivered; page acc://pv2-bank-585.acme/book/1 changed at 2026-10-18T12:01:21Z"
+    },
+    {
+      "name": "same-500",
+      "file": "same-500.json.gz",
+      "sha256": "e9dc7518653ce4fc9c131b3535dd7fa681540206cefb43b61ff7f3ac0d823d92",
+      "captureFile": "same-500.capture.json.gz",
+      "captureSha256": "8cf6158534730518117692a71cf236326a6381c5de5162094d0157b332508bc3",
+      "intentId": "1e17a637-4c63-44e7-ac0c-7ab82790199b",
+      "operationId": "0xb8f567256b614a4fbb47031063a8e44efecf98ac99adcb1eb89d72298ce10f9b",
+      "txHash": "8ba54d1b920b37d19f0f35239b443e3b13d9bd588d1450bac2214803b5d71755",
+      "principal": "acc://pv2-cust-500.acme/data",
+      "partitions": [
+        "acc://bvn-bvn2.acme"
+      ],
+      "pages": 3,
+      "builtAt": "2026-10-18T12:10:44Z",
+      "submittedAt": "2026-10-18T12:03:39Z",
+      "signers": [
+        "acc://pv2-cust-500.acme/book/1"
+      ]
+    },
+    {
+      "name": "same-507",
+      "file": "same-507.json.gz",
+      "sha256": "db62a95a9ed010b066be3b6ea14b93d62c89666d71d9aedb5b7ce662b4a82129",
+      "captureFile": "same-507.capture.json.gz",
+      "captureSha256": "adb0d007b24056bd39cd7beb19080d08fbd47cdaa079630c7461a4c277b631f2",
+      "intentId": "6c2adf87-71e8-4e73-b02b-d3c34a15582f",
+      "operationId": "0x79f3efe9dbd8cacebff75be91ffc1d20c6537d58252575293814f9e008e332aa",
+      "txHash": "7233a5bcdaa10a4085f1bdfad2fd7fecde506f2bd6f0e04ebda4cff1406e2d51",
+      "principal": "acc://pv2-cust-507.acme/data",
+      "partitions": [
+        "acc://bvn-bvn3.acme"
+      ],
+      "pages": 3,
+      "builtAt": "2026-10-18T12:10:43Z",
+      "submittedAt": "2026-10-18T12:03:31Z",
+      "signers": [
+        "acc://pv2-cust-507.acme/book/1"
+      ]
+    }
+  ]
+}

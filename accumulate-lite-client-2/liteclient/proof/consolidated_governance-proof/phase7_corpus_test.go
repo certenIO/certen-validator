@@ -185,10 +185,31 @@ func TestP7_1_CorpusIsWellFormed(t *testing.T) {
 	// a doubled one (H-repeat), so refusing either would be a false governance
 	// rejection. The cycle cases became over-counting cases instead, and are
 	// checked by TestP7_3_LongerPathGrantsNoMoreAuthority.
-	for _, want := range []string{"depth-limit", "duplicate-key", "path-binding", "unsupported-type"} {
+	//
+	// "unsupported-type" was in this list while case K (a btc signature) was captured as a refusal. SUPERSEDED BY RB8-D
+	// (2026-10-17, research R8, gap G-42): btc is a key signature Accumulate accepts and CERTEN verifies from its bytes, so
+	// case K was recaptured as the authorised case it is and no corpus case is refused for its signature type any more.
+	// The requirement that replaced it is checked just below: K must be present, authorised, and a non-ed25519 key type.
+	for _, want := range []string{"depth-limit", "duplicate-key", "path-binding"} {
 		if !refusalKinds[want] {
 			t.Errorf("the corpus has no case whose refusal reason is %q", want)
 		}
+	}
+	if refusalKinds["unsupported-type"] {
+		t.Error("the corpus still records a case refused as unsupported-type: a key-signature type Accumulate accepts is never refused on its type (RB8, G-42)")
+	}
+	var caseK *corpusTrace
+	for i := range cf.Traces {
+		if cf.Traces[i].Case == "K" {
+			caseK = &cf.Traces[i]
+		}
+	}
+	if caseK == nil {
+		t.Fatal("the corpus has no case K (the non-ed25519 key-signature case)")
+	}
+	if caseK.Expect != "valid" || caseK.KeyType != "btc" || !caseK.CoreVerdict || caseK.RefusalKind != "" {
+		t.Errorf("case K must be a btc key signature Accumulate itself verified and CERTEN authorises (expect valid, no refusal); it records expect=%q type=%q coreVerdict=%v refusal=%q",
+			caseK.Expect, caseK.KeyType, caseK.CoreVerdict, caseK.RefusalKind)
 	}
 	// A delegated case whose inner key ALSO sits on the outer page is passed by
 	// an implementation that ignores delegation entirely. At least one case must
@@ -320,6 +341,25 @@ func TestP7_1_D4_MerkleFormVerifies(t *testing.T) {
 			if !tr.CoreVerdict {
 				t.Fatal("corpus says this is a merkle-form signature but accumulate-core " +
 					"does not accept it - the corpus is wrong")
+			}
+
+			if tr.KeyType != "ed25519" {
+				// A non-ed25519 key signature (case K, btc) carries Accumulate's binary encoding in the record the extractor
+				// builds; it must verify from its bytes under the merkle form. The metadata-digest control below is
+				// ed25519-specific (VerifyEd25519), so the control for these types is accumulate-core's own verdict plus
+				// digestForm recorded when the trace was captured.
+				sd, err := (&SignatureVerifier{}).ExtractSignatureFromMessageResult(messageResultFor(tr))
+				if err != nil {
+					t.Fatalf("extraction of a %s signature Kermit delivered: %v", tr.KeyType, err)
+				}
+				form, err := sv.VerifyAgainstAcceptedDigests(sd, tr.TransactionHash)
+				if err != nil {
+					t.Fatalf("a %s signature Kermit delivered is still refused: %v", tr.KeyType, err)
+				}
+				if form != DigestFormMerkle {
+					t.Fatalf("verified under the %q form; accumulate-core used %q", form, DigestFormMerkle)
+				}
+				return
 			}
 
 			form, err := sv.VerifyAgainstAcceptedDigests(corpusSignatureData(tr), tr.TransactionHash)

@@ -124,6 +124,20 @@ func AdminSeedFromEnv() (adminSeed, error) {
 type EntitlementConfig struct {
 	Mode EntitlementMode
 	Keys entitlement.KeySet
+
+	// RequireCostBasis is execution rules v14's binding ceiling (RB4-F6): a ceiling that touches a chain the epoch does
+	// not price is refused (ENTITLEMENT_UNPRICED), and a basis no bound can be computed from is refused
+	// (ENTITLEMENT_COST_BASIS_INVALID). Set by the app for a block once the v14 activation (an anchor set in force) is
+	// reached; false reproduces v13's verdict exactly, which skipped the ceiling in both cases. Never read from the
+	// environment.
+	RequireCostBasis bool
+
+	// RequireBoundingBasis is execution rules v15's reading of a published cost basis (PV2-F3): a basis that is zero where
+	// the block multiplies it is no bound - the cost sums to nothing and the chain passes any ceiling - so the chain is
+	// unpriced (ENTITLEMENT_UNPRICED) exactly as one the epoch does not list. Set by the app for a block once the
+	// cross-partition activation is in force (a committed fact of the chain, never a date or the environment); false is
+	// rules v14's verdict byte for byte, in which a listed zero is a price. Meaningful only with RequireCostBasis.
+	RequireBoundingBasis bool
 }
 
 // EntitlementConfigFromEnv reads the gate configuration.
@@ -232,7 +246,7 @@ func VerifyEntitlement(
 		// this much". Until 2026-08-08 only the first was enforced — the
 		// ceilings were published and read as a boolean, so an entitled account
 		// could execute an intent of any size.
-		if reason, cerr := verifyCostCeiling(vb, nowUnix); cerr != nil {
+		if reason, cerr := verifyCostCeiling(vb, cfg.RequireCostBasis, cfg.RequireBoundingBasis); cerr != nil {
 			if cfg.Mode == EntitlementObserve {
 				return reason, nil
 			}
@@ -261,23 +275,34 @@ func VerifyEntitlement(
 // established — the ceiling read here is one this epoch's signer published for
 // this account, not an attacker's number.
 //
-// Returns ("", nil) — the intent is affordable, or cannot be bounded — in three
-// distinct cases, and the distinction matters:
+// A leaf publishing a zero ceiling returns ("", nil): Entitled() has already
+// refused that case as NOT_ENTITLED, and re-refusing here would relabel the
+// same decision.
 //
-//   - No cost basis was published for a chain the block touches. The bound is
-//     unknown. Refusing would turn a gateway configuration gap into refusal of
-//     legitimate work; admitting it as zero would let an unpriced chain bypass
-//     the ceiling entirely. Neither is acceptable, so the COST gate does not
-//     apply and the STATUS gate still does. Visible as a distinct metric so an
-//     unpriced chain is a reported gap rather than a silent hole.
+// The ceiling is BINDING from execution rules v14 (requireBasis, RB4-F6):
 //
-//   - The leaf publishes a zero ceiling. Entitled() has already refused that
-//     case as NOT_ENTITLED; re-refusing here would relabel the same decision.
+//   - No cost basis was published for a chain the block touches: refused as
+//     ENTITLEMENT_UNPRICED, naming the chain. The bound is unknown, so the
+//     ceiling cannot be shown to hold, and admitting the block would let an
+//     unpriced chain spend without one. The gateway publishes an entry for
+//     every chain it prices and omits the rest, so this is reached only by an
+//     epoch that breaks that rule.
 //
-//   - The arithmetic could not be completed. Fails OPEN on purpose: a bound we
-//     could not compute is not evidence of unaffordability, and there is no
-//     safe way to refuse on a number that does not exist.
-func verifyCostCeiling(vb *ValidatorBlock, _ int64) (string, error) {
+//   - From execution rules v15 (requireBound, PV2-F3) a published basis that is
+//     not a bound is unpriced as well: zero where the block multiplies it (the
+//     base, or the per-leg figure of a chain with several legs) sums to nothing
+//     and passes every ceiling. Under v14 a listed zero is a price, as it was
+//     when v14 began deciding blocks - changing that inside v14 would decide
+//     the same bytes two ways.
+//
+//   - A published basis no bound can be computed from - negative, or
+//     overflowing int64 for the block's legs: refused as
+//     ENTITLEMENT_COST_BASIS_INVALID.
+//
+// Before v14 (requireBasis false) both cases returned ("", nil) - the ceiling
+// was skipped - and that verdict is kept exactly, so committed history replays
+// to the same app hash.
+func verifyCostCeiling(vb *ValidatorBlock, requireBasis, requireBound bool) (string, error) {
 	ev := vb.EntitlementEvidence
 	if ev == nil {
 		return "", nil // unreachable: Verify already refused a nil evidence
@@ -288,9 +313,25 @@ func verifyCostCeiling(vb *ValidatorBlock, _ int64) (string, error) {
 		return "", nil
 	}
 
-	worst, ok, err := WorstCaseCostMicroUSD(vb, ev.Header)
-	if err != nil || !ok {
-		return "", nil
+	worst, ok, err := worstCaseCost(vb, ev.Header, requireBound)
+	switch {
+	case err != nil && requireBasis:
+		return entitlement.ReasonCostBasisInvalid, &entitlement.VerifyError{
+			Reason: entitlement.ReasonCostBasisInvalid,
+			Detail: fmt.Sprintf("epoch %d: %v; the ceiling of %s cannot be bounded", ev.Header.Epoch, err, ev.Leaf.ADIURL),
+		}
+	case !ok && requireBasis:
+		what := "publishes no cost basis for"
+		if requireBound {
+			what = "publishes no cost basis, or a zero one where the block multiplies it, for" // rules v15 (PV2-F3)
+		}
+		return entitlement.ReasonUnpriced, &entitlement.VerifyError{
+			Reason: entitlement.ReasonUnpriced,
+			Detail: fmt.Sprintf("epoch %d %s chain(s) %v this block settles on; the ceiling of %s "+
+				"cannot be bounded", ev.Header.Epoch, what, unpricedChains(vb, ev.Header, requireBound), ev.Leaf.ADIURL),
+		}
+	case err != nil || !ok:
+		return "", nil // rules before v14: the ceiling is skipped
 	}
 	if worst <= ceiling {
 		return "", nil
@@ -302,6 +343,11 @@ func verifyCostCeiling(vb *ValidatorBlock, _ int64) (string, error) {
 			"worst-case cost %d microUSD exceeds intent ceiling %d microUSD for %s",
 			worst, ceiling, ev.Leaf.ADIURL),
 	}
+}
+
+// isV14EntitlementReason reports whether a refusal reason is one only rules v14 reaches.
+func isV14EntitlementReason(reason string) bool {
+	return reason == entitlement.ReasonUnpriced || reason == entitlement.ReasonCostBasisInvalid
 }
 
 // asVerifyError is errors.As specialised, kept local so this file has no

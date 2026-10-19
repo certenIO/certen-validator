@@ -13,10 +13,13 @@ package proofv2
 
 import (
 	"bytes"
+	"encoding/hex"
 	"reflect"
+	"strconv"
 	"strings"
 
 	"gitlab.com/accumulatenetwork/accumulate/pkg/api/v3"
+	"gitlab.com/accumulatenetwork/accumulate/pkg/database/merkle"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/errors"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/types/messaging"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/types/network"
@@ -55,6 +58,21 @@ type Spine struct {
 	// priorNetworkUpdates counts the writes to the network definition applied before this walk started, when it was
 	// restored from a checkpoint (RestoreSpine) rather than walked from genesis.
 	priorNetworkUpdates uint64
+
+	// priorGlobalsUpdates is the same for the globals account, as the checkpoint recorded it (evidence 2.1: ledger.AccumulateSpineCheckpoint
+	// GlobalsUpdates, held from the activation of rules v15; a spine restored from an earlier checkpoint starts at 0).
+	priorGlobalsUpdates uint64
+
+	// refuseReplay, set by the evidence 2.1 verifier on the spines it walks, makes a record that applies an update the walk already
+	// applied (the same transaction hash) a refusal, certify_update_replayed. A 2.0 spine never sets it, so 2.0 verdicts do not move.
+	refuseReplay bool
+
+	// RootChainIndex is the root chain index of the last verified anchor, with rciKnown whether it is established: a spine from genesis or one
+	// that has verified an anchor knows it, one restored from a checkpoint recorded before the field existed does not (V-E A2(c): the lower
+	// bound of the first window after such a checkpoint is then unproven, certify_update_unproven). Only the evidence 2.1 walk (refuseReplay)
+	// reads it.
+	RootChainIndex uint64
+	rciKnown       bool
 }
 
 // NetworkUpdates is the number of writes to acc://dn.acme/network the spine has applied since genesis: what the network
@@ -69,6 +87,18 @@ func (s *Spine) NetworkUpdates() uint64 {
 	return n
 }
 
+// GlobalsUpdates is the number of writes to acc://dn.acme/globals the spine has counted (V-E A2(b)): what the globals account's main
+// chain must account for, beside its genesis entry. Only the evidence 2.1 verifier compares it; 2.0 never has.
+func (s *Spine) GlobalsUpdates() uint64 {
+	n := s.priorGlobalsUpdates
+	for _, a := range s.Applied {
+		if a.Principal == protocol.DnUrl().JoinPath(protocol.Globals).String() {
+			n++
+		}
+	}
+	return n
+}
+
 // RestoreSpine rebuilds a spine at a checkpoint the chain verified: the set in force, the next major block, the last
 // verified anchor's minor block and roots, and how many network-definition writes were applied up to it.
 func RestoreSpine(g *network.GlobalValues, next, lastMinor uint64, root, state [32]byte, networkUpdates uint64) (*Spine, error) {
@@ -77,6 +107,7 @@ func RestoreSpine(g *network.GlobalValues, next, lastMinor uint64, root, state [
 		return nil, err
 	}
 	s.LastMinorBlock, s.RootChainAnchor, s.StateTreeAnchor, s.priorNetworkUpdates = lastMinor, root, state, networkUpdates
+	s.rciKnown = false // a checkpoint says it separately (SpineAt)
 	return s, nil
 }
 
@@ -89,7 +120,7 @@ func NewSpine(genesis *network.GlobalValues, next uint64) (*Spine, error) {
 	if next == 0 {
 		return nil, errors.BadRequest.With("major blocks are 1-based")
 	}
-	return &Spine{globals: genesis.Copy(), NextMajor: next}, nil
+	return &Spine{globals: genesis.Copy(), NextMajor: next, rciKnown: true}, nil
 }
 
 // Clone returns an independent copy, so one verified spine can be extended to several targets.
@@ -124,7 +155,7 @@ func (s *Spine) Advance(r *api.MajorHeaderRecord) error {
 		return errors.Conflict.WithFormat("anchor for minor block %d does not advance past %d", body.MinorBlockIndex, s.LastMinorBlock)
 	}
 
-	err = s.verifyAndCommit(body, r.Anchor, r.Signatures, r.Updates)
+	err = s.verifyAndCommit(body, r.Anchor, r.Signatures, r.Updates, s.refuseReplay)
 	if err != nil {
 		return errors.UnknownError.WithFormat("major block %d: %w", r.Index, err)
 	}
@@ -151,6 +182,10 @@ func (s *Spine) AdvanceEpoch(r *api.MinorRootRecord) error {
 	if proof.MerkleState == nil || proof.Receipt == nil {
 		return errors.BadRequest.With("incomplete root proof")
 	}
+	// A record decoded from JSON can hold a null step in either receipt, which Accumulate's Validate dereferences (RB9-L).
+	if !stepsPresent(proof.Receipt) || !stepsPresent(proof.ContinuedReceipt) {
+		return errors.BadRequest.With("incomplete root proof")
+	}
 	if !bytes.Equal(proof.MerkleState.Anchor(), s.RootChainAnchor[:]) {
 		return errors.Unauthenticated.With("root proof does not start at the verified root")
 	}
@@ -161,24 +196,113 @@ func (s *Spine) AdvanceEpoch(r *api.MinorRootRecord) error {
 		return errors.Unauthenticated.With("invalid root proof")
 	}
 
-	err = s.verifyAndCommit(body, r.Anchor, r.Signatures, r.Updates)
+	err = s.verifyAndCommit(body, r.Anchor, r.Signatures, r.Updates, s.refuseReplay)
 	if err != nil {
+		if cs, ok := err.(*CertifyState); ok {
+			return cs
+		}
 		return errors.UnknownError.WithFormat("block %d: %w", body.MinorBlockIndex, err)
 	}
 	return nil
 }
 
-func (s *Spine) verifyAndCommit(body *protocol.DirectoryAnchor, anchor *messaging.SequencedMessage, sigs []protocol.KeySignature, updates []*api.NetworkUpdateProof) error {
+// AdvanceAnchored verifies an anchored minor-root record (evidence 2.1): a record without a root proof, whose continuity with the
+// previously verified root chain anchor is the O(log n) link instead of the walk of every root chain entry in between. The record's
+// anchor must be a Directory self-anchor of a later minor block; the link must start at the verified root chain anchor, end at the
+// anchor's own, and validate; the updates are applied and the quorum checked exactly as AdvanceEpoch does, and (on a spine the 2.1
+// verifier walks) an update the walk already applied is refused. The refusals are *CertifyState with index 0: the caller, who knows
+// the link's ordinal, renames the index (reindexCertifyState).
+func (s *Spine) AdvanceAnchored(r *api.MinorRootRecord, link *merkle.Receipt) error {
+	if r == nil || r.Anchor == nil {
+		return errors.BadRequest.With("incomplete minor root record")
+	}
+	if r.RootProof != nil {
+		return errors.BadRequest.With("an anchored record carries no root proof")
+	}
+	body, err := checkDirectorySelfAnchor(r.Anchor)
+	if err != nil {
+		return err
+	}
+	if body.MinorBlockIndex <= s.LastMinorBlock {
+		return errors.Conflict.WithFormat("anchor for minor block %d does not advance past %d", body.MinorBlockIndex, s.LastMinorBlock)
+	}
+	if link == nil {
+		return certifyState(StateCertifyLinkMissing, "0")
+	}
+	if !stepsPresent(link) { // a null step, which Accumulate's Validate dereferences
+		return certifyState(StateCertifyLinkInvalid, "0")
+	}
+	if !bytes.Equal(link.Start, s.RootChainAnchor[:]) {
+		return certifyState(StateCertifyLinkStart, "0")
+	}
+	if !bytes.Equal(link.Anchor, body.RootChainAnchor[:]) {
+		return certifyState(StateCertifyLinkEnd, "0")
+	}
+	if !link.Validate(nil) {
+		return certifyState(StateCertifyLinkInvalid, "0")
+	}
+
+	err = s.verifyAndCommit(body, r.Anchor, r.Signatures, r.Updates, true)
+	if err != nil {
+		if cs, ok := err.(*CertifyState); ok {
+			return cs
+		}
+		return errors.UnknownError.WithFormat("block %d: %w", body.MinorBlockIndex, err)
+	}
+	return nil
+}
+
+// reindexCertifyState names the ordinal (index) a *CertifyState was judged at, for the index-carrying codes the spine produces; any other
+// error is returned as it is.
+func reindexCertifyState(err error, index int) error {
+	cs, ok := err.(*CertifyState)
+	if !ok {
+		return err
+	}
+	switch cs.Code {
+	case StateCertifyLinkMissing, StateCertifyLinkStart, StateCertifyLinkEnd, StateCertifyLinkInvalid:
+		return certifyState(cs.Code, strconv.Itoa(index))
+	}
+	return err
+}
+
+func hasUpdate(list []AppliedUpdate, h [32]byte) bool {
+	for _, a := range list {
+		if a.TxHash == h {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Spine) verifyAndCommit(body *protocol.DirectoryAnchor, anchor *messaging.SequencedMessage, sigs []protocol.KeySignature, updates []*api.NetworkUpdateProof, refuseReplay bool) error {
 	candidate := s.globals.Copy()
 	var applied []AppliedUpdate
+	// Evidence 2.1 only: each update's root chain position must lie in (the previous anchor's RootChainIndex, this one's] (V-E A2(c)).
+	var win *updateWindow
+	if refuseReplay {
+		win = &updateWindow{prev: s.RootChainIndex, prevKnown: s.rciKnown, this: body.RootChainIndex, block: body.MinorBlockIndex}
+	}
 	for _, u := range updates {
 		a, err := applyProvenUpdate(candidate, u, body.RootChainAnchor)
 		if err != nil {
 			return err
 		}
 		if a != nil {
+			if refuseReplay && (hasUpdate(s.Applied, a.TxHash) || hasUpdate(applied, a.TxHash)) {
+				return certifyState(StateCertifyUpdateReplayed, hex.EncodeToString(a.TxHash[:]))
+			}
 			a.AnchorMinorBlock = body.MinorBlockIndex
 			applied = append(applied, *a)
+		}
+		if win != nil {
+			h, err := transactionHash(u.Transaction)
+			if err != nil {
+				return err
+			}
+			if err := win.check(u.Transaction.Header.Principal.String(), h, u.Receipt.Entries); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -196,6 +320,7 @@ func (s *Spine) verifyAndCommit(body *protocol.DirectoryAnchor, anchor *messagin
 	s.LastMinorBlock = body.MinorBlockIndex
 	s.RootChainAnchor = body.RootChainAnchor
 	s.StateTreeAnchor = body.StateTreeAnchor
+	s.RootChainIndex, s.rciKnown = body.RootChainIndex, true
 	s.Applied = append(s.Applied, applied...)
 	return nil
 }
@@ -292,6 +417,9 @@ func applyProvenUpdate(g *network.GlobalValues, u *api.NetworkUpdateProof, root 
 	if !bytes.Equal(u.Receipt.Anchor, root[:]) {
 		return nil, errors.Unauthenticated.With("network update receipt does not end at the anchor's root")
 	}
+	if !stepsPresent(u.Receipt) { // a null step, which Accumulate's Validate dereferences (RB9-L)
+		return nil, errors.BadRequest.With("incomplete network update proof")
+	}
 	if !u.Receipt.Validate(nil) {
 		return nil, errors.Unauthenticated.With("invalid network update receipt")
 	}
@@ -320,6 +448,20 @@ func applyProvenUpdate(g *network.GlobalValues, u *api.NetworkUpdateProof, root 
 		return &AppliedUpdate{Principal: principal.String(), TxHash: h}, g.ParseGlobals(wd.Entry)
 	}
 	return nil, nil
+}
+
+// stepsPresent reports whether every step of a receipt (nil: none) is present. A receipt decoded from JSON can hold a null step, and
+// Accumulate's Validate reads the hash of every step it is given.
+func stepsPresent(r *merkle.Receipt) bool {
+	if r == nil {
+		return true
+	}
+	for _, e := range r.Entries {
+		if e == nil {
+			return false
+		}
+	}
+	return true
 }
 
 // isNil reports whether v is nil or a nil pointer inside an interface (CERTEN: a decoded record can hold either).
