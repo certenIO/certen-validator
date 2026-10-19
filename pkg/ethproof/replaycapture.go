@@ -104,9 +104,14 @@ type ReplayCaptureConfig struct {
 	Poll    time.Duration // default 2s
 	Clock   ReplayClock   // default WallClock; a replay clock over a recorded world (RB10-F9)
 	Logf    func(string, ...interface{})
-	// Concurrent is the most captures of this chain that run at once (default DefaultReplayCaptureConcurrency): the rest wait
-	// for a slot and spend their budget doing so. The size is fixed by the first capture of the chain in a store.
+	// Concurrent is the most captures of this chain that are in the After phase at once (default
+	// DefaultReplayCaptureConcurrency): the rest wait for a slot and spend their budget doing so. The slot is held for the
+	// After phase only (RB10-B10); the Before phase of a capture that has its After runs beside the others without one. The
+	// size is fixed by the first capture of the chain in a store.
 	Concurrent int
+	// afterDone is called once when the capture's After phase is over - its After proof is in hand, or the capture ended for
+	// whatever reason - and frees the capture slot a capturer holds for it (RB10-B10 D1).
+	afterDone func()
 }
 
 func (c *ReplayCaptureConfig) concurrent() int {
@@ -218,6 +223,13 @@ func CaptureReplayGuard(ctx context.Context, cfg ReplayCaptureConfig, txHash com
 	deadline := clock.Now().Add(cfg.budget())
 	bctx, cancel := clock.WithDeadline(ctx, deadline)
 	defer cancel()
+	// The capture slot is the After phase's: freed when After is in hand, and in any case when the capture ends.
+	afterOver := func() {}
+	if cfg.afterDone != nil {
+		var once sync.Once
+		afterOver = func() { once.Do(cfg.afterDone) }
+	}
+	defer afterOver()
 	state := &ReplayNamedState{ChainID: cfg.ChainID, TxHash: txHash}
 	finish := func(st, reason, format string, args ...interface{}) *ReplayGuardEvidence {
 		state.State, state.Reason, state.Detail = st, reason, fmt.Sprintf(format, args...)
@@ -405,6 +417,9 @@ func CaptureReplayGuard(ctx context.Context, cfg ReplayCaptureConfig, txHash com
 		}
 		proof.Headers = append(proof.Headers, raw)
 	}
+	// Everything the After proof needs is in hand: the Before phase below is a low-rate read that waits for a state some
+	// providers never serve, and holds no capture slot (V-R10B3 D1).
+	afterOver()
 
 	// Before: the same slot in the state of the settlement block's parent, asked of every provider in turn and asked
 	// again until the budget ends, as After is (RB10-F7: a provider's backends differ, and one that refuses the parent now
@@ -753,7 +768,7 @@ func (s *ReplayGuardStore) Wait(ctx context.Context, chain int64, tx common.Hash
 // DefaultReplayCaptureConcurrency is how many captures of one chain run at once when the configuration does not say.
 const DefaultReplayCaptureConcurrency = 4
 
-// captureSlots is the semaphore bounding the captures of one chain that run at once (V-R10B2 note: each pass of a capture
+// captureSlots is the semaphore bounding the captures of one chain that are in their After phase at once (V-R10B2 note: each pass of a capture
 // asks every provider, and a restart backlog of settlements would otherwise multiply that load on the providers the
 // observation itself uses). The size is fixed by the first capture of the chain.
 func (s *ReplayGuardStore) captureSlots(chain int64, n int) chan struct{} {
@@ -776,6 +791,8 @@ type ReplayGuardCapturer struct {
 	store *ReplayGuardStore
 	// verifySettlement is the one verification of a proven settlement this capturer makes per Bind or Resolve.
 	verifySettlement func(*Settlement) (*types.Header, *ReceiptLeaf, error)
+	// bindWait is the longest Bind waits for a capture that has not finished: zero means its budget and two minutes.
+	bindWait time.Duration
 }
 
 // NewReplayGuardCapturer returns a capturer writing to store (DefaultReplayGuards when nil).
@@ -788,8 +805,11 @@ func NewReplayGuardCapturer(cfg ReplayCaptureConfig, store *ReplayGuardStore) *R
 
 // Begin starts the capture of txHash's replay guard in the background, once per transaction. It never blocks and never
 // fails the caller: whatever happens is stored as evidence or as a named state. At most the configured number of captures
-// of the chain run at once; one waiting for a slot has begun spending its budget, and names the wait when the budget ends
-// before a slot frees.
+// of the chain are in the After phase at once (the receipt, the transaction, the header chain and the After proof: the
+// reads that must happen within a block or two of inclusion); a capture holds its slot for that phase only, and asks for the
+// Before state (which head-only providers never serve) without one, so a settlement is never made to wait for a slot by
+// captures that are merely waiting for a state that will not be served (RB10-B10). One waiting for a slot has begun spending
+// its budget, and names the wait when the budget ends before a slot frees, or frees with less than a poll of it left.
 func (c *ReplayGuardCapturer) Begin(txHash common.Hash) {
 	e, first := c.store.begin(c.cfg.ChainID, txHash)
 	if !first {
@@ -814,28 +834,48 @@ func (c *ReplayGuardCapturer) Begin(txHash common.Hash) {
 		ctx, cancel := context.WithTimeout(context.Background(), c.cfg.budget()+time.Minute)
 		defer cancel()
 		slots := c.store.captureSlots(c.cfg.ChainID, c.cfg.concurrent())
+		// slotWait is the named state of a capture that never read the chain because it waited for a slot.
+		slotWait := func(why string) *ReplayGuardEvidence {
+			c.cfg.logf("⚠️ [S6-REPLAY] chain %d tx %s: %s", c.cfg.ChainID, txHash.Hex(), why)
+			return &ReplayGuardEvidence{Version: ReplayGuardDomain, State: &ReplayNamedState{State: ReplayUnproven, Reason: ReasonStateUnavailable,
+				ChainID: c.cfg.ChainID, TxHash: txHash, Detail: why + " (the settlements observed at once exceed what the providers are asked for at once)"}}
+		}
+		waited := false
 		select {
 		case slots <- struct{}{}:
 		default:
+			waited = true
 			wctx, wcancel := clock.WithDeadline(ctx, deadline)
 			select {
 			case slots <- struct{}{}:
 				wcancel()
 			case <-wctx.Done():
 				wcancel()
-				c.cfg.logf("⚠️ [S6-REPLAY] chain %d tx %s: no capture slot freed within the budget of %s", c.cfg.ChainID, txHash.Hex(), c.cfg.budget())
-				ev = &ReplayGuardEvidence{Version: ReplayGuardDomain, State: &ReplayNamedState{State: ReplayUnproven, Reason: ReasonStateUnavailable,
-					ChainID: c.cfg.ChainID, TxHash: txHash, Detail: fmt.Sprintf("the capture waited for one of the %d capture slots of chain %d and none freed within its budget of %s (the settlements observed at once exceed what the providers are asked for at once)",
-						cap(slots), c.cfg.ChainID, c.cfg.budget())}}
+				ev = slotWait(fmt.Sprintf("the capture waited for one of the %d capture slots of chain %d and none freed within its budget of %s",
+					cap(slots), c.cfg.ChainID, c.cfg.budget()))
 				return
 			}
 		}
-		defer func() { <-slots }()
-		cfg := c.cfg
-		cfg.Budget = deadline.Sub(clock.Now()) // the budget not spent waiting for the slot
-		if cfg.Budget <= 0 {
-			cfg.Budget = time.Nanosecond
+		// The slot is the After phase's (V-R10B3 D1): the capture frees it when its After proof is in hand, and in any case
+		// when it ends or panics.
+		var once sync.Once
+		free := func() { once.Do(func() { <-slots }) }
+		defer free()
+		remaining := deadline.Sub(clock.Now()) // the budget not spent waiting for the slot
+		if waited && remaining < c.cfg.poll() {
+			// V-R10B3 D2: a capture that got its slot with (all but) no budget left cannot read the chain on its own behalf: it
+			// is the slot wait, not a receipt it failed to find.
+			free()
+			ev = slotWait(fmt.Sprintf("the capture waited for one of the %d capture slots of chain %d and one freed with %s of its budget of %s left, less than the poll of %s, too little to read the chain",
+				cap(slots), c.cfg.ChainID, max(remaining, 0), c.cfg.budget(), c.cfg.poll()))
+			return
 		}
+		cfg := c.cfg
+		cfg.Budget = remaining
+		if cfg.Budget <= 0 {
+			cfg.Budget = time.Nanosecond // a zero budget would mean the default one
+		}
+		cfg.afterDone = free
 		ev = CaptureReplayGuard(ctx, cfg, txHash)
 	}()
 }
@@ -880,11 +920,17 @@ func (c *ReplayGuardCapturer) Bind(s *Settlement) {
 				c.store.put(e, c.panicState(s, r), true)
 			}
 		}()
-		ctx, cancel := context.WithTimeout(context.Background(), c.cfg.budget()+2*time.Minute)
+		wait := c.bindWait
+		if wait <= 0 {
+			wait = c.cfg.budget() + 2*time.Minute
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), wait)
 		defer cancel()
 		e, first := c.store.begin(c.cfg.ChainID, s.TxHash)
 		if first {
-			c.store.put(e, c.namedState(c.look(s), s, ReplayUnproven, ReasonCaptureNotAttempted,
+			l := c.look(s)
+			c.noteLookError(s, l, "the settlement was first observed at finality and does not verify")
+			c.store.put(e, c.namedState(l, s, ReplayUnproven, ReasonCaptureNotAttempted,
 				"the settlement was first observed at finality; no proof of the replay guard was captured at inclusion, and no provider serves that state any longer"), true)
 			close(e.done)
 			return
@@ -892,7 +938,9 @@ func (c *ReplayGuardCapturer) Bind(s *Settlement) {
 		select {
 		case <-e.done:
 		case <-ctx.Done():
-			c.store.put(e, c.namedState(c.look(s), s, ReplayUnproven, ReasonStateUnavailable, "the capture did not finish: "+ctx.Err().Error()), true)
+			l := c.look(s)
+			c.noteLookError(s, l, "the capture did not finish and the settlement does not verify")
+			c.store.put(e, c.namedState(l, s, ReplayUnproven, ReasonStateUnavailable, "the capture did not finish: "+ctx.Err().Error()), true)
 			return
 		}
 		c.store.mu.Lock()
@@ -919,6 +967,7 @@ func (c *ReplayGuardCapturer) Resolve(s *Settlement) (out *ReplayGuardEvidence) 
 	}
 	defer func() {
 		if r := recover(); r != nil {
+			c.note("⚠️ [S6-REPLAY] chain %d tx %s: Resolve recovered from a panic: %v", c.cfg.ChainID, s.TxHash.Hex(), r)
 			out = c.panicState(s, r)
 		}
 	}()
@@ -926,8 +975,26 @@ func (c *ReplayGuardCapturer) Resolve(s *Settlement) (out *ReplayGuardEvidence) 
 	if !ok {
 		return nil
 	}
-	out, _ = c.holdTo(ev, s)
+	out, refusal := c.holdTo(ev, s)
+	if refusal != "" {
+		c.note("⚠️ [S6-REPLAY] chain %d tx %s: Resolve: the captured evidence does not hold against the proven settlement: %s",
+			c.cfg.ChainID, s.TxHash.Hex(), refusal)
+	}
 	return out
+}
+
+// note logs on the observation's own path: a logger that fails is never what fails the observation or changes its evidence.
+func (c *ReplayGuardCapturer) note(format string, args ...interface{}) {
+	defer func() { _ = recover() }() // the logger is what failed: there is nowhere left to report it
+	c.cfg.logf(format, args...)
+}
+
+// noteLookError logs why a proven settlement does not verify (a verification failure or a recovered panic), which the
+// named state built from the look does not carry.
+func (c *ReplayGuardCapturer) noteLookError(s *Settlement, l settlementLook, what string) {
+	if l.err != nil {
+		c.note("⚠️ [S6-REPLAY] chain %d tx %s: %s: %v", c.cfg.ChainID, s.TxHash.Hex(), what, l.err)
+	}
 }
 
 // settlementLook is the one look at a proven settlement a Bind or a Resolve takes: its verified header and receipt, its
@@ -1029,9 +1096,11 @@ func (c *ReplayGuardCapturer) holdTo(ev *ReplayGuardEvidence, s *Settlement) (ou
 // restateUnknowns is the capture's named state about this transaction with what the capture could not state - the block
 // (it never saw the receipt) and the contract (it never read the transaction) - taken from the proven settlement (RB10-B8
 // D2): the capture keeps its reason, detail and providers. A block or contract it did state is never replaced, so a state of
-// another block or contract is still the mismatch the verifier names. Any other evidence is returned as it is.
+// another block or contract is still the mismatch the verifier names. Any other evidence is returned as it is - evidence
+// that carries a proof as well as a state included, which the verifier refuses by name (exactly one of the two): restating
+// its state would drop the proof and make it verify (RB10-B10).
 func restateUnknowns(ev *ReplayGuardEvidence, l settlementLook) *ReplayGuardEvidence {
-	if ev == nil || ev.State == nil || l.hdr == nil || l.tx == nil || ev.State.TxHash != l.tx.Hash() {
+	if ev == nil || ev.Proof != nil || ev.State == nil || l.hdr == nil || l.tx == nil || ev.State.TxHash != l.tx.Hash() {
 		return ev
 	}
 	st := *ev.State
