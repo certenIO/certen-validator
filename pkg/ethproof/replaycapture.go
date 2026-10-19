@@ -548,27 +548,130 @@ type replayKey struct {
 type replayEntry struct {
 	ev    *ReplayGuardEvidence
 	bound bool
+	size  int
+	key   replayKey
 	done  chan struct{}
 }
 
 // ReplayGuardStore holds the replay-guard evidence of settlements beside them, by (chain, transaction): bounded, oldest
 // first out. It is the single place the evidence builders read from.
 type ReplayGuardStore struct {
-	mu    sync.Mutex
-	max   int
-	order []replayKey
-	m     map[replayKey]*replayEntry
+	mu       sync.Mutex
+	max      int
+	maxBytes int
+	bytes    int
+	order    []replayKey
+	m        map[replayKey]*replayEntry
 }
+
+// DefaultReplayGuardBytes bounds the evidence bytes a store holds (V-R10B note: a proof may carry 512 headers, so a
+// count bound alone is several hundred MB to GB in the worst case).
+const DefaultReplayGuardBytes = 256 << 20
 
 // DefaultReplayGuards is the process-wide store the observers and the evidence builders share.
 var DefaultReplayGuards = NewReplayGuardStore(8192)
 
-// NewReplayGuardStore returns a store holding at most max settlements' evidence.
+// NewReplayGuardStore returns a store holding at most max settlements' evidence and DefaultReplayGuardBytes bytes of it.
 func NewReplayGuardStore(max int) *ReplayGuardStore {
+	return NewReplayGuardStoreBytes(max, DefaultReplayGuardBytes)
+}
+
+// NewReplayGuardStoreBytes returns a store holding at most max settlements' evidence and maxBytes bytes of it
+// (ReplayEvidenceSize); the oldest leave first.
+func NewReplayGuardStoreBytes(max, maxBytes int) *ReplayGuardStore {
 	if max <= 0 {
 		max = 1024
 	}
-	return &ReplayGuardStore{max: max, m: map[replayKey]*replayEntry{}}
+	if maxBytes <= 0 {
+		maxBytes = DefaultReplayGuardBytes
+	}
+	return &ReplayGuardStore{max: max, maxBytes: maxBytes, m: map[replayKey]*replayEntry{}}
+}
+
+// MaxBytes is the store's byte bound.
+func (s *ReplayGuardStore) MaxBytes() int { return s.maxBytes }
+
+// Bytes is the evidence bytes the store holds now.
+func (s *ReplayGuardStore) Bytes() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.bytes
+}
+
+// ReplayEvidenceSize is the size the store charges for evidence: the bytes of its proofs (headers, trie nodes) and named
+// state text, plus a fixed overhead per entry.
+func ReplayEvidenceSize(ev *ReplayGuardEvidence) int {
+	const overhead = 512
+	if ev == nil {
+		return overhead
+	}
+	n := overhead
+	nodes := func(sp *SlotProof) {
+		if sp == nil {
+			return
+		}
+		for _, b := range sp.AccountProof {
+			n += len(b)
+		}
+		for _, b := range sp.StorageProof {
+			n += len(b)
+		}
+	}
+	before := func(b *ReplayBefore) {
+		if b != nil {
+			n += len(b.ParentHeader)
+			nodes(&b.Proof)
+		}
+	}
+	if p := ev.Proof; p != nil {
+		for _, h := range p.Headers {
+			n += len(h)
+		}
+		nodes(&p.After)
+		before(p.Before)
+		if p.BeforeUnavailable != nil {
+			n += len(p.BeforeUnavailable.Reason)
+			for _, f := range p.BeforeUnavailable.Providers {
+				n += len(f.Host) + len(f.Error)
+			}
+		}
+	}
+	if st := ev.State; st != nil {
+		n += len(st.Detail) + len(st.Reason)
+		for _, f := range st.Providers {
+			n += len(f.Host) + len(f.Error)
+		}
+		before(st.Before)
+	}
+	return n
+}
+
+// Put stores evidence for a settlement directly (bound as given), as a finished capture would.
+func (s *ReplayGuardStore) Put(chain int64, tx common.Hash, ev *ReplayGuardEvidence, bound bool) {
+	e, first := s.begin(chain, tx)
+	s.put(e, ev, bound)
+	if first {
+		close(e.done)
+	}
+}
+
+// evict drops the oldest entries while the store is over either bound; keep is never dropped.
+func (s *ReplayGuardStore) evict(keep replayKey) {
+	for len(s.order) > 0 && (len(s.order) > s.max || s.bytes > s.maxBytes) {
+		k := s.order[0]
+		if k == keep {
+			if len(s.order) == 1 {
+				return
+			}
+			s.order = append(s.order[1:], k)
+			continue
+		}
+		if e, ok := s.m[k]; ok {
+			s.bytes -= e.size
+		}
+		delete(s.m, k)
+		s.order = s.order[1:]
+	}
 }
 
 // begin registers a capture; first is true for the caller that must run it.
@@ -579,20 +682,25 @@ func (s *ReplayGuardStore) begin(chain int64, tx common.Hash) (*replayEntry, boo
 	if e, ok := s.m[k]; ok {
 		return e, false
 	}
-	e := &replayEntry{done: make(chan struct{})}
+	e := &replayEntry{key: k, done: make(chan struct{})}
 	s.m[k] = e
 	s.order = append(s.order, k)
-	for len(s.order) > s.max {
-		delete(s.m, s.order[0])
-		s.order = s.order[1:]
-	}
+	s.evict(k)
 	return e, true
 }
 
 func (s *ReplayGuardStore) put(e *replayEntry, ev *ReplayGuardEvidence, bound bool) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	e.ev, e.bound = ev, bound
-	s.mu.Unlock()
+	size := ReplayEvidenceSize(ev)
+	if s.m[e.key] == e {
+		s.bytes += size - e.size
+		e.size = size
+		s.evict(e.key)
+		return
+	}
+	e.size = size // already evicted: charged to no one
 }
 
 // Get is the evidence stored for the settlement, and whether it has been held to the proven settlement (bound). ok is
@@ -670,6 +778,9 @@ func (s *ReplayGuardStore) discard(chain int64, tx common.Hash) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	k := replayKey{chain, tx}
+	if e, ok := s.m[k]; ok {
+		s.bytes -= e.size
+	}
 	delete(s.m, k)
 	for i, o := range s.order {
 		if o == k {
@@ -694,6 +805,13 @@ func (c *ReplayGuardCapturer) Bind(s *Settlement) {
 		return // no account settlement: no S6 claim
 	}
 	go func() {
+		var e *replayEntry
+		// V-R10B note: whatever fails in here is the settlement's named state, never a crash of the observer.
+		defer func() {
+			if r := recover(); r != nil && e != nil {
+				c.store.put(e, c.settlementState(s, ReplayUnproven, ReasonStateUnavailable, fmt.Sprintf("the bind failed: %v", r)), true)
+			}
+		}()
 		ctx, cancel := context.WithTimeout(context.Background(), c.cfg.budget()+2*time.Minute)
 		defer cancel()
 		e, first := c.store.begin(c.cfg.ChainID, s.TxHash)
@@ -723,7 +841,7 @@ func (c *ReplayGuardCapturer) Bind(s *Settlement) {
 			}
 			c.cfg.logf("⚠️ [S6-REPLAY] chain %d tx %s: the captured evidence does not hold against the proven settlement: %s{reason=%s}: %s",
 				c.cfg.ChainID, s.TxHash.Hex(), st, reason, detail)
-			c.store.put(e, c.settlementState(s, st, reason, detail), true)
+			c.store.put(e, c.refusalState(s, ev, st, reason, detail), true)
 			return
 		}
 		c.store.put(e, ev, true)
@@ -745,7 +863,7 @@ func (c *ReplayGuardCapturer) Resolve(s *Settlement) *ReplayGuardEvidence {
 		if re, ok := err.(*ReplayError); ok {
 			st, reason, detail = re.State, re.Reason, re.Detail
 		}
-		return c.settlementState(s, st, reason, detail)
+		return c.refusalState(s, ev, st, reason, detail)
 	}
 	return ev
 }
@@ -760,4 +878,19 @@ func (c *ReplayGuardCapturer) settlementState(s *Settlement, state, reason, deta
 		st.Contract = *tx.To()
 	}
 	return &ReplayGuardEvidence{Version: ReplayGuardDomain, State: st}
+}
+
+// refusalState is the named state of evidence that does not hold against the proven settlement s. A refutation
+// slot_set_at_parent carries the Before that refutes, so that a reader verifies it (V-R10B note).
+func (c *ReplayGuardCapturer) refusalState(s *Settlement, ev *ReplayGuardEvidence, state, reason, detail string) *ReplayGuardEvidence {
+	out := c.settlementState(s, state, reason, detail)
+	if state == ReplayRefuted && reason == ReasonSlotSetAtParent && ev != nil {
+		switch {
+		case ev.Proof != nil && ev.Proof.Before != nil:
+			out.State.Before = ev.Proof.Before
+		case ev.State != nil && ev.State.Before != nil:
+			out.State.Before = ev.State.Before
+		}
+	}
+	return out
 }

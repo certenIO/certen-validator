@@ -311,6 +311,11 @@ func decodeReplayHeader(raw []byte, what string) (*types.Header, error) {
 	if h.Number == nil {
 		return nil, unproven(ReasonProofDoesNotVerify, "%s has no number", what)
 	}
+	// SPEC §4: a header's hash is keccak256 of its raw RLP. Only the canonical encoding is accepted, so that hash and the
+	// decoded header's hash (h.Hash(), its re-encoding) are the same (V-R10B note).
+	if enc, err := rlp.EncodeToBytes(&h); err != nil || !bytes.Equal(enc, raw) {
+		return nil, unproven(ReasonProofDoesNotVerify, "%s is not the canonical RLP encoding of the header it decodes to", what)
+	}
 	return &h, nil
 }
 
@@ -566,6 +571,62 @@ func (e *ReplayGuardEvidence) VerifyAgainst(header *types.Header, tx *types.Tran
 		return nil, unproven(ReasonBlockMismatch, "the named state is about tx %s in block %d (%s), the settlement is %s in block %d (%s)",
 			st.TxHash.Hex(), st.BlockNumber, st.BlockHash.Hex(), tx.Hash().Hex(), header.Number.Uint64(), header.Hash().Hex())
 	}
-	return &ReplayGuardCheck{State: st.State, Reason: st.Reason, ChainID: st.ChainID, Contract: st.Contract,
-		SettlementBlock: BlockRef{Number: st.BlockNumber, Hash: st.BlockHash}, Named: st}, nil
+	// The chain and the contract the state names are the settlement's (V-R10B note): the chain id when the transaction
+	// carries one, and the transaction's target. Only a state named before the capture had the transaction
+	// (receipt_unavailable), or about a contract creation, names no contract.
+	if id := tx.ChainId(); id != nil && id.Sign() > 0 && (!id.IsInt64() || id.Int64() != st.ChainID) {
+		return nil, unproven(ReasonContractMismatch, "the transaction is of chain %s, the named state of chain %d", id, st.ChainID)
+	}
+	switch to := tx.To(); {
+	case to != nil && st.Contract == *to:
+	case st.Contract == (common.Address{}) && (to == nil || st.Reason == ReasonReceiptUnavailable):
+	default:
+		return nil, unproven(ReasonContractMismatch, "the named state is about contract %s, the transaction's target is %v", st.Contract.Hex(), to)
+	}
+	chk := &ReplayGuardCheck{State: st.State, Reason: st.Reason, ChainID: st.ChainID, Contract: st.Contract,
+		SettlementBlock: BlockRef{Number: st.BlockNumber, Hash: st.BlockHash}, Named: st}
+	if st.State == ReplayRefuted && st.Reason == ReasonSlotSetAtParent {
+		line, err := st.verifyRefutation(header, tx, logs)
+		if err != nil {
+			return nil, err
+		}
+		chk.BeforeVerified = true
+		chk.Established = []string{line}
+	}
+	return chk, nil
+}
+
+// verifyRefutation verifies the Before a refutation slot_set_at_parent carries (V-R10B note: a refutation is stated only
+// with the proof that refutes): the parent header is the settlement block's parent, and the proof proves, at its state
+// root, the slot of a LeafConsumed key the contract emitted in this receipt to be 1.
+func (st *ReplayNamedState) verifyRefutation(header *types.Header, tx *types.Transaction, logs []*types.Log) (string, error) {
+	if st.Before == nil {
+		return "", unproven(ReasonProofDoesNotVerify, "the refutation %s carries no Before proof", ReasonSlotSetAtParent)
+	}
+	parent, err := decodeReplayHeader(st.Before.ParentHeader, "the refutation's parent header")
+	if err != nil {
+		return "", unproven(ReasonParentHeaderUnproven, "%v", err)
+	}
+	if parent.Hash() != header.ParentHash || parent.Number.Uint64()+1 != header.Number.Uint64() {
+		return "", unproven(ReasonParentHeaderUnproven, "the refutation's parent header is block %d (%s), the settlement block names its parent %s",
+			parent.Number.Uint64(), parent.Hash().Hex(), header.ParentHash.Hex())
+	}
+	gen, ok := SettlementCallGeneration(tx.Data())
+	layout, pinned := replayLayouts[gen]
+	if !ok || !pinned {
+		return "", unproven(ReasonAccountGeneration, "the transaction is no settlement call of a pinned generation")
+	}
+	for _, lg := range logs {
+		if lg == nil || lg.Address != st.Contract || len(lg.Topics) != 3 || lg.Topics[0] != LeafConsumedTopic {
+			continue
+		}
+		slot := ReplaySlotFor(lg.Topics[2], layout.base)
+		res, err := st.Before.Proof.verify(parent.Root, st.Contract, slot)
+		if err == nil && res.Value == common.BigToHash(big.NewInt(1)) {
+			return fmt.Sprintf("S6 refuted: %s's replay-guard slot %s (leaf %s) is already 1 in the state of block %d (%s), the settlement block's parent",
+				st.Contract.Hex(), slot.Hex(), lg.Topics[2].Hex(), parent.Number.Uint64(), parent.Hash().Hex()), nil
+		}
+	}
+	return "", unproven(ReasonProofDoesNotVerify, "the refutation's Before does not prove the slot of any LeafConsumed key of %s to be 1 at block %d",
+		st.Contract.Hex(), parent.Number.Uint64())
 }

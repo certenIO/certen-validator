@@ -23,3 +23,16 @@ recorded expectation and the verdict the current code gives.
 **SPEC.md §4 constants.** "the only pinned generation is `CertenAccountV7_3`" is superseded by `../s6replay2/SPEC.md` §2
 (the generation table). An implementation conformant to s6replay1 alone refuses a genuine V7_2 proof that Go proves; it
 must also judge every vector of s6replay2 as stated.
+
+## RB10-B7: named states held to the settlement; a refutation stated only with its verified Before
+
+`../s6replay3/SPEC.md` §3 replaces §4a step 3 ("A carried `before` is not verified here"). One vector of this set changes
+verdict. The file is not edited; the generator writes its recorded verdict (`s6replay1.Recorded`) and
+`TestS6Replay1Vectors` judges it only through the superseded list, which states both verdicts.
+
+| vector | recorded | judged now | why | superseded by (s6replay3) |
+|---|---|---|---|---|
+| `049_state_refuted_slot_set_at_parent` | `stated s6_replay_refuted{slot_set_at_parent}` | `refused s6_replay_unproven{parent_header_unproven}` | its `before` is the parent of another world (the slot-set world), not the settlement block's parent: a refutation is now stated only with its Before verified | `006_refuted_with_verified_before`, `007_refuted_without_before`, `008_refuted_with_another_parent` |
+
+No other vector or mutation of this set changes verdict (`TestS6Replay1Vectors`); `050_state_refuted_slot_unset_at_block`
+stays `stated` (the named-state form carries no After proof to verify).

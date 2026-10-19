@@ -222,9 +222,21 @@ type builder struct {
 	worlds  map[string]*replayworld.World
 }
 
+// Recorded are the verdicts this published set records for the vectors whose verdict the verifier no longer gives
+// (testdata/s6replay1/SUPERSEDED.md): the set is frozen, so regenerating it writes what it recorded, and the tests judge
+// those vectors only through their superseded list.
+var Recorded = map[string]Expect{
+	// RB10-B7: a refutation is stated only with its verified Before; this vector's Before is another world's parent.
+	"049_state_refuted_slot_set_at_parent": {Result: ResultStated, State: ethproof.ReplayRefuted, Reason: ethproof.ReasonSlotSetAtParent, Established: []string{}},
+}
+
 func (b *builder) add(name, desc string, s Settlement, evidence []byte) {
-	b.vectors = append(b.vectors, Vector{Name: fmt.Sprintf("%03d_%s", len(b.vectors)+1, name), Description: desc, Settlement: s,
-		Evidence: string(evidence), Expect: Judge(s, evidence)})
+	full := fmt.Sprintf("%03d_%s", len(b.vectors)+1, name)
+	expect, frozen := Recorded[full]
+	if !frozen {
+		expect = Judge(s, evidence)
+	}
+	b.vectors = append(b.vectors, Vector{Name: full, Description: desc, Settlement: s, Evidence: string(evidence), Expect: expect})
 }
 
 // textual applies a tree edit to evidence JSON.

@@ -27,6 +27,7 @@ const s6Dir = "testdata/s6replay1"
 var s6Replay1Superseded = map[string]struct {
 	recorded, now s6replay1.Expect
 	by            []string
+	set           string // the set holding by (default s6replay2)
 }{
 	"029_generation_v7_2_unpinned": {
 		recorded: s6replay1.Expect{Result: s6replay1.ResultRefused, State: ethproof.ReplayUnproven, Reason: ethproof.ReasonAccountGeneration, Established: []string{}},
@@ -37,6 +38,13 @@ var s6Replay1Superseded = map[string]struct {
 		recorded: s6replay1.Expect{Result: s6replay1.ResultStated, State: ethproof.ReplayUnproven, Reason: ethproof.ReasonAccountGeneration, Established: []string{}},
 		now:      s6replay1.Expect{Result: s6replay1.ResultStated, State: ethproof.ReplayUnproven, Reason: ethproof.ReasonAccountGeneration, Established: []string{}},
 		by:       []string{"001_v7_2_valid_execute", "002_v7_2_valid_batch"},
+	},
+	// RB10-B7: a refutation is stated only with its verified Before; this vector carries another world's parent.
+	"049_state_refuted_slot_set_at_parent": {
+		recorded: s6replay1.Expect{Result: s6replay1.ResultStated, State: ethproof.ReplayRefuted, Reason: ethproof.ReasonSlotSetAtParent, Established: []string{}},
+		now:      s6replay1.Expect{Result: s6replay1.ResultRefused, State: ethproof.ReplayUnproven, Reason: ethproof.ReasonParentHeaderUnproven, Established: []string{}},
+		by:       []string{"006_refuted_with_verified_before", "007_refuted_without_before", "008_refuted_with_another_parent"},
+		set:      s6Dir3,
 	},
 }
 
@@ -99,9 +107,13 @@ func TestS6Replay1Vectors(t *testing.T) {
 			if got := s6replay1.Judge(v.Settlement, []byte(v.Evidence)); !reflect.DeepEqual(got, sup.now) {
 				t.Errorf("%s (superseded): judged %+v, the superseded list states %+v now", v.Name, got, sup.now)
 			}
+			dir := s6Dir2
+			if sup.set != "" {
+				dir = sup.set
+			}
 			for _, by := range sup.by {
-				if _, err := os.Stat(filepath.Join(s6Dir2, by+".json")); err != nil {
-					t.Errorf("%s is superseded by s6replay2 %s, which is not committed: %v", v.Name, by, err)
+				if _, err := os.Stat(filepath.Join(dir, by+".json")); err != nil {
+					t.Errorf("%s is superseded by %s %s, which is not committed: %v", v.Name, dir, by, err)
 				}
 			}
 		} else if got := s6replay1.Judge(v.Settlement, []byte(v.Evidence)); !reflect.DeepEqual(got, v.Expect) {
