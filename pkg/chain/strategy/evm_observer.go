@@ -223,7 +223,7 @@ func (o *EVMObserver) ObserveTransaction(ctx context.Context, txHash common.Hash
 // A settlement that cannot be proven is refused by name; it is never observed without its proofs.
 func (o *EVMObserver) observeSettled(ctx context.Context, txHash common.Hash, deadline time.Time) (*ObservationResult, error) {
 	if o.finality == nil {
-		return nil, fmt.Errorf("chain %d: no agreeing providers to observe %s with: %v", o.chainID, txHash.Hex(), o.finalityErr)
+		return nil, fmt.Errorf("chain %d: no agreeing providers to observe %s with: %v", o.chainID, txHash.Hex(), ethrpc.RedactError(o.finalityErr))
 	}
 	// The S6 capture starts NOW, at inclusion, not when the chain finalizes: no public provider serves old state. It runs
 	// beside this observation and never delays or fails it.
@@ -232,12 +232,12 @@ func (o *EVMObserver) observeSettled(ctx context.Context, txHash common.Hash, de
 	}
 	receipt, err := ethrpc.SettledInFinalizedChain(ctx, o.finality, txHash, deadline, o.pollingInterval, log.Printf)
 	if err != nil {
-		return nil, fmt.Errorf("observe %s in the finalized chain %d: %w", txHash.Hex(), o.chainID, err)
+		return nil, fmt.Errorf("observe %s in the finalized chain %d: %w", txHash.Hex(), o.chainID, ethrpc.RedactError(err))
 	}
 	// By HASH, from the agreeing providers: a read by height could be answered by a backend on another fork.
 	header, err := o.finality.HeaderByHash(ctx, receipt.BlockHash)
 	if err != nil {
-		return nil, fmt.Errorf("read the finalized header %s on chain %d: %w", receipt.BlockHash.Hex(), o.chainID, err)
+		return nil, fmt.Errorf("read the finalized header %s on chain %d: %w", receipt.BlockHash.Hex(), o.chainID, ethrpc.RedactError(err))
 	}
 	if header.Hash() != receipt.BlockHash {
 		return nil, fmt.Errorf("the finalized header at %d on chain %d is %s, the receipt names %s", receipt.BlockNumber.Uint64(),

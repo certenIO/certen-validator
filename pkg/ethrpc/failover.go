@@ -91,11 +91,12 @@ func NewPool(urls []string, cooldown time.Duration, logger *log.Logger) (*Pool, 
 	var dialed int
 	for _, u := range urls {
 		e := &endpoint{url: u}
+		RegisterProviderURL(u) // its key is a secret literal from here on (RB10-B14a)
 		c, err := ethclient.Dial(u)
 		if err != nil {
 			e.coolUntil = time.Now().Add(cooldown)
-			e.lastReason = err.Error()
-			logger.Printf("⚠️ endpoint %s failed to dial, starting in cooldown: %v", redact(u), err)
+			e.lastReason = RedactText(err.Error())
+			logger.Printf("⚠️ endpoint %s failed to dial, starting in cooldown: %v", redact(u), RedactError(err))
 		} else {
 			e.client = c
 			dialed++
@@ -153,12 +154,12 @@ func (p *Pool) Do(ctx context.Context, fn func(*ethclient.Client) error) error {
 		}
 		lastErr = err
 		if !ShouldFailover(err) {
-			return err
+			return RedactError(err)
 		}
 		p.markFailure(e, err)
 		p.logger.Printf("↪️ %s unusable (%s), trying next provider", redact(e.url), summarize(err))
 	}
-	return fmt.Errorf("ethrpc: all %d endpoints failed, last error: %w", len(candidates), lastErr)
+	return fmt.Errorf("ethrpc: all %d endpoints failed, last error: %w", len(candidates), RedactError(lastErr))
 }
 
 // candidates returns dialed endpoints in cost order: those out of cooldown first, then those still
@@ -193,7 +194,7 @@ func (p *Pool) markFailure(e *endpoint, err error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	e.failures++
-	e.lastReason = err.Error()
+	e.lastReason = RedactText(err.Error())
 	// Back off further the more consecutively an endpoint fails, capped so a recovered provider is
 	// still retried within a few minutes.
 	mult := time.Duration(e.failures)
@@ -281,27 +282,14 @@ func ShouldFailover(err error) bool {
 var ErrEndpointLacksHistory = errors.New("endpoint does not hold the requested history")
 
 // redact removes the API key from a provider URL before logging. Alchemy and Infura carry the key
-// in the path, so a bare URL in a log line is a leaked credential.
+// in the path, so a bare URL in a log line is a leaked credential. It is RedactText (RB10-B14a): the URL becomes
+// scheme://host/<redacted>, a URL with nothing after its host is kept, and any registered secret literal goes too.
 func redact(u string) string {
-	i := strings.Index(u, "://")
-	if i < 0 {
-		return u
-	}
-	rest := u[i+3:]
-	slash := strings.Index(rest, "/")
-	if slash < 0 {
-		return u
-	}
-	host := rest[:slash]
-	path := rest[slash:]
-	if len(strings.Trim(path, "/")) == 0 {
-		return u
-	}
-	return u[:i+3] + host + "/<redacted>"
+	return RedactText(u)
 }
 
 func summarize(err error) string {
-	s := err.Error()
+	s := RedactText(err.Error()) // redacted before it is cut: a cut inside a URL would leave part of its key
 	if len(s) > 90 {
 		return s[:90] + "…"
 	}

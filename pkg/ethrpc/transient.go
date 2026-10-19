@@ -118,7 +118,7 @@ func (e *TransientError) Error() string {
 	if e.Stopped != nil {
 		stop = fmt.Sprintf("; stopped by %v", e.Stopped)
 	}
-	return fmt.Sprintf("%v (provider %s, %d attempts over %s%s)", e.Err, e.Host, e.Attempts, e.Elapsed.Round(time.Millisecond), stop)
+	return RedactText(fmt.Sprintf("%v (provider %s, %d attempts over %s%s)", e.Err, e.Host, e.Attempts, e.Elapsed.Round(time.Millisecond), stop))
 }
 
 func (e *TransientError) Unwrap() []error {
@@ -196,6 +196,7 @@ func parseRetryAfter(v string, now time.Time) (time.Duration, bool) {
 // websocket endpoint dials eagerly) is retried like a query.
 func dialProvider(ctx context.Context, host, rawurl string, timeout, budget time.Duration) (*ethclient.Client, *retryAfterHint, error) {
 	hint := &retryAfterHint{}
+	RegisterProviderURL(rawurl) // its key is a secret literal from here on (RB10-B14a)
 	httpClient := &http.Client{Transport: &retryAfterTransport{base: http.DefaultTransport, hint: hint}}
 	c, err := retryTransient(ctx, host, hint, budget, timeout, func(c context.Context) (*rpc.Client, error) {
 		return rpc.DialOptions(c, rawurl, rpc.WithHTTPClient(httpClient))

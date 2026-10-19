@@ -58,6 +58,7 @@ func DialRetrying(ctx context.Context, rawurl string) (*ethclient.Client, error)
 // DialRPCRetrying is DialRetrying for callers that also make raw calls (eth_getProof).
 func DialRPCRetrying(ctx context.Context, rawurl string) (*rpc.Client, error) {
 	host := providerHost(rawurl)
+	RegisterProviderURL(rawurl) // its key is a secret literal from here on (RB10-B14a)
 	hint := &retryAfterHint{}
 	httpClient := &http.Client{Transport: &retryingTransport{base: http.DefaultTransport, host: host, hint: hint}}
 	// Dialling HTTP makes no request; a websocket endpoint connects here, and a transient failure to connect is retried.

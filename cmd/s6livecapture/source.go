@@ -21,6 +21,7 @@ import (
 	"github.com/ethereum/go-ethereum/rpc"
 
 	"github.com/certen/independant-validator/pkg/ethproof"
+	"github.com/certen/independant-validator/pkg/ethrpc"
 )
 
 // minAgreeing is how many providers must answer, all alike, before a fact (receipt, header, block body) is taken: the
@@ -64,6 +65,7 @@ func hostOf(raw string) string {
 func newSource(ctx context.Context, chainID int64, provs []Provider, transports func(host string) http.RoundTripper) (*source, error) {
 	s := &source{chainID: chainID}
 	for _, p := range provs {
+		ethrpc.RegisterProviderURL(p.URL) // the key a URL carries is a secret literal from here on (RB10-B14a)
 		c, err := rpc.DialOptions(ctx, p.URL, rpc.WithHTTPClient(&http.Client{Transport: transports(p.Host), Timeout: 40 * time.Second}))
 		if err != nil {
 			return nil, fmt.Errorf("dial %s: %s", p.Host, ethproof.BoundProviderText(err.Error()))

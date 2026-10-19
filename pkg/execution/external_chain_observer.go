@@ -94,9 +94,10 @@ func NewExternalChainObserver(config *ExternalChainObserverConfig) (*ExternalCha
 
 	// Dial the raw RPC client so we can derive both the high-level ethclient and the
 	// gethclient (RB-5: gethclient exposes eth_getProof for storage-slot state proofs).
+	ethrpc.RegisterProviderURL(config.EthereumRPC) // its key is a secret literal from here on (RB10-B14a)
 	rpcClient, err := ethrpc.DialRPCRetrying(context.Background(), config.EthereumRPC)
 	if err != nil {
-		return nil, fmt.Errorf("connect to ethereum: %w", err)
+		return nil, fmt.Errorf("connect to ethereum: %w", ethrpc.RedactError(err))
 	}
 	client := ethclient.NewClient(rpcClient)
 
@@ -193,7 +194,7 @@ func (o *ExternalChainObserver) ObserveTransaction(
 	// The transaction itself: read from one provider, and accepted only as the transaction with this hash.
 	tx, _, err := o.ethClient.TransactionByHash(ctx, txHash)
 	if err != nil {
-		return nil, fmt.Errorf("get transaction: %w", err)
+		return nil, fmt.Errorf("get transaction: %w", ethrpc.RedactError(err))
 	}
 	if tx == nil || tx.Hash() != txHash {
 		return nil, fmt.Errorf("the provider's transaction for %s is not that transaction", txHash.Hex())
@@ -202,7 +203,7 @@ func (o *ExternalChainObserver) ObserveTransaction(
 	// Compute current confirmations
 	currentBlock, err := o.ethClient.BlockNumber(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("get current block: %w", err)
+		return nil, fmt.Errorf("get current block: %w", ethrpc.RedactError(err))
 	}
 	confirmations := int(currentBlock - receipt.BlockNumber.Uint64())
 
@@ -213,6 +214,7 @@ func (o *ExternalChainObserver) ObserveTransaction(
 	// checked against the header's roots and verified before they are kept. A block whose proofs cannot be built keeps
 	// none, and says why: every caller that needs them refuses by that reason.
 	if settlement, err := o.inclusionProofs(ctx, receipt, deadline); err != nil {
+		err = ethrpc.RedactError(err)
 		o.log("⚠️ [OBSERVER] No inclusion proofs for %s on chain %d: %v", txHash.Hex(), o.chainID, err)
 		result.inclusionErr = err
 	} else {
@@ -235,11 +237,11 @@ func (o *ExternalChainObserver) ObserveTransaction(
 // that block cannot be served in its name.
 func (o *ExternalChainObserver) agreedHeader(ctx context.Context, receipt *types.Receipt) (*types.Header, error) {
 	if o.finality == nil {
-		return nil, fmt.Errorf("chain %d: no agreeing providers to read block %s with: %v", o.chainID, receipt.BlockHash.Hex(), o.finalityErr)
+		return nil, fmt.Errorf("chain %d: no agreeing providers to read block %s with: %v", o.chainID, receipt.BlockHash.Hex(), ethrpc.RedactError(o.finalityErr))
 	}
 	header, err := o.finality.HeaderByHash(ctx, receipt.BlockHash)
 	if err != nil {
-		return nil, fmt.Errorf("get block header: %w", err)
+		return nil, fmt.Errorf("get block header: %w", ethrpc.RedactError(err))
 	}
 	if header.Hash() != receipt.BlockHash {
 		return nil, fmt.Errorf("header binding failed: header.Hash()=%s != receipt.BlockHash=%s (untrusted RPC header)",
@@ -286,7 +288,7 @@ func (o *ExternalChainObserver) waitForReceipt(
 				continue // Transaction not yet mined
 			}
 			if err != nil {
-				o.log("⚠️ [OBSERVER] Error getting receipt: %v", err)
+				o.log("⚠️ [OBSERVER] Error getting receipt: %v", ethrpc.RedactError(err))
 				continue
 			}
 
@@ -299,7 +301,7 @@ func (o *ExternalChainObserver) waitForReceipt(
 // the one rule this observer and the chain strategy's observer share (RB5-F49).
 func (o *ExternalChainObserver) settledInFinalizedChain(ctx context.Context, txHash common.Hash, deadline time.Time) (*types.Receipt, error) {
 	if o.finality == nil {
-		return nil, fmt.Errorf("chain %d: no agreeing providers to observe %s with: %v", o.chainID, txHash.Hex(), o.finalityErr)
+		return nil, fmt.Errorf("chain %d: no agreeing providers to observe %s with: %v", o.chainID, txHash.Hex(), ethrpc.RedactError(o.finalityErr))
 	}
 	return ethrpc.SettledInFinalizedChain(ctx, o.finality, txHash, deadline, o.pollingInterval, o.log)
 }
@@ -394,7 +396,8 @@ func (o *ExternalChainObserver) fetchStateProofs(ctx context.Context, blockNumbe
 
 func (o *ExternalChainObserver) log(format string, args ...interface{}) {
 	if o.logger != nil {
-		o.logger.Printf(format, args...)
+		// A provider's error text carries no credential into a log (RB10-B14a): the line is redacted as a whole.
+		o.logger.Printf("%s", ethrpc.RedactText(fmt.Sprintf(format, args...)))
 	}
 }
 
