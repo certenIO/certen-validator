@@ -1,0 +1,2 @@
+# The S6 conformance files are hashed in manifest.json and MANIFEST: their bytes are the contract, never converted.
+* -text

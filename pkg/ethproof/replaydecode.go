@@ -17,7 +17,7 @@ import (
 //
 // DecodeReplayGuardEvidence is the one entry point a verifier reads evidence bytes through. It is strict, so that the Go
 // and TypeScript verifiers (testdata/s6replay1/SPEC.md) accept exactly the same byte strings: a document is refused,
-// with a named reason, unless it is one JSON value with no duplicate key, every object holds only the keys of its
+// with a named reason, unless it is at most MaxReplayEvidenceBytes long, one JSON value with no duplicate key, every object holds only the keys of its
 // schema and every required one, every value has its schema's type and lexical form, exactly one of proof and state is
 // carried, and every version is ReplayGuardDomain. Each refusal is s6_replay_unproven{reason}.
 
@@ -27,7 +27,15 @@ const (
 	ReasonUnknownField  = "unknown_field"
 	ReasonMissingField  = "missing_field"
 	ReasonWrongType     = "wrong_type"
+	// ReasonEvidenceTooLarge: the document is longer than MaxReplayEvidenceBytes. It is refused before anything is read, so
+	// it is never malformed_json, however the document is made.
+	ReasonEvidenceTooLarge = "evidence_too_large"
 )
+
+// MaxReplayEvidenceBytes is the largest evidence document, in bytes, that DecodeReplayGuardEvidence reads (4 MiB). Honest
+// evidence is far smaller (at most 512 headers of about 1.2 KB of hex, and the proofs: under 1 MiB). The reader has no
+// depth limit, so its memory is bounded only by its input, which is therefore bounded here, before anything is parsed.
+const MaxReplayEvidenceBytes = 4 << 20
 
 // MaxReplayJSONInteger is the largest integer the wire format carries (2^53-1): every JSON number is exact in both
 // verifiers.
@@ -94,67 +102,89 @@ type jsonValue struct {
 	str  string // the string, or the number's literal text
 }
 
+// parseJSONValue reads one JSON value with an explicit stack of the containers that are open, never by recursion: the
+// recursion this replaced was bounded by Go's goroutine stack, whose overflow is a fatal runtime error, so a hostile
+// document of a few million nested arrays (a 12 MB file) could kill the process of any verifier reading it. The reading
+// is otherwise the recursive reader's, step for step: the same json.Decoder calls in the same order (so a syntax error
+// carries the same text), an object's key is checked for a duplicate when it is read, before its value, and keys and
+// values are kept in document order. A pending object key is the last element of its object's keys, its value being
+// stored when the value is complete.
 func parseJSONValue(dec *json.Decoder) (*jsonValue, error) {
-	tok, err := dec.Token()
-	if err != nil {
-		return nil, err
-	}
-	switch t := tok.(type) {
-	case json.Delim:
-		switch t {
-		case '{':
-			v := &jsonValue{kind: 'o', vals: map[string]*jsonValue{}}
-			for dec.More() {
-				kt, err := dec.Token()
-				if err != nil {
-					return nil, err
+	var open []*jsonValue // the containers opened and not yet closed, outermost first
+	for {
+		// the first token of a value: a scalar is a complete value, a delimiter opens a container
+		var done *jsonValue
+		tok, err := dec.Token()
+		if err != nil {
+			return nil, err
+		}
+		switch t := tok.(type) {
+		case json.Delim:
+			switch t {
+			case '{':
+				open = append(open, &jsonValue{kind: 'o', vals: map[string]*jsonValue{}})
+			case '[':
+				open = append(open, &jsonValue{kind: 'a', arr: []*jsonValue{}})
+			default:
+				return nil, fmt.Errorf("unexpected %v", t)
+			}
+		case string:
+			done = &jsonValue{kind: 's', str: t}
+		case json.Number:
+			done = &jsonValue{kind: 'n', str: t.String()}
+		case bool:
+			if t {
+				done = &jsonValue{kind: 'b', str: "true"}
+			} else {
+				done = &jsonValue{kind: 'b', str: "false"}
+			}
+		case nil:
+			done = &jsonValue{kind: 'z'}
+		default:
+			return nil, fmt.Errorf("unexpected token %v", tok)
+		}
+		// advance: hand a complete value to the container it sits in, then either read that container's next element
+		// (back to the outer loop for its first token) or close it, which completes it in turn
+		for {
+			if done != nil {
+				if len(open) == 0 {
+					return done, nil
 				}
-				k, ok := kt.(string)
-				if !ok {
-					return nil, fmt.Errorf("object key is not a string")
+				top := open[len(open)-1]
+				if top.kind == 'o' {
+					top.vals[top.keys[len(top.keys)-1]] = done
+				} else {
+					top.arr = append(top.arr, done)
 				}
-				if _, dup := v.vals[k]; dup {
-					return nil, fmt.Errorf("duplicate key %q", k)
+				done = nil
+			}
+			top := open[len(open)-1]
+			if dec.More() {
+				if top.kind == 'o' {
+					kt, err := dec.Token()
+					if err != nil {
+						return nil, err
+					}
+					k, ok := kt.(string)
+					if !ok {
+						return nil, fmt.Errorf("object key is not a string")
+					}
+					if _, dup := top.vals[k]; dup {
+						return nil, fmt.Errorf("duplicate key %q", k)
+					}
+					top.keys = append(top.keys, k)
+					top.vals[k] = nil // the value is stored when it is complete
 				}
-				child, err := parseJSONValue(dec)
-				if err != nil {
-					return nil, err
-				}
-				v.keys = append(v.keys, k)
-				v.vals[k] = child
+				break
 			}
 			if _, err := dec.Token(); err != nil {
 				return nil, err
 			}
-			return v, nil
-		case '[':
-			v := &jsonValue{kind: 'a', arr: []*jsonValue{}}
-			for dec.More() {
-				child, err := parseJSONValue(dec)
-				if err != nil {
-					return nil, err
-				}
-				v.arr = append(v.arr, child)
-			}
-			if _, err := dec.Token(); err != nil {
-				return nil, err
-			}
-			return v, nil
+			open[len(open)-1] = nil
+			open = open[:len(open)-1]
+			done = top
 		}
-		return nil, fmt.Errorf("unexpected %v", t)
-	case string:
-		return &jsonValue{kind: 's', str: t}, nil
-	case json.Number:
-		return &jsonValue{kind: 'n', str: t.String()}, nil
-	case bool:
-		if t {
-			return &jsonValue{kind: 'b', str: "true"}, nil
-		}
-		return &jsonValue{kind: 'b', str: "false"}, nil
-	case nil:
-		return &jsonValue{kind: 'z'}, nil
 	}
-	return nil, fmt.Errorf("unexpected token %v", tok)
 }
 
 func parseStrictJSON(raw []byte) (*jsonValue, error) {
@@ -262,11 +292,22 @@ func checkWireObject(path string, v *jsonValue, schema []wireField) error {
 
 // DecodeReplayGuardEvidence decodes S6 evidence strictly (see the top of this file and testdata/s6replay1/SPEC.md):
 //
+//  0. at most MaxReplayEvidenceBytes long - else evidence_too_large, before anything is read (testdata/s6replay5/SPEC.md);
 //  1. one JSON value, no duplicate key, nothing after it - else malformed_json;
 //  2. the schema, depth first in schema order - unknown_field, missing_field, wrong_type;
 //  3. exactly one of proof and state - else no_evidence_or_state;
 //  4. the evidence's version, then the proof's, is ReplayGuardDomain - else unknown_version.
 func DecodeReplayGuardEvidence(raw []byte) (*ReplayGuardEvidence, error) {
+	if len(raw) > MaxReplayEvidenceBytes {
+		return nil, unproven(ReasonEvidenceTooLarge, "the evidence is %d bytes, more than the %d bytes the format allows", len(raw), MaxReplayEvidenceBytes)
+	}
+	return decodeReplayEvidence(raw)
+}
+
+// decodeReplayEvidence is steps 1-4 of DecodeReplayGuardEvidence, for a document within the size bound. Its reader has no
+// depth limit and no recursion, so a document of any depth that fits in memory is read (RB10-B12); the tests call it
+// directly to hold the reader itself to that, independent of the size bound.
+func decodeReplayEvidence(raw []byte) (*ReplayGuardEvidence, error) {
 	doc, err := parseStrictJSON(raw)
 	if err != nil {
 		return nil, unproven(ReasonMalformedJSON, "%v", err)
