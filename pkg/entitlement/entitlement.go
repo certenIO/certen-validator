@@ -437,7 +437,8 @@ const (
 	ReasonNotEntitled    = "NOT_ENTITLED"
 	ReasonCeiling        = "INTENT_CEILING_EXCEEDED"
 	// ReasonUnpriced is a ceiling that touches a chain the epoch publishes no cost basis for (execution rules v14,
-	// RB4-F6): the bound cannot be computed, so the ceiling cannot be shown to hold, and the block is refused rather
+	// RB4-F6), or, from execution rules v15, one whose basis is not a bound - zero where the block multiplies it
+	// (PV2-F3): the bound cannot be computed, so the ceiling cannot be shown to hold, and the block is refused rather
 	// than admitted unbounded.
 	ReasonUnpriced = "ENTITLEMENT_UNPRICED"
 	// ReasonCostBasisInvalid is a published cost basis no bound can be computed from: negative, or overflowing int64

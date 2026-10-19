@@ -85,8 +85,11 @@ On each anchor: `setAuthorizedPubkeyCommitments(new29, true)`. The old keys keep
 
    While the file exists a validator queues and starts no intent (intents written directly to Accumulate
    included - the pause is at discovery, not at the gateway); intents already running finish; nothing is
-   lost, discovery resumes at the first block it had not processed. The path is `INTENT_INTAKE_PAUSE_FILE`
-   (default `data/intake.paused`).
+   lost, discovery resumes at the first block it had not processed. An intent handed to the intent workers and
+   not started by any is queued, not in progress: `discovery_intents_in_progress` counts only intents a worker is
+   running, and `discovery_intents_queued` counts the hand-offs a paused intake is holding back (kept in the retry
+   journal, started when the file is removed), so zero in progress means nothing is running even while some are
+   queued. The path is `INTENT_INTAKE_PAUSE_FILE` (default `data/intake.paused`).
 2. **Re-register** on each anchor: for each validator address `removeValidator(addr)` then
    `registerValidator(addr, 100, newPubkey)`. Verify: `currentValidatorSetRoot()` unchanged,
    `validators(addr).blsPublicKey` equals the new key for all 7, `pubkeyBindingEnforced()` true.

@@ -482,6 +482,8 @@ func startRehearsalNetworkWith(t *testing.T, f *rotationFixture, size int, rpc b
 		}
 		cfg.TxIndex.Indexer = "null"
 		cfg.Instrumentation.Prometheus = false
+		// The production limits (comet_tx_limits.go), so a test network carries what production carries.
+		applyCometTxLimits(cfg)
 		if err := genesis.SaveAs(cfg.GenesisFile()); err != nil {
 			t.Fatal(err)
 		}

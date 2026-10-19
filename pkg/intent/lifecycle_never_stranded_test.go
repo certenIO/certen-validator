@@ -121,15 +121,18 @@ func TestADeclinedIntentIsRecordedFailed(t *testing.T) {
 	const intentID = "declined-in-block"
 	store := screenStore(t, []entitlement.Leaf{activeLeaf("acc://other.acme/data")}, time.Now().Add(time.Hour))
 	failures := &failureLog{}
-	id := retryDiscovery(&blockClient{txs: []*accumulate.CertenTransaction{blockTx("aa01", intentID, 41)}}, nil, failures, 0)
+	id := retryDiscovery(&blockClient{txs: []*accumulate.CertenTransaction{blockTx("aa01", intentID, 41)}},
+		openJournal(t, filepath.Join(t.TempDir(), "r.json")), failures, 0)
 	id.SetEntitlementScreen(store, func() bool { return true })
+	startIntentWorkers(t, id, 1) // the block job hands the intent to an intent worker (RB8-H)
 
 	if err := id.processBlock(&BlockProcessJob{BlockHeight: 41}, "test"); err != nil {
 		t.Fatalf("processBlock: %v", err)
 	}
-	if s, ok := failures.status(intentID); !ok || s != database.IntentLifecycleFailed {
-		t.Fatalf("the declined intent's lifecycle was not recorded failed (written: %v %q)", ok, s)
-	}
+	waitUntil(t, "the declined intent's lifecycle was recorded failed", 5*time.Second, func() bool {
+		s, ok := failures.status(intentID)
+		return ok && s == database.IntentLifecycleFailed
+	})
 }
 
 // A retry is kept from the moment it is queued, survives the process, is resumed with the intent rebuilt from its

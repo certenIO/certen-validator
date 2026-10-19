@@ -82,6 +82,11 @@ type MemberOutcome struct {
 	// Refusal is the named cause of a refusal before any chain transaction (RB6-F10). Set, the member has no
 	// settlement and the intent fails with failure_class refused.
 	Refusal string
+	// NotStarted says the report is that the member's proof cycle could not START (a start failure). Such a report is only the
+	// absence of a cycle, so it never replaces a member that is already beyond start: executed on its chain (settled or
+	// reverted), written back, proof pending or unavailable, refused, or recorded as a non-settlement (settlement none, even
+	// when its attestation failed) (ErrMemberBeyondStart).
+	NotStarted bool
 }
 
 // RecordedMemberOutcome is a member's outcome as recorded.
@@ -117,6 +122,10 @@ func (r *IntentLifecycleRepository) MemberOutcomeOf(ctx context.Context, intentI
 
 // ErrMemberOutcomeInvalid is a report that cannot be recorded as given.
 var ErrMemberOutcomeInvalid = errors.New("invalid member outcome")
+
+// ErrMemberBeyondStart is a start-failure report for a member whose recorded outcome is beyond start. It is not recorded and
+// not owed: nothing it could say is true of the member (its action ran, or its refusal stands), so a queue would only repeat it (a copy already queued is ended, not deferred, by the outbox reconciler).
+var ErrMemberBeyondStart = errors.New("member outcome is beyond start")
 
 func (o *MemberOutcome) validate() error {
 	switch {
@@ -239,6 +248,11 @@ func (r *IntentLifecycleRepository) RecordMemberOutcome(ctx context.Context, o M
 		return derived, err
 	}
 	next := memberRowOf(o)
+	if o.NotStarted && prior != nil && (prior.Settlement == string(MemberSettlementSettled) || prior.Settlement == string(MemberSettlementReverted) ||
+		prior.Settlement == string(MemberSettlementNone) || prior.ProofCycle != string(MemberProofCycleFailed)) {
+		return derived, fmt.Errorf("%w: intent %s member %d is recorded %s / %s (cycle %s); a report that cycle %s could not start does not replace it",
+			ErrMemberBeyondStart, o.IntentID, o.ChainID, prior.Settlement, prior.ProofCycle, prior.CycleID, o.CycleID)
+	}
 	if prior != nil && prior.ProofCycle == string(MemberProofCycleWritten) && o.ProofCycle != MemberProofCycleWritten {
 		return derived, fmt.Errorf("%w: intent %s member %d was written back by cycle %s (%s); a later report that it was not (cycle %s) is stale",
 			ErrMemberOutcomeInvalid, o.IntentID, o.ChainID, prior.CycleID, prior.WriteBackTx, o.CycleID)

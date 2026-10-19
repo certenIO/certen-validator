@@ -249,6 +249,11 @@ const (
 	//     with the strengthened binding (intentcert.BindProofV21) and govRoot v4. Until H, the v15 binary decides every block
 	//     exactly as v14 did, and a certificate that carries 2.1 is refused by name (ErrIntentProofV21NotInForce) with the
 	//     result code v14 returned for it (10): a refusal of the same code, so the block's results hash is v14's.
+	//   - From the same height the binding ceiling reads a published cost basis differently (PV2-F3, EntitlementConfig.
+	//     RequireBoundingBasis): a basis of zero where the block multiplies it (the base, or the per-leg figure of a chain with
+	//     several legs) is no bound - it sums to nothing and passes every ceiling - so the chain is unpriced and the block is
+	//     refused ENTITLEMENT_UNPRICED, as for a chain the epoch does not list. Until H, v14's reading stands: a listed zero is a
+	//     price. Both readings are exported (WorstCaseCostMicroUSD, WorstCaseCostMicroUSDBounded).
 	//
 	// v15 CONTINUES v7..v14 state without a reset: the kind is new, so no committed history contains it, and that is
 	// checked, not assumed - IndexCommittedHistory refuses to start on any committed activation-kind transaction that v15

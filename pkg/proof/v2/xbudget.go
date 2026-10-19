@@ -2,8 +2,9 @@
 //
 // The evidence budget (docs/proof/G1_CROSS_PARTITION.md D6 g1_closure_exceeds_budget; RB9 Phase C1b-2; RB9-F5 package F5-4, V-E A4).
 //
-// Evidence travels inside the intent certificate, which is ONE transaction of CERTEN's consensus (CometBFT v0.38.21). pkg/consensus sets no
-// size limit of its own, so the engine's defaults bind: the mempool refuses a transaction over max_tx_bytes = 1 MiB
+// Evidence travels inside the intent certificate, which is ONE transaction of CERTEN's consensus (CometBFT v0.38.21). pkg/consensus raises the node-local RPC
+// body limit so that a transaction of the mempool's size passes the RPC, and judges every transaction against the whole path
+// (comet_tx_limits.go, C5-D1); it sets no mempool or block limit of its own, so the chain's own limits bind: the mempool refuses a transaction over max_tx_bytes = 1 MiB
 // (cometbft/config/config.go:799, "MaxTxBytes: 1024 * 1024"), and a block holds at most 21 MiB (cometbft/types/params.go:99,
 // "MaxBytes: 22020096"). One transaction is the tighter bound. Since the RPC body limit was raised (C5-D1, pkg/consensus/comet_tx_limits.go,
 // all 7 validators) the whole path accepts exactly ConsensusTxLimit.

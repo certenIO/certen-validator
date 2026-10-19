@@ -110,6 +110,9 @@ type MemberOutcomeReconciler struct {
 // MemberOutcomeReconcileReport is what one pass did.
 type MemberOutcomeReconcileReport struct {
 	Pending, Recorded, Quarantined, Deferred, Remaining int
+	// Ended counts entries removed because they can no longer be recorded or owed: a start failure for a member that has since
+	// moved beyond start (database.ErrMemberBeyondStart).
+	Ended int
 }
 
 // Start runs passes until ctx ends.
@@ -140,8 +143,8 @@ func (r *MemberOutcomeReconciler) passAndLog(ctx context.Context) {
 		return
 	}
 	if rep.Pending > 0 {
-		r.Logf("[MEMBER-OUTCOME] outbox pass: pending=%d recorded=%d quarantined=%d deferred=%d remaining=%d",
-			rep.Pending, rep.Recorded, rep.Quarantined, rep.Deferred, rep.Remaining)
+		r.Logf("[MEMBER-OUTCOME] outbox pass: pending=%d recorded=%d ended=%d quarantined=%d deferred=%d remaining=%d",
+			rep.Pending, rep.Recorded, rep.Ended, rep.Quarantined, rep.Deferred, rep.Remaining)
 	}
 }
 
@@ -176,6 +179,15 @@ func (r *MemberOutcomeReconciler) RunOnce(ctx context.Context) (*MemberOutcomeRe
 			if derived.Terminal {
 				r.Logf("[LIFECYCLE] intent %s is %s: %s (outcome recorded from the outbox)", e.Outcome.IntentID, derived.Status, derived.Summary)
 			}
+		case errors.Is(err, database.ErrMemberBeyondStart):
+			// A start-failure report that was queued while its first record failed, replayed after the member moved beyond start:
+			// not recorded and not owed (the member's own outcome stands), so the entry ends here rather than being counted
+			// Deferred on every pass for the life of the outbox.
+			if rmErr := r.Outbox.Remove(e.ID); rmErr != nil {
+				return nil, rmErr
+			}
+			r.Logf("[MEMBER-OUTCOME] ended without recording: intent %s member %d - %v", e.Outcome.IntentID, e.Outcome.ChainID, err)
+			rep.Ended++
 		case errors.Is(err, database.ErrMemberOutcomeInvalid):
 			reason := fmt.Sprintf("the lifecycle store refused intent %s member %d: %v", e.Outcome.IntentID, e.Outcome.ChainID, err)
 			if qErr := r.Outbox.Quarantine(e.ID, reason); qErr != nil {
