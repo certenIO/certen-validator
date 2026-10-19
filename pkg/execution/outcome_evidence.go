@@ -47,7 +47,7 @@ import (
 //
 // What offline verification CANNOT establish, and says so: that the blocks are canonical and final on their chain (the
 // headers hash to the stated hashes; whether the chain holds them is the online check, --online-rpc); that a LeafConsumed
-// log's emitter is the member's CertenAccountV7_2 (its code is not part of the evidence); that the stated validator BLS
+// log's emitter runs the member's account generation (its code is not part of the evidence); that the stated validator BLS
 // keys are the ones the anchor registered (the set root commits addresses and powers, not keys - the online check reads
 // the registry); that a member not settled stayed unconsumed through its claim block (a LeafConsumed log's absence is
 // not provable from one block; it is the quorum's certified statement) and that its deadline is the one the user signed.
@@ -982,9 +982,22 @@ func (m OutcomeMemberEvidence) verifyExecuted(chainID int64, a *anchorFacts, lea
 	chk.proved("member: %d committed event(s) checked among the proven receipt's logs and %d committed slot(s) proven at the block's "+
 		"state root; %d absent, %d not holding - consistent with status %d and effects hash 0x%x", nEvents, nSlots, len(missing),
 		len(unset), leaf.Status, leaf.EffectsHash[:8])
-	chk.unproven("that the LeafConsumed log's emitter %s runs CertenAccountV7_2 code (an account consumes a leaf only by "+
-		"executing exactly the calls it recomputes into it)", account.Hex())
+	chk.unproven("that the LeafConsumed log's emitter %s runs %s code (an account consumes a leaf only by "+
+		"executing exactly the calls it recomputes into it)", account.Hex(), m.accountGeneration())
 	return m.verifyReplayGuard(hdr, settlementTx, rcpt, chk)
+}
+
+// accountGeneration is the account generation the member's leaf version names (RB10-F2): absent or v3 is
+// CertenAccountV7_2, v4 is CertenAccountV7_3 (whose replay guard is _consumedLeaf). The notes name it, never a fixed one.
+func (m OutcomeMemberEvidence) accountGeneration() string {
+	if m.LeafVersion == "" {
+		return AccountLeafV3.AccountGeneration()
+	}
+	v, err := ParseAccountLeafVersion(string(m.LeafVersion))
+	if err != nil {
+		return fmt.Sprintf("an unknown account generation (leaf version %q)", m.LeafVersion)
+	}
+	return v.AccountGeneration()
 }
 
 // verifyReplayGuard holds the S6 evidence to the settlement just proven (RB10). Evidence that is carried and does not
@@ -1031,7 +1044,7 @@ func (m OutcomeMemberEvidence) verifyConsumedElsewhere(a *anchorFacts, leaf Outc
 	chk.ConsumedUnder = lg.Topics[1]
 	chk.proved("member: the leaf was consumed under another anchor, 0x%x, by %s, its receipt proven into block %d (header hashes "+
 		"to 0x%x)", lg.Topics[1][:8], common.Hash(leaf.Tx).Hex(), leaf.BlockNumber, leaf.BlockHash[:8])
-	chk.unproven("that the LeafConsumed log's emitter %s runs CertenAccountV7_2 code", account.Hex())
+	chk.unproven("that the LeafConsumed log's emitter %s runs %s code", account.Hex(), m.accountGeneration())
 	return nil
 }
 
@@ -1127,4 +1140,43 @@ func verifyOutcomeAggregate(signersKey *bls.PublicKey, sigHex, keyHex string, ms
 		return evidenceFail("the BLS aggregate signature does not verify under the signers' aggregate key over the outcome message")
 	}
 	return nil
+}
+
+// replayGuardRank is how much a member's S6 replay-guard evidence establishes against the settlement the evidence proves
+// (RB10-F1): what decides between two validators' evidence of one outcome, which may differ only there.
+type replayGuardRank string
+
+const (
+	replayGuardAbsent  replayGuardRank = "no replay guard"
+	replayGuardInvalid replayGuardRank = "a replay guard that does not verify"
+	replayGuardNamed   replayGuardRank = "a named state"
+	replayGuardProven  replayGuardRank = "proven"
+)
+
+// replayGuardStanding verifies the member's replay-guard evidence against its proven settlement and ranks it.
+func (ev OutcomeEvidence) replayGuardStanding() replayGuardRank {
+	m := ev.Member
+	if m.ReplayGuard == nil {
+		return replayGuardAbsent
+	}
+	bundle, err := evHash(ev.Anchor.BundleID, "anchor.bundleId")
+	if err != nil {
+		return replayGuardInvalid
+	}
+	leaf, err := m.Leaf.decode(ev.ChainID, bundle)
+	if err != nil {
+		return replayGuardInvalid
+	}
+	hdr, tx, rcpt, err := m.settlement(leaf, "settlement")
+	if err != nil {
+		return replayGuardInvalid
+	}
+	rg, err := m.ReplayGuard.VerifyAgainst(hdr, tx, rcpt.Status == types.ReceiptStatusSuccessful, rcpt.Logs)
+	if err != nil {
+		return replayGuardInvalid
+	}
+	if rg.State == ethproof.ReplayProven {
+		return replayGuardProven
+	}
+	return replayGuardNamed
 }
