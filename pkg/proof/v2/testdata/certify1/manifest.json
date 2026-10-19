@@ -806,9 +806,9 @@
     },
     {
       "name": "anchor-re-rooted-off-the-verified-root",
-      "description": "the link starts at the verified root and ends at the foreign anchor's root, which the genesis set signed, and the genesis link is the same receipt: the walk accepts it and the transaction's receipt, which ends at the world's own root, is refused",
+      "description": "the link starts at the verified root and ends at the foreign anchor's root, which the genesis set signed: the walk accepts it and the transaction's receipt, which ends at the world's own root, is refused",
       "world": "chain-final-only",
-      "edit": "evidence/certify/0, links/0 and genesisLink replaced by a record of another chain signed by the genesis set, linked from the verified root",
+      "edit": "evidence/certify/0 and links/0 replaced by a record of another chain signed by the genesis set, linked from the verified root",
       "file": "anchor-re-rooted-off-the-verified-root.json",
       "sha256": "a7f14920653480b9c7a7b9f6566eeb0268e327d87ceb333d65758b4e75fc8df7",
       "expect": "refused",

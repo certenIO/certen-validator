@@ -63,7 +63,10 @@ The verifier outputs one verdict per statement plus an overall verdict. A missin
      certified root; every update the walk applied must be an entry of that main chain, and the walk must have applied
      every entry (count = height − genesis). This closes update omission, stale-globals replay and window skipping using
      only state at the target block, which is inside retention when the proof is built. Each update's window is checked
-     against the block its main-chain entry was recorded in;
+     against the block its main-chain entry was recorded in; [Evidence 2.1 only. What the code establishes today: the root-chain
+     position of the main-chain anchor the receipt is proven into lies in (the previous RootChainIndex, this RootChainIndex]; a
+     later main-chain anchor re-proving an older entry is not excluded. The stronger binding, and the wording of this sentence,
+     are an owner decision (pr/proof-v2-a8-wording-draft.md, OWNER_QUEUE.md).]
    - a proof-authorized (signature-less, Kourou) anchor counts only as a Merkle path to an already-verified root;
    - the proof carries its spine segment. CERTEN-published checkpoints are accelerators the verifier re-derives, never
      inputs (measured: all 473 Kermit majors verify in 1.7 s / 887 KB).
