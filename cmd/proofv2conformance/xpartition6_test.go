@@ -19,8 +19,9 @@ func TestXPartition6VectorsAreReproducible(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(files) != 17+2 {
-		t.Fatalf("%d files written, want 17 vectors, the manifest and its hash", len(files))
+	// 17 vectors, and a -g sibling beside each of the 6 that verified (RB9-F6, F-VE-2 option b), the manifest and its hash.
+	if len(files) != 17+6+2 {
+		t.Fatalf("%d files written, want 17 vectors and 6 siblings, the manifest and its hash", len(files))
 	}
 	written := map[string]bool{}
 	for _, f := range files {

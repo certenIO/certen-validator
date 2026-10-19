@@ -15,6 +15,7 @@ import (
 
 func verifyCase(t *testing.T, c xworld.Case) (*proofv2.Report, error) {
 	t.Helper()
+	c = c.Linked() // the document the offline walk requires (F-VE-2 (b))
 	_, p, err := c.Document()
 	if err != nil {
 		t.Fatal(err)

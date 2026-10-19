@@ -54,6 +54,7 @@ func loadReal21(t *testing.T) real21 {
 	var pin [32]byte
 	b, _ := hex.DecodeString(realPin)
 	copy(pin[:], b)
+	ev.GenesisLink = recordedGenesisLink(t, ir.Inputs.GenesisRootChainAnchor) // the offline walk requires it of every evidence 2.1 document (RB9-F6)
 	rep, err := proofv2.Verify21FromGenesis(ev, ar, ir.Inputs, pin)
 	if err != nil {
 		t.Fatalf("the stored real document does not verify: %v", err)
@@ -211,4 +212,35 @@ func TestGovRootV4ComputesOverTheRealStored21Document(t *testing.T) {
 	if root == [32]byte{} || pages == [32]byte{} || votes == [32]byte{} {
 		t.Fatal("a zero root")
 	}
+}
+
+// recordedGenesisLink is Kermit's recorded answer to the genesis question for the stored real document (pkg/proof/v2/testdata/certify1-live/links.json,
+// label genesis): the receipt from the pinned genesis root chain anchor to the real certified root, hex. Every evidence 2.1 document needs it of the
+// offline walk (RB9-F6, F-VE-2 option b); the committed fixture is the continuous document without it, unchanged.
+func recordedGenesisLink(t *testing.T, genesis [32]byte) string {
+	t.Helper()
+	raw, err := os.ReadFile("../proof/v2/testdata/certify1-live/links.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rec struct {
+		Links []struct {
+			Label   string `json:"label"`
+			Prev    string `json:"prev"`
+			Receipt string `json:"receipt"`
+		} `json:"links"`
+	}
+	if err := json.Unmarshal(raw, &rec); err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range rec.Links {
+		if l.Label == "genesis" {
+			if l.Prev != hex.EncodeToString(genesis[:]) || l.Receipt == "" {
+				t.Fatalf("the recorded genesis answer starts at %s (want %x) or is a refusal", l.Prev, genesis)
+			}
+			return l.Receipt
+		}
+	}
+	t.Fatal("no recorded answer labelled genesis")
+	return ""
 }

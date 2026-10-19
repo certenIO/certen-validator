@@ -28,6 +28,224 @@
       "description": "an UpdateAccountAuth is the default rule plus the authorities its operations add and RequireAuthorization, which the verifier implements: it is not refused",
       "file": "override-update-account-auth-is-modelled.json",
       "sha256": "9c85069a6c0a6804ede7d1cc00bf402acbdda1ae1242accfe0af15bc4bcf109d",
+      "expect": "refused",
+      "state": "certify_link_missing",
+      "fields": [
+        "genesis"
+      ],
+      "note": "frozen document; verdict moved by F-VE-2 (b) (2.1 unreleased)"
+    },
+    {
+      "name": "anchor-wrapper-source-altered",
+      "description": "the SequencedMessage wrapper of BVN3's anchor names acc://bvn-BVN4.acme and the anchors key and the pages' partition follow it: every receipt still verifies (the receipt covers the anchor transaction, not the wrapper) but the committed body names BVN3",
+      "file": "anchor-wrapper-source-altered.json",
+      "sha256": "f7f3e204390f600fa43bc0994f6e43f85063233f77d792a96cfa9b7332c78dbd",
+      "expect": "refused",
+      "state": "g1_foreign_partition_mismatch",
+      "partition": "BVN3",
+      "block": 90
+    },
+    {
+      "name": "production-sequenced-bound",
+      "description": "the vote's production carries the SequencedMessage: its hash is the synthetic ledger entry, it wraps the vote's signature message and names the vote's transport",
+      "file": "production-sequenced-bound.json",
+      "sha256": "4924dc6cbb402c7bbd3ef763211a4600cfed5c19aad63c1813009ee0c2505d6d",
+      "expect": "refused",
+      "state": "certify_link_missing",
+      "fields": [
+        "genesis"
+      ],
+      "note": "frozen document; verdict moved by F-VE-2 (b) (2.1 unreleased)"
+    },
+    {
+      "name": "production-sequenced-number-altered",
+      "description": "the carried SequencedMessage has another Number than the vote's transport (the ledger entry is its hash)",
+      "file": "production-sequenced-number-altered.json",
+      "sha256": "53af9ff2ab2f6114255883b264392576f161be94cba98672b2552d1c1433295d",
+      "expect": "refused",
+      "state": "g1_arrival_unproven",
+      "partition": "BVN2",
+      "block": 70
+    },
+    {
+      "name": "production-sequenced-wraps-another-vote",
+      "description": "the carried SequencedMessage wraps a signature message that is not the vote",
+      "file": "production-sequenced-wraps-another-vote.json",
+      "sha256": "14fc68873eb205162ada6419f4f54a342f2489953187f0204872bbcca39c2698",
+      "expect": "refused",
+      "state": "g1_arrival_unproven",
+      "partition": "BVN2",
+      "block": 70
+    },
+    {
+      "name": "production-sequenced-message-not-carried",
+      "description": "a document made before the production carried its message: it keeps its verdict and the report discloses the production as unbound",
+      "file": "production-sequenced-message-not-carried.json",
+      "sha256": "bae32cccb45d205e5df6fcf4b61f1e78737736a559f73a0927d87321da4d3147",
+      "expect": "refused",
+      "state": "certify_link_missing",
+      "fields": [
+        "genesis"
+      ],
+      "note": "frozen document; verdict moved by F-VE-2 (b) (2.1 unreleased)"
+    },
+    {
+      "name": "held-transaction-vote-without-production",
+      "description": "the transaction is held (HoldUntil) and the vote carries no production proof: a release may have produced it later than its signature arrived",
+      "file": "held-transaction-vote-without-production.json",
+      "sha256": "599fcd2befe76f91e5a0ba8c4eba7c8fc3da80cb42f11187c3d5c8ca880cb045",
+      "expect": "refused",
+      "state": "certify_link_missing",
+      "fields": [
+        "genesis"
+      ],
+      "note": "frozen document; verdict moved by F-VE-2 (b) (2.1 unreleased)"
+    },
+    {
+      "name": "inline-vote-without-production-not-held",
+      "description": "an inline vote on a transaction that is not held needs no production to be placed: nothing is unproven",
+      "file": "inline-vote-without-production-not-held.json",
+      "sha256": "ee873d58b7a88e46653dd1ad78005abca1eb623dc339315a9ee30f8740cc3884",
+      "expect": "refused",
+      "state": "certify_link_missing",
+      "fields": [
+        "genesis"
+      ],
+      "note": "frozen document; verdict moved by F-VE-2 (b) (2.1 unreleased)"
+    },
+    {
+      "name": "authority-not-ready-header-authority-without-a-vote",
+      "description": "the header names the delegate book as a required authority; it never voted",
+      "file": "authority-not-ready-header-authority-without-a-vote.json",
+      "sha256": "2938b50fade656ede4f7dddd2ef33fb365922b63a808584722b6f5486c0ccc12",
+      "expect": "refused",
+      "state": "g1_authority_not_ready",
+      "partition": "BVN1",
+      "block": 50
+    },
+    {
+      "name": "all-authorities-disabled-outside-voter",
+      "description": "the principal lists only the delegate book and it is disabled: any authority's vote suffices, the voter (BankBook) is outside the list and the report discloses it",
+      "file": "all-authorities-disabled-outside-voter.json",
+      "sha256": "0587bab0de399e99795813a5be7528d4ffbca7fac6bddbb9accc64f861518444",
+      "expect": "refused",
+      "state": "certify_link_missing",
+      "fields": [
+        "genesis"
+      ],
+      "note": "frozen document; verdict moved by F-VE-2 (b) (2.1 unreleased)"
+    },
+    {
+      "name": "enabled-listed-authority-outside-voter",
+      "description": "the principal lists the delegate book, enabled; the vote is BankBook's, outside the list while another authority is enabled: it is not a vote the executor counts",
+      "file": "enabled-listed-authority-outside-voter.json",
+      "sha256": "fa0fd74bf809ae62f905bf03fa4a319b5a502f95fa9d380259d7a6edba15524e",
+      "expect": "refused",
+      "state": "g1_vote_not_reproduced",
+      "partition": "BVN1",
+      "block": 50
+    },
+    {
+      "name": "write-data-all-listed-disabled-listed-voter",
+      "description": "the principal lists BankBook and it is disabled, and BankBook voted: the executor needs one vote and nothing more, so the mode is all_authorities_disabled",
+      "file": "write-data-all-listed-disabled-listed-voter.json",
+      "sha256": "6a117ecba22d38bfa86ce2f51202de1854a73438e24848c381f6b6dc129f30e2",
+      "expect": "refused",
+      "state": "certify_link_missing",
+      "fields": [
+        "genesis"
+      ],
+      "note": "frozen document; verdict moved by F-VE-2 (b) (2.1 unreleased)"
+    },
+    {
+      "name": "update-account-auth-requires-the-disabled-listed-authority",
+      "description": "the same principal, but the transaction is an UpdateAccountAuth, which always requires its authorities (RequireAuthorization): BankBook voted accept, so it is ready, and the mode is authorities_required",
+      "file": "update-account-auth-requires-the-disabled-listed-authority.json",
+      "sha256": "5c834af466c7047867ae5ce63948a6639276a6d64ceae638d71afca6ca630e3b",
+      "expect": "refused",
+      "state": "certify_link_missing",
+      "fields": [
+        "genesis"
+      ],
+      "note": "frozen document; verdict moved by F-VE-2 (b) (2.1 unreleased)"
+    },
+    {
+      "name": "update-account-auth-requires-another-disabled-authority",
+      "description": "an UpdateAccountAuth on a principal listing two disabled books, BankBook (voted) and the delegate book (did not): the disabled authority is still required",
+      "file": "update-account-auth-requires-another-disabled-authority.json",
+      "sha256": "6ffff37c1de6e7d3e3bbb904d74259f99d8683a28f7531a0151148ffe6b31522",
+      "expect": "refused",
+      "state": "g1_authority_not_ready",
+      "partition": "BVN1",
+      "block": 50
+    },
+    {
+      "name": "delegation-path-of-21-recorded",
+      "description": "the key signature of the delegated vote is recorded as passing through 21 delegators, one more than protocol.DelegationDepthLimit",
+      "file": "delegation-path-of-21-recorded.json",
+      "sha256": "73cdf4fb16975757776a9031e4d66554a6e59f44c2dc7d1eefd2020a2f1480fe",
+      "expect": "refused",
+      "state": "g1_delegation_depth_exceeded"
+    },
+    {
+      "name": "delegation-chain-depth-2",
+      "description": "the vote is cast through two delegations: BankPage2 delegates to book 1, whose page delegates to the delegate book; the key signature is wrapped in two delegated signatures and each hop's authority signature is recorded on the page that delegated",
+      "file": "delegation-chain-depth-2.json",
+      "sha256": "5a9e2ffee1127e97ad71eb7f06eb9e2be01d58398bc7a0d9cb5949249a5dbe74",
+      "expect": "refused",
+      "state": "certify_link_missing",
+      "fields": [
+        "genesis"
+      ],
+      "note": "frozen document; verdict moved by F-VE-2 (b) (2.1 unreleased)"
+    },
+    {
+      "name": "delegation-chain-depth-20",
+      "description": "the vote is cast through 20 delegations, the limit (protocol.DelegationDepthLimit): 21 pages on two partitions, every hop's arrival derived",
+      "file": "delegation-chain-depth-20.json",
+      "sha256": "83067e5f81c10bd4a8f1c15ba8efc572a5847fe9a23672e7db27fcbdb550ef36",
+      "expect": "refused",
+      "state": "certify_link_missing",
+      "fields": [
+        "genesis"
+      ],
+      "note": "frozen document; verdict moved by F-VE-2 (b) (2.1 unreleased)"
+    },
+    {
+      "name": "delegation-chain-depth-21",
+      "description": "the key signature is wrapped in 21 delegated signatures, one more than the limit: the executor refuses it, so the document is refused by name",
+      "file": "delegation-chain-depth-21.json",
+      "sha256": "a53c96f2d7e69d27f97b5cb89a78cc6edb77fc119ca94a9ef604e8ed80bb2e47",
+      "expect": "refused",
+      "state": "g1_delegation_depth_exceeded"
+    },
+    {
+      "name": "delegation-cycle-between-the-books",
+      "description": "the delegate book's page delegates back to the authority book that delegates to it: the governing set contains a cycle, each book is expanded once and the vote, cast through the first delegation, verifies",
+      "file": "delegation-cycle-between-the-books.json",
+      "sha256": "8b95701b1c6fa1451182bdbd2392e5684b46987b42d5298afd58ca46e4ab9314",
+      "expect": "refused",
+      "state": "certify_link_missing",
+      "fields": [
+        "genesis"
+      ],
+      "note": "frozen document; verdict moved by F-VE-2 (b) (2.1 unreleased)"
+    },
+    {
+      "name": "transaction-other-than-the-evidence-names",
+      "description": "the carried transaction is another transaction than TxHash names",
+      "file": "transaction-other-than-the-evidence-names.json",
+      "sha256": "6d49ccb6e806d1f8014948b4bbf83374dbc5586f278a7f81d12beac60cf2b894",
+      "expect": "refused",
+      "state": "g1_transaction_mismatch",
+      "partition": "BVN1",
+      "block": 50
+    },
+    {
+      "name": "override-update-account-auth-is-modelled-g",
+      "description": "an UpdateAccountAuth is the default rule plus the authorities its operations add and RequireAuthorization, which the verifier implements: it is not refused (the sibling of the frozen document override-update-account-auth-is-modelled that carries the genesis link: F-VE-2 (b))",
+      "file": "override-update-account-auth-is-modelled-g.json",
+      "sha256": "23d72a878948a7e115a88d1392ed8d3b31ddf664a8e880c67c7419491bab45be",
       "expect": "verified",
       "report": {
         "version": "2.1",
@@ -104,20 +322,10 @@
       }
     },
     {
-      "name": "anchor-wrapper-source-altered",
-      "description": "the SequencedMessage wrapper of BVN3's anchor names acc://bvn-BVN4.acme and the anchors key and the pages' partition follow it: every receipt still verifies (the receipt covers the anchor transaction, not the wrapper) but the committed body names BVN3",
-      "file": "anchor-wrapper-source-altered.json",
-      "sha256": "f7f3e204390f600fa43bc0994f6e43f85063233f77d792a96cfa9b7332c78dbd",
-      "expect": "refused",
-      "state": "g1_foreign_partition_mismatch",
-      "partition": "BVN3",
-      "block": 90
-    },
-    {
-      "name": "production-sequenced-bound",
-      "description": "the vote's production carries the SequencedMessage: its hash is the synthetic ledger entry, it wraps the vote's signature message and names the vote's transport",
-      "file": "production-sequenced-bound.json",
-      "sha256": "4924dc6cbb402c7bbd3ef763211a4600cfed5c19aad63c1813009ee0c2505d6d",
+      "name": "production-sequenced-bound-g",
+      "description": "the vote's production carries the SequencedMessage: its hash is the synthetic ledger entry, it wraps the vote's signature message and names the vote's transport (the sibling of the frozen document production-sequenced-bound that carries the genesis link: F-VE-2 (b))",
+      "file": "production-sequenced-bound-g.json",
+      "sha256": "605628520a29b23bd3d2ec75a299389c0e3d00138afc5a1f33002b216fb00b8d",
       "expect": "verified",
       "report": {
         "version": "2.1",
@@ -205,30 +413,10 @@
       }
     },
     {
-      "name": "production-sequenced-number-altered",
-      "description": "the carried SequencedMessage has another Number than the vote's transport (the ledger entry is its hash)",
-      "file": "production-sequenced-number-altered.json",
-      "sha256": "53af9ff2ab2f6114255883b264392576f161be94cba98672b2552d1c1433295d",
-      "expect": "refused",
-      "state": "g1_arrival_unproven",
-      "partition": "BVN2",
-      "block": 70
-    },
-    {
-      "name": "production-sequenced-wraps-another-vote",
-      "description": "the carried SequencedMessage wraps a signature message that is not the vote",
-      "file": "production-sequenced-wraps-another-vote.json",
-      "sha256": "14fc68873eb205162ada6419f4f54a342f2489953187f0204872bbcca39c2698",
-      "expect": "refused",
-      "state": "g1_arrival_unproven",
-      "partition": "BVN2",
-      "block": 70
-    },
-    {
-      "name": "production-sequenced-message-not-carried",
-      "description": "a document made before the production carried its message: it keeps its verdict and the report discloses the production as unbound",
-      "file": "production-sequenced-message-not-carried.json",
-      "sha256": "bae32cccb45d205e5df6fcf4b61f1e78737736a559f73a0927d87321da4d3147",
+      "name": "production-sequenced-message-not-carried-g",
+      "description": "a document made before the production carried its message: it keeps its verdict and the report discloses the production as unbound (the sibling of the frozen document production-sequenced-message-not-carried that carries the genesis link: F-VE-2 (b))",
+      "file": "production-sequenced-message-not-carried-g.json",
+      "sha256": "7c1524b97e2e7a46ede4c55f20fe4ba072d5ce722e688c7cd64a2612ea546094",
       "expect": "verified",
       "report": {
         "version": "2.1",
@@ -319,10 +507,10 @@
       }
     },
     {
-      "name": "held-transaction-vote-without-production",
-      "description": "the transaction is held (HoldUntil) and the vote carries no production proof: a release may have produced it later than its signature arrived",
-      "file": "held-transaction-vote-without-production.json",
-      "sha256": "599fcd2befe76f91e5a0ba8c4eba7c8fc3da80cb42f11187c3d5c8ca880cb045",
+      "name": "held-transaction-vote-without-production-g",
+      "description": "the transaction is held (HoldUntil) and the vote carries no production proof: a release may have produced it later than its signature arrived (the sibling of the frozen document held-transaction-vote-without-production that carries the genesis link: F-VE-2 (b))",
+      "file": "held-transaction-vote-without-production-g.json",
+      "sha256": "000376f67dd25f38f1a52a4064528454d987aacf75b051dd9d9d2945ca7643b0",
       "expect": "verified",
       "report": {
         "version": "2.1",
@@ -399,10 +587,10 @@
       }
     },
     {
-      "name": "inline-vote-without-production-not-held",
-      "description": "an inline vote on a transaction that is not held needs no production to be placed: nothing is unproven",
-      "file": "inline-vote-without-production-not-held.json",
-      "sha256": "ee873d58b7a88e46653dd1ad78005abca1eb623dc339315a9ee30f8740cc3884",
+      "name": "inline-vote-without-production-not-held-g",
+      "description": "an inline vote on a transaction that is not held needs no production to be placed: nothing is unproven (the sibling of the frozen document inline-vote-without-production-not-held that carries the genesis link: F-VE-2 (b))",
+      "file": "inline-vote-without-production-not-held-g.json",
+      "sha256": "9b360abc5c8d3b8cc7def5d1a00a7f9fa0908f7f267de1ed704068d5439d18d1",
       "expect": "verified",
       "report": {
         "version": "2.1",
@@ -477,20 +665,10 @@
       }
     },
     {
-      "name": "authority-not-ready-header-authority-without-a-vote",
-      "description": "the header names the delegate book as a required authority; it never voted",
-      "file": "authority-not-ready-header-authority-without-a-vote.json",
-      "sha256": "2938b50fade656ede4f7dddd2ef33fb365922b63a808584722b6f5486c0ccc12",
-      "expect": "refused",
-      "state": "g1_authority_not_ready",
-      "partition": "BVN1",
-      "block": 50
-    },
-    {
-      "name": "all-authorities-disabled-outside-voter",
-      "description": "the principal lists only the delegate book and it is disabled: any authority's vote suffices, the voter (BankBook) is outside the list and the report discloses it",
-      "file": "all-authorities-disabled-outside-voter.json",
-      "sha256": "0587bab0de399e99795813a5be7528d4ffbca7fac6bddbb9accc64f861518444",
+      "name": "all-authorities-disabled-outside-voter-g",
+      "description": "the principal lists only the delegate book and it is disabled: any authority's vote suffices, the voter (BankBook) is outside the list and the report discloses it (the sibling of the frozen document all-authorities-disabled-outside-voter that carries the genesis link: F-VE-2 (b))",
+      "file": "all-authorities-disabled-outside-voter-g.json",
+      "sha256": "336d767318d0d7196da536d14e3e42b230ab81dda2c91d5876cd191a44bedb0f",
       "expect": "verified",
       "report": {
         "version": "2.1",
@@ -569,20 +747,10 @@
       }
     },
     {
-      "name": "enabled-listed-authority-outside-voter",
-      "description": "the principal lists the delegate book, enabled; the vote is BankBook's, outside the list while another authority is enabled: it is not a vote the executor counts",
-      "file": "enabled-listed-authority-outside-voter.json",
-      "sha256": "fa0fd74bf809ae62f905bf03fa4a319b5a502f95fa9d380259d7a6edba15524e",
-      "expect": "refused",
-      "state": "g1_vote_not_reproduced",
-      "partition": "BVN1",
-      "block": 50
-    },
-    {
-      "name": "write-data-all-listed-disabled-listed-voter",
-      "description": "the principal lists BankBook and it is disabled, and BankBook voted: the executor needs one vote and nothing more, so the mode is all_authorities_disabled",
-      "file": "write-data-all-listed-disabled-listed-voter.json",
-      "sha256": "6a117ecba22d38bfa86ce2f51202de1854a73438e24848c381f6b6dc129f30e2",
+      "name": "write-data-all-listed-disabled-listed-voter-g",
+      "description": "the principal lists BankBook and it is disabled, and BankBook voted: the executor needs one vote and nothing more, so the mode is all_authorities_disabled (the sibling of the frozen document write-data-all-listed-disabled-listed-voter that carries the genesis link: F-VE-2 (b))",
+      "file": "write-data-all-listed-disabled-listed-voter-g.json",
+      "sha256": "83901be7e579306bba0bb38f281c6a114d2edef254faecdb5cd54659fa99e3ec",
       "expect": "verified",
       "report": {
         "version": "2.1",
@@ -659,10 +827,10 @@
       }
     },
     {
-      "name": "update-account-auth-requires-the-disabled-listed-authority",
-      "description": "the same principal, but the transaction is an UpdateAccountAuth, which always requires its authorities (RequireAuthorization): BankBook voted accept, so it is ready, and the mode is authorities_required",
-      "file": "update-account-auth-requires-the-disabled-listed-authority.json",
-      "sha256": "5c834af466c7047867ae5ce63948a6639276a6d64ceae638d71afca6ca630e3b",
+      "name": "update-account-auth-requires-the-disabled-listed-authority-g",
+      "description": "the same principal, but the transaction is an UpdateAccountAuth, which always requires its authorities (RequireAuthorization): BankBook voted accept, so it is ready, and the mode is authorities_required (the sibling of the frozen document update-account-auth-requires-the-disabled-listed-authority that carries the genesis link: F-VE-2 (b))",
+      "file": "update-account-auth-requires-the-disabled-listed-authority-g.json",
+      "sha256": "46170cea770501eae5fc3c712c238e5c7349645cef634cc58f810f42d946751e",
       "expect": "verified",
       "report": {
         "version": "2.1",
@@ -739,28 +907,10 @@
       }
     },
     {
-      "name": "update-account-auth-requires-another-disabled-authority",
-      "description": "an UpdateAccountAuth on a principal listing two disabled books, BankBook (voted) and the delegate book (did not): the disabled authority is still required",
-      "file": "update-account-auth-requires-another-disabled-authority.json",
-      "sha256": "6ffff37c1de6e7d3e3bbb904d74259f99d8683a28f7531a0151148ffe6b31522",
-      "expect": "refused",
-      "state": "g1_authority_not_ready",
-      "partition": "BVN1",
-      "block": 50
-    },
-    {
-      "name": "delegation-path-of-21-recorded",
-      "description": "the key signature of the delegated vote is recorded as passing through 21 delegators, one more than protocol.DelegationDepthLimit",
-      "file": "delegation-path-of-21-recorded.json",
-      "sha256": "73cdf4fb16975757776a9031e4d66554a6e59f44c2dc7d1eefd2020a2f1480fe",
-      "expect": "refused",
-      "state": "g1_delegation_depth_exceeded"
-    },
-    {
-      "name": "delegation-chain-depth-2",
-      "description": "the vote is cast through two delegations: BankPage2 delegates to book 1, whose page delegates to the delegate book; the key signature is wrapped in two delegated signatures and each hop's authority signature is recorded on the page that delegated",
-      "file": "delegation-chain-depth-2.json",
-      "sha256": "5a9e2ffee1127e97ad71eb7f06eb9e2be01d58398bc7a0d9cb5949249a5dbe74",
+      "name": "delegation-chain-depth-2-g",
+      "description": "the vote is cast through two delegations: BankPage2 delegates to book 1, whose page delegates to the delegate book; the key signature is wrapped in two delegated signatures and each hop's authority signature is recorded on the page that delegated (the sibling of the frozen document delegation-chain-depth-2 that carries the genesis link: F-VE-2 (b))",
+      "file": "delegation-chain-depth-2-g.json",
+      "sha256": "02423d6fc9247af66b38a97e2d10f2f5395e5ab0231fc2d5d67659769f4318c0",
       "expect": "verified",
       "report": {
         "version": "2.1",
@@ -865,10 +1015,10 @@
       }
     },
     {
-      "name": "delegation-chain-depth-20",
-      "description": "the vote is cast through 20 delegations, the limit (protocol.DelegationDepthLimit): 21 pages on two partitions, every hop's arrival derived",
-      "file": "delegation-chain-depth-20.json",
-      "sha256": "83067e5f81c10bd4a8f1c15ba8efc572a5847fe9a23672e7db27fcbdb550ef36",
+      "name": "delegation-chain-depth-20-g",
+      "description": "the vote is cast through 20 delegations, the limit (protocol.DelegationDepthLimit): 21 pages on two partitions, every hop's arrival derived (the sibling of the frozen document delegation-chain-depth-20 that carries the genesis link: F-VE-2 (b))",
+      "file": "delegation-chain-depth-20-g.json",
+      "sha256": "18ec491b7f05b1354609f21401949cc8a3da6fca5fb532cdcb1f42a1c593e4aa",
       "expect": "verified",
       "report": {
         "version": "2.1",
@@ -1369,18 +1519,10 @@
       }
     },
     {
-      "name": "delegation-chain-depth-21",
-      "description": "the key signature is wrapped in 21 delegated signatures, one more than the limit: the executor refuses it, so the document is refused by name",
-      "file": "delegation-chain-depth-21.json",
-      "sha256": "a53c96f2d7e69d27f97b5cb89a78cc6edb77fc119ca94a9ef604e8ed80bb2e47",
-      "expect": "refused",
-      "state": "g1_delegation_depth_exceeded"
-    },
-    {
-      "name": "delegation-cycle-between-the-books",
-      "description": "the delegate book's page delegates back to the authority book that delegates to it: the governing set contains a cycle, each book is expanded once and the vote, cast through the first delegation, verifies",
-      "file": "delegation-cycle-between-the-books.json",
-      "sha256": "8b95701b1c6fa1451182bdbd2392e5684b46987b42d5298afd58ca46e4ab9314",
+      "name": "delegation-cycle-between-the-books-g",
+      "description": "the delegate book's page delegates back to the authority book that delegates to it: the governing set contains a cycle, each book is expanded once and the vote, cast through the first delegation, verifies (the sibling of the frozen document delegation-cycle-between-the-books that carries the genesis link: F-VE-2 (b))",
+      "file": "delegation-cycle-between-the-books-g.json",
+      "sha256": "0c9624492d5370d9b95a2c3984df0942b1ac411646622ba7f96558480212371b",
       "expect": "verified",
       "report": {
         "version": "2.1",
@@ -1461,16 +1603,6 @@
           }
         ]
       }
-    },
-    {
-      "name": "transaction-other-than-the-evidence-names",
-      "description": "the carried transaction is another transaction than TxHash names",
-      "file": "transaction-other-than-the-evidence-names.json",
-      "sha256": "6d49ccb6e806d1f8014948b4bbf83374dbc5586f278a7f81d12beac60cf2b894",
-      "expect": "refused",
-      "state": "g1_transaction_mismatch",
-      "partition": "BVN1",
-      "block": 50
     }
   ]
 }

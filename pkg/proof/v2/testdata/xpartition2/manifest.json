@@ -8,72 +8,12 @@
       "description": "governing pages on three partitions, each at its own block through its own anchor; routing proven",
       "file": "valid-mixed-partition.json",
       "sha256": "b6009b563058f203d1a7666cc13fb60e6413f8d56278eb833297270661f8e51e",
-      "expect": "verified",
-      "report": {
-        "version": "2.1",
-        "tag": "certen:g1:v4",
-        "partition": "acc://bvn-BVN1.acme",
-        "anchorBlock": 50,
-        "certifiedRoot": "4b5bb5147f4ecfcfb3ef2e772d1038990c61697e24620fb97c9224a22b15e2ba",
-        "checkBlock": 300,
-        "setVerdict": "verified",
-        "routingHeight": 1,
-        "proven": [
-          {
-            "url": "acc://pv2-cust-5.acme/data",
-            "partition": "acc://bvn-BVN1.acme",
-            "block": 50,
-            "roles": [
-              "principal-chain"
-            ]
-          },
-          {
-            "url": "acc://pv2-bank-5.acme/book",
-            "partition": "acc://bvn-BVN2.acme",
-            "block": 70,
-            "roles": [
-              "authority-book"
-            ]
-          },
-          {
-            "url": "acc://pv2-bank-5.acme/book/1",
-            "partition": "acc://bvn-BVN2.acme",
-            "block": 70,
-            "roles": [
-              "authority-page",
-              "voter"
-            ]
-          },
-          {
-            "url": "acc://pv2-bank-5.acme/book/2",
-            "partition": "acc://bvn-BVN2.acme",
-            "block": 70,
-            "roles": [
-              "authority-page"
-            ]
-          },
-          {
-            "url": "acc://pv2-dele-5.acme/book",
-            "partition": "acc://bvn-BVN3.acme",
-            "block": 90,
-            "roles": [
-              "delegate-book"
-            ]
-          },
-          {
-            "url": "acc://pv2-dele-5.acme/book/1",
-            "partition": "acc://bvn-BVN3.acme",
-            "block": 90,
-            "roles": [
-              "delegate-page"
-            ]
-          }
-        ],
-        "pagesBound": 6,
-        "unproven": [
-          "g1_completeness_unproven"
-        ]
-      }
+      "expect": "refused",
+      "state": "certify_link_missing",
+      "fields": [
+        "genesis"
+      ],
+      "note": "frozen document; verdict moved by F-VE-2 (b) (2.1 unreleased)"
     },
     {
       "name": "foreign-page-at-another-block",
@@ -224,6 +164,138 @@
       "description": "a certified-key-page role, which only the intent certificate can justify, is listed as declared",
       "file": "declared-role-listed.json",
       "sha256": "902db5ff5a6a6f226f88a23c0bbff94ed2f7684b06202fef45c15c02ab0844aa",
+      "expect": "refused",
+      "state": "certify_link_missing",
+      "fields": [
+        "genesis"
+      ],
+      "note": "frozen document; verdict moved by F-VE-2 (b) (2.1 unreleased)"
+    },
+    {
+      "name": "routing-mismatch",
+      "description": "the proven routing table, unchanged since genesis, sends pv2-bank-5.acme to BVN3 while its anchor names BVN2",
+      "file": "routing-mismatch.json",
+      "sha256": "dd2d7dff0857188854bd6bdd5e0882b602e910f2acc3c88c51a172191c124e86",
+      "expect": "refused",
+      "state": "g1_routing_mismatch",
+      "partition": "BVN2",
+      "block": 70
+    },
+    {
+      "name": "routing-history-unproven",
+      "description": "the routing table was rewritten after genesis (main chain height 2): what it was at B_Y is a named state",
+      "file": "routing-history-unproven.json",
+      "sha256": "26afe4dedc7cc6e0fd58697876a44cefbc419451cd10741c9c5f8df86aa51339",
+      "expect": "refused",
+      "state": "certify_link_missing",
+      "fields": [
+        "genesis"
+      ],
+      "note": "frozen document; verdict moved by F-VE-2 (b) (2.1 unreleased)"
+    },
+    {
+      "name": "routing-absent",
+      "description": "no routing proof is carried: Partition == route(URL) is a named state",
+      "file": "routing-absent.json",
+      "sha256": "e14a0f5ad892babb0e5c11bec1193514555c39504c902e21db879dd2257b8f54",
+      "expect": "refused",
+      "state": "certify_link_missing",
+      "fields": [
+        "genesis"
+      ],
+      "note": "frozen document; verdict moved by F-VE-2 (b) (2.1 unreleased)"
+    },
+    {
+      "name": "routing-receipt-altered",
+      "description": "a step of the routing proof's receipt altered",
+      "file": "routing-receipt-altered.json",
+      "sha256": "6bbcfc26c41e53e3ec69a86e378596ad8b628f3a9f831d134d36063e50a74744",
+      "expect": "refused"
+    },
+    {
+      "name": "evidence-20-with-21-members",
+      "description": "a document that says 2.0 but carries anchors, votes and a routing proof",
+      "file": "evidence-20-with-21-members.json",
+      "sha256": "9542eb3859195aaaf12703ccb3d09455b61a487cd0e8b582019e5723679631ae",
+      "expect": "refused"
+    },
+    {
+      "name": "valid-mixed-partition-g",
+      "description": "governing pages on three partitions, each at its own block through its own anchor; routing proven (the sibling of the frozen document valid-mixed-partition that carries the genesis link: F-VE-2 (b))",
+      "file": "valid-mixed-partition-g.json",
+      "sha256": "4e8b7de5a99f19b3d35ea9537a3693ab088112c56aca9abd47fc0a7006df5efd",
+      "expect": "verified",
+      "report": {
+        "version": "2.1",
+        "tag": "certen:g1:v4",
+        "partition": "acc://bvn-BVN1.acme",
+        "anchorBlock": 50,
+        "certifiedRoot": "4b5bb5147f4ecfcfb3ef2e772d1038990c61697e24620fb97c9224a22b15e2ba",
+        "checkBlock": 300,
+        "setVerdict": "verified",
+        "routingHeight": 1,
+        "proven": [
+          {
+            "url": "acc://pv2-cust-5.acme/data",
+            "partition": "acc://bvn-BVN1.acme",
+            "block": 50,
+            "roles": [
+              "principal-chain"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/1",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page",
+              "voter"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/2",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book/1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-page"
+            ]
+          }
+        ],
+        "pagesBound": 6,
+        "unproven": [
+          "g1_completeness_unproven"
+        ]
+      }
+    },
+    {
+      "name": "declared-role-listed-g",
+      "description": "a certified-key-page role, which only the intent certificate can justify, is listed as declared (the sibling of the frozen document declared-role-listed that carries the genesis link: F-VE-2 (b))",
+      "file": "declared-role-listed-g.json",
+      "sha256": "b2f2e26b816e954caa3660a9f309d9ea3709b45659e5cc789ee28cdc0c159945",
       "expect": "verified",
       "report": {
         "version": "2.1",
@@ -295,20 +367,10 @@
       }
     },
     {
-      "name": "routing-mismatch",
-      "description": "the proven routing table, unchanged since genesis, sends pv2-bank-5.acme to BVN3 while its anchor names BVN2",
-      "file": "routing-mismatch.json",
-      "sha256": "dd2d7dff0857188854bd6bdd5e0882b602e910f2acc3c88c51a172191c124e86",
-      "expect": "refused",
-      "state": "g1_routing_mismatch",
-      "partition": "BVN2",
-      "block": 70
-    },
-    {
-      "name": "routing-history-unproven",
-      "description": "the routing table was rewritten after genesis (main chain height 2): what it was at B_Y is a named state",
-      "file": "routing-history-unproven.json",
-      "sha256": "26afe4dedc7cc6e0fd58697876a44cefbc419451cd10741c9c5f8df86aa51339",
+      "name": "routing-history-unproven-g",
+      "description": "the routing table was rewritten after genesis (main chain height 2): what it was at B_Y is a named state (the sibling of the frozen document routing-history-unproven that carries the genesis link: F-VE-2 (b))",
+      "file": "routing-history-unproven-g.json",
+      "sha256": "3fdb68a22d343a1a481ca7a4b10cd3b6f2e62293edeeba3e5ba4267f1b53db10",
       "expect": "verified",
       "report": {
         "version": "2.1",
@@ -378,10 +440,10 @@
       }
     },
     {
-      "name": "routing-absent",
-      "description": "no routing proof is carried: Partition == route(URL) is a named state",
-      "file": "routing-absent.json",
-      "sha256": "e14a0f5ad892babb0e5c11bec1193514555c39504c902e21db879dd2257b8f54",
+      "name": "routing-absent-g",
+      "description": "no routing proof is carried: Partition == route(URL) is a named state (the sibling of the frozen document routing-absent that carries the genesis link: F-VE-2 (b))",
+      "file": "routing-absent-g.json",
+      "sha256": "8efd59c62b6c12f01c1e8b879b2ed021f07896375bb93b9d724c332941cab546",
       "expect": "verified",
       "report": {
         "version": "2.1",
@@ -449,20 +511,6 @@
           "g1_completeness_unproven"
         ]
       }
-    },
-    {
-      "name": "routing-receipt-altered",
-      "description": "a step of the routing proof's receipt altered",
-      "file": "routing-receipt-altered.json",
-      "sha256": "6bbcfc26c41e53e3ec69a86e378596ad8b628f3a9f831d134d36063e50a74744",
-      "expect": "refused"
-    },
-    {
-      "name": "evidence-20-with-21-members",
-      "description": "a document that says 2.0 but carries anchors, votes and a routing proof",
-      "file": "evidence-20-with-21-members.json",
-      "sha256": "9542eb3859195aaaf12703ccb3d09455b61a487cd0e8b582019e5723679631ae",
-      "expect": "refused"
     }
   ]
 }

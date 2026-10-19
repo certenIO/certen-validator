@@ -49,6 +49,8 @@ type real21World struct {
 	ev    *proofv2.Evidence
 	spine *ledger.AccumulateSpineLog
 	inc   [32]byte
+	ar    *proofv2.Archive           // the archive the spine was extended from, for the offline walk (RB9-F6)
+	in    govproof.IncarnationInputs // the pinned incarnation's inputs, for the offline walk (RB9-F6)
 }
 
 func loadReal21World(t *testing.T) real21World {
@@ -83,7 +85,7 @@ func loadReal21World(t *testing.T) real21World {
 		t.Fatal(err)
 	}
 	l.Checkpoints, l.Sets = cps, append(l.Sets, sets...)
-	w.spine, w.inc = l, ir.Incarnation
+	w.spine, w.inc, w.ar, w.in = l, ir.Incarnation, ar, ir.Inputs
 	return w
 }
 

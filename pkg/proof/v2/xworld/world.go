@@ -75,6 +75,11 @@ type Options struct {
 	// carries as proven writes (consensus applies them while it extends the spine, V-J J1): each has a receipt from its transaction to the
 	// major block's root chain anchor, which is therefore not the usual seed. The world's other members are built on that root.
 	MajorUpdates []string
+	// GenesisLinked (RB9-F6, F-VE-2 option b) builds the plain world as the offline walk requires every evidence 2.1 document to be: the world pins its
+	// first major block's root as the incarnation's genesis root chain anchor (as a chain world does) and the document carries the genesis link, the
+	// receipt from that root to the certified root. The document, its pin and everything that follows from the pin are therefore NOT the zero value's
+	// bytes; the earlier worlds are unchanged. It does not combine with Chain (a chain world always carries its link) or with MajorUpdates.
+	GenesisLinked bool
 }
 
 // Built is a built world.
@@ -288,7 +293,10 @@ func build(o Options) *Built {
 	// A chain world pins its own chain's start as the incarnation's genesis root chain anchor (the genesis link, Evidence.GenesisLink, starts
 	// there); every earlier suite keeps its seed.
 	genesisRoot := seed("genesis root")
-	if o.Chain != nil {
+	if o.GenesisLinked && (o.Chain != nil || len(o.MajorUpdates) > 0) {
+		panic("a GenesisLinked world does not combine with a Chain or MajorUpdates")
+	}
+	if o.Chain != nil || o.GenesisLinked {
 		genesisRoot = GenesisRoot()
 	}
 	in := proof.IncarnationInputs{
@@ -634,6 +642,9 @@ func build(o Options) *Built {
 	certify := []string{hexs(must(certRecord.MarshalBinary()))}
 	hops := []string{}
 	var genesisLink string
+	if o.GenesisLinked {
+		genesisLink = rcptHex(rcpt(r1, step{true, q})) // the first major block's root, then q: the certified root is h2(r1, q)
+	}
 	if o.Chain != nil {
 		fin, finLink := o.Chain.final(chainB, q, a32(certRoot), a32(bpt), v)
 		genesisLink = o.Chain.genesisLink(r1, chainB, q)

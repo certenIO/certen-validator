@@ -8,6 +8,131 @@
       "description": "D2a: the principal on BVN1, the authority book on BVN2 and the delegate book on BVN3, each proven at its own block through a BlockValidatorAnchor",
       "file": "d2a-bvn-to-bvn-valid.json",
       "sha256": "b6009b563058f203d1a7666cc13fb60e6413f8d56278eb833297270661f8e51e",
+      "expect": "refused",
+      "state": "certify_link_missing",
+      "fields": [
+        "genesis"
+      ],
+      "note": "frozen document; verdict moved by F-VE-2 (b) (2.1 unreleased)"
+    },
+    {
+      "name": "d2a-bvn-slot-holds-a-directory-anchor",
+      "description": "D2a: BVN2's anchor is a DirectoryAnchor naming BVN2 as its source, proven into the certified root: the kind does not fit a block validator partition",
+      "file": "d2a-bvn-slot-holds-a-directory-anchor.json",
+      "sha256": "4109b43467e7802d16d801ad39a24aab712b42dc887f4f013bb26c9ca0953e62",
+      "expect": "refused",
+      "state": "g1_foreign_partition_mismatch",
+      "partition": "BVN2",
+      "block": 70
+    },
+    {
+      "name": "d2b-directory-authority-valid",
+      "description": "D2b: the principal on BVN1, its authority book acc://dn.acme/operators on the Directory, proven at Directory block 70 through the DirectoryAnchor the Directory executed for it; the vote is sequenced from the Directory",
+      "file": "d2b-directory-authority-valid.json",
+      "sha256": "8073b717b79754270f1dd8ad9708f25b0c52ec69f969537079baaa1ff16d6d21",
+      "expect": "refused",
+      "state": "certify_link_missing",
+      "fields": [
+        "genesis"
+      ],
+      "note": "frozen document; verdict moved by F-VE-2 (b) (2.1 unreleased)"
+    },
+    {
+      "name": "d2b-directory-page-with-a-bvn-anchor",
+      "description": "D2b: the Directory's anchor is a BlockValidatorAnchor naming the Directory as its source, proven into the certified root: the kind does not fit the Directory",
+      "file": "d2b-directory-page-with-a-bvn-anchor.json",
+      "sha256": "18268b11efe8ae6cec4824bc191b9174610380541c3912fbd15086cd99418639",
+      "expect": "refused",
+      "state": "g1_foreign_partition_mismatch",
+      "partition": "Directory",
+      "block": 70
+    },
+    {
+      "name": "d2b-directory-page-at-another-block",
+      "description": "D2b: a Directory page proven at another Directory block (a valid receipt to a different state root)",
+      "file": "d2b-directory-page-at-another-block.json",
+      "sha256": "158ea74a7f388d987d3df2722ff82c2ec8b1867ae5bac85e00234041be5127ea",
+      "expect": "refused",
+      "state": "g1_page_block_mismatch",
+      "partition": "Directory",
+      "block": 70
+    },
+    {
+      "name": "d2b-directory-book-routed-elsewhere",
+      "description": "D2b: the proven routing table, unchanged since genesis, sends acc://dn.acme to BVN3 while the anchor names the Directory",
+      "file": "d2b-directory-book-routed-elsewhere.json",
+      "sha256": "eb39415cef7461fbe794c9f3fa8a057a17f5773390ebd71c2f87ab9e4bff9941",
+      "expect": "refused",
+      "state": "g1_routing_mismatch",
+      "partition": "Directory",
+      "block": 70
+    },
+    {
+      "name": "d2b-directory-anchor-under-a-bvn-key",
+      "description": "D2b: the Directory's anchor is filed under BVN2's key in the anchors map: the partition is derived from the anchor, not the key",
+      "file": "d2b-directory-anchor-under-a-bvn-key.json",
+      "sha256": "6e21d699720627f50b6516ebaf436259d1a9de0a111a49039e5ba6f42561c763",
+      "expect": "refused",
+      "state": "g1_foreign_partition_mismatch",
+      "partition": "Directory",
+      "block": 70
+    },
+    {
+      "name": "d2c-directory-principal-valid",
+      "description": "D2c: the principal acc://dn.acme/pv2-data on the Directory, governed by a book on BVN2; the transaction's own anchor is a DirectoryAnchor and the vote is sequenced from BVN2 to the Directory",
+      "file": "d2c-directory-principal-valid.json",
+      "sha256": "73e42b9ce78c137496429aef55e256bee9a3462f923ed902cdd58100869d1db1",
+      "expect": "refused",
+      "state": "certify_link_missing",
+      "fields": [
+        "genesis"
+      ],
+      "note": "frozen document; verdict moved by F-VE-2 (b) (2.1 unreleased)"
+    },
+    {
+      "name": "d2c-directory-principal-with-a-bvn-anchor",
+      "description": "D2c: the transaction's partition anchor is a BlockValidatorAnchor naming the Directory as its source: the kind does not fit the Directory",
+      "file": "d2c-directory-principal-with-a-bvn-anchor.json",
+      "sha256": "5046767a9985c837a1ed09f7f866c9c02614f32295d7b5004975badc04a85c83",
+      "expect": "refused",
+      "state": "g1_foreign_partition_mismatch",
+      "partition": "Directory",
+      "block": 50
+    },
+    {
+      "name": "d2c-directory-principal-at-another-block",
+      "description": "D2c: the Directory principal proven at another Directory block",
+      "file": "d2c-directory-principal-at-another-block.json",
+      "sha256": "be96e81b17b6a692e7c7c323f2e78d3c81c3560b8fa36bfcfc6f325ec44f592d",
+      "expect": "refused",
+      "state": "g1_page_block_mismatch",
+      "partition": "Directory",
+      "block": 50
+    },
+    {
+      "name": "d2c-vote-from-an-unanchored-partition",
+      "description": "D2c: the vote claims to be sequenced from BVN4, whose anchor the evidence does not hold",
+      "file": "d2c-vote-from-an-unanchored-partition.json",
+      "sha256": "76adb0e0f58d4b4db663a77604d8df4fb136cf6e92edcd0214409f49a48ed7c2",
+      "expect": "refused",
+      "state": "g1_partition_anchor_unavailable",
+      "partition": "acc://bvn-BVN4.acme"
+    },
+    {
+      "name": "d2c-vote-sequenced-to-another-partition",
+      "description": "D2c: the vote was sequenced to BVN1, not to the Directory that holds the principal",
+      "file": "d2c-vote-sequenced-to-another-partition.json",
+      "sha256": "bd8af49667c20cb849571a63be8d096c8f6eacf7fa0f94286b21db60593ceeca",
+      "expect": "refused",
+      "state": "g1_foreign_partition_mismatch",
+      "partition": "BVN2",
+      "block": 70
+    },
+    {
+      "name": "d2a-bvn-to-bvn-valid-g",
+      "description": "D2a: the principal on BVN1, the authority book on BVN2 and the delegate book on BVN3, each proven at its own block through a BlockValidatorAnchor (the sibling of the frozen document d2a-bvn-to-bvn-valid that carries the genesis link: F-VE-2 (b))",
+      "file": "d2a-bvn-to-bvn-valid-g.json",
+      "sha256": "4e8b7de5a99f19b3d35ea9537a3693ab088112c56aca9abd47fc0a7006df5efd",
       "expect": "verified",
       "report": {
         "version": "2.1",
@@ -76,20 +201,10 @@
       }
     },
     {
-      "name": "d2a-bvn-slot-holds-a-directory-anchor",
-      "description": "D2a: BVN2's anchor is a DirectoryAnchor naming BVN2 as its source, proven into the certified root: the kind does not fit a block validator partition",
-      "file": "d2a-bvn-slot-holds-a-directory-anchor.json",
-      "sha256": "4109b43467e7802d16d801ad39a24aab712b42dc887f4f013bb26c9ca0953e62",
-      "expect": "refused",
-      "state": "g1_foreign_partition_mismatch",
-      "partition": "BVN2",
-      "block": 70
-    },
-    {
-      "name": "d2b-directory-authority-valid",
-      "description": "D2b: the principal on BVN1, its authority book acc://dn.acme/operators on the Directory, proven at Directory block 70 through the DirectoryAnchor the Directory executed for it; the vote is sequenced from the Directory",
-      "file": "d2b-directory-authority-valid.json",
-      "sha256": "8073b717b79754270f1dd8ad9708f25b0c52ec69f969537079baaa1ff16d6d21",
+      "name": "d2b-directory-authority-valid-g",
+      "description": "D2b: the principal on BVN1, its authority book acc://dn.acme/operators on the Directory, proven at Directory block 70 through the DirectoryAnchor the Directory executed for it; the vote is sequenced from the Directory (the sibling of the frozen document d2b-directory-authority-valid that carries the genesis link: F-VE-2 (b))",
+      "file": "d2b-directory-authority-valid-g.json",
+      "sha256": "638bc8eb0c48e3a28897e7dbaffd737bebf46b35742309d1a4daea2d2e4f1f32",
       "expect": "verified",
       "report": {
         "version": "2.1",
@@ -158,50 +273,10 @@
       }
     },
     {
-      "name": "d2b-directory-page-with-a-bvn-anchor",
-      "description": "D2b: the Directory's anchor is a BlockValidatorAnchor naming the Directory as its source, proven into the certified root: the kind does not fit the Directory",
-      "file": "d2b-directory-page-with-a-bvn-anchor.json",
-      "sha256": "18268b11efe8ae6cec4824bc191b9174610380541c3912fbd15086cd99418639",
-      "expect": "refused",
-      "state": "g1_foreign_partition_mismatch",
-      "partition": "Directory",
-      "block": 70
-    },
-    {
-      "name": "d2b-directory-page-at-another-block",
-      "description": "D2b: a Directory page proven at another Directory block (a valid receipt to a different state root)",
-      "file": "d2b-directory-page-at-another-block.json",
-      "sha256": "158ea74a7f388d987d3df2722ff82c2ec8b1867ae5bac85e00234041be5127ea",
-      "expect": "refused",
-      "state": "g1_page_block_mismatch",
-      "partition": "Directory",
-      "block": 70
-    },
-    {
-      "name": "d2b-directory-book-routed-elsewhere",
-      "description": "D2b: the proven routing table, unchanged since genesis, sends acc://dn.acme to BVN3 while the anchor names the Directory",
-      "file": "d2b-directory-book-routed-elsewhere.json",
-      "sha256": "eb39415cef7461fbe794c9f3fa8a057a17f5773390ebd71c2f87ab9e4bff9941",
-      "expect": "refused",
-      "state": "g1_routing_mismatch",
-      "partition": "Directory",
-      "block": 70
-    },
-    {
-      "name": "d2b-directory-anchor-under-a-bvn-key",
-      "description": "D2b: the Directory's anchor is filed under BVN2's key in the anchors map: the partition is derived from the anchor, not the key",
-      "file": "d2b-directory-anchor-under-a-bvn-key.json",
-      "sha256": "6e21d699720627f50b6516ebaf436259d1a9de0a111a49039e5ba6f42561c763",
-      "expect": "refused",
-      "state": "g1_foreign_partition_mismatch",
-      "partition": "Directory",
-      "block": 70
-    },
-    {
-      "name": "d2c-directory-principal-valid",
-      "description": "D2c: the principal acc://dn.acme/pv2-data on the Directory, governed by a book on BVN2; the transaction's own anchor is a DirectoryAnchor and the vote is sequenced from BVN2 to the Directory",
-      "file": "d2c-directory-principal-valid.json",
-      "sha256": "73e42b9ce78c137496429aef55e256bee9a3462f923ed902cdd58100869d1db1",
+      "name": "d2c-directory-principal-valid-g",
+      "description": "D2c: the principal acc://dn.acme/pv2-data on the Directory, governed by a book on BVN2; the transaction's own anchor is a DirectoryAnchor and the vote is sequenced from BVN2 to the Directory (the sibling of the frozen document d2c-directory-principal-valid that carries the genesis link: F-VE-2 (b))",
+      "file": "d2c-directory-principal-valid-g.json",
+      "sha256": "09f9909602f2334d75f2b7a699172f2c980d830f534c57a6ab99d2459c59b8bd",
       "expect": "verified",
       "report": {
         "version": "2.1",
@@ -268,45 +343,6 @@
           "g1_completeness_unproven"
         ]
       }
-    },
-    {
-      "name": "d2c-directory-principal-with-a-bvn-anchor",
-      "description": "D2c: the transaction's partition anchor is a BlockValidatorAnchor naming the Directory as its source: the kind does not fit the Directory",
-      "file": "d2c-directory-principal-with-a-bvn-anchor.json",
-      "sha256": "5046767a9985c837a1ed09f7f866c9c02614f32295d7b5004975badc04a85c83",
-      "expect": "refused",
-      "state": "g1_foreign_partition_mismatch",
-      "partition": "Directory",
-      "block": 50
-    },
-    {
-      "name": "d2c-directory-principal-at-another-block",
-      "description": "D2c: the Directory principal proven at another Directory block",
-      "file": "d2c-directory-principal-at-another-block.json",
-      "sha256": "be96e81b17b6a692e7c7c323f2e78d3c81c3560b8fa36bfcfc6f325ec44f592d",
-      "expect": "refused",
-      "state": "g1_page_block_mismatch",
-      "partition": "Directory",
-      "block": 50
-    },
-    {
-      "name": "d2c-vote-from-an-unanchored-partition",
-      "description": "D2c: the vote claims to be sequenced from BVN4, whose anchor the evidence does not hold",
-      "file": "d2c-vote-from-an-unanchored-partition.json",
-      "sha256": "76adb0e0f58d4b4db663a77604d8df4fb136cf6e92edcd0214409f49a48ed7c2",
-      "expect": "refused",
-      "state": "g1_partition_anchor_unavailable",
-      "partition": "acc://bvn-BVN4.acme"
-    },
-    {
-      "name": "d2c-vote-sequenced-to-another-partition",
-      "description": "D2c: the vote was sequenced to BVN1, not to the Directory that holds the principal",
-      "file": "d2c-vote-sequenced-to-another-partition.json",
-      "sha256": "bd8af49667c20cb849571a63be8d096c8f6eacf7fa0f94286b21db60593ceeca",
-      "expect": "refused",
-      "state": "g1_foreign_partition_mismatch",
-      "partition": "BVN2",
-      "block": 70
     }
   ]
 }

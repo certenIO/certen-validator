@@ -1448,6 +1448,51 @@
       "prefix": "certify_link_start{genesis}: the link does not start at the previous verified root chain anchor"
     },
     {
+      "name": "continuous-genesis-link-absent",
+      "description": "a document in the continuous form (no links) without the chain identity: the offline walk requires the genesis link of every evidence 2.1 document, not only of one that has links",
+      "world": "chain-continuous",
+      "edit": "evidence/genesisLink removed",
+      "file": "continuous-genesis-link-absent.json",
+      "sha256": "c65be5352ae78724cc281ee018feacf66246012a25e2651499a5b2761c1b1fde",
+      "expect": "refused",
+      "state": "certify_link_missing",
+      "fields": [
+        "genesis"
+      ],
+      "wording": "certify_link_missing{genesis}: an anchored item has no link",
+      "prefix": "certify_link_missing{genesis}: an anchored item has no link"
+    },
+    {
+      "name": "continuous-chain-of-another-incarnation-without-a-link",
+      "description": "a complete continuous chain of another incarnation (the pinned genesis records and genesis set, its own root chain) with no genesis link: before F-VE-2 option (b) it passed the pin; now it is refused for the missing link",
+      "world": "chain-continuous-foreign-genesis",
+      "edit": "evidence/genesisLink removed",
+      "file": "continuous-chain-of-another-incarnation-without-a-link.json",
+      "sha256": "cc859a9aa913cba5f3e7d613c55df8c6990e3589006e2c7f6eabb0299f891d5a",
+      "expect": "refused",
+      "state": "certify_link_missing",
+      "fields": [
+        "genesis"
+      ],
+      "wording": "certify_link_missing{genesis}: an anchored item has no link",
+      "prefix": "certify_link_missing{genesis}: an anchored item has no link"
+    },
+    {
+      "name": "continuous-chain-of-another-incarnation-with-its-own-link",
+      "description": "the same continuous chain with its own, self-consistent genesis link: it does not start at the pinned genesis root chain anchor",
+      "world": "chain-continuous-foreign-genesis",
+      "edit": "none (the world's chain, major block and genesis link start at a root of another incarnation)",
+      "file": "continuous-chain-of-another-incarnation-with-its-own-link.json",
+      "sha256": "e02863234f2a201cfce4382fe1ffe4dfb25a8041ff2147f40f765c162526550e",
+      "expect": "refused",
+      "state": "certify_link_start",
+      "fields": [
+        "genesis"
+      ],
+      "wording": "certify_link_start{genesis}: the link does not start at the previous verified root chain anchor",
+      "prefix": "certify_link_start{genesis}: the link does not start at the previous verified root chain anchor"
+    },
+    {
       "name": "accounted-set-change-verified",
       "description": "updates in the minor run: the globals are rewritten (B, then the genesis content again) and the network to version 2 (a fourth validator); the proven accounts hold 3 and 2 main chain entries, the walk applied every write: the set check is verified, not asserted",
       "world": "chain-accounted",

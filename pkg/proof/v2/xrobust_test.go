@@ -483,6 +483,11 @@ var robustOptionalMembers = optionalTable(
 		"ev:check/set/network/stateReceipt/entries", "ev:check/set/incarnation", "portable:evidence/check/globals/stateReceipt",
 		"portable:evidence/check/globals/stateReceipt/entries", "portable:evidence/check/network/stateReceipt",
 		"portable:evidence/check/network/stateReceipt/entries", "portable:evidence/check/incarnation"),
+	grp("Evidence.GenesisLink: the OFFLINE walk requires it of every evidence 2.1 document (certify_link_missing{genesis}, RB9-F6, F-VE-2 option b), and the "+
+		"portable form is judged by it; the evidence form is judged here by VerifyEvidence21FromSpine, which requires it only of a document that carries links "+
+		"(verifyFromSpine): its starting points come from the chain's own spine log, which carries the incarnation's genesis root chain anchor - the "+
+		"owner's decision that consensus is unaffected. A continuous document without the member is refused offline and judged on its merits here",
+		"ev:genesisLink"),
 	grp("Vote.Cause is recorded and committed into govRoot v4 (intentcert EncodeVoteV4) and read by no verifier step: a recorded fact "+
 		"that is not proven (recorded as a finding)",
 		"ev:votes/*/cause"),

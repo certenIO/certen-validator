@@ -8,558 +8,72 @@
       "description": "an UpdateAccountAuth adds the delegate book to a principal that listed the voter's book; both books vote accept: the added book's signature is admitted although the principal does not list it yet, the transaction is ready when the added book and the book of the set before it have voted. Each key signature's arrival is derived on its own partition (BankPage1 on BVN2 in block 65, DelePage1 on BVN3 in block 66) and each vote's production is proven in its partition's synthetic ledger and bound to its SequencedMessage: nothing is left unproven",
       "file": "add-op-added-authority-voted.json",
       "sha256": "431cdc1b8528600203fe859b8390bbc207aee17614791aebc9f1a00ed69a4b56",
-      "expect": "verified",
-      "report": {
-        "version": "2.1",
-        "tag": "certen:g1:v4",
-        "partition": "acc://bvn-BVN1.acme",
-        "anchorBlock": 50,
-        "certifiedRoot": "124beb56255d48906089586a4dce33c0d0f8825fb79da372d00117142018631f",
-        "checkBlock": 300,
-        "setVerdict": "verified",
-        "routingHeight": 1,
-        "proven": [
-          {
-            "url": "acc://pv2-cust-5.acme/data",
-            "partition": "acc://bvn-BVN1.acme",
-            "block": 50,
-            "roles": [
-              "principal-chain"
-            ]
-          },
-          {
-            "url": "acc://pv2-bank-5.acme/book",
-            "partition": "acc://bvn-BVN2.acme",
-            "block": 70,
-            "roles": [
-              "authority-book"
-            ]
-          },
-          {
-            "url": "acc://pv2-bank-5.acme/book/1",
-            "partition": "acc://bvn-BVN2.acme",
-            "block": 70,
-            "roles": [
-              "authority-page",
-              "voter"
-            ]
-          },
-          {
-            "url": "acc://pv2-bank-5.acme/book/2",
-            "partition": "acc://bvn-BVN2.acme",
-            "block": 70,
-            "roles": [
-              "authority-page"
-            ]
-          },
-          {
-            "url": "acc://bvn-BVN2.acme/synthetic",
-            "partition": "acc://bvn-BVN2.acme",
-            "block": 70,
-            "roles": [
-              "synthetic-chain"
-            ]
-          },
-          {
-            "url": "acc://pv2-dele-5.acme/book",
-            "partition": "acc://bvn-BVN3.acme",
-            "block": 90,
-            "roles": [
-              "authority-book",
-              "header-authority"
-            ]
-          },
-          {
-            "url": "acc://pv2-dele-5.acme/book/1",
-            "partition": "acc://bvn-BVN3.acme",
-            "block": 90,
-            "roles": [
-              "authority-page",
-              "header-authority",
-              "voter"
-            ]
-          },
-          {
-            "url": "acc://bvn-BVN3.acme/synthetic",
-            "partition": "acc://bvn-BVN3.acme",
-            "block": 90,
-            "roles": [
-              "synthetic-chain"
-            ]
-          }
-        ],
-        "pagesBound": 8,
-        "unproven": null,
-        "authorizationMode": "authorities_required",
-        "arrivals": [
-          {
-            "kind": "signature",
-            "account": "acc://pv2-bank-5.acme/book/1",
-            "block": 65
-          },
-          {
-            "kind": "signature",
-            "account": "acc://pv2-dele-5.acme/book/1",
-            "block": 66
-          },
-          {
-            "kind": "produced",
-            "account": "acc://bvn-BVN2.acme/synthetic",
-            "block": 66
-          },
-          {
-            "kind": "produced",
-            "account": "acc://bvn-BVN3.acme/synthetic",
-            "block": 68
-          }
-        ]
-      }
+      "expect": "refused",
+      "state": "certify_link_missing",
+      "fields": [
+        "genesis"
+      ],
+      "note": "frozen document; verdict moved by F-VE-2 (b) (2.1 unreleased)"
     },
     {
       "name": "add-op-added-authority-voted-first",
       "description": "the added authority's vote is delivered to the principal before the voter's: its key signature arrives in block 60, it is first in the principal's signature chain and in the document. The executor finds the transaction ready when the last required vote arrives, whichever it is",
       "file": "add-op-added-authority-voted-first.json",
       "sha256": "36dc0ed3d529f951a59a9f517c00838029bda2b9782b3cfa5ad0b1a7587de01f",
-      "expect": "verified",
-      "report": {
-        "version": "2.1",
-        "tag": "certen:g1:v4",
-        "partition": "acc://bvn-BVN1.acme",
-        "anchorBlock": 50,
-        "certifiedRoot": "17f213cd787b9ed4c42547b204adafc75d680b1f3aa9178ece48cb5439aea287",
-        "checkBlock": 300,
-        "setVerdict": "verified",
-        "routingHeight": 1,
-        "proven": [
-          {
-            "url": "acc://pv2-cust-5.acme/data",
-            "partition": "acc://bvn-BVN1.acme",
-            "block": 50,
-            "roles": [
-              "principal-chain"
-            ]
-          },
-          {
-            "url": "acc://pv2-bank-5.acme/book",
-            "partition": "acc://bvn-BVN2.acme",
-            "block": 70,
-            "roles": [
-              "authority-book"
-            ]
-          },
-          {
-            "url": "acc://pv2-bank-5.acme/book/1",
-            "partition": "acc://bvn-BVN2.acme",
-            "block": 70,
-            "roles": [
-              "authority-page",
-              "voter"
-            ]
-          },
-          {
-            "url": "acc://pv2-bank-5.acme/book/2",
-            "partition": "acc://bvn-BVN2.acme",
-            "block": 70,
-            "roles": [
-              "authority-page"
-            ]
-          },
-          {
-            "url": "acc://pv2-dele-5.acme/book",
-            "partition": "acc://bvn-BVN3.acme",
-            "block": 90,
-            "roles": [
-              "authority-book",
-              "header-authority"
-            ]
-          },
-          {
-            "url": "acc://pv2-dele-5.acme/book/1",
-            "partition": "acc://bvn-BVN3.acme",
-            "block": 90,
-            "roles": [
-              "authority-page",
-              "header-authority",
-              "voter"
-            ]
-          }
-        ],
-        "pagesBound": 6,
-        "unproven": [
-          "g1_vote_held",
-          "g1_vote_held"
-        ],
-        "authorizationMode": "authorities_required",
-        "arrivals": [
-          {
-            "kind": "signature",
-            "account": "acc://pv2-dele-5.acme/book/1",
-            "block": 60
-          },
-          {
-            "kind": "signature",
-            "account": "acc://pv2-bank-5.acme/book/1",
-            "block": 65
-          }
-        ]
-      }
+      "expect": "refused",
+      "state": "certify_link_missing",
+      "fields": [
+        "genesis"
+      ],
+      "note": "frozen document; verdict moved by F-VE-2 (b) (2.1 unreleased)"
     },
     {
       "name": "add-op-votes-listed-in-the-other-order",
       "description": "the principal's signature chain holds the voter's vote and then the added authority's, the document lists them the other way round: the verifier reads no order into the list",
       "file": "add-op-votes-listed-in-the-other-order.json",
       "sha256": "10b513cc1ac03607977e5bb0d8046c642c0ceb54c1612e32e58c8e7342b0446a",
-      "expect": "verified",
-      "report": {
-        "version": "2.1",
-        "tag": "certen:g1:v4",
-        "partition": "acc://bvn-BVN1.acme",
-        "anchorBlock": 50,
-        "certifiedRoot": "45858f61d6e7ec61495e31b2340166814ca7beb87f76dcdb98fab1b98e7263e4",
-        "checkBlock": 300,
-        "setVerdict": "verified",
-        "routingHeight": 1,
-        "proven": [
-          {
-            "url": "acc://pv2-cust-5.acme/data",
-            "partition": "acc://bvn-BVN1.acme",
-            "block": 50,
-            "roles": [
-              "principal-chain"
-            ]
-          },
-          {
-            "url": "acc://pv2-bank-5.acme/book",
-            "partition": "acc://bvn-BVN2.acme",
-            "block": 70,
-            "roles": [
-              "authority-book"
-            ]
-          },
-          {
-            "url": "acc://pv2-bank-5.acme/book/1",
-            "partition": "acc://bvn-BVN2.acme",
-            "block": 70,
-            "roles": [
-              "authority-page",
-              "voter"
-            ]
-          },
-          {
-            "url": "acc://pv2-bank-5.acme/book/2",
-            "partition": "acc://bvn-BVN2.acme",
-            "block": 70,
-            "roles": [
-              "authority-page"
-            ]
-          },
-          {
-            "url": "acc://pv2-dele-5.acme/book",
-            "partition": "acc://bvn-BVN3.acme",
-            "block": 90,
-            "roles": [
-              "authority-book",
-              "header-authority"
-            ]
-          },
-          {
-            "url": "acc://pv2-dele-5.acme/book/1",
-            "partition": "acc://bvn-BVN3.acme",
-            "block": 90,
-            "roles": [
-              "authority-page",
-              "header-authority",
-              "voter"
-            ]
-          }
-        ],
-        "pagesBound": 6,
-        "unproven": [
-          "g1_vote_held",
-          "g1_vote_held"
-        ],
-        "authorizationMode": "authorities_required",
-        "arrivals": [
-          {
-            "kind": "signature",
-            "account": "acc://pv2-dele-5.acme/book/1",
-            "block": 66
-          },
-          {
-            "kind": "signature",
-            "account": "acc://pv2-bank-5.acme/book/1",
-            "block": 65
-          }
-        ]
-      }
+      "expect": "refused",
+      "state": "certify_link_missing",
+      "fields": [
+        "genesis"
+      ],
+      "note": "frozen document; verdict moved by F-VE-2 (b) (2.1 unreleased)"
     },
     {
       "name": "add-op-added-authority-page-threshold-two-voted",
       "description": "the added authority's page holds two keys and a threshold of 2 (version 2 after the threshold was set in block 20): both keys signed, in blocks 62 and 66, and the page's vote is the book's vote; all three key signatures' arrivals are derived",
       "file": "add-op-added-authority-page-threshold-two-voted.json",
       "sha256": "9a857d319d5d89ae3b52b346bee7a5474c316ff827828e52827e08d265d6ea67",
-      "expect": "verified",
-      "report": {
-        "version": "2.1",
-        "tag": "certen:g1:v4",
-        "partition": "acc://bvn-BVN1.acme",
-        "anchorBlock": 50,
-        "certifiedRoot": "4a67857057665760c44e7b13de306155a423439cf75b4b11fdef08ca27844acb",
-        "checkBlock": 300,
-        "setVerdict": "verified",
-        "routingHeight": 1,
-        "proven": [
-          {
-            "url": "acc://pv2-cust-5.acme/data",
-            "partition": "acc://bvn-BVN1.acme",
-            "block": 50,
-            "roles": [
-              "principal-chain"
-            ]
-          },
-          {
-            "url": "acc://pv2-bank-5.acme/book",
-            "partition": "acc://bvn-BVN2.acme",
-            "block": 70,
-            "roles": [
-              "authority-book"
-            ]
-          },
-          {
-            "url": "acc://pv2-bank-5.acme/book/1",
-            "partition": "acc://bvn-BVN2.acme",
-            "block": 70,
-            "roles": [
-              "authority-page",
-              "voter"
-            ]
-          },
-          {
-            "url": "acc://pv2-bank-5.acme/book/2",
-            "partition": "acc://bvn-BVN2.acme",
-            "block": 70,
-            "roles": [
-              "authority-page"
-            ]
-          },
-          {
-            "url": "acc://pv2-dele-5.acme/book",
-            "partition": "acc://bvn-BVN3.acme",
-            "block": 90,
-            "roles": [
-              "authority-book",
-              "header-authority"
-            ]
-          },
-          {
-            "url": "acc://pv2-dele-5.acme/book/1",
-            "partition": "acc://bvn-BVN3.acme",
-            "block": 90,
-            "roles": [
-              "authority-page",
-              "header-authority",
-              "voter"
-            ]
-          }
-        ],
-        "pagesBound": 6,
-        "unproven": [
-          "g1_vote_held",
-          "g1_vote_held"
-        ],
-        "authorizationMode": "authorities_required",
-        "arrivals": [
-          {
-            "kind": "signature",
-            "account": "acc://pv2-bank-5.acme/book/1",
-            "block": 65
-          },
-          {
-            "kind": "signature",
-            "account": "acc://pv2-dele-5.acme/book/1",
-            "block": 66
-          },
-          {
-            "kind": "signature",
-            "account": "acc://pv2-dele-5.acme/book/1",
-            "block": 62
-          }
-        ]
-      }
+      "expect": "refused",
+      "state": "certify_link_missing",
+      "fields": [
+        "genesis"
+      ],
+      "note": "frozen document; verdict moved by F-VE-2 (b) (2.1 unreleased)"
     },
     {
       "name": "enable-op-both-authorities-voted",
       "description": "an UpdateAccountAuth enables the delegate book, which was disabled before: RequireAuthorization makes a disabled authority as required as an enabled one, and both books voted",
       "file": "enable-op-both-authorities-voted.json",
       "sha256": "3f4155c9d974ee98d2d3747e3648adb4eccc3a346eb5b511135df7ebeb8348c8",
-      "expect": "verified",
-      "report": {
-        "version": "2.1",
-        "tag": "certen:g1:v4",
-        "partition": "acc://bvn-BVN1.acme",
-        "anchorBlock": 50,
-        "certifiedRoot": "7c9f412346b3bfc682ff235f29dbba48e7f1a2074c167a322bdfbaf7131783c4",
-        "checkBlock": 300,
-        "setVerdict": "verified",
-        "routingHeight": 1,
-        "proven": [
-          {
-            "url": "acc://pv2-cust-5.acme/data",
-            "partition": "acc://bvn-BVN1.acme",
-            "block": 50,
-            "roles": [
-              "principal-chain"
-            ]
-          },
-          {
-            "url": "acc://pv2-bank-5.acme/book",
-            "partition": "acc://bvn-BVN2.acme",
-            "block": 70,
-            "roles": [
-              "authority-book"
-            ]
-          },
-          {
-            "url": "acc://pv2-bank-5.acme/book/1",
-            "partition": "acc://bvn-BVN2.acme",
-            "block": 70,
-            "roles": [
-              "authority-page",
-              "voter"
-            ]
-          },
-          {
-            "url": "acc://pv2-bank-5.acme/book/2",
-            "partition": "acc://bvn-BVN2.acme",
-            "block": 70,
-            "roles": [
-              "authority-page"
-            ]
-          },
-          {
-            "url": "acc://pv2-dele-5.acme/book",
-            "partition": "acc://bvn-BVN3.acme",
-            "block": 90,
-            "roles": [
-              "authority-book"
-            ]
-          },
-          {
-            "url": "acc://pv2-dele-5.acme/book/1",
-            "partition": "acc://bvn-BVN3.acme",
-            "block": 90,
-            "roles": [
-              "authority-page",
-              "voter"
-            ]
-          }
-        ],
-        "pagesBound": 6,
-        "unproven": [
-          "g1_vote_held",
-          "g1_vote_held"
-        ],
-        "authorizationMode": "authorities_required",
-        "arrivals": [
-          {
-            "kind": "signature",
-            "account": "acc://pv2-bank-5.acme/book/1",
-            "block": 65
-          },
-          {
-            "kind": "signature",
-            "account": "acc://pv2-dele-5.acme/book/1",
-            "block": 66
-          }
-        ]
-      }
+      "expect": "refused",
+      "state": "certify_link_missing",
+      "fields": [
+        "genesis"
+      ],
+      "note": "frozen document; verdict moved by F-VE-2 (b) (2.1 unreleased)"
     },
     {
       "name": "disable-op-both-authorities-voted",
       "description": "an UpdateAccountAuth disables the delegate book: it was required before (enabled) and is required after (disabled, by RequireAuthorization), and both books voted",
       "file": "disable-op-both-authorities-voted.json",
       "sha256": "ebf942267948b55afb066c1c6717f6e20be2ad504804f3b34a6a2460ee4cf2b6",
-      "expect": "verified",
-      "report": {
-        "version": "2.1",
-        "tag": "certen:g1:v4",
-        "partition": "acc://bvn-BVN1.acme",
-        "anchorBlock": 50,
-        "certifiedRoot": "1a19db3f1358e83e17bb83275b8bacc8b4d0021aef538c0b4bb087eb56f183ee",
-        "checkBlock": 300,
-        "setVerdict": "verified",
-        "routingHeight": 1,
-        "proven": [
-          {
-            "url": "acc://pv2-cust-5.acme/data",
-            "partition": "acc://bvn-BVN1.acme",
-            "block": 50,
-            "roles": [
-              "principal-chain"
-            ]
-          },
-          {
-            "url": "acc://pv2-bank-5.acme/book",
-            "partition": "acc://bvn-BVN2.acme",
-            "block": 70,
-            "roles": [
-              "authority-book"
-            ]
-          },
-          {
-            "url": "acc://pv2-bank-5.acme/book/1",
-            "partition": "acc://bvn-BVN2.acme",
-            "block": 70,
-            "roles": [
-              "authority-page",
-              "voter"
-            ]
-          },
-          {
-            "url": "acc://pv2-bank-5.acme/book/2",
-            "partition": "acc://bvn-BVN2.acme",
-            "block": 70,
-            "roles": [
-              "authority-page"
-            ]
-          },
-          {
-            "url": "acc://pv2-dele-5.acme/book",
-            "partition": "acc://bvn-BVN3.acme",
-            "block": 90,
-            "roles": [
-              "authority-book"
-            ]
-          },
-          {
-            "url": "acc://pv2-dele-5.acme/book/1",
-            "partition": "acc://bvn-BVN3.acme",
-            "block": 90,
-            "roles": [
-              "authority-page",
-              "voter"
-            ]
-          }
-        ],
-        "pagesBound": 6,
-        "unproven": [
-          "g1_vote_held",
-          "g1_vote_held"
-        ],
-        "authorizationMode": "authorities_required",
-        "arrivals": [
-          {
-            "kind": "signature",
-            "account": "acc://pv2-bank-5.acme/book/1",
-            "block": 65
-          },
-          {
-            "kind": "signature",
-            "account": "acc://pv2-dele-5.acme/book/1",
-            "block": 66
-          }
-        ]
-      }
+      "expect": "refused",
+      "state": "certify_link_missing",
+      "fields": [
+        "genesis"
+      ],
+      "note": "frozen document; verdict moved by F-VE-2 (b) (2.1 unreleased)"
     },
     {
       "name": "add-op-only-the-added-authority-voted",
@@ -670,6 +184,564 @@
       "state": "g1_block_before_signature",
       "partition": "BVN1",
       "block": 50
+    },
+    {
+      "name": "add-op-added-authority-voted-g",
+      "description": "an UpdateAccountAuth adds the delegate book to a principal that listed the voter's book; both books vote accept: the added book's signature is admitted although the principal does not list it yet, the transaction is ready when the added book and the book of the set before it have voted. Each key signature's arrival is derived on its own partition (BankPage1 on BVN2 in block 65, DelePage1 on BVN3 in block 66) and each vote's production is proven in its partition's synthetic ledger and bound to its SequencedMessage: nothing is left unproven (the sibling of the frozen document add-op-added-authority-voted that carries the genesis link: F-VE-2 (b))",
+      "file": "add-op-added-authority-voted-g.json",
+      "sha256": "7fea4e6e14b4c406ce43fa31c6dc880ab7494f59d66a67ce3014af5fec240a47",
+      "expect": "verified",
+      "report": {
+        "version": "2.1",
+        "tag": "certen:g1:v4",
+        "partition": "acc://bvn-BVN1.acme",
+        "anchorBlock": 50,
+        "certifiedRoot": "124beb56255d48906089586a4dce33c0d0f8825fb79da372d00117142018631f",
+        "checkBlock": 300,
+        "setVerdict": "verified",
+        "routingHeight": 1,
+        "proven": [
+          {
+            "url": "acc://pv2-cust-5.acme/data",
+            "partition": "acc://bvn-BVN1.acme",
+            "block": 50,
+            "roles": [
+              "principal-chain"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/1",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page",
+              "voter"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/2",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page"
+            ]
+          },
+          {
+            "url": "acc://bvn-BVN2.acme/synthetic",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "synthetic-chain"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "authority-book",
+              "header-authority"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book/1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "authority-page",
+              "header-authority",
+              "voter"
+            ]
+          },
+          {
+            "url": "acc://bvn-BVN3.acme/synthetic",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "synthetic-chain"
+            ]
+          }
+        ],
+        "pagesBound": 8,
+        "unproven": null,
+        "authorizationMode": "authorities_required",
+        "arrivals": [
+          {
+            "kind": "signature",
+            "account": "acc://pv2-bank-5.acme/book/1",
+            "block": 65
+          },
+          {
+            "kind": "signature",
+            "account": "acc://pv2-dele-5.acme/book/1",
+            "block": 66
+          },
+          {
+            "kind": "produced",
+            "account": "acc://bvn-BVN2.acme/synthetic",
+            "block": 66
+          },
+          {
+            "kind": "produced",
+            "account": "acc://bvn-BVN3.acme/synthetic",
+            "block": 68
+          }
+        ]
+      }
+    },
+    {
+      "name": "add-op-added-authority-voted-first-g",
+      "description": "the added authority's vote is delivered to the principal before the voter's: its key signature arrives in block 60, it is first in the principal's signature chain and in the document. The executor finds the transaction ready when the last required vote arrives, whichever it is (the sibling of the frozen document add-op-added-authority-voted-first that carries the genesis link: F-VE-2 (b))",
+      "file": "add-op-added-authority-voted-first-g.json",
+      "sha256": "8a058e2378d29370a187a1fa9b5d8404d63b8bdb26aea745b5a77bbf9bf844aa",
+      "expect": "verified",
+      "report": {
+        "version": "2.1",
+        "tag": "certen:g1:v4",
+        "partition": "acc://bvn-BVN1.acme",
+        "anchorBlock": 50,
+        "certifiedRoot": "17f213cd787b9ed4c42547b204adafc75d680b1f3aa9178ece48cb5439aea287",
+        "checkBlock": 300,
+        "setVerdict": "verified",
+        "routingHeight": 1,
+        "proven": [
+          {
+            "url": "acc://pv2-cust-5.acme/data",
+            "partition": "acc://bvn-BVN1.acme",
+            "block": 50,
+            "roles": [
+              "principal-chain"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/1",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page",
+              "voter"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/2",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "authority-book",
+              "header-authority"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book/1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "authority-page",
+              "header-authority",
+              "voter"
+            ]
+          }
+        ],
+        "pagesBound": 6,
+        "unproven": [
+          "g1_vote_held",
+          "g1_vote_held"
+        ],
+        "authorizationMode": "authorities_required",
+        "arrivals": [
+          {
+            "kind": "signature",
+            "account": "acc://pv2-dele-5.acme/book/1",
+            "block": 60
+          },
+          {
+            "kind": "signature",
+            "account": "acc://pv2-bank-5.acme/book/1",
+            "block": 65
+          }
+        ]
+      }
+    },
+    {
+      "name": "add-op-votes-listed-in-the-other-order-g",
+      "description": "the principal's signature chain holds the voter's vote and then the added authority's, the document lists them the other way round: the verifier reads no order into the list (the sibling of the frozen document add-op-votes-listed-in-the-other-order that carries the genesis link: F-VE-2 (b))",
+      "file": "add-op-votes-listed-in-the-other-order-g.json",
+      "sha256": "d054d56c6e71a3d351504c11c74378b0c365b8d56a9303f181d16a91e3ab2ecf",
+      "expect": "verified",
+      "report": {
+        "version": "2.1",
+        "tag": "certen:g1:v4",
+        "partition": "acc://bvn-BVN1.acme",
+        "anchorBlock": 50,
+        "certifiedRoot": "45858f61d6e7ec61495e31b2340166814ca7beb87f76dcdb98fab1b98e7263e4",
+        "checkBlock": 300,
+        "setVerdict": "verified",
+        "routingHeight": 1,
+        "proven": [
+          {
+            "url": "acc://pv2-cust-5.acme/data",
+            "partition": "acc://bvn-BVN1.acme",
+            "block": 50,
+            "roles": [
+              "principal-chain"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/1",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page",
+              "voter"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/2",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "authority-book",
+              "header-authority"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book/1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "authority-page",
+              "header-authority",
+              "voter"
+            ]
+          }
+        ],
+        "pagesBound": 6,
+        "unproven": [
+          "g1_vote_held",
+          "g1_vote_held"
+        ],
+        "authorizationMode": "authorities_required",
+        "arrivals": [
+          {
+            "kind": "signature",
+            "account": "acc://pv2-dele-5.acme/book/1",
+            "block": 66
+          },
+          {
+            "kind": "signature",
+            "account": "acc://pv2-bank-5.acme/book/1",
+            "block": 65
+          }
+        ]
+      }
+    },
+    {
+      "name": "add-op-added-authority-page-threshold-two-voted-g",
+      "description": "the added authority's page holds two keys and a threshold of 2 (version 2 after the threshold was set in block 20): both keys signed, in blocks 62 and 66, and the page's vote is the book's vote; all three key signatures' arrivals are derived (the sibling of the frozen document add-op-added-authority-page-threshold-two-voted that carries the genesis link: F-VE-2 (b))",
+      "file": "add-op-added-authority-page-threshold-two-voted-g.json",
+      "sha256": "8128affddab8029ada66b7f5027d259eff75979fd6d0fa7c29c6c12feb37dc5a",
+      "expect": "verified",
+      "report": {
+        "version": "2.1",
+        "tag": "certen:g1:v4",
+        "partition": "acc://bvn-BVN1.acme",
+        "anchorBlock": 50,
+        "certifiedRoot": "4a67857057665760c44e7b13de306155a423439cf75b4b11fdef08ca27844acb",
+        "checkBlock": 300,
+        "setVerdict": "verified",
+        "routingHeight": 1,
+        "proven": [
+          {
+            "url": "acc://pv2-cust-5.acme/data",
+            "partition": "acc://bvn-BVN1.acme",
+            "block": 50,
+            "roles": [
+              "principal-chain"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/1",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page",
+              "voter"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/2",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "authority-book",
+              "header-authority"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book/1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "authority-page",
+              "header-authority",
+              "voter"
+            ]
+          }
+        ],
+        "pagesBound": 6,
+        "unproven": [
+          "g1_vote_held",
+          "g1_vote_held"
+        ],
+        "authorizationMode": "authorities_required",
+        "arrivals": [
+          {
+            "kind": "signature",
+            "account": "acc://pv2-bank-5.acme/book/1",
+            "block": 65
+          },
+          {
+            "kind": "signature",
+            "account": "acc://pv2-dele-5.acme/book/1",
+            "block": 66
+          },
+          {
+            "kind": "signature",
+            "account": "acc://pv2-dele-5.acme/book/1",
+            "block": 62
+          }
+        ]
+      }
+    },
+    {
+      "name": "enable-op-both-authorities-voted-g",
+      "description": "an UpdateAccountAuth enables the delegate book, which was disabled before: RequireAuthorization makes a disabled authority as required as an enabled one, and both books voted (the sibling of the frozen document enable-op-both-authorities-voted that carries the genesis link: F-VE-2 (b))",
+      "file": "enable-op-both-authorities-voted-g.json",
+      "sha256": "c3e6c01363858015455cb768adbcf629e25e5651bffd928db5a448775a05e8c1",
+      "expect": "verified",
+      "report": {
+        "version": "2.1",
+        "tag": "certen:g1:v4",
+        "partition": "acc://bvn-BVN1.acme",
+        "anchorBlock": 50,
+        "certifiedRoot": "7c9f412346b3bfc682ff235f29dbba48e7f1a2074c167a322bdfbaf7131783c4",
+        "checkBlock": 300,
+        "setVerdict": "verified",
+        "routingHeight": 1,
+        "proven": [
+          {
+            "url": "acc://pv2-cust-5.acme/data",
+            "partition": "acc://bvn-BVN1.acme",
+            "block": 50,
+            "roles": [
+              "principal-chain"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/1",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page",
+              "voter"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/2",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "authority-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book/1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "authority-page",
+              "voter"
+            ]
+          }
+        ],
+        "pagesBound": 6,
+        "unproven": [
+          "g1_vote_held",
+          "g1_vote_held"
+        ],
+        "authorizationMode": "authorities_required",
+        "arrivals": [
+          {
+            "kind": "signature",
+            "account": "acc://pv2-bank-5.acme/book/1",
+            "block": 65
+          },
+          {
+            "kind": "signature",
+            "account": "acc://pv2-dele-5.acme/book/1",
+            "block": 66
+          }
+        ]
+      }
+    },
+    {
+      "name": "disable-op-both-authorities-voted-g",
+      "description": "an UpdateAccountAuth disables the delegate book: it was required before (enabled) and is required after (disabled, by RequireAuthorization), and both books voted (the sibling of the frozen document disable-op-both-authorities-voted that carries the genesis link: F-VE-2 (b))",
+      "file": "disable-op-both-authorities-voted-g.json",
+      "sha256": "7d6be90a9a1e307def75fa241d9cc81115ca6c3ae50eaa18c1c2f642610c6ab0",
+      "expect": "verified",
+      "report": {
+        "version": "2.1",
+        "tag": "certen:g1:v4",
+        "partition": "acc://bvn-BVN1.acme",
+        "anchorBlock": 50,
+        "certifiedRoot": "1a19db3f1358e83e17bb83275b8bacc8b4d0021aef538c0b4bb087eb56f183ee",
+        "checkBlock": 300,
+        "setVerdict": "verified",
+        "routingHeight": 1,
+        "proven": [
+          {
+            "url": "acc://pv2-cust-5.acme/data",
+            "partition": "acc://bvn-BVN1.acme",
+            "block": 50,
+            "roles": [
+              "principal-chain"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/1",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page",
+              "voter"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/2",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "authority-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book/1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "authority-page",
+              "voter"
+            ]
+          }
+        ],
+        "pagesBound": 6,
+        "unproven": [
+          "g1_vote_held",
+          "g1_vote_held"
+        ],
+        "authorizationMode": "authorities_required",
+        "arrivals": [
+          {
+            "kind": "signature",
+            "account": "acc://pv2-bank-5.acme/book/1",
+            "block": 65
+          },
+          {
+            "kind": "signature",
+            "account": "acc://pv2-dele-5.acme/book/1",
+            "block": 66
+          }
+        ]
+      }
     }
   ]
 }
