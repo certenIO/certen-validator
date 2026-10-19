@@ -101,6 +101,7 @@ type ReplayCaptureConfig struct {
 	Source  ReplayCaptureSource
 	Budget  time.Duration // default ReplayCaptureBudget
 	Poll    time.Duration // default 2s
+	Clock   ReplayClock   // default WallClock; a replay clock over a recorded world (RB10-F9)
 	Logf    func(string, ...interface{})
 }
 
@@ -109,6 +110,13 @@ func (c *ReplayCaptureConfig) budget() time.Duration {
 		return ReplayCaptureBudget
 	}
 	return c.Budget
+}
+
+func (c *ReplayCaptureConfig) clock() ReplayClock {
+	if c.Clock == nil {
+		return WallClock
+	}
+	return c.Clock
 }
 
 func (c *ReplayCaptureConfig) poll() time.Duration {
@@ -195,8 +203,9 @@ func proveAt(ctx context.Context, p ReplayStateProvider, contract common.Address
 // block, provider or pass.
 func CaptureReplayGuard(ctx context.Context, cfg ReplayCaptureConfig, txHash common.Hash) *ReplayGuardEvidence {
 	src := cfg.Source
-	deadline := time.Now().Add(cfg.budget())
-	bctx, cancel := context.WithDeadline(ctx, deadline)
+	clock := cfg.clock()
+	deadline := clock.Now().Add(cfg.budget())
+	bctx, cancel := clock.WithDeadline(ctx, deadline)
 	defer cancel()
 	state := &ReplayNamedState{ChainID: cfg.ChainID, TxHash: txHash}
 	finish := func(st, reason, format string, args ...interface{}) *ReplayGuardEvidence {
@@ -223,7 +232,7 @@ func CaptureReplayGuard(ctx context.Context, cfg ReplayCaptureConfig, txHash com
 			rc = r
 			break
 		}
-		if bctx.Err() != nil || !sleepCtx(bctx, cfg.poll()) {
+		if bctx.Err() != nil || !clock.Sleep(bctx, cfg.poll()) {
 			return finish(ReplayUnproven, ReasonReceiptUnavailable, "no agreed receipt for the settlement before %s (last: %v)", ended(), err)
 		}
 	}
@@ -276,7 +285,7 @@ func CaptureReplayGuard(ctx context.Context, cfg ReplayCaptureConfig, txHash com
 	}
 	slot := ReplaySlotFor(leaf, layout.base)
 
-	headerN, err := agreedHeaderByHash(bctx, src, rc.BlockHash, deadline, cfg.poll())
+	headerN, err := agreedHeaderByHash(bctx, src, rc.BlockHash, clock, deadline, cfg.poll())
 	if err != nil {
 		return finish(ReplayUnproven, ReasonStateUnavailable, "the settlement block %s has no agreed header: %v", rc.BlockHash.Hex(), err)
 	}
@@ -344,7 +353,7 @@ func CaptureReplayGuard(ctx context.Context, cfg ReplayCaptureConfig, txHash com
 		if after != nil {
 			break
 		}
-		if bctx.Err() != nil || !sleepCtx(bctx, cfg.poll()) {
+		if bctx.Err() != nil || !clock.Sleep(bctx, cfg.poll()) {
 			failures.notAsked(providers, ended())
 			state.Providers = failures.list()
 			return finish(ReplayUnproven, ReasonStateUnavailable,
@@ -373,7 +382,7 @@ func CaptureReplayGuard(ctx context.Context, cfg ReplayCaptureConfig, txHash com
 	// again until the budget ends, as After is (RB10-F7: a provider's backends differ, and one that refuses the parent now
 	// can serve it seconds later).
 	before := newProviderFailures()
-	parent, perr := agreedHeaderByHash(bctx, src, headerN.ParentHash, deadline, cfg.poll())
+	parent, perr := agreedHeaderByHash(bctx, src, headerN.ParentHash, clock, deadline, cfg.poll())
 	if perr != nil {
 		before.note("(agreeing providers)", fmt.Sprintf("the parent header %s: %v", headerN.ParentHash.Hex(), perr))
 	} else {
@@ -400,7 +409,7 @@ func CaptureReplayGuard(ctx context.Context, cfg ReplayCaptureConfig, txHash com
 				proof.Before = &ReplayBefore{ParentHeader: parentRLP, Proof: *sp}
 				break
 			}
-			if proof.Before == nil && !sleepCtx(bctx, cfg.poll()) {
+			if proof.Before == nil && !clock.Sleep(bctx, cfg.poll()) {
 				break
 			}
 		}
@@ -460,7 +469,7 @@ func (f *providerFailures) list() []ReplayProviderFailure {
 }
 
 // agreedHeaderByHash reads a header by hash from the agreeing providers, asking again until the deadline.
-func agreedHeaderByHash(ctx context.Context, src ReplayCaptureSource, hash common.Hash, deadline time.Time, poll time.Duration) (*types.Header, error) {
+func agreedHeaderByHash(ctx context.Context, src ReplayCaptureSource, hash common.Hash, clock ReplayClock, deadline time.Time, poll time.Duration) (*types.Header, error) {
 	for {
 		h, err := src.HeaderByHash(ctx, hash)
 		if err == nil && h != nil && h.Number != nil && h.Hash() == hash {
@@ -469,10 +478,10 @@ func agreedHeaderByHash(ctx context.Context, src ReplayCaptureSource, hash commo
 		if err == nil {
 			err = fmt.Errorf("the served header is not block %s", hash.Hex())
 		}
-		if ctx.Err() != nil || time.Now().After(deadline) {
+		if ctx.Err() != nil || clock.Now().After(deadline) {
 			return nil, err
 		}
-		if !sleepCtx(ctx, poll) {
+		if !clock.Sleep(ctx, poll) {
 			return nil, err
 		}
 	}

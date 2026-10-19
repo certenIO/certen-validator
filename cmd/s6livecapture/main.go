@@ -351,7 +351,14 @@ func Judge(ctx context.Context, w *World) (*Verdict, *ethproof.ReplayGuardEviden
 	}
 	tx := common.HexToHash(w.TxHash)
 	v := &Verdict{ChainID: w.ChainID, Chain: w.Chain, TxHash: tx.Hex()}
-	ev := ethproof.CaptureReplayGuard(ctx, ethproof.ReplayCaptureConfig{ChainID: w.ChainID, Source: src, Budget: time.Millisecond, Poll: time.Millisecond}, tx)
+	// RB10-F9: the recorded world answers instantly, so the capture runs with the production budget and the live poll
+	// interval on a replay clock that moves only when the capture waits: it asks what the live capture asked, in order.
+	start, terr := time.Parse(time.RFC3339Nano, w.StartedUTC)
+	if terr != nil {
+		start = time.Unix(0, 0).UTC()
+	}
+	ev := ethproof.CaptureReplayGuard(ctx, ethproof.ReplayCaptureConfig{ChainID: w.ChainID, Source: src, Budget: ethproof.ReplayCaptureBudget,
+		Poll: time.Second, Clock: ethproof.NewVirtualClock(start)}, tx)
 	if ev == nil {
 		return v, nil, fmt.Errorf("%s is no account settlement: no S6 claim", tx.Hex())
 	}
