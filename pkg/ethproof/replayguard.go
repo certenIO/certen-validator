@@ -498,6 +498,10 @@ func (sp *SlotProof) verify(stateRoot common.Hash, account common.Address, slot 
 		return nil, storageInvalid("the declared storage hash %s / code hash %s are not the account's %s / %s", sp.StorageHash.Hex(),
 			sp.CodeHash.Hex(), res.Account.StorageRoot.Hex(), res.Account.CodeHash.Hex())
 	}
+	if !res.Account.Exists && (sp.StorageHash != (common.Hash{}) || sp.CodeHash != (common.Hash{})) {
+		return nil, storageInvalid("the account is proven absent, yet the proof declares storage hash %s / code hash %s (an absent account declares zero)",
+			sp.StorageHash.Hex(), sp.CodeHash.Hex())
+	}
 	if res.Value != sp.Value {
 		return nil, storageInvalid("the declared value %s is not the proven %s", sp.Value.Hex(), res.Value.Hex())
 	}
