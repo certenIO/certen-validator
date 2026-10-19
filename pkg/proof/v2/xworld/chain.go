@@ -8,6 +8,8 @@
 package xworld
 
 import (
+	"fmt"
+
 	"gitlab.com/accumulatenetwork/accumulate/pkg/api/v3"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/database/merkle"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/types/messaging"
@@ -298,3 +300,38 @@ func (c *Chain) writes(network bool) (n uint64, last string) {
 // ForeignGenesis is the root a chain of another incarnation starts at (Chain.Start): a chain that shares the pinned genesis records but not
 // the genesis root chain anchor.
 func ForeignGenesis() []byte { return seed("another incarnation genesis root") }
+
+// majorUpdateProofs returns the root chain anchor of a major block that carries the updates of kinds (start when it carries none) and each
+// update with its receipt: the transactions are folded left to right into one root, so every receipt ends at the same anchor.
+func majorUpdateProofs(kinds []string, rec chainRecords, start []byte) ([]byte, []*api.NetworkUpdateProof) {
+	if len(kinds) == 0 {
+		return start, nil
+	}
+	txs := make([]*protocol.Transaction, len(kinds))
+	hs := make([][]byte, len(kinds))
+	roots := make([][]byte, len(kinds)) // roots[i] = the fold of the first i+1 transactions
+	for i, k := range kinds {
+		txs[i], hs[i] = updateTx(k, rec, fmt.Sprintf("major update %d", i))
+		if i == 0 {
+			roots[i] = hs[i]
+		} else {
+			roots[i] = h2(roots[i-1], hs[i])
+		}
+	}
+	root := roots[len(kinds)-1]
+	ups := make([]*api.NetworkUpdateProof, len(kinds))
+	for i := range kinds {
+		var steps []step
+		if i > 0 {
+			steps = append(steps, step{false, roots[i-1]})
+		}
+		for j := i + 1; j < len(kinds); j++ {
+			steps = append(steps, step{true, hs[j]})
+		}
+		if len(steps) == 0 { // a single update would be its own root: a receipt of no steps
+			panic("xworld: MajorUpdates needs at least two updates, or use a chain item")
+		}
+		ups[i] = &api.NetworkUpdateProof{Transaction: txs[i], Receipt: rcpt(hs[i], steps...)}
+	}
+	return root, ups
+}

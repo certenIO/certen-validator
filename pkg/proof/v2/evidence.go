@@ -281,9 +281,15 @@ func verifyFromSpine(ev *Evidence, l *ledger.AccumulateSpineLog, pinned [32]byte
 	}
 	// Evidence 2.1 only (consensus judges it only from the rules v15 activation): a document that builds on a checkpoint more than
 	// CheckpointLag major blocks behind the newest is refused by name (V-E F-VE-1), so keys that were in force at an old checkpoint cannot
-	// be named. Evidence 2.0 is judged as ever.
-	if newest := uint64(len(l.Checkpoints)); ev.Version == Version21 && ev.Majors+CheckpointLag < newest {
-		return nil, certifyState(StateCheckpointStale, strconv.FormatUint(ev.Majors, 10), strconv.FormatUint(newest, 10), strconv.Itoa(CheckpointLag))
+	// be named. Both checkpoints a document names are bounded - the certification's (ev.Majors) and the set check's (ev.Check.Majors, whose
+	// hop records and bound state tree a holder of retired keys would otherwise forge, V-J J2); the refusal names the certification's when
+	// both are stale. Evidence 2.0 is judged as ever.
+	if newest := uint64(len(l.Checkpoints)); ev.Version == Version21 {
+		for _, n := range []uint64{ev.Majors, ev.Check.Majors} {
+			if n+CheckpointLag < newest {
+				return nil, certifyState(StateCheckpointStale, strconv.FormatUint(n, 10), strconv.FormatUint(newest, 10), strconv.Itoa(CheckpointLag))
+			}
+		}
 	}
 	var genesisRoot [32]byte // read for evidence 2.1 only: a 2.0 verdict does not depend on the log's genesis root
 	if ev.Version == Version21 {

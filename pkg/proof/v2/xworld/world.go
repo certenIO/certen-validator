@@ -71,6 +71,10 @@ type Options struct {
 	// Chain shapes the minor-root items between the last major block and the certified anchor (RB9-F5, chain.go): continuous or
 	// anchored (with a link). Nil: the one continuous item every earlier suite has.
 	Chain *Chain
+	// MajorUpdates, when set (two or more), are update kinds (UpdateGlobalsB, UpdateGenesisGlobals, UpdateNetworkV2, ...) that major block 1's header record
+	// carries as proven writes (consensus applies them while it extends the spine, V-J J1): each has a receipt from its transaction to the
+	// major block's root chain anchor, which is therefore not the usual seed. The world's other members are built on that root.
+	MajorUpdates []string
 }
 
 // Built is a built world.
@@ -312,14 +316,15 @@ func build(o Options) *Built {
 	netV2 := &genNetV2
 	globB := *genGlob
 	globB.MajorBlockSchedule = "0 */6 * * *"
+	crec := chainRecords{globals: must(genGlob.MarshalBinary()), globalsB: must(globB.MarshalBinary()), networkV2: must(netV2.MarshalBinary())}
+	r1, majorUpdates := majorUpdateProofs(o.MajorUpdates, crec, r1)
 	a1 := directoryAnchor(100, a32(r1), a32(seed("state 1")))
-	m1 := &api.MajorHeaderRecord{Index: 1, Entry: &protocol.IndexEntry{BlockIndex: 1}, Anchor: a1, Signatures: signAnchor(a1, v[0], v[1], v[2])}
+	m1 := &api.MajorHeaderRecord{Index: 1, Entry: &protocol.IndexEntry{BlockIndex: 1}, Anchor: a1, Signatures: signAnchor(a1, v[0], v[1], v[2]), Updates: majorUpdates}
 
 	// The certify chain (RB9-F5): base is the root the closing item starts from. Without Options.Chain it is the major block's root, as always.
 	base := r1
 	var chainRecs, chainLinks []string
 	var chainB chainBuilt
-	crec := chainRecords{globals: must(genGlob.MarshalBinary()), globalsB: must(globB.MarshalBinary()), networkV2: must(netV2.MarshalBinary())}
 	if o.Chain != nil {
 		chainB = o.Chain.build(r1, crec, v)
 		chainRecs, chainLinks, base = chainB.recs, chainB.links, chainB.base
