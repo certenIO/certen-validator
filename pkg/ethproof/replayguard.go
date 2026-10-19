@@ -192,11 +192,11 @@ type ReplaySlot struct {
 // SlotProof is an account proof and a storage proof, as eth_getProof serves them, at one block's state root.
 type SlotProof struct {
 	// AccountAbsent: the account proof is a verified exclusion proof (the contract is not in that state).
-	AccountAbsent bool            `json:"account_absent,omitempty"`
-	AccountProof  []hexutil.Bytes `json:"account_proof"`
-	StorageHash   common.Hash     `json:"storage_hash"`
-	CodeHash      common.Hash     `json:"code_hash"`
-	StorageProof  []hexutil.Bytes `json:"storage_proof"`
+	AccountAbsent bool            `json:"accountAbsent,omitempty"`
+	AccountProof  []hexutil.Bytes `json:"accountProof"`
+	StorageHash   common.Hash     `json:"storageHash"`
+	CodeHash      common.Hash     `json:"codeHash"`
+	StorageProof  []hexutil.Bytes `json:"storageProof"`
 	// Value is the slot's value as the proof states it; verification recomputes it.
 	Value common.Hash `json:"value"`
 }
@@ -210,7 +210,7 @@ type ReplayProviderFailure struct {
 // ReplayBefore is the optional transition half: the settlement block's parent (header, which must be the block's
 // parentHash) and the slot proven 0 in its state.
 type ReplayBefore struct {
-	ParentHeader hexutil.Bytes `json:"parent_header_rlp"`
+	ParentHeader hexutil.Bytes `json:"parentHeader"`
 	Proof        SlotProof     `json:"proof"`
 }
 
@@ -224,14 +224,14 @@ type ReplayBeforeUnavailable struct {
 // ReplayGuardProof is the S6 storage evidence of one settlement (domain tag certen:s6-replay:v1).
 type ReplayGuardProof struct {
 	Version    string         `json:"version"`
-	ChainID    int64          `json:"chain_id"`
+	ChainID    int64          `json:"chainId"`
 	Generation string         `json:"generation"`
 	Contract   common.Address `json:"contract"`
 	Slot       ReplaySlot     `json:"slot"`
 	// SettlementBlock is the block the settlement is proven in; ProvenAt the block After is proven at (not before it, at
 	// most MaxReplayHeaderChain after it).
-	SettlementBlock BlockRef `json:"settlement_block"`
-	ProvenAt        BlockRef `json:"proven_at"`
+	SettlementBlock BlockRef `json:"settlementBlock"`
+	ProvenAt        BlockRef `json:"provenAt"`
 	// Headers are the RLP headers of the blocks after the settlement block up to ProvenAt, each linked by parentHash to
 	// the one before; empty when ProvenAt is the settlement block.
 	Headers []hexutil.Bytes `json:"headers"`
@@ -239,17 +239,17 @@ type ReplayGuardProof struct {
 	After SlotProof `json:"after"`
 	// Before: the slot is 0 in the state of the settlement block's parent, or BeforeUnavailable says it was not served.
 	Before            *ReplayBefore            `json:"before,omitempty"`
-	BeforeUnavailable *ReplayBeforeUnavailable `json:"s6_before_unavailable,omitempty"`
+	BeforeUnavailable *ReplayBeforeUnavailable `json:"beforeUnavailable,omitempty"`
 }
 
 // ReplayNamedState is a replay guard that is not proven (or is refuted), stated with what it was judged at.
 type ReplayNamedState struct {
 	State       string                  `json:"state"`
 	Reason      string                  `json:"reason"`
-	ChainID     int64                   `json:"chain_id"`
-	TxHash      common.Hash             `json:"tx_hash"`
-	BlockNumber uint64                  `json:"block_number"`
-	BlockHash   common.Hash             `json:"block_hash"`
+	ChainID     int64                   `json:"chainId"`
+	TxHash      common.Hash             `json:"txHash"`
+	BlockNumber uint64                  `json:"blockNumber"`
+	BlockHash   common.Hash             `json:"blockHash"`
 	Contract    common.Address          `json:"contract"`
 	Providers   []ReplayProviderFailure `json:"providers,omitempty"`
 	Detail      string                  `json:"detail,omitempty"`
