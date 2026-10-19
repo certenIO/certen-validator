@@ -161,8 +161,11 @@ func TestTheReplayGuardIsBoundToTheMembersLeafAndAccount(t *testing.T) {
 		ev := m.named()
 		ev.State.Contract = common.HexToAddress("0x00000000000000000000000000000000000000cc")
 		m.ev.ReplayGuard = ev
-		if _, err := m.check(t); !errors.Is(err, ErrOutcomeEvidence) || !strings.Contains(err.Error(), "the member's account") {
-			t.Fatalf("want a refusal naming the member's account, got %v", err)
+		// RB10-B7: ethproof now holds a named state to the transaction's target itself (s6replay3 SPEC §3), so the
+		// refusal comes before layer 6's account binding, as contract_mismatch.
+		if _, err := m.check(t); !errors.Is(err, ErrOutcomeEvidence) || !strings.Contains(err.Error(), "contract_mismatch") ||
+			!strings.Contains(err.Error(), "0x00000000000000000000000000000000000000cc") {
+			t.Fatalf("want a refusal contract_mismatch naming the stated contract, got %v", err)
 		}
 	})
 	t.Run("a named state of another chain is refused", func(t *testing.T) {
