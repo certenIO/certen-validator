@@ -238,7 +238,7 @@ func buildMemberEvidence(ctx context.Context, c OutcomeEvidenceSource, leafVersi
 		}
 		ev.Transaction = incl
 		if rg, ok := c.(ReplayGuardReader); ok && leaf.Status != OutcomeConsumedElsewhere {
-			ev.ReplayGuard = rg.ReplayGuardOf(common.Hash(leaf.Tx))
+			ev.ReplayGuard = replayGuardForLeaf(rg.ReplayGuardOf(common.Hash(leaf.Tx)), leaf)
 		}
 		if leaf.Status != OutcomeConsumedElsewhere {
 			var slots []ExpectedStateSlot
@@ -437,4 +437,19 @@ func readQuorumRegistry(call func(method string, args ...interface{}) ([]interfa
 		return nil, fmt.Errorf("the listed validators' powers sum to %s, the anchor's totalVotingPower is %s", sum, total)
 	}
 	return reg, nil
+}
+
+// replayGuardForLeaf is the replay guard a member's evidence carries (V-R10B D5): the capture is keyed by the settlement
+// transaction, so a proof of another leaf's slot of that transaction is replaced by the named state slot_mismatch for this
+// member's leaf, at the settlement it was judged at; layer 6 refuses a proof whose key is not the member's leaf.
+func replayGuardForLeaf(rg *ethproof.ReplayGuardEvidence, leaf OutcomeLeaf) *ethproof.ReplayGuardEvidence {
+	if rg == nil || rg.Proof == nil || rg.Proof.Slot.Key == common.Hash(leaf.BatchLeaf) {
+		return rg
+	}
+	p := rg.Proof
+	return &ethproof.ReplayGuardEvidence{Version: ethproof.ReplayGuardDomain, State: &ethproof.ReplayNamedState{
+		State: ethproof.ReplayUnproven, Reason: ethproof.ReasonSlotMismatch, ChainID: p.ChainID, TxHash: common.Hash(leaf.Tx),
+		BlockNumber: leaf.BlockNumber, BlockHash: common.Hash(leaf.BlockHash), Contract: p.Contract,
+		Detail: fmt.Sprintf("the capture of this settlement proved the slot of leaf %s, not this member's leaf %s", p.Slot.Key.Hex(),
+			common.Hash(leaf.BatchLeaf).Hex())}}
 }

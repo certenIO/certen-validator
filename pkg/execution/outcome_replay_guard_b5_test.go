@@ -175,3 +175,30 @@ func TestTheReplayGuardIsBoundToTheMembersLeafAndAccount(t *testing.T) {
 		}
 	})
 }
+
+// V-R10B D5, build side: the capture is keyed by the settlement transaction. When the guard it holds proves another
+// leaf's slot of that transaction, the member's evidence carries the named state slot_mismatch for its own leaf - never
+// the other leaf's proof, which layer 6 refuses.
+func TestTheBuiltEvidenceCarriesOnlyAGuardOfTheMembersOwnLeaf(t *testing.T) {
+	other := common.Hash{0x0b, 0x0e, 0xef}
+	m := newS6MemberProving(t, &other)
+	m.ev.ReplayGuard = replayGuardForLeaf(m.proven(), m.leaf)
+	if m.ev.ReplayGuard == nil || m.ev.ReplayGuard.State == nil || m.ev.ReplayGuard.State.Reason != ethproof.ReasonSlotMismatch ||
+		m.ev.ReplayGuard.State.State != ethproof.ReplayUnproven {
+		t.Fatalf("another leaf's proof was not replaced by the named state slot_mismatch: %+v", m.ev.ReplayGuard)
+	}
+	chk, err := m.check(t)
+	if err != nil {
+		t.Fatalf("the member's evidence with the named state is refused: %v", err)
+	}
+	if not := joined(chk.NotEstablished); !strings.Contains(not, "slot_mismatch") {
+		t.Fatalf("the named state is not stated as not established:\n%s", not)
+	}
+	own := newS6Member(t)
+	if rg := replayGuardForLeaf(own.proven(), own.leaf); rg == nil || rg.Proof == nil {
+		t.Fatalf("the member's own proof was not kept: %+v", rg)
+	}
+	if rg := replayGuardForLeaf(nil, own.leaf); rg != nil {
+		t.Fatalf("no guard became %+v", rg)
+	}
+}
