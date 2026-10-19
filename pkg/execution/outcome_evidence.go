@@ -1003,9 +1003,13 @@ func (m OutcomeMemberEvidence) accountGeneration() string {
 
 // bindReplayGuard holds verified S6 evidence to the member it rides beside (V-R10B D5): a proof's key must be the member's
 // leaf (a receipt may hold another leaf's LeafConsumed) and its contract the member's account; a named state must be of
-// the member's account and of the outcome's chain.
+// the member's account and of the outcome's chain. The one exception is the S6 verifier's own (s6replay3 SPEC section 3
+// step 4, vector 004): a named state with the reason receipt_unavailable - the capture was never served the settlement
+// transaction, so it names no contract - states no contract, and is a named state, not a refusal (V-R10B2 D1). No other
+// reason is exempt.
 func bindReplayGuard(rg *ethproof.ReplayGuardCheck, chainID int64, account common.Address, leaf [32]byte) error {
-	if rg.Contract != account {
+	namesNoContract := rg.State != ethproof.ReplayProven && rg.Reason == ethproof.ReasonReceiptUnavailable && rg.Contract == (common.Address{})
+	if rg.Contract != account && !namesNoContract {
 		return fmt.Errorf("%s{contract_mismatch}: the evidence is of contract %s, not the member's account %s", ethproof.ReplayUnproven, rg.Contract.Hex(), account.Hex())
 	}
 	if rg.ChainID != chainID {
@@ -1249,10 +1253,28 @@ func (m *OutcomeMemberEvidence) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+// UnmarshalJSON decodes the layer-6 document as encoding/json does, except that its `member` key is read by its exact key,
+// once (V-R10B2 D3): encoding/json matches keys case-insensitively and lets a later duplicate replace the earlier value, so
+// a second "member", or "Member", without the replay guard would silently drop a proven guard (and Go and a
+// case-sensitive reader would read different members). A case variant or a duplicate is refused by name. No other key of
+// the document is policed, and a "Member" nested in another value is not a key of this object. A document with no member
+// key decodes as before and is refused by its verification.
+func (ev *OutcomeEvidence) UnmarshalJSON(b []byte) error {
+	if err := checkExactKeyOnce(b, "member"); err != nil {
+		return evidenceFail("member: %v", err)
+	}
+	type plain OutcomeEvidence
+	return json.Unmarshal(b, (*plain)(ev))
+}
+
 // checkReplayGuardKey reads the member object's keys (V-R10B D3): encoding/json matches keys case-insensitively and lets
 // the last duplicate win, so a "replayguard" or a second "replayGuard" would silently replace the first. A key equal to
 // replayGuard under case folding must be exactly "replayGuard" and appear once.
-func checkReplayGuardKey(b []byte) error {
+func checkReplayGuardKey(b []byte) error { return checkExactKeyOnce(b, "replayGuard") }
+
+// checkExactKeyOnce reads the object's own keys (not those of values nested in it): a key equal to want under case folding
+// - which is how encoding/json matches a key to a field - must be exactly want and appear once.
+func checkExactKeyOnce(b []byte, want string) error {
 	dec := json.NewDecoder(bytes.NewReader(b))
 	tok, err := dec.Token()
 	if err != nil {
@@ -1271,12 +1293,12 @@ func checkReplayGuardKey(b []byte) error {
 		if !ok {
 			return fmt.Errorf("object key %v is not a string", kt)
 		}
-		if strings.EqualFold(key, "replayGuard") {
-			if key != "replayGuard" {
-				return fmt.Errorf("the key %q is a case variant of replayGuard and is refused", key)
+		if strings.EqualFold(key, want) {
+			if key != want {
+				return fmt.Errorf("the key %q is a case variant of %s and is refused", key, want)
 			}
 			if seen++; seen > 1 {
-				return fmt.Errorf("the key replayGuard appears more than once")
+				return fmt.Errorf("the key %s appears more than once", want)
 			}
 		}
 		var skip json.RawMessage
