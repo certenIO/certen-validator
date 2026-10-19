@@ -77,6 +77,22 @@ type Timeline struct {
 	PrincipalAuthorities []AuthSpec
 	// HoldUntil, when non-zero, makes the transaction a held one (Header.HoldUntil.MinorBlock).
 	HoldUntil uint64
+
+	// Second adds a second voter to the world (RB9-K-F1): the authority DeleBook votes through its page DelePage1 on BVN3, beside BankBook
+	// through BankPage1 on BVN2, so a transaction that needs two authorities to vote (an UpdateAccountAuth that adds an authority) is a
+	// document. Only the fields that describe the voter's page and vote are read from it - Genesis (default K2), Events, Sigs (default one
+	// signature by K2 at version 1 in block SecondSigBlock; a Vote other than accept on the last signature makes the book vote so),
+	// ProduceBlock and BindSequenced - and any other is refused. The transaction, the principal and the layout are the first
+	// description's. It does not combine with Delegated.
+	Second *Timeline
+	// NoFirstVote makes BankBook not vote: BankPage1 is a page of the book like any other and nothing about the book's vote is carried
+	// (it needs Second, or the document has no vote at all).
+	NoFirstVote bool
+	// SecondFirst delivers the second voter's vote to the principal before the first's: it is first in the principal's signature chain and
+	// in the document's votes.
+	SecondFirst bool
+	// SwapDocumentOrder lists the votes in the document in the other order than the principal's signature chain holds them.
+	SwapDocumentOrder bool
 }
 
 // AuthSpec is one entry of the principal's authority list.
@@ -101,6 +117,8 @@ type SigEvent struct {
 	Key     string
 	Version uint64
 	Block   uint64
+	// Vote is the vote the signature carries (the zero value is accept).
+	Vote protocol.VoteType
 }
 
 type keyMat struct {
@@ -257,8 +275,36 @@ func arrivalFor(idx [][]byte, blocks []uint64, i int) proofv2.Arrival {
 	return a
 }
 
-// timelineWorld is the scripted BankPage1 and everything the evidence carries about it.
+// voterID says which page of which book on which partition a scripted voter is. The first voter is BankPage1 of BankBook on BVN2 (the
+// shipped documents), the second DelePage1 of DeleBook on BVN3 (RB9-K-F1). Every seed label of a voter ends in its tag, so the first
+// voter's chains are exactly the shipped ones and the second's are its own.
+type voterID struct {
+	page, book      string
+	partSrc, partID string // the partition's URL and id
+	number          uint64 // the sequence number of the vote's SequencedMessage
+	tag             string
+	key             string // the default signing key
+	sigBlock        uint64 // the default arrival block of the signature
+}
+
+// SecondSigBlock is the block of BVN3 the second voter's key signature arrives in by default.
+const SecondSigBlock = 66
+
+// voteNumber2 is the sequence number of the second voter's vote (BVN3 to BVN1).
+const voteNumber2 = 6
+
+var (
+	firstVoter  = voterID{BankPage1, BankBook, PartBVN2, "BVN2", voteNumber, "", "K0", HopBlock}
+	secondVoter = voterID{DelePage1, DeleBook, PartBVN3, "BVN3", voteNumber2, " (second voter)", "K2", SecondSigBlock}
+)
+
+func (id voterID) seed(label string) []byte { return seed(label + id.tag) }
+
+// timelineWorld is the scripted BankPage1 and everything the evidence carries about it. With a second voter it holds a second
+// timelineWorld for DelePage1 (second), built over the same transaction.
 type timelineWorld struct {
+	id         voterID
+	second     *timelineWorld
 	t          Timeline
 	txn        *protocol.Transaction
 	txHash     []byte
@@ -284,19 +330,46 @@ type timelineWorld struct {
 	seqRaw  []byte
 }
 
-func (t Timeline) withDefaults() Timeline {
+func (t Timeline) withDefaults(id voterID) Timeline {
 	if len(t.Genesis) == 0 {
-		t.Genesis = []string{"K0"}
+		t.Genesis = []string{id.key}
 	}
 	if len(t.Sigs) == 0 {
-		t.Sigs = []SigEvent{{Key: "K0", Version: 1, Block: HopBlock}}
+		t.Sigs = []SigEvent{{Key: id.key, Version: 1, Block: id.sigBlock}}
 	}
 	return t
 }
 
+// voteType is the vote the voter casts: the last signature's, the one that completes the page's vote.
+func (w *timelineWorld) voteType() protocol.VoteType { return w.t.Sigs[len(w.t.Sigs)-1].Vote }
+
+// checkSecond refuses a description of a second voter that carries what the world would ignore, and the combinations the world does not build.
+func checkSecond(first, second Timeline) {
+	if first.Delegated {
+		panic("xworld: a second voter does not combine with the delegated world")
+	}
+	if second.Second != nil || second.NoFirstVote || second.SecondFirst || second.SwapDocumentOrder {
+		panic("xworld: a second voter carries no second voter, order or absence of its own")
+	}
+	if second.Body != nil || second.Delegated || second.OmitTransaction || second.Initiate || second.HoldUntil != 0 || second.HeaderAuthority != "" ||
+		second.LedgerVersion != 0 || len(second.PrincipalAuthorities) != 0 || second.DelegateDepth != 0 || second.DelegateCycle || len(second.DelegatorEvents) != 0 ||
+		second.AuthBlock != 0 || second.KeyBlock != 0 || len(second.ProvenHeadKeys) != 0 {
+		panic("xworld: a second voter's description carries a field only the first description reads: the transaction and the principal are the first's")
+	}
+}
+
 func newTimelineWorld(spec Timeline) *timelineWorld {
-	t := spec.withDefaults()
-	w := &timelineWorld{t: t}
+	if spec.Second == nil && (spec.NoFirstVote || spec.SecondFirst || spec.SwapDocumentOrder) {
+		panic("xworld: NoFirstVote, SecondFirst and SwapDocumentOrder describe two voters and need Second")
+	}
+	if spec.Second != nil {
+		checkSecond(spec, *spec.Second)
+	}
+	if spec.NoFirstVote && (len(spec.Genesis) > 0 || len(spec.Events) > 0 || len(spec.Sigs) > 0 || spec.ProduceBlock != 0 || spec.BindSequenced || spec.Initiate) {
+		panic("xworld: BankBook does not vote, so BankPage1 is not scripted: Genesis, Events, Sigs, ProduceBlock, BindSequenced and Initiate describe a vote that is not there")
+	}
+	t := spec.withDefaults(firstVoter)
+	w := &timelineWorld{t: t, id: firstVoter}
 
 	// The governed transaction: a WriteData to the principal.
 	w.txn = &protocol.Transaction{
@@ -331,7 +404,25 @@ func newTimelineWorld(spec Timeline) *timelineWorld {
 		w.addSynth()
 		return w
 	}
+	w.scriptPage()
+	w.addSynth()
+	if spec.Second != nil {
+		w.second = newSecondVoter(*spec.Second, w.txn, w.txHash)
+	}
+	return w
+}
 
+// newSecondVoter is the scripted DelePage1 of the second voter over the same transaction (RB9-K-F1).
+func newSecondVoter(spec Timeline, txn *protocol.Transaction, txHash []byte) *timelineWorld {
+	w := &timelineWorld{t: spec.withDefaults(secondVoter), id: secondVoter, txn: txn, txHash: txHash}
+	w.scriptPage()
+	w.addSynth()
+	return w
+}
+
+// scriptPage scripts the voter's page: its history, the signatures recorded on it and the chains that hold them.
+func (w *timelineWorld) scriptPage() {
+	t := w.t
 	// The page's history and the page it leads to, by the script's own bookkeeping.
 	genKeys := map[string]bool{}
 	var specs []*protocol.KeySpecParams
@@ -339,7 +430,7 @@ func newTimelineWorld(spec Timeline) *timelineWorld {
 		genKeys[l] = true
 		specs = append(specs, &protocol.KeySpecParams{KeyHash: keyOf(l).hash})
 	}
-	genesis := &protocol.Transaction{Header: protocol.TransactionHeader{Principal: mustURL(BankBook), Memo: "genesis of the page"}, Body: &protocol.CreateKeyPage{Keys: specs}}
+	genesis := &protocol.Transaction{Header: protocol.TransactionHeader{Principal: mustURL(w.id.book), Memo: "genesis of the page"}, Body: &protocol.CreateKeyPage{Keys: specs}}
 	txns := []*protocol.Transaction{genesis}
 	blocks := []uint64{10}
 	var held []string
@@ -347,7 +438,7 @@ func newTimelineWorld(spec Timeline) *timelineWorld {
 	version, threshold := uint64(1), uint64(1)
 	for n, e := range t.Events {
 		if e.Credits {
-			txns = append(txns, &protocol.Transaction{Header: protocol.TransactionHeader{Principal: mustURL(BankPage1), Memo: fmt.Sprintf("event %d", n)}, Body: &protocol.BurnCredits{Amount: 1}})
+			txns = append(txns, &protocol.Transaction{Header: protocol.TransactionHeader{Principal: mustURL(w.id.page), Memo: fmt.Sprintf("event %d", n)}, Body: &protocol.BurnCredits{Amount: 1}})
 			blocks = append(blocks, e.Block)
 			continue
 		}
@@ -373,14 +464,14 @@ func newTimelineWorld(spec Timeline) *timelineWorld {
 			threshold = uint64(len(held))
 		}
 		version++
-		txns = append(txns, &protocol.Transaction{Header: protocol.TransactionHeader{Principal: mustURL(BankPage1), Memo: fmt.Sprintf("event %d", n)}, Body: &protocol.UpdateKeyPage{Operation: ops}})
+		txns = append(txns, &protocol.Transaction{Header: protocol.TransactionHeader{Principal: mustURL(w.id.page), Memo: fmt.Sprintf("event %d", n)}, Body: &protocol.UpdateKeyPage{Operation: ops}})
 		blocks = append(blocks, e.Block)
 	}
 	headKeys := held
 	if len(t.ProvenHeadKeys) > 0 {
 		headKeys = t.ProvenHeadKeys
 	}
-	w.page = &protocol.KeyPage{Url: mustURL(BankPage1), Version: version, AcceptThreshold: threshold}
+	w.page = &protocol.KeyPage{Url: mustURL(w.id.page), Version: version, AcceptThreshold: threshold}
 	for _, h := range sortedKeys(headKeys) {
 		w.page.Keys = append(w.page.Keys, &protocol.KeySpec{PublicKeyHash: h})
 	}
@@ -397,18 +488,20 @@ func newTimelineWorld(spec Timeline) *timelineWorld {
 	}
 
 	// The signature chain: two earlier messages in block 30, the scripted signatures, one later message in block 69.
-	w.sigEntries = [][]byte{seed("earlier hop a"), seed("earlier hop b")}
+	w.sigEntries = [][]byte{w.id.seed("earlier hop a"), w.id.seed("earlier hop b")}
 	w.sigBlkAll = []uint64{30, 30}
 	for _, s := range t.Sigs {
 		k := keyOf(s.Key)
-		sig := must(new(signing.Builder).SetType(protocol.SignatureTypeED25519).SetUrl(mustURL(BankPage1)).SetVersion(s.Version).SetTimestamp(1700000000000).SetPrivateKey(k.priv).Sign(w.txHash))
+		b := new(signing.Builder).SetType(protocol.SignatureTypeED25519).SetUrl(mustURL(w.id.page)).SetVersion(s.Version).SetTimestamp(1700000000000).SetPrivateKey(k.priv)
+		b.Vote = s.Vote
+		sig := must(b.Sign(w.txHash))
 		msg := (&messaging.SignatureMessage{Signature: sig, TxID: w.txn.ID()}).Hash()
 		w.sigPos = append(w.sigPos, len(w.sigEntries))
 		w.sigEntries = append(w.sigEntries, msg[:])
 		w.sigBlkAll = append(w.sigBlkAll, s.Block)
 		w.sigSigs = append(w.sigSigs, sig)
 	}
-	w.sigEntries = append(w.sigEntries, seed("later signature"))
+	w.sigEntries = append(w.sigEntries, w.id.seed("later signature"))
 	w.sigBlkAll = append(w.sigBlkAll, 69)
 	w.sigIdx = indexFor(w.sigBlkAll)
 
@@ -416,32 +509,29 @@ func newTimelineWorld(spec Timeline) *timelineWorld {
 		{"main", mainEntries}, {"main-index", mainIdx}, {"signature", w.sigEntries}, {"signature-index", w.sigIdx},
 	}
 	w.pageAcct = acct{a: w.page, chains: w.pageChains}
-
-	w.addSynth()
-	return w
 }
 
 // addSynth adds the synthetic ledger holding the vote's SequencedMessage when the script produces it in a block.
 func (w *timelineWorld) addSynth() {
 	t := w.t
 	if t.ProduceBlock != 0 {
-		w.synthMsg = seed("sequenced vote message")
+		w.synthMsg = w.id.seed("sequenced vote message")
 		if t.BindSequenced {
 			var cause [32]byte
-			copy(cause[:], seed("cause of the vote"))
-			auth := &protocol.AuthoritySignature{Origin: mustURL(BankPage1), Authority: mustURL(BankBook), Vote: protocol.VoteTypeAccept, TxID: w.txn.ID(),
-				Cause: mustURL(BankPage1).WithTxID(cause)}
+			copy(cause[:], w.id.seed("cause of the vote"))
+			auth := &protocol.AuthoritySignature{Origin: mustURL(w.id.page), Authority: mustURL(w.id.book), Vote: w.voteType(), TxID: w.txn.ID(),
+				Cause: mustURL(w.id.page).WithTxID(cause)}
 			inner := &messaging.SignatureMessage{Signature: auth, TxID: w.txn.ID()}
-			seq := &messaging.SequencedMessage{Message: inner, Source: mustURL(PartBVN2), Destination: mustURL(PartBVN1), Number: voteNumber}
+			seq := &messaging.SequencedMessage{Message: inner, Source: mustURL(w.id.partSrc), Destination: mustURL(PartBVN1), Number: w.id.number}
 			ih, sh := inner.Hash(), seq.Hash()
 			w.voteMsg, w.synthMsg = ih[:], sh[:]
 			w.seqRaw = must(seq.MarshalBinary())
 		}
-		w.synthEnt = [][]byte{seed("earlier synthetic a"), w.synthMsg, seed("later synthetic")}
+		w.synthEnt = [][]byte{w.id.seed("earlier synthetic a"), w.synthMsg, w.id.seed("later synthetic")}
 		w.synthBlks = []uint64{20, t.ProduceBlock, 69}
 		w.synthIdx = indexFor(w.synthBlks)
 		w.synthPos = 1
-		sl := &protocol.SyntheticLedger{Url: protocol.PartitionUrl("BVN2").JoinPath(protocol.Synthetic)}
+		sl := &protocol.SyntheticLedger{Url: protocol.PartitionUrl(w.id.partID).JoinPath(protocol.Synthetic)}
 		a := acct{a: sl, chains: []namedChain{{"main", w.synthEnt}, {"main-index", w.synthIdx}}}
 		w.synth = &a
 	}
@@ -455,7 +545,7 @@ func (w *timelineWorld) hops() (hop proofv2.VoteHop, counted []proofv2.VoteHop) 
 	mk := func(i int) proofv2.VoteHop {
 		pos := w.sigPos[i]
 		return proofv2.VoteHop{
-			Page: BankPage1, Message: hexs(w.sigEntries[pos]), Signature: hexs(must(w.sigSigs[i].MarshalBinary())),
+			Page: w.id.page, Message: hexs(w.sigEntries[pos]), Signature: hexs(must(w.sigSigs[i].MarshalBinary())),
 			Block:   w.t.Sigs[i].Block,
 			Receipt: rcptHex(entryReceipt(w.sigEntries, pos)),
 			Arrival: func() *proofv2.Arrival { a := arrivalFor(w.sigIdx, w.sigBlkAll, pos); return &a }(),

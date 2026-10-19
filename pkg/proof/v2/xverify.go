@@ -396,6 +396,14 @@ func deriveRoles(ev *Evidence, byURL map[string]*provenAcct, anchors map[string]
 		}
 		addRoot(a.Url, RoleAuthorityBook, RoleAuthorityPage)
 	}
+	// The all-authorities-disabled rule (the executor accepts any authority's vote then, sig_common.go:367-369) is not the rule of a
+	// transaction type that requires authorization (protocol.TransactionType.RequireAuthorization: UpdateAccountAuth). evaluateTimeline
+	// applies the same carve-out, so the pages a document needs are derived by the rule that judges its votes: the authority of a vote
+	// outside the list is not a root there (RB9-K-F1, a vector of testdata/xpartition6). Without the transaction its type is not known
+	// and the rule stands as it was.
+	if txn != nil && txn.Body.Type().RequireAuthorization() {
+		allDisabled = false
+	}
 	// The books the carried transaction names are roots whether or not they are listed authorities (their header-authority role is
 	// added when each is expanded). Without a transaction the role is only a recorded fact and the books the pages record are expanded.
 	for _, h := range headerURLs {

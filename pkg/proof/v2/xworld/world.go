@@ -352,6 +352,31 @@ func build(o Options) *Built {
 	}
 	principal := acct{a: &protocol.DataAccount{Url: mustURL(lay.principal),
 		AccountAuth: protocol.AccountAuth{Authorities: principalAuths}}, sigs: [][]byte{seed("earlier signature"), voteMsg}}
+	// Two voters (RB9-K-F1): the principal's signature chain holds the votes that voted, in the order they were delivered.
+	var tw2 *timelineWorld
+	var chainVotes []int // 1 and 2: the first and the second voter's vote, in the principal's signature chain order
+	var sigEntries [][]byte
+	voteMsgs := map[int][]byte{1: voteMsg}
+	if tw != nil && tw.second != nil {
+		tw2 = tw.second
+		voteMsgs[2] = seed("vote message (second voter)")
+		if tw2.voteMsg != nil {
+			voteMsgs[2] = tw2.voteMsg
+		}
+		switch {
+		case tw.t.NoFirstVote:
+			chainVotes = []int{2}
+		case tw.t.SecondFirst:
+			chainVotes = []int{2, 1}
+		default:
+			chainVotes = []int{1, 2}
+		}
+		sigEntries = [][]byte{seed("earlier signature")}
+		for _, n := range chainVotes {
+			sigEntries = append(sigEntries, voteMsgs[n])
+		}
+		principal = acct{a: principal.a, chains: []namedChain{{"main", [][]byte{seed("main chain of " + principal.url())}}, {"signature", sigEntries}}}
+	}
 	bvn1 := []acct{principal}
 	xRoles := map[string][]proofv2.PageRole{lay.principal: {proofv2.RolePrincipalChain}}
 	if tw != nil && tw.t.LedgerVersion != 0 {
@@ -390,13 +415,26 @@ func build(o Options) *Built {
 			bvn3Roles[mp.pageURL] = []proofv2.PageRole{proofv2.RoleDelegatePage, proofv2.RoleVoter}
 		}
 	}
-	if tw != nil {
+	if tw != nil && !tw.t.NoFirstVote {
 		if tw.dw == nil {
 			bvn2[1] = tw.pageAcct
 		}
 		if tw.synth != nil {
 			bvn2 = append(bvn2, *tw.synth)
 			bvn2Roles[tw.synth.url()] = []proofv2.PageRole{proofv2.RoleSyntheticChain}
+		}
+	}
+	if tw != nil && tw.t.NoFirstVote {
+		bvn2Roles[lay.page1] = []proofv2.PageRole{proofv2.RoleAuthorityPage} // BankPage1 is a page of the book; it voted nothing
+	}
+	if tw2 != nil {
+		// DelePage1 votes for DeleBook: the scripted page replaces the plain one, with its synthetic ledger when its vote is produced.
+		bvn3[1] = tw2.pageAcct
+		bookRoles, pageRoles := secondVoterRoles(tw.txn, principalAuths)
+		bvn3Roles[DeleBook], bvn3Roles[DelePage1] = bookRoles, pageRoles
+		if tw2.synth != nil {
+			bvn3 = append(bvn3, *tw2.synth)
+			bvn3Roles[tw2.synth.url()] = []proofv2.PageRole{proofv2.RoleSyntheticChain}
 		}
 	}
 
@@ -634,6 +672,12 @@ func build(o Options) *Built {
 		}
 		vote.Counted = counted
 		vote.Produced = tw.production()
+		vote.Vote = tw.voteType().String()
+	}
+
+	votes := []proofv2.Vote{vote}
+	if tw2 != nil {
+		votes = twoVotes(tw, tw2, lay.x.src, vote, voteMsgs, chainVotes, sigEntries)
 	}
 
 	ev := &proofv2.Evidence{
@@ -649,7 +693,7 @@ func build(o Options) *Built {
 			lay.d.src: {Message: hexs(must(anchors["d"].msg.MarshalBinary())), Receipt: rcptHex(anchorReceipt("d"))},
 		},
 		Pages: pages,
-		Votes: []proofv2.Vote{vote},
+		Votes: votes,
 		Check: proofv2.SetCheck{Majors: 1, Hops: hops, Set: proof.ValidatorSetProof{Incarnation: hexs(pin[:]), Network: netProof, Globals: globProof}},
 	}
 	if !o.NoRouting {
@@ -667,8 +711,10 @@ func build(o Options) *Built {
 				ev.Pages[i].History = tw.dw.p3.history
 			case tw.dw != nil && midHistory(tw.dw, ev.Pages[i].URL) != nil:
 				ev.Pages[i].History = midHistory(tw.dw, ev.Pages[i].URL)
-			case tw.dw == nil && ev.Pages[i].URL == BankPage1:
+			case tw.dw == nil && !tw.t.NoFirstVote && ev.Pages[i].URL == BankPage1:
 				ev.Pages[i].History = tw.history
+			case tw2 != nil && ev.Pages[i].URL == DelePage1:
+				ev.Pages[i].History = tw2.history
 			}
 		}
 	}

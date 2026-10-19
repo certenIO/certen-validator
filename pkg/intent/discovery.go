@@ -72,6 +72,11 @@ func (id *IntentDiscovery) executeCanonical(
 	certenProof *proof.CertenProof,
 	blockHeight uint64,
 ) (consensus.TargetChainOutcome, error) {
+	// The BFT stage is where v1's vote evidence for the intent comes into being: it sets certenProof.GovVoteEvidence once the G1 proof is
+	// complete, before the block is signed and broadcast. So this is the first moment the shadow's page cross-check (v1's replayed pages
+	// against v2's captured pages, PROOF_V2 section 11) has anything to compare, and it is asked here for the single- and the multi-leg
+	// path alike, whatever the stage returns afterwards: the comparison does not depend on the settlement.
+	defer id.crossCheckV1Pages(intent.IntentID, certenProof)
 	if withOutcome, ok := id.bftConsensus.(bftConsensusWithOutcome); ok {
 		return withOutcome.ExecuteCanonicalIntentWithOutcome(
 			ctx, (*consensus.CertenIntent)(intent), certenProof, blockHeight)
@@ -250,6 +255,9 @@ type IntentDiscovery struct {
 	// Intent tracking - E.4 remediation: Two-phase status tracking
 	intentStatus map[string]IntentStatus // Tracks status of each intent
 	intentCount  int64                   // Total intents discovered
+	// crossChecked holds the intents whose v1 vote evidence has been handed to the shadow's page cross-check (crossCheckV1Pages);
+	// guarded by mu, created on first use.
+	crossChecked map[string]struct{}
 
 	// Entitlement pre-screen (see entitlement_prescreen.go). Advisory only —
 	// declines work this node would otherwise do, never admits anything.
@@ -431,9 +439,39 @@ type ProofV2Shadow interface {
 }
 
 // ProofV2CrossChecker is implemented by a shadow that compares the pages v1 replayed for an intent with the pages v2 captured
-// (docs/proof/PROOF_V2.md §5.2: a disagreement on any page is stop-the-line). It never delays or fails an intent.
+// (docs/proof/PROOF_V2.md §5.2: a disagreement on any page is stop-the-line). It never delays or fails an intent. Discovery asks once
+// per intent, after the BFT stage has produced v1's vote evidence (crossCheckV1Pages).
 type ProofV2CrossChecker interface {
 	CrossCheck(intentID string, ev *govvote.Evidence)
+}
+
+// crossCheckV1Pages hands the shadow the vote evidence v1 produced for the intent, once, for the shadow's page cross-check. It is
+// called after the BFT stage returns (executeCanonical), because that stage is what sets cp.GovVoteEvidence; it used to be asked for in
+// proveV2, which runs before it on the same proof, so the cross-check never ran (C5-F1).
+//
+//   - Never without evidence: a stage that failed before producing any leaves the proof without, and nothing is asked.
+//   - Once per intent for the life of the process. The retry loop only re-runs an intent whose proof was unavailable
+//     (errChainedProofUnavailable, raised before this stage, so those passes carry no evidence); an intent whose stage failed after
+//     it produced evidence (the broadcast of the certified block) is failed, not retried, and may be found again and run again. The
+//     comparison is of v1's replay against v2's capture of the same pages, which a second pass would repeat.
+//   - Fire and forget: the shadow runs the comparison in the background and reports it by name (counter and log); this never waits
+//     for it, and nothing it finds reaches the intent.
+func (id *IntentDiscovery) crossCheckV1Pages(intentID string, cp *proof.CertenProof) {
+	cc, ok := id.v2Shadow.(ProofV2CrossChecker)
+	if !ok || cp == nil || cp.GovVoteEvidence == nil {
+		return
+	}
+	id.mu.Lock()
+	if _, asked := id.crossChecked[intentID]; asked {
+		id.mu.Unlock()
+		return
+	}
+	if id.crossChecked == nil {
+		id.crossChecked = make(map[string]struct{})
+	}
+	id.crossChecked[intentID] = struct{}{}
+	id.mu.Unlock()
+	cc.CrossCheck(intentID, cp.GovVoteEvidence)
 }
 
 // SetProofV2Shadow installs the proof v2 shadow.
@@ -1593,9 +1631,6 @@ func chainedRetryBackoff(base time.Duration, step, maxShift int, capDur time.Dur
 // on the checkpoints the chain has verified, and the intent fails closed (retryably) without it, as it does without
 // its chained proof. Before that, proof v2 is a shadow built in the background.
 func (id *IntentDiscovery) proveV2(ctx context.Context, intentID, accountURL, txHash, partition string, cp *proof.CertenProof) error {
-	if cc, ok := id.v2Shadow.(ProofV2CrossChecker); ok && cp != nil && cp.GovVoteEvidence != nil {
-		cc.CrossCheck(intentID, cp.GovVoteEvidence)
-	}
 	required, maxMajors := false, uint64(0)
 	if id.v2Gate != nil {
 		var err error

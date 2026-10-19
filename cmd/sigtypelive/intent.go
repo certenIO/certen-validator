@@ -61,6 +61,22 @@ func executionCommitment(chainID uint64, target string, valueWei uint64) (commit
 
 // buildIntent returns the four blobs for one case. from is the CertenAccount of the ADI on the target chain.
 func buildIntent(adi string, c liveCase, from string) (*intentBlobs, error) {
+	return buildIntentSpec(intentSpec{
+		ADI: adi, By: "sigtype-" + c.Tag, Desc: fmt.Sprintf("RB8-D live signature-type run: %s approves 1 wei on Base Sepolia", c.Name),
+		Book: c.book(adi), Page: c.page(adi), From: from, Tags: []string{"rb8-d", "sigtype", c.Tag},
+	})
+}
+
+// intentSpec is what varies between the intents the live runs write: the ADI, who the intent says it was created by, the
+// description, the key book and page it declares (the certified key page), the leg's account on the target chain, and the tags.
+type intentSpec struct {
+	ADI, By, Desc, Book, Page, From string
+	Tags                            []string
+}
+
+// buildIntentSpec returns the four blobs for spec. The shape is byte-for-byte what buildIntent has always produced.
+func buildIntentSpec(sp intentSpec) (*intentBlobs, error) {
+	adi, from := sp.ADI, sp.From
 	idb := make([]byte, 16)
 	if _, err := rand.Read(idb); err != nil {
 		return nil, err
@@ -72,7 +88,7 @@ func buildIntent(adi string, c liveCase, from string) (*intentBlobs, error) {
 	now := time.Now().UTC()
 	nowMs, nowS := now.UnixMilli(), now.Unix()
 	expires := nowS + 3600
-	by := "sigtype-" + c.Tag + "-" + intentID[:8]
+	by := sp.By + "-" + intentID[:8]
 
 	commit, dataHash, err := executionCommitment(baseSepoliaChainID, intentRecipient, 1)
 	if err != nil {
@@ -83,13 +99,13 @@ func buildIntent(adi string, c liveCase, from string) (*intentBlobs, error) {
 	intentData := map[string]any{
 		"kind": "CERTEN_INTENT", "version": "2.0", "proof_class": "on_demand",
 		"intentType":      "single_leg_cross_chain_transfer",
-		"description":     fmt.Sprintf("RB8-D live signature-type run: %s approves 1 wei on Base Sepolia", c.Name),
+		"description":     sp.Desc,
 		"organizationAdi": adi,
 		"initiator":       map[string]any{"adi": adi, "by": by, "role": "organization_operator"},
 		"priority":        "normal", "risk_level": "medium", "compliance_required": false,
 		"leg_count": 1, "execution_mode": "sequential", "intent_id": intentID, "created_by": by,
 		"created_at": now.Format("2006-01-02T15:04:05.000Z"), "intent_class": "financial_transfer",
-		"regulatory_jurisdiction": "global", "tags": []string{"rb8-d", "sigtype", c.Tag},
+		"regulatory_jurisdiction": "global", "tags": sp.Tags,
 	}
 	crossChain := map[string]any{
 		"protocol": "CERTEN", "version": "2.0", "operationGroupId": intentID,
@@ -123,7 +139,7 @@ func buildIntent(adi string, c liveCase, from string) (*intentBlobs, error) {
 			"bridge_type": "certen_anchor_v8", "relay_mechanism": "proof_based", "finality_requirements": "fast",
 		},
 	}
-	book, page := c.book(adi), c.page(adi)
+	book, page := sp.Book, sp.Page
 	governance := map[string]any{
 		"organizationAdi": adi,
 		"authorization": map[string]any{
