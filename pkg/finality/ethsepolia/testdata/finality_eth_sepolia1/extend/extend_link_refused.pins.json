@@ -1,0 +1,266 @@
+{
+  "adiri": {
+    "chain_id": 2017,
+    "eip2935": {
+      "address": "0x0000F90827F1C53a10cb7A02335B175320002935",
+      "runtime_codehash": "0x6e49e66782037c0555897870e29fa5e552daf4719552131a0abce779daec0a5d"
+    },
+    "epoch0_final_state": {
+      "hash": "0x725705f6ff227979f8812d8c395e9a048c5e97877462e8c12513dcda66cc01d5",
+      "number": 290
+    },
+    "epoch_record_codec": "telcoin-epoch-record/bcs-blake3/1",
+    "genesis_committee": [
+      "89142f700382ba353262037ee9d72e43d56dfc6001618dee906b5dd2955c24955a0af1e16a65e064fb5a9602c3ba4846073fd2f422ae52f2e328a1b7d6e42a27cac5dc731ecaf3711ef2b727b226f0b29bad2fe890c453a6f3b23d5396b8483c",
+      "8fe0fa048858f10a610a75242de0532b1df341f7bdd11b28872ca0c128487e5422baa945926ebd3b75e7f350590288630a9c930031fdcd9b2ce76ac7833090378e05f8578a7ce437c6c0cf99496c83ef5ee1c1b5a5e580bd8c922070c2234e73",
+      "b1f5f47e63566357362e2157f1b6860df78c08e98f7f5df8e0e2cf837cdea6420c0698dc123f187ed170acfe5c138bf11202b69c3ce2c4f5c2de7fa58d993931164fc3011118c62f0fb1b9cf723f1e55a410a9f77e8cd41576c9e4f8d0adf8ba",
+      "b7d6a84c181082e78d93f8b203208e4e1b3a2b99dc66879bc86d73dcae4bc7a1162aac775b64d8c121c4318ffd2954590f81dd1f91583a3d1a3b260df8a1e08b4a6a56f6f1974901d0b5823c821214eeacce9b5780cae0856bc6a50a7599320f",
+      "b7d7220480a5df0d1d3d622426d667151a091b430f329546067dba93da38697f5307fd9729f79089fe1ae6179658e0230d00059cc2349f9308b8eaff0b79309cdd2f8ed0568340f504909d643c435bc2d98123e11c6e9a125547a78c69855463"
+    ],
+    "genesis_hash": "0x3577ee7223cf0d9a1da1293fd12a47e0e45bb97afcd0427bccd4954cb704baef",
+    "genesis_link_sha256": "6ccf8d955bbb92278e5cecfc9b580d2e4946dfee234a64eb582e33bd3452cbbd",
+    "max_headers": 16384,
+    "min_committee_size": 4
+  },
+  "arb_sepolia": {
+    "bold_genesis_assertion": "0x940486661b708c53f29a6333667cb740969cbee0d9554b139b14567ba549d723",
+    "bold_genesis_l2_block": 105880604,
+    "bridge": "0x38f918D0E9F1b721EDaA41302E399fa1B79333a9",
+    "chain_id": 421614,
+    "layout": {
+      "acc_array_slot": 7,
+      "assertions_slot": 117,
+      "delayed_acc_array_slot": 6,
+      "name": "nitro-contracts-v3.1.0"
+    },
+    "logic_pins": {
+      "0x3bd9637547d75e5b4539449e14c759b86b9d37a7c1f2b47a1524f857e4ff1a0c": "bridge_impl",
+      "0xdd93a7606e6067aaae8ad5afa28b943a8272809eb72face4e2bb3bf4d0609445": "rollup_admin_logic",
+      "0xeadf786edd4819d0262d9679d43b878d7005408a822aa0c43cf79bd0043c09a3": "rollup_user_logic"
+    },
+    "max_blobs": 16,
+    "max_header_chain": 32768,
+    "max_segments": 102400,
+    "max_uncompressed_batch": 16777216,
+    "parent_chain_id": 11155111,
+    "rollup": "0x042B2E6C5E99d4c521bd49beeD5E99651D9B0Cf4"
+  },
+  "base_sepolia": {
+    "batch_inbox": "0xff00000000000000000000000000000000084532",
+    "chain_id": 84532,
+    "channel_timeout": 300,
+    "denim_time": 1792605600,
+    "impl_pins": {
+      "0x35c04acf3bb541d90092bf3e328475377142f70760fa82f372ac0c4e4b3ff4f6": {
+        "role": "syscfg_impl"
+      }
+    },
+    "isthmus_time": 1744905600,
+    "l1_chain_id": 11155111,
+    "l2_block_time": 2,
+    "l2_genesis_time": 1695768288,
+    "max_blobs": 32,
+    "max_rlp_bytes_per_channel": 100000000,
+    "seq_window_size": 3600,
+    "system_config": "0xf272670eb55e895584501d564afeb048bed26194"
+  },
+  "eth_sepolia": {
+    "anchors": [
+      {
+        "block_root": "0x5f71d7f650f9252b48749b5f062c0c234e01afd69f364ab600e2b6051494b20d",
+        "committee_root": "0xcabeda493c59d9927d0d771f833c37015c1e1e0e1b66336601c1b04981ecbcdc",
+        "derived_by": [
+          "bootstrap:Lodestar/v1.50.0/003bd66@lodestar-sepolia.chainsafe.io",
+          "bootstrap:Lighthouse/v8.3.0-rc.0-4920af7/x86_64-linux@ethereum-sepolia-beacon-api.publicnode.com"
+        ],
+        "link_sha256": "e55bc5ef6ede9cf7b1f09ba302d1723001bd03268672f2dd4875c8c38889c81d",
+        "period": 1378,
+        "wsp_epochs": 279
+      },
+      {
+        "committee_root": "0xeca0dc8f9795664e3b6ed51bd7bdadd916fc41637d4eb2ba1d789a5d1d38096b",
+        "derived_by": [
+          "lc_link:lodestar-sepolia.chainsafe.io"
+        ],
+        "link_sha256": "20a6127c6dcc8cbfb38fdf4b9fbc4adf91ea2d5ea102a6004285ed89872b59bc",
+        "period": 1379,
+        "wsp_epochs": 279
+      },
+      {
+        "committee_root": "0xcc041cf91f82373e5e16d5a890ecef952080a430c2640bee7810bea7934ded46",
+        "derived_by": [
+          "lc_link:lodestar-sepolia.chainsafe.io"
+        ],
+        "link_sha256": "b99effe5b9f8425fd7f7acfd1e76d49d96560d360e30bf960a0d039187aa5fa8",
+        "period": 1380,
+        "wsp_epochs": 279
+      },
+      {
+        "committee_root": "0xe86270e383ab11aa669434e882f9008fe2ec682ef785bf611fab677cc922c822",
+        "derived_by": [
+          "lc_link:lodestar-sepolia.chainsafe.io"
+        ],
+        "link_sha256": "3c202185023bef0630ea537b754cef8bfa825ced747fcab357ef0274d0615096",
+        "period": 1381,
+        "wsp_epochs": 279
+      },
+      {
+        "committee_root": "0x95b74d051c4c5a5d46f9ba68f20b367e8bf3bbe45ab7ea678209539db160a9f2",
+        "derived_by": [
+          "lc_link:lodestar-sepolia.chainsafe.io"
+        ],
+        "link_sha256": "b440e98b72d4966772a0f339d11f080bfd1bfad9ef7db18d891e43b016932074",
+        "period": 1382,
+        "wsp_epochs": 279
+      },
+      {
+        "committee_root": "0x35a40c75345e291dd57db169c2b9ff40aa6982354e2283bb591a0c505f18a860",
+        "derived_by": [
+          "lc_link:lodestar-sepolia.chainsafe.io"
+        ],
+        "link_sha256": "88b5ea6300827102512e0a5cfc09167a19e507db5fed80a20968d4dd8f5837be",
+        "period": 1383,
+        "wsp_epochs": 279
+      },
+      {
+        "committee_root": "0xc0b82c1173b30ef46b8ff7d46ba165dabf4c8e2a479cac5b3f4d74899af4c55f",
+        "derived_by": [
+          "lc_link:lodestar-sepolia.chainsafe.io"
+        ],
+        "link_sha256": "883c2878247f1e36891ff8920652f4c5fd32a93ec57482d7c01d0663453538a4",
+        "period": 1384,
+        "wsp_epochs": 279
+      },
+      {
+        "committee_root": "0x5087a97fd2d8f1034f40e69d3eb54abda117196e95440cf22ca94b62bfb06bb5",
+        "derived_by": [
+          "lc_link:lodestar-sepolia.chainsafe.io"
+        ],
+        "link_sha256": "d199b88c3f5cf80aefc5367b3e2bd22c1dc27117c8dfaaff296cce7e287b6228",
+        "period": 1385,
+        "wsp_epochs": 279
+      },
+      {
+        "committee_root": "0xe5c865dc0a4bcafad6ee029dc98e33822098e5df2f50e9b87bebfb6c5dfdab04",
+        "derived_by": [
+          "lc_link:lodestar-sepolia.chainsafe.io"
+        ],
+        "link_sha256": "b4184f5326a95ebf08ac155acbffc577f521b59e39e9ebf4d04ca87d669f8a83",
+        "period": 1386,
+        "wsp_epochs": 279
+      },
+      {
+        "committee_root": "0xae4a70ef55e850d628822e6f7e87bf5b42acbcd90561b7cf3032d70b0d329539",
+        "derived_by": [
+          "lc_link:lodestar-sepolia.chainsafe.io"
+        ],
+        "link_sha256": "5d2eaccbbd088846986d282e7f13f5269d523b935fc6f43fadada724863cb4d0",
+        "period": 1387,
+        "wsp_epochs": 279
+      },
+      {
+        "committee_root": "0xd2e3cd3b3569bd743bb520188491d1688c98f29f0f6829de4e1abf268c75b0a5",
+        "derived_by": [
+          "lc_link:lodestar-sepolia.chainsafe.io"
+        ],
+        "link_sha256": "3496066e98e084124d24bc330ebb779a4e1762738594af36c9238c6030b079aa",
+        "period": 1388,
+        "wsp_epochs": 279
+      },
+      {
+        "committee_root": "0x24b49c0a2a62ce55324997b8aea8149060e9e57459a6c3c4c4bba78573643986",
+        "derived_by": [
+          "lc_link:lodestar-sepolia.chainsafe.io"
+        ],
+        "link_sha256": "109d96acdce81d2dd10f5daffdd413c410a52ebfe48d807219dbe46bba6405b9",
+        "period": 1389,
+        "wsp_epochs": 279
+      },
+      {
+        "committee_root": "0x343e466c91eb25084bf4a64d15a00ebddb0a2e1703aec4b7f5734ae344aba5ee",
+        "derived_by": [
+          "lc_link:lodestar-sepolia.chainsafe.io"
+        ],
+        "link_sha256": "c62cb0ce9c6f5c3a3452bec015665a150b29b20796aa6421919f374983b4be42",
+        "period": 1390,
+        "wsp_epochs": 279
+      },
+      {
+        "committee_root": "0xe0a6ede4f641fa171bd6cdca25356f98b48039fbe01454685ea4b234ace4fac9",
+        "derived_by": [
+          "lc_link:lodestar-sepolia.chainsafe.io",
+          "beacon_api:Lodestar/v1.50.0/003bd66",
+          "beacon_api:Lighthouse/v8.3.0-rc.0-4920af7/x86_64-linux"
+        ],
+        "link_sha256": "ea25e10e8ceab99407290f671513f5702dc153abf5b3e8702649029b435a2b8d",
+        "period": 1391,
+        "wsp_epochs": 279
+      }
+    ],
+    "chain_id": 11155111,
+    "epochs_per_period": 256,
+    "forks": [
+      {
+        "epoch": 0,
+        "layout": null,
+        "name": "genesis",
+        "version": "0x90000069"
+      },
+      {
+        "epoch": 50,
+        "layout": null,
+        "name": "altair",
+        "version": "0x90000070"
+      },
+      {
+        "epoch": 100,
+        "layout": null,
+        "name": "bellatrix",
+        "version": "0x90000071"
+      },
+      {
+        "epoch": 56832,
+        "layout": null,
+        "name": "capella",
+        "version": "0x90000072"
+      },
+      {
+        "epoch": 132608,
+        "layout": null,
+        "name": "deneb",
+        "version": "0x90000073"
+      },
+      {
+        "epoch": 222464,
+        "layout": "electra",
+        "name": "electra",
+        "version": "0x90000074"
+      },
+      {
+        "epoch": 272640,
+        "layout": "electra",
+        "name": "fulu",
+        "version": "0x90000075"
+      },
+      {
+        "epoch": 353024,
+        "layout": "gloas",
+        "name": "gloas",
+        "version": "0x90000076"
+      }
+    ],
+    "genesis_time": 1655733600,
+    "genesis_validators_root": "0xd8ea171f3c94aea21ebc42a1ed61052acf3f9209c00e4efbaaddac09ed9b8078",
+    "max_links": 64,
+    "max_spine_headers": 16384,
+    "min_participants": 342,
+    "spec": "consensus-specs v1.7.0-beta.4 aa16bb4c",
+    "sync_committee_size": 512
+  },
+  "format": "certen-finality-pins/1",
+  "onchain_commitment": null,
+  "published_utc": "2026-10-20T02:35:00Z",
+  "shared": {
+    "kzg_setup_sha256": "f8e44a31ebf0a6d0734dcb301b0716e2c77f3ae18ed0cab0870fbcc2ca55616f"
+  }
+}

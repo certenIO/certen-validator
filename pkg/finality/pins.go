@@ -18,7 +18,7 @@ const PinsFormat = "certen-finality-pins/1"
 
 // PinsSHA256 is the SHA-256 of the embedded pins file. A verifier refuses to start (finality_pins_corrupt) if the embedded
 // bytes hash otherwise; CI job finality-pins-sync compares this constant and the file across the three repositories.
-const PinsSHA256 = "2de949079ea15be3838250cc498385acffa2f25c7ef2f96114a970094e9e88d4"
+const PinsSHA256 = "12217758b3a8074a07873cd3d26cc46edab7782d31f393d7f540c3e3077062d5"
 
 //go:embed pins/finality-pins.json
 var embeddedPins []byte
@@ -120,6 +120,7 @@ type Pins struct {
 
 	sum    [32]byte
 	source string
+	raw    []byte // the bytes this Pins was parsed from (Extend compares non-ledger content against them)
 }
 
 type pinsFile struct {
@@ -206,7 +207,7 @@ func parsePins(raw []byte, sum [32]byte, source string) (*Pins, error) {
 	if f.PublishedUTC == "" {
 		return nil, PinsCorrupt(PinsPublishedUTCEmpty)
 	}
-	p := &Pins{Format: f.Format, PublishedUTC: f.PublishedUTC, OnchainCommitment: f.OnchainCommitment, EthSepolia: f.EthSepolia, Shared: f.Shared, sum: sum, source: source}
+	p := &Pins{Format: f.Format, PublishedUTC: f.PublishedUTC, OnchainCommitment: f.OnchainCommitment, EthSepolia: f.EthSepolia, Shared: f.Shared, sum: sum, source: source, raw: append([]byte(nil), raw...)}
 	for name, r := range map[string]json.RawMessage{"base_sepolia": f.BaseSepolia, "arb_sepolia": f.ArbSepolia, "adiri": f.Adiri} {
 		if len(r) > 0 && string(r) != "null" {
 			if p.Sections == nil {

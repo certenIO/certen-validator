@@ -1,0 +1,26 @@
+{
+ "format": "certen-finality-ethsepolia-case/1",
+ "id": "adv_leg_above_finalized_head",
+ "description": "the leg is the block above the finalized execution head",
+ "pins": "pins/main.json",
+ "leg": {
+  "chain": "11155111",
+  "number": "11954763",
+  "hash": "0x7777777777777777777777777777777777777777777777777777777777777777",
+  "header_rlp": "0x"
+ },
+ "evidence_base": "raw/gloas_latest/evidence.bin",
+ "evidence_patches": [
+  {
+   "at": 41,
+   "del": 8,
+   "ins": "0x0000000000b66a4b"
+  },
+  {
+   "at": 49,
+   "del": 32,
+   "ins": "0x7777777777777777777777777777777777777777777777777777777777777777"
+  }
+ ],
+ "expect_canonical": "{\"code\":\"finality_block_not_covered\",\"fields\":{\"block_number\":\"11954763\",\"finalized_exec_number\":\"11954762\"}}"
+}

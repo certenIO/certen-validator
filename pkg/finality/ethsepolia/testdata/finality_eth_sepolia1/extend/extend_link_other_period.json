@@ -1,0 +1,12 @@
+{
+ "format": "certen-finality-ethsepolia-extend-case/1",
+ "id": "extend_link_other_period",
+ "description": "the bytes supplied for 1388 are the link of 1389",
+ "base": "extend/base_1386.json",
+ "extension": "extend/extend_link_other_period.pins.json",
+ "links_dir": "raw/links",
+ "links_replace": {
+  "1388": "extend/extend_link_other_period.link1388.ssz"
+ },
+ "expect_canonical": "{\"code\":\"finality_ledger_extension_invalid\",\"fields\":{\"got_sha256\":\"0x109d96acdce81d2dd10f5daffdd413c410a52ebfe48d807219dbe46bba6405b9\",\"period\":\"1388\",\"reason\":\"link_sha256_mismatch\",\"want_sha256\":\"0xe2f86478dbf0e1e3e16f491e36c33f69140d4a440d903aab6b1032b61a543ad0\"}}"
+}
