@@ -231,6 +231,10 @@ func TestRuntimeWiringEndToEndAgainstFakeProviders(t *testing.T) {
 				t.Errorf("chain %d %s is verified against providers that serve no evidence", chain, l)
 			}
 			// a prover that does not serve a level must not speak for it: the sibling prover's state is the leg's status
+			// the embedded pins must load for every kind: a pin_mismatch here is a kind refusing the shipped pins file
+			if code := stateCodeOf(v.State); code == "pin_mismatch" || code == finality.CodePinUnknown {
+				t.Errorf("chain %d %s: the embedded pins are refused by a kind: %s", chain, l, code)
+			}
 			if code := stateCodeOf(v.State); code == finality.CodeEvidenceUnrecognised {
 				t.Errorf("chain %d %s: the status is %s, a prover answered a level it does not serve", chain, l, code)
 			}

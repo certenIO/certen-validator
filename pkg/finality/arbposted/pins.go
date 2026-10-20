@@ -27,6 +27,11 @@ type layoutPins struct {
 	AssertionsSlot      uint64 `json:"assertions_slot"`
 	AccArraySlot        uint64 `json:"acc_array_slot"`
 	DelayedAccArraySlot uint64 `json:"delayed_acc_array_slot"`
+	// the keys of the sibling finalized kind's layout pins (pkg/finality/arbfinal): accepted and ignored here
+	ConfigSlotOffset       uint64 `json:"config_slot_offset"`
+	FastConfirmerShiftBits uint64 `json:"fast_confirmer_shift_bits"`
+	FastConfirmerSlot      uint64 `json:"fast_confirmer_slot"`
+	StatusShiftBits        uint64 `json:"status_shift_bits"`
 }
 
 // arbPins is the arb_sepolia section of the pins file (spec 4.2).
@@ -43,6 +48,11 @@ type arbPins struct {
 	MaxUncompressedBatch int               `json:"max_uncompressed_batch"`
 	ParentChainID        uint64            `json:"parent_chain_id"`
 	Rollup               string            `json:"rollup"`
+	// ConfirmPath and ProxySlots are the arb_sepolia keys of the sibling arb-sepolia/finalized/v1 kind (pkg/finality/arbfinal). The
+	// section is shared, this decoder refuses unknown keys, and neither key is read by this kind: they are accepted and ignored, so the
+	// embedded pins (which carry both) load here.
+	ConfirmPath json.RawMessage `json:"confirm_path"`
+	ProxySlots  json.RawMessage `json:"proxy_slots"`
 
 	bridge common.Address
 }
