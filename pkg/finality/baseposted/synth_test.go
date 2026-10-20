@@ -57,6 +57,8 @@ type synthOpts struct {
 	dirtyValue       byte   // and its value
 	omitImpl         bool   // the implementation account is absent from the state
 	rawStream        []byte // the decompressed channel used as given, instead of the batches built here
+	txData           []byte // the calldata of every frame transaction, used as given instead of the marshalled frame
+	garbageTx        []byte // the frame transaction bytes put in the block trie instead of the signed transaction
 }
 
 type synth struct {
@@ -165,6 +167,9 @@ func makeSynth(t *testing.T, o synthOpts) *synth {
 		}
 		f := Frame{ID: id, Number: uint16(i), Data: chData[lo:hi], IsLast: i == o.nFrames-1}
 		frameBytes = append(frameBytes, append([]byte{0}, MarshalFrame(f)...))
+		if o.txData != nil {
+			frameBytes[i] = o.txData
+		}
 	}
 	blocks := o.frameBlocks
 	if len(blocks) == 0 {
@@ -206,6 +211,9 @@ func makeSynth(t *testing.T, o synthOpts) *synth {
 				t.Fatal(err)
 			}
 			b, _ := stx.MarshalBinary()
+			if o.garbageTx != nil {
+				b = o.garbageTx
+			}
 			raws = append(raws, b)
 		}
 		txRoot := ethproof.TrieRoot(raws)
