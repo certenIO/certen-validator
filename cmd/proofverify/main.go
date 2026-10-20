@@ -52,6 +52,7 @@ import (
 	"github.com/certen/independant-validator/pkg/database"
 	"github.com/certen/independant-validator/pkg/execution"
 	"github.com/certen/independant-validator/pkg/finality"
+	"github.com/certen/independant-validator/pkg/finality/allkinds"
 	certenproof "github.com/certen/independant-validator/pkg/proof"
 	proofv2 "github.com/certen/independant-validator/pkg/proof/v2"
 	gnarklogger "github.com/consensys/gnark/logger"
@@ -107,6 +108,12 @@ func main() {
 	pins, pinsErr := finality.EmbeddedPins()
 	if pinsErr != nil {
 		fmt.Fprintln(os.Stderr, pinsErr)
+		os.Exit(exitFailed)
+	}
+	// Every implemented finality verifier kind is registered (explicitly, no init()), so --offline and --finality judge every
+	// level of every chain from files and the embedded pins. The provers need live sources and stay unregistered here.
+	if err := allkinds.Register(finality.Default); err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(exitFailed)
 	}
 
