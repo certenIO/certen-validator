@@ -54,5 +54,53 @@
     "original": "pad > 0",
     "mutated": "*",
     "reason": "At pad == 0 the guarded statement appends make([]byte, 0), an empty slice, which leaves b unchanged, so `pad >= 0` and `pad > 0` produce the same bytes for every input."
+  },
+  {
+    "file": "verify.go",
+    "function": "judge",
+    "operator": "int_literal",
+    "original": "w[10:30]",
+    "mutated": "*",
+    "reason": "[20]byte(w[10:31]) converts a slice to an array of 20 bytes, which takes the first 20 elements of the slice (the conversion only requires len >= 20), the same 20 bytes as w[10:30]; both occurrences."
+  },
+  {
+    "file": "verify.go",
+    "function": "judge",
+    "operator": "int_literal",
+    "original": "code[implOff:implOff+20]",
+    "mutated": "*",
+    "reason": "copy(gimpl[:], code[implOff:implOff+21]) copies at most len(gimpl) = 20 bytes, the same as the 20-byte slice; len(code) >= tmplLen+2 > implOff+21 is checked before, so the longer slice is valid."
+  },
+  {
+    "file": "verify.go",
+    "function": "judge",
+    "operator": "int_literal",
+    "original": "args[20:52]",
+    "mutated": "*",
+    "reason": "[32]byte(args[20:53]) takes the first 32 elements of the slice, the same as args[20:52]; the longer slice is within args (rest >= ArgsBaseLen >= 116)."
+  },
+  {
+    "file": "verify.go",
+    "function": "judge",
+    "operator": "int_literal",
+    "original": "args[84:116]",
+    "mutated": "*",
+    "reason": "copy(l2seqW[:], args[84:117]) copies at most len(l2seqW) = 32 bytes, the same as the 32-byte slice."
+  },
+  {
+    "file": "verify.go",
+    "function": "judge",
+    "operator": "int_literal",
+    "original": "reg[0:4]",
+    "mutated": "*",
+    "reason": "binary.BigEndian.Uint32 reads only the first four bytes of its argument, so reg[0:5] gives the same number."
+  },
+  {
+    "file": "verify.go",
+    "function": "judge",
+    "operator": "int_literal",
+    "original": "reg[4:12]",
+    "mutated": "*",
+    "reason": "binary.BigEndian.Uint64 reads only the first eight bytes of its argument, so reg[4:13] gives the same number."
   }
 ]
