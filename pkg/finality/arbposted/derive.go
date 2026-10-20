@@ -120,7 +120,7 @@ func parseUnsigned(r *msgReader, poster common.Address, requestID *common.Hash, 
 
 // parseL2Msg is parseL2Message for the kinds a delayed L2 message can hold: unsigned (0), contract (1), batch (3), signed (4).
 // Any other kind, a short field or a nested failure fails the whole message, as in Nitro.
-func parseL2Msg(msg []byte, poster common.Address, requestID *common.Hash, chainID *big.Int, depth int) ([][]byte, bool) {
+func parseL2Msg(msg []byte, poster common.Address, requestID *common.Hash, chainID *big.Int, depth int, unmarshalSigned bool) ([][]byte, bool) {
 	r := &msgReader{b: msg}
 	k := r.take(1)
 	if k == nil {
@@ -157,7 +157,7 @@ func parseL2Msg(msg []byte, poster common.Address, requestID *common.Hash, chain
 				h := crypto.Keccak256Hash(requestID[:], common.BigToHash(index).Bytes())
 				sub = &h
 			}
-			txs, ok := parseL2Msg(nested, poster, sub, chainID, depth+1)
+			txs, ok := parseL2Msg(nested, poster, sub, chainID, depth+1, unmarshalSigned)
 			if !ok {
 				return nil, false
 			}
@@ -165,8 +165,16 @@ func parseL2Msg(msg []byte, poster common.Address, requestID *common.Hash, chain
 			index.Add(index, big.NewInt(1))
 		}
 	case l2SignedTx:
-		var tx types.Transaction
 		rest := r.rest()
+		if !unmarshalSigned {
+			// sequencer batches: the bytes are compared with the block's own transactions, which are valid by construction, so
+			// a message transaction that is not valid can never equal one and needs no unmarshalling to be unmatched
+			if len(rest) == 0 || (rest[0] < 0xc0 && rest[0] != 1 && rest[0] != 2 && rest[0] != 4) {
+				return nil, false // empty, or a type Nitro refuses (Arbitrum types, blob, unknown): it fails the message
+			}
+			return [][]byte{append([]byte(nil), rest...)}, true
+		}
+		var tx types.Transaction
 		if err := tx.UnmarshalBinary(rest); err != nil || tx.Type() >= 0x64 || tx.Type() == types.BlobTxType {
 			return nil, false
 		}
@@ -223,7 +231,7 @@ func deriveDelayed(chainID uint64, d Delayed) (txs [][]byte, ok bool) {
 		return [][]byte{encTx(txSubmitRetryable, cid, req, poster, l1BaseFee, deposit, maxFee, gasW.Big().Uint64(), optAddr(retryTo), callvalue,
 			callvalueRefund, maxSubmission, feeRefund, data)}, true
 	case msgKindL2Message:
-		return parseL2Msg(d.Data, poster, &req, cid, 0)
+		return parseL2Msg(d.Data, poster, &req, cid, 0, true)
 	case msgKindL2FundedByL1:
 		kind := r.take(1)
 		if kind == nil {

@@ -4,11 +4,13 @@ package arbposted
 
 import (
 	"bytes"
-	"encoding/binary"
 	"errors"
+	"math/big"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/rlp"
 
+	"github.com/certen/independant-validator/pkg/ethproof"
 	"github.com/certen/independant-validator/pkg/finality/strictbrotli"
 )
 
@@ -127,37 +129,24 @@ type l2Message struct {
 	txs     [][]byte
 }
 
-// parseL2 returns the signed transactions of an L2 message, mirroring nitro's ParseL2Transactions for the kinds that carry
-// user-signed transactions: kind 4 (one transaction) and kind 3 (a batch of nested messages, depth <= 16). Every other kind
-// contributes none (kinds 0/1 build poster-derived transactions that cannot equal a user-signed one).
-func parseL2(msg []byte, depth int) [][]byte {
-	if len(msg) == 0 {
-		return nil
+// parseL2 returns the signed transactions of one sequencer-batch L2 message, as Nitro's parseL2Message (arbos/parse_l2.go) builds it
+// with no L1 request id: kind 4 is one transaction, kind 3 a batch of nested messages (depth < 16; a length prefix that is cut,
+// oversize or past the data ends the batch quietly), kind 0 is an unsigned transaction whose fields must parse (it is built from
+// the poster and is not a signed transaction, so it contributes none). Everything else fails the message: kind 1 (a contract
+// transaction needs a request id), 2, 6 (heartbeats are disabled), 7, unknown kinds, a short field, and ANY nested failure fails the
+// WHOLE message. A failed message has no transactions: a malformed message is not a message. ok is false for those.
+func parseL2(msg []byte, depth int) ([][]byte, bool) {
+	txs, ok := parseL2Msg(msg, common.Address{}, nil, big.NewInt(0), depth, false)
+	if !ok {
+		return nil, false
 	}
-	switch msg[0] {
-	case l2SignedTx:
-		if len(msg) == 1 {
-			return nil
+	var signed [][]byte
+	for _, tx := range txs {
+		if ethproof.TxType(tx) <= 4 {
+			signed = append(signed, tx)
 		}
-		return [][]byte{append([]byte(nil), msg[1:]...)}
-	case l2Batch:
-		if depth >= maxL2Depth {
-			return nil
-		}
-		var out [][]byte
-		rest := msg[1:]
-		for len(rest) >= 8 {
-			n := binary.BigEndian.Uint64(rest[:8])
-			rest = rest[8:]
-			if n > maxL2MessageSize || n > uint64(len(rest)) {
-				break
-			}
-			out = append(out, parseL2(rest[:n], depth+1)...)
-			rest = rest[n:]
-		}
-		return out
 	}
-	return nil
+	return signed, true
 }
 
 // decodePayload turns a batch payload (header byte then brotli) into messages. res.state is "" on success; otherwise it
@@ -252,7 +241,8 @@ func decodePayload(payload []byte, maxUncompressed, maxSegments int) payloadResu
 		default:
 			continue
 		}
-		res.messages = append(res.messages, l2Message{ordinal: ord, txs: parseL2(msg, 0)})
+		txs, _ := parseL2(msg, 0)
+		res.messages = append(res.messages, l2Message{ordinal: ord, txs: txs})
 		ord++
 	}
 	return res

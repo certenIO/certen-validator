@@ -340,16 +340,22 @@ func TestSegmentsAndMessages(t *testing.T) {
 	for i := 0; i < 16; i++ {
 		nested = batchMsg(nested)
 	}
-	if got := parseL2(nested, 0); len(got) != 1 {
-		t.Fatalf("16 nested batches: %d txs", len(got))
+	if got, ok := parseL2(nested, 0); !ok || len(got) != 1 {
+		t.Fatalf("16 nested batches: ok %v, %d txs", ok, len(got))
 	}
-	if got := parseL2(batchMsg(nested), 0); len(got) != 0 {
-		t.Fatalf("a 17th nested batch must be dropped: %d txs", len(got))
+	if got, ok := parseL2(batchMsg(nested), 0); ok || len(got) != 0 {
+		t.Fatalf("a 17th nested batch must fail the whole message: ok %v, %d txs", ok, len(got))
 	}
-	// an oversize or overrunning nested length stops the batch
+	// an oversize or overrunning nested length ends the batch quietly: the message is valid and empty
 	over := append([]byte{l2Batch}, binary.BigEndian.AppendUint64(nil, 1<<40)...)
-	if len(parseL2(over, 0)) != 0 || len(parseL2([]byte{l2SignedTx}, 0)) != 0 || len(parseL2(nil, 0)) != 0 {
-		t.Fatal("a malformed message yielded transactions")
+	if got, ok := parseL2(over, 0); !ok || len(got) != 0 {
+		t.Fatalf("an oversize nested length: ok %v, %d txs", ok, len(got))
+	}
+	// an empty signed message, an empty message and a missing kind fail the message
+	for _, m := range [][]byte{{l2SignedTx}, nil} {
+		if got, ok := parseL2(m, 0); ok || len(got) != 0 {
+			t.Fatalf("message %x: ok %v, %d txs", m, ok, len(got))
+		}
 	}
 }
 
