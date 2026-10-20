@@ -472,6 +472,18 @@ func (b *builder) synthCases(txs [][]byte) ([]synthCase, error) {
 		ev2, _ := assemble(e2, nil, legC)
 		cases = append(cases, synthCase{f.id, fmt.Sprintf("blob batch (KZG-proven) whose payload starts with 0x%02x", f.flag), "synth", legC, ev2, f.want})
 	}
+	// a KZG-valid blob batch, and the same batch whose versioned hash is not the hash of the blob's commitment (the accumulator is
+	// computed over the altered hash, so only the versioned-hash equality of the blob check can refuse it)
+	okBl, okVh := blobsFor(payloadWith(0x00))
+	e3 := arbposted.Evidence{BlockTxs: txs, BatchSeq: N, Header40: h40, BeforeAcc: before, DataKind: arbposted.DataBlobs, VersionedHashes: okVh, Blobs: okBl}
+	ev3, l1h3 := assemble(e3, nil, legC)
+	cases = append(cases, synthCase{"synth_valid_blob", "a blob-mode batch whose blob, commitment and KZG proof verify, in a synthetic Bridge", "synth", legC, ev3, okWant(N, uint64(len(okBl)), 2, 1, -1, l1h3)})
+	badVh := append([][32]byte(nil), okVh...)
+	badVh[0][7] ^= 1
+	e4 := e3
+	e4.VersionedHashes = badVh
+	ev4, _ := assemble(e4, nil, legC)
+	cases = append(cases, synthCase{"adv_synth_blob_versioned_hash_not_commitment", "the accumulator commits to a versioned hash that is not the hash of the carried commitment, while the blob proof verifies", "synth", legC, ev4, canonState("blob_commitment_mismatch")})
 	// decompression bounds at the pinned defaults
 	bomb := append([]byte{0x00}, brotliBytes(bytes.Repeat([]byte{0}, 20<<20))...)
 	bombEv, _ := assemble(calldataEv(bomb, txs, N), nil, legC)

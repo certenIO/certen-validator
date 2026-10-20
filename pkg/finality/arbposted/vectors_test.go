@@ -125,7 +125,7 @@ func refOf(t testing.TB, l vecLeg) finality.BlockRef {
 // Every published case is judged by Kind.Verify and must produce exactly the canonical verdict the generator wrote as a literal.
 func TestPublishedVectorsFinalityArbPosted1(t *testing.T) {
 	cases, files := loadManifest(t)
-	if len(cases) < 40 {
+	if len(cases) < 60 {
 		t.Fatalf("only %d cases", len(cases))
 	}
 	for _, id := range cases {
