@@ -39,3 +39,11 @@ pkg/finality/testdata/finality_chain2/* text eol=lf
 # finality_eth_sepolia1 (RB11-C2): every file is hashed in its MANIFEST and copied byte-for-byte into the TypeScript repository; the link files are hashed by link_sha256.
 pkg/finality/ethsepolia/testdata/finality_eth_sepolia1/** -text
 pkg/finality/pins-links/* -text
+
+# RB11-INT3 (C2 finding F5): every published finality vector set directory carries a rule that keeps its bytes (adiri, arbfinal and
+# ethl1 through their testdata/.gitattributes; arb_posted1, base_posted1 and base_final1 through their own; chain1, chain2 and the
+# registry/pins snapshots above; eth_sepolia1 and pins-links above). The loose files directly under pkg/finality/testdata are
+# specification too (the addendum golden, the pinned go.mod requirement list, SUPERSEDED.md, the mutation-equivalents lists and the
+# golden generator): a CRLF checkout must not rewrite them.
+pkg/finality/testdata/* -text
+pkg/finality/testdata/finality/*.txt -text
