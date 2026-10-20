@@ -181,8 +181,7 @@ func (b *Builder) BuildFor(ctx context.Context, ref finality.BlockRef) (*finalit
 		return nil, nil, err
 	}
 	if rec.DataLocation == capture.LocBlob && len(blobs) != len(rec.VersionedHashes) {
-		return nil, nil, finality.NewState(codeBlobUnavailable, "l1_block", rec.L1Block, "versioned_hashes", hashList(rec.VersionedHashes),
-			"beacon_slot", uint64(0), "http_status", uint64(0))
+		return nil, nil, b.blobUnavailable(rec)
 	}
 	ev := Evidence{LC: lc, L1Spine: spine, StateBlock: proof.ProofBlock, BlockTxs: txs, BatchSeq: rec.N, Header40: rec.Header40,
 		BeforeAcc: rec.BeforeAcc, DelayedAcc: rec.DelayedAcc, Nodes: proof.Nodes}
@@ -230,6 +229,7 @@ type located struct {
 // locate finds the captured batch whose decoded payload holds a message with the block's signed transactions. The time
 // bounds only narrow the candidates (hints are never evidence); the decode decides.
 func (b *Builder) locate(batches []capture.BatchRecord, hdr finality.HeaderFields, txs [][]byte, arb *arbPins) (*located, error) {
+	var incomplete *capture.BatchRecord
 	var std [][]byte
 	for _, tx := range txs {
 		if ethproof.TxType(tx) <= 4 {
@@ -244,7 +244,12 @@ func (b *Builder) locate(batches []capture.BatchRecord, hdr finality.HeaderField
 		switch rec.DataLocation {
 		case capture.LocBlob:
 			bl, err := capture.LoadBlobs(b.Store, b.Chain(), rec)
-			if err != nil || len(bl) != len(rec.VersionedHashes) {
+			if err != nil {
+				return nil, err
+			}
+			if len(bl) != len(rec.VersionedHashes) {
+				r := rec
+				incomplete = &r
 				continue
 			}
 			raws := make([][]byte, len(bl))
@@ -281,7 +286,23 @@ func (b *Builder) locate(batches []capture.BatchRecord, hdr finality.HeaderField
 			}
 		}
 	}
+	if incomplete != nil {
+		return nil, b.blobUnavailable(*incomplete)
+	}
 	return nil, nil
+}
+
+// blobUnavailable is l1_blob_unavailable for a captured batch whose blobs are not all stored: the capture phase's own record of
+// the beacon answer when it gave up, else the batch's L1 block and hashes with no beacon status.
+func (b *Builder) blobUnavailable(rec capture.BatchRecord) error {
+	slot, status := uint64(0), uint64(0)
+	if raw, ok, err := b.Store.Get(capture.Key{Chain: b.Chain(), L1Block: rec.L1Block, L1Hash: rec.L1Hash, Item: capture.ItemBlobUnavailable(rec.N)}); err == nil && ok {
+		if u, err := capture.DecodeBlobUnavailableRecord(raw); err == nil {
+			slot, status = u.BeaconSlot, uint64(u.HTTPStatus)
+		}
+	}
+	return finality.NewState(codeBlobUnavailable, "l1_block", rec.L1Block, "versioned_hashes", hashList(rec.VersionedHashes),
+		"beacon_slot", slot, "http_status", status)
 }
 
 func redactErr(err error) string { return ethrpc.RedactText(err.Error()) }
