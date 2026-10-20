@@ -1,0 +1,19 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "adv_spine_empty",
+ "kind": "covers",
+ "description": "no headers",
+ "exec_hash": "0xd10922c78306346f1c1f769558eda4c63528f7b778258781c477bee518c9bb08",
+ "max": 16384,
+ "expect": {
+  "code": "finality_evidence_malformed",
+  "fields": {
+   "got_len": "0",
+   "index": "0",
+   "part": "spine",
+   "reason": "empty",
+   "want_len": "1"
+  },
+  "result": "fault"
+ }
+}

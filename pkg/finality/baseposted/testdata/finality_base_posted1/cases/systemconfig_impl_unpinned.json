@@ -1,0 +1,18 @@
+{
+  "format": "certen-base-posted-case/1",
+  "id": "systemconfig_impl_unpinned",
+  "description": "the SystemConfig implementation's code hash is not a pinned syscfg_impl",
+  "pins": "pins/syscfg_impl_other.json",
+  "leg": "legs/a.json",
+  "evidence": "evidence/valid_a.bin",
+  "expect": {
+    "result": "state",
+    "code": "contract_identity_unproven",
+    "fields": {
+      "address": "0xaeb75e200b9bcf9343ff1a2d2b1b3976e7339ca4",
+      "code_hash": "0x35c04acf3bb541d90092bf3e328475377142f70760fa82f372ac0c4e4b3ff4f6",
+      "judged_at": "11954001",
+      "role": "syscfg_impl"
+    }
+  }
+}

@@ -1,0 +1,16 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "adv_synth_final_period_gap_next_known",
+ "kind": "head",
+ "description": "synthetic: next known, final update signed in period 12 (store period + 2)",
+ "pins": "pins/synth.json",
+ "lc": "lc/adv_synth_final_period_gap_next_known.bin",
+ "expect": {
+  "code": "finality_period_gap",
+  "fields": {
+   "signature_period": "12",
+   "store_period": "10"
+  },
+  "result": "fault"
+ }
+}

@@ -1,0 +1,17 @@
+{
+  "format": "certen-finality-vectors/1",
+  "id": "adv_pins_proxy_runtime_not_pinned",
+  "description": "the OP proxy runtime hash is not pinned: the Portal proxy is unproven",
+  "pins": "pins/adv_pins_proxy_runtime_not_pinned.json",
+  "leg": "legs/leg_47604755.json",
+  "evidence": "evidence/valid_leg_47604755.bin",
+  "expect": {
+    "code": "contract_identity_unproven",
+    "fields": {
+      "address": "0x49f53e41452c74589e85ca1677426ba426459e85",
+      "code_hash": "0xfa8c9db6c6cab7108dea276f4cd09d575674eb0852c0fa3187e59e98ef977998",
+      "judged_at": "11954148",
+      "role": "portal_proxy"
+    }
+  }
+}

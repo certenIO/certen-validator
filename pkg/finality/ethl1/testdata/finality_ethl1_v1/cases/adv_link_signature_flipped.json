@@ -1,0 +1,18 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "adv_link_signature_flipped",
+ "kind": "head",
+ "description": "link 0 signature bit flipped",
+ "pins": "pins/main.json",
+ "lc": "lc/adv_link_signature_flipped.bin",
+ "expect": {
+  "code": "finality_signature_invalid",
+  "fields": {
+   "fork_version": "0x90000076",
+   "index": "0",
+   "participants": "512",
+   "signature_slot": "11370572"
+  },
+  "result": "fault"
+ }
+}

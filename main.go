@@ -34,6 +34,9 @@ import (
 	"github.com/certen/independant-validator/pkg/ethrpc"
 	"github.com/certen/independant-validator/pkg/execution"
 	"github.com/certen/independant-validator/pkg/execution/contracts"
+	"github.com/certen/independant-validator/pkg/finality"
+	"github.com/certen/independant-validator/pkg/finality/adiri"
+	finruntime "github.com/certen/independant-validator/pkg/finality/runtime"
 	"github.com/certen/independant-validator/pkg/firestore"
 	"github.com/certen/independant-validator/pkg/intent"
 	"github.com/certen/independant-validator/pkg/ledger"
@@ -870,6 +873,9 @@ func main() {
 			UptimeSeconds     int64                  `json:"uptime_seconds"`
 			BatchDetails      map[string]interface{} `json:"batch_details"`
 			StatusExplanation string                 `json:"status_explanation"`
+			// Staged finality (RB11): upgrader switch and, per chain, capture lag, last captured block, pending legs by level
+			// and last append. Informational: it never changes Status.
+			Finality map[string]any `json:"finality"`
 		}{
 			Status:        healthStatus.Status,
 			Phase:         healthStatus.Phase,
@@ -881,6 +887,7 @@ func main() {
 			ProofCycle:    healthStatus.ProofCycle,
 			UptimeSeconds: int64(time.Since(healthStatus.startTime).Seconds()),
 			BatchDetails:  make(map[string]interface{}),
+			Finality:      metrics.FinalityHealth(),
 		}
 
 		// Build status explanation
@@ -2304,6 +2311,42 @@ func startValidator(
 		monitor.Start(context.Background())
 		log.Printf("✅ [Phase 5] Standing evidence checks started (settled-without-canonical, " +
 			"contradicted layer 5, schema-behind-binary)")
+
+		// Staged finality (RB11, PROOF_V2 S7, certen:finality:v1). For every settled leg this worker appends the strongest
+		// finality level now buildable (l1_posted, finalized; included is derived and never stored) to the leg's append-only, hash-linked addendum chain,
+		// beside the stored proof, and re-schedules until the chain's top level. It runs on its own goroutine under its own
+		// deadlines and shares nothing with settlement, attestation or write-back, none of which waits on it; nothing it writes
+		// is an input of any attestation message, outcome root or govRoot. CERTEN_FINALITY_UPGRADER_ENABLED (default on) turns
+		// it off, and an off switch is a named, logged state (finality_upgrader_disabled) and a metric, never a silent skip.
+		finalityOn, ferr := finality.Enabled()
+		if ferr != nil {
+			return nil, nil, fmt.Errorf("finality upgrader: %w", ferr)
+		}
+		finalityRepo := database.NewFinalityAddendaRepository(dbClient)
+		// The finality runtime wiring (pkg/finality/runtime) builds, from the validator's provider configuration plus the
+		// CERTEN_FINALITY_* variables, the provers and capture loops of every live chain and the light-client source. The pins
+		// are the embedded, hash-checked file unless CERTEN_FINALITY_PINS_FILE names an override, whose source it reports. A chain
+		// whose providers are missing is announced as the named state finality_upgrader_disabled, never skipped silently.
+		finalityCfg, ferr := finruntime.ConfigFromEnv()
+		if ferr != nil {
+			return nil, nil, fmt.Errorf("finality configuration: %w", ferr)
+		}
+		finalityWire, ferr := finruntime.Wire(finalityCfg, finruntime.Deps{
+			Registry: finality.Default, Store: database.NewFinalityCaptureStore(dbClient),
+			Status: database.NewFinalityStatusRepository(dbClient), Logf: log.Printf,
+		})
+		if ferr != nil {
+			return nil, nil, fmt.Errorf("finality wiring: %w", ferr)
+		}
+		// The Adiri genesis link is embedded and hash-pinned by the pins the runtime built under; it is checked once here, at startup,
+		// never per proof.
+		if ferr := adiri.CheckEmbeddedGenesisLink(finalityWire.Pins); ferr != nil {
+			return nil, nil, fmt.Errorf("finality pins: %w", ferr)
+		}
+		if _, ferr := finality.Launch(context.Background(), finalityOn, finalityRepo, finalityRepo, finalityWire.Registry, finalityWire.Pins,
+			finalityWire.Upgrader); ferr != nil {
+			return nil, nil, fmt.Errorf("finality upgrader: %w", ferr)
+		}
 	}
 
 	go intentDiscovery.StartMonitoring()

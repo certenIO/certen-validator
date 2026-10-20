@@ -1,0 +1,16 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "adv_electra_bootstrap_committee_branch_forged",
+ "kind": "head",
+ "description": "one node of the bootstrap's 6-node current_sync_committee_branch flipped",
+ "pins": "pins/main.json",
+ "lc": "lc/adv_electra_bootstrap_committee_branch_forged.bin",
+ "expect": {
+  "code": "finality_bootstrap_invalid",
+  "fields": {
+   "check": "committee_branch",
+   "slot": "11288576"
+  },
+  "result": "fault"
+ }
+}

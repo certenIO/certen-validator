@@ -1,0 +1,43 @@
+{
+ "format": "certen-finality-ethl1-test-pins/1",
+ "description": "synthetic network: electra@2000, gloas@2570 (version 0x900000a1), heze@2575 (gloas layout, version 0x900000a2); one anchor, period 10, a 4-key test committee",
+ "chain_id": "11155111",
+ "genesis_validators_root": "0x5aed068eb473ea47c471529bc71f23089c461da86e438d2f46718e916f8d4065",
+ "forks": [
+  {
+   "name": "genesis",
+   "epoch": "0",
+   "version": "0x900000a0",
+   "layout": 0
+  },
+  {
+   "name": "electra",
+   "epoch": "2000",
+   "version": "0x900000a0",
+   "layout": 1
+  },
+  {
+   "name": "gloas",
+   "epoch": "2570",
+   "version": "0x900000a1",
+   "layout": 2
+  },
+  {
+   "name": "heze",
+   "epoch": "2575",
+   "version": "0x900000a2",
+   "layout": 2
+  }
+ ],
+ "anchors": [
+  {
+   "period": "10",
+   "committee_root": "0xe63d03f972f2f1b2f73881ba0e80fc49e322474b157f32a428fbab7a8114bbca",
+   "block_root": null,
+   "wsp_epochs": "279"
+  }
+ ],
+ "min_participants": 342,
+ "max_links": 64,
+ "max_spine_headers": 16384
+}

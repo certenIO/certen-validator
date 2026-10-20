@@ -1,0 +1,97 @@
+{
+  "base_sepolia": {
+    "batch_inbox": "0xff00000000000000000000000000000000084532",
+    "chain_id": 84532,
+    "channel_timeout": 300,
+    "denim_time": 1792605600,
+    "impl_pins": {
+      "0x35c04acf3bb541d90092bf3e328475377142f70760fa82f372ac0c4e4b3ff4f6": {
+        "role": "syscfg_impl"
+      }
+    },
+    "isthmus_time": 1744905600,
+    "kzg_setup_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+    "l1_chain_id": 11155111,
+    "l2_block_time": 2,
+    "l2_genesis_time": 1695768288,
+    "max_blobs": 32,
+    "max_rlp_bytes_per_channel": 100000000,
+    "seq_window_size": 3600,
+    "system_config": "0xf272670eb55e895584501d564afeb048bed26194"
+  },
+  "eth_sepolia": {
+    "anchors": [
+      {
+        "committee_root": "0xe0a6ede4f641fa171bd6cdca25356f98b48039fbe01454685ea4b234ace4fac9",
+        "derived_by": [
+          "vector-set pin: next_sync_committee of the Lodestar light_client update of period 1390 captured 2026-10-20 (single source; not a published ledger entry)"
+        ],
+        "link_sha256": "ea25e10e8ceab99407290f671513f5702dc153abf5b3e8702649029b435a2b8d",
+        "period": 1391,
+        "wsp_epochs": 279
+      }
+    ],
+    "chain_id": 11155111,
+    "epochs_per_period": 256,
+    "forks": [
+      {
+        "epoch": 0,
+        "layout": null,
+        "name": "genesis",
+        "version": "0x90000069"
+      },
+      {
+        "epoch": 50,
+        "layout": null,
+        "name": "altair",
+        "version": "0x90000070"
+      },
+      {
+        "epoch": 100,
+        "layout": null,
+        "name": "bellatrix",
+        "version": "0x90000071"
+      },
+      {
+        "epoch": 56832,
+        "layout": null,
+        "name": "capella",
+        "version": "0x90000072"
+      },
+      {
+        "epoch": 132608,
+        "layout": null,
+        "name": "deneb",
+        "version": "0x90000073"
+      },
+      {
+        "epoch": 222464,
+        "layout": "electra",
+        "name": "electra",
+        "version": "0x90000074"
+      },
+      {
+        "epoch": 272640,
+        "layout": "electra",
+        "name": "fulu",
+        "version": "0x90000075"
+      },
+      {
+        "epoch": 353024,
+        "layout": "gloas",
+        "name": "gloas",
+        "version": "0x90000076"
+      }
+    ],
+    "genesis_time": 1655733600,
+    "genesis_validators_root": "0xd8ea171f3c94aea21ebc42a1ed61052acf3f9209c00e4efbaaddac09ed9b8078",
+    "max_links": 64,
+    "max_spine_headers": 16384,
+    "min_participants": 342,
+    "spec": "consensus-specs v1.7.0-beta.4 aa16bb4c",
+    "sync_committee_size": 512
+  },
+  "format": "certen-finality-pins/1",
+  "onchain_commitment": null,
+  "published_utc": "2026-10-20T02:35:00Z"
+}

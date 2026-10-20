@@ -1,0 +1,7 @@
+# Digests of the portable proof v2 export of the live Kermit fixture (pkg/proof/v2/testdata/evidence_3cfb04cf.json.gz and
+# archive.json.gz), captured on origin/main 979a03c BEFORE the finality section existed:
+#   sha256(json.Marshal(Export(...)))          the whole document with its major blocks
+#   sha256(json.Marshal(ExportDocument(...)))  the document without them, as proof_v2_portable stores it
+# TestPortableBytesAreUnchangedByTheFinalitySection holds the current code to them. New file, new evidence; no existing golden moved.
+export   43e6d06747b375f546c1da4e68269c2df007f15575378eb318479340bdad3628 1675418
+document c7a28c42044074414301449689b7c55a313f53259f63b4abe05ee937199db2fa 732167

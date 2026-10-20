@@ -1,0 +1,19 @@
+{
+  "decode": {
+    "result": "stream_error"
+  },
+  "description": "block tx counts [2, 2^64-1]: the wrapped sum is 1 and the payload carries one well-formed transaction, so the first block reads a second one that was never declared.",
+  "format": "certen-base-posted-stream/1",
+  "id": "span_counts_wrap_to_one_with_a_valid_tx",
+  "params": {
+    "chain_id": "84532",
+    "l2_block_time": "2",
+    "l2_genesis_time": "1695768288"
+  },
+  "stream": "0xb89901000911111111111111111111111111111111111111112222222222222222222222222222222222222222020002ffffffffffffffffff01000000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000001090909090909090909090909090909090909090902c501010280c00188a401",
+  "verifier": {
+    "code": "channel_malformed",
+    "fields": {},
+    "result": "state"
+  }
+}

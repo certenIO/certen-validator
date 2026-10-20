@@ -1,0 +1,17 @@
+{
+  "format": "certen-finality-vectors/1",
+  "id": "other_type_0_resolved_before_the_cutover",
+  "description": "live: a type-0 (FaultDisputeGame) game, DEFENDER_WINS, created before the retirement timestamp: not a type-621 game, so its implementation is not pinned",
+  "pins": "pins/main.json",
+  "leg": "legs/leg_47604755.json",
+  "evidence": "evidence/other_type_0_resolved_before_the_cutover.bin",
+  "expect": {
+    "code": "contract_identity_unproven",
+    "fields": {
+      "address": "0x6ddba09bc4ccb0d6ca9fc5350580f74165707499",
+      "code_hash": "0x7138c1e90bf00ed1f96159632d8fbd4d313a2e47a1fd0f2f3fd3a3eeb857f650",
+      "judged_at": "11954232",
+      "role": "game_impl"
+    }
+  }
+}

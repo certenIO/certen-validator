@@ -1,0 +1,20 @@
+{
+  "format": "certen-finality-vectors/1",
+  "id": "adv_output_root_index_points_at_another_root",
+  "description": "the index selects the next intermediate root; the header at the output-root block does not commit to it",
+  "pins": "pins/main.json",
+  "leg": "legs/leg_47604755.json",
+  "evidence": "evidence/valid_leg_47604755.bin",
+  "splice": {
+    "offset": 36013,
+    "delete": 1,
+    "insert": "0x12"
+  },
+  "expect": {
+    "code": "output_root_mismatch",
+    "fields": {
+      "claimed": "0xd01dd4b557e78f29440552c67aa08e5b3d428905c7343c1dc261b5931ec290f2",
+      "computed": "0xd5778037bf4f7b770978977d80f1a1a18fca1e3fe69d5f04111816cab2d3472e"
+    }
+  }
+}

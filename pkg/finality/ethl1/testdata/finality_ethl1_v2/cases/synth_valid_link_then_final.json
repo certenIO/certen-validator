@@ -1,0 +1,19 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "synth_valid_link_then_final",
+ "kind": "head",
+ "description": "synthetic: one link in the anchor period learns B; the final update signed by B in the next period verifies",
+ "pins": "pins/synth.json",
+ "lc": "lc/synth_valid_link_then_final.bin",
+ "expect": {
+  "finalized_head": {
+   "beacon_root": "0xbc7ea479ae99b8717459083e8e9f67e50dba6642622f3ebaef2208010feca317",
+   "epoch": "2890",
+   "exec_hash": "0xe1c34136c776a8aa18a2e50ce71f622ebd3dde201a9a4b8c84c94b02d69d38c2",
+   "participants": "512",
+   "periods_crossed": "1",
+   "slot": "92480"
+  },
+  "result": "ok"
+ }
+}

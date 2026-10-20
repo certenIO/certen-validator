@@ -1,0 +1,19 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "adv_attested_state_root_altered",
+ "kind": "head",
+ "description": "attested state_root flipped: the finality branch no longer reaches it",
+ "pins": "pins/main.json",
+ "lc": "lc/adv_attested_state_root_altered.bin",
+ "expect": {
+  "code": "finality_link_invalid",
+  "fields": {
+   "attested_slot": "11394240",
+   "check": "finality_branch",
+   "index": "0",
+   "period": "1390",
+   "signature_slot": "11394241"
+  },
+  "result": "fault"
+ }
+}

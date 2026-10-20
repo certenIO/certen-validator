@@ -1,0 +1,11 @@
+{
+ "format": "certen-finality-lcssz-case/1",
+ "id": "lcssz_below_minimum_length",
+ "description": "one byte below the minimum Electra finality update: refused before any slice",
+ "len": 2055,
+ "att_off": 400,
+ "fin_off": 1228,
+ "exec_hash": "",
+ "exec_number": 0,
+ "expect": "invalid"
+}

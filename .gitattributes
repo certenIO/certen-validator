@@ -27,3 +27,27 @@ pkg/crypto/bls_zkp/*.bin binary
 accumulate-lite-client-2/liteclient/proof/govsig/testdata/sigtypes/*.json text eol=lf
 # A golden is specification: its bytes are never normalised.
 accumulate-lite-client-2/liteclient/proof/consolidated_governance-proof/testdata/*.golden.json text eol=lf
+
+# The finality pins file is HASHED as raw bytes (pkg/finality PINS_SHA256) and mirrored byte-identically into the other
+# repos, and the finality vectors, states registry and manifest are copied byte-for-byte into the TypeScript verifier's repo.
+# A CRLF checkout would make the pinned hashes fail on Windows.
+pkg/finality/pins/*.json text eol=lf
+pkg/finality/testdata/finality/*.json text eol=lf
+pkg/finality/testdata/finality_chain1/* text eol=lf
+pkg/finality/testdata/finality_chain2/* text eol=lf
+
+# finality_eth_sepolia1 (RB11-C2): every file is hashed in its MANIFEST and copied byte-for-byte into the TypeScript repository; the link files are hashed by link_sha256.
+pkg/finality/ethsepolia/testdata/finality_eth_sepolia1/** -text
+pkg/finality/pins-links/* -text
+
+# RB11-INT3 (C2 finding F5): every published finality vector set directory carries a rule that keeps its bytes (adiri, arbfinal and
+# ethl1 through their testdata/.gitattributes; arb_posted1, base_posted1 and base_final1 through their own; chain1, chain2 and the
+# registry/pins snapshots above; eth_sepolia1 and pins-links above). The loose files directly under pkg/finality/testdata are
+# specification too (the addendum golden, the pinned go.mod requirement list, SUPERSEDED.md, the mutation-equivalents lists and the
+# golden generator): a CRLF checkout must not rewrite them.
+pkg/finality/testdata/* -text
+pkg/finality/testdata/finality/*.txt -text
+# RB11-E2E-POS: the recorded Settlements of the published vectors' leg blocks are hashed in their MANIFEST.json; a CRLF checkout must not rewrite them.
+cmd/proofverify/testdata/finality_e2e_pos1/* -text
+pkg/finality/ethsepolia/testdata/finality_eth_sepolia2/** -text
+pkg/finality/ethsepolia/testdata/finality_eth_sepolia3/** -text

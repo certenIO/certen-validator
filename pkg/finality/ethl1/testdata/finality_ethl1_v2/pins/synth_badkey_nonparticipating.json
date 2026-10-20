@@ -1,0 +1,43 @@
+{
+ "format": "certen-finality-ethl1-test-pins/1",
+ "description": "synthetic: the period-10 ledger root commits to a committee whose seat 511 holds bytes that are not a valid key",
+ "chain_id": "11155111",
+ "genesis_validators_root": "0x5aed068eb473ea47c471529bc71f23089c461da86e438d2f46718e916f8d4065",
+ "forks": [
+  {
+   "name": "genesis",
+   "epoch": "0",
+   "version": "0x900000a0",
+   "layout": 0
+  },
+  {
+   "name": "electra",
+   "epoch": "2000",
+   "version": "0x900000a0",
+   "layout": 1
+  },
+  {
+   "name": "gloas",
+   "epoch": "2570",
+   "version": "0x900000a1",
+   "layout": 2
+  },
+  {
+   "name": "heze",
+   "epoch": "2575",
+   "version": "0x900000a2",
+   "layout": 2
+  }
+ ],
+ "anchors": [
+  {
+   "period": "10",
+   "committee_root": "0xf8633b6c42d98b4eda149cd95b5c50e5dfadde07fd8078917c4fa8d49044df76",
+   "block_root": null,
+   "wsp_epochs": "279"
+  }
+ ],
+ "min_participants": 342,
+ "max_links": 64,
+ "max_spine_headers": 16384
+}

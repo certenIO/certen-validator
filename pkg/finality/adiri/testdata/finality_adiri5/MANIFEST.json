@@ -1,0 +1,17 @@
+{
+ "files": {
+  "evidence/slot5-alias-9000-claimed-809-no-leg-header.bin": "fb35fd2aa314f08f647980221705ccd66632f2c3ce7f62aa65758e03e86e1a54",
+  "evidence/slot5-alias-9000-claimed-809.bin": "fb35fd2aa314f08f647980221705ccd66632f2c3ce7f62aa65758e03e86e1a54",
+  "evidence/slot5-leg-hash-absent-slot.bin": "b4ff68315a0ed968e539848223ad1dbd05419bd743fb6d105b300d7e1fa45792",
+  "evidence/slot5-leg-header-hash-mismatch.bin": "39ae566313a330d821cf512e7e9043028ca8e4021396a336f86b0a9de34b5d7e",
+  "evidence/slot5-leg-header-number-mismatch.bin": "b63995cddd95de2189d803130cbffd2a6349977410634eeac5c96981b0e464c1",
+  "evidence/slot5-leg-header-ok.bin": "b3e823a8f6adf1099993ba24e62b559cd31af84bcf717833d6adf506907f0414",
+  "evidence/slot5-leg-header-undecodable.bin": "096e3ce52ea2d78c11c2bc861b85edc969e00eaeb5b414f7a0505a082961a317",
+  "evidence/slot5-window-8191-refused.bin": "fab60bef270673cc96db8c31e066edec1157f4295535db91a014916f192235fc",
+  "evidence/slot5-window-edge-8190-accepted.bin": "5cd5c2c5e352d0f2538293d9c674ee69494990ed6c9564e617fa0b6a8c7ca663",
+  "evidence/slot5-zero-leg-hash-absent-slot.bin": "e0aa1f6fd6febb56462c1601dcb1418a8c0d9747c7e559f268e21642dee83aa5",
+  "evidence/syn-rotation.bin": "031d6a75c0e15f03c5af206fe4ef690ef18288f35e2ea2b461e5a13d261af9c3",
+  "vectors.json": "b02fb896d0f16bd066b0ee9d6a00e84ded155c10d7d042d46d2bfcd54d8d2c46"
+ },
+ "format": "finality_adiri5/manifest/1"
+}

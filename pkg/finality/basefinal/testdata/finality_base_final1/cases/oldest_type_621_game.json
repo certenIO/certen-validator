@@ -1,0 +1,17 @@
+{
+  "format": "certen-finality-vectors/1",
+  "id": "oldest_type_621_game",
+  "description": "live: the oldest type-621 game of the factory (index 15114)",
+  "pins": "pins/main.json",
+  "leg": "legs/leg_47604755.json",
+  "evidence": "evidence/oldest_type_621_game.bin",
+  "expect": {
+    "code": "contract_identity_unproven",
+    "fields": {
+      "address": "0x498313fb340cd5055c5568546364008299a47517",
+      "code_hash": "0x9481bfad74fa19f4b54f5912afdab38b9317e3cb0e333a69adaa6069f567726a",
+      "judged_at": "11954232",
+      "role": "game_impl"
+    }
+  }
+}

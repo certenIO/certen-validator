@@ -1,0 +1,17 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "adv_committee_body_not_ledger",
+ "kind": "head",
+ "description": "one public-key bit of the committee body flipped: its root is not the ledger root",
+ "pins": "pins/main.json",
+ "lc": "lc/adv_committee_body_not_ledger.bin",
+ "expect": {
+  "code": "finality_pin_mismatch",
+  "fields": {
+   "got_root": "0x00004589d5ac3d22e2029024b22d48e870ab9cc6c18d3b9ca80853199960abd0",
+   "period": "1390",
+   "want_root": "0x343e466c91eb25084bf4a64d15a00ebddb0a2e1703aec4b7f5734ae344aba5ee"
+  },
+  "result": "fault"
+ }
+}

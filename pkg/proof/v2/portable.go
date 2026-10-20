@@ -40,6 +40,15 @@ type Portable struct {
 	// (docs/proof/GOVROOT_V3.md), so another language's verifier can reproduce the root. It is not evidence: Verify
 	// neither reads nor checks it.
 	GovRootV3Inputs *PortableGovRootV3Inputs `json:"govRootV3Inputs,omitempty"`
+
+	// Finality is the staged finality section of the proof's settled leg (pkg/finality, domain tag certen:finality:v1;
+	// V2_SPEC_S7 section 2.5): ONE object {format, leg, addenda} -- the carried leg and its append-only, hash-linked chain of
+	// addenda -- kept here as the raw bytes of that object. The chain commits to the leg binding D0 (the hash of the leg's own
+	// Settlement fields), not to the proof's original digest. It sits BESIDE the document and never inside any hashed
+	// content (PROOF_V2 section 10.3): Export, ExportDocument, Import and Verify neither write nor read it, so a document
+	// without it is byte-for-byte what it always was, and a document with it differs only by this last member. A verifier
+	// judges the object with finality.ParseSection and finality.Registry.VerifyDocumentSection; its shape is theirs to judge.
+	Finality json.RawMessage `json:"finality,omitempty"`
 }
 
 // PortableGovRootV3Inputs are govRoot v3's inputs that are not proof facts: sha256 of each governance level's

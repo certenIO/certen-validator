@@ -1,0 +1,298 @@
+[
+  {
+    "file": "build.go",
+    "function": "Builder.facts",
+    "operator": "int_literal",
+    "original": "code[tl+84+24 : tl+84+32]",
+    "mutated": "code[tl+84+24 : tl+85+32]",
+    "reason": "binary.BigEndian.Uint64 reads only the first eight bytes of its argument, so a slice that ends one or two bytes later gives the same number (len(code) >= tl+2+ArgsBaseLen is checked before, so the longer slice is valid)."
+  },
+  {
+    "file": "build.go",
+    "function": "Builder.facts",
+    "operator": "int_literal",
+    "original": "code[tl+84+24 : tl+84+32]",
+    "mutated": "code[tl+84+24 : tl+84+33]",
+    "reason": "binary.BigEndian.Uint64 reads only the first eight bytes of its argument, so a slice that ends one or two bytes later gives the same number (len(code) >= tl+2+ArgsBaseLen is checked before, so the longer slice is valid)."
+  },
+  {
+    "file": "build.go",
+    "function": "Builder.covering",
+    "operator": "guard_off",
+    "original": "if leg > newest.L2Seq",
+    "mutated": "if false",
+    "reason": "With the guard removed and leg above the newest game, newest.L2Seq-leg wraps to a huge difference, so the estimate keeps idx = count-1; the scan loads the newest game, finds leg above its end and answers no_covering_game with the same leg_block and the same newest_l2_sequence_number (the newest game's end) as the guard does."
+  },
+  {
+    "file": "build.go",
+    "function": "Builder.covering",
+    "operator": "guard_off",
+    "original": "if idx+1 >= count",
+    "mutated": "if false",
+    "reason": "Dead branch: it is reached only with leg > f.L2Seq at idx = count-1, i.e. at the newest game, and leg > newest.L2Seq has been answered (no_covering_game) before the scan starts."
+  },
+  {
+    "file": "build.go",
+    "function": "Builder.covering",
+    "operator": "arith",
+    "original": "idx+1",
+    "mutated": "idx-1",
+    "reason": "Dead branch (see the entry for `if idx+1 >= count`): the newest game cannot be below the leg here."
+  },
+  {
+    "file": "build.go",
+    "function": "Builder.covering",
+    "operator": "int_literal",
+    "original": "idx+1 >= count",
+    "mutated": "idx+0 >= count",
+    "reason": "Dead branch (see the entry for `if idx+1 >= count`) for `idx+0 >= count`; at idx+0 the condition is idx >= count, never true for a loaded index."
+  },
+  {
+    "file": "build.go",
+    "function": "Builder.covering",
+    "operator": "cmp_boundary",
+    "original": "idx+1 >= count",
+    "mutated": "idx+1 > count",
+    "reason": "Dead branch (see the entry for `if idx+1 >= count`)."
+  },
+  {
+    "file": "build.go",
+    "function": "Builder.unresolved",
+    "operator": "cmp_boundary",
+    "original": "lay.ArgsBaseLen > 0",
+    "mutated": "lay.ArgsBaseLen >= 0",
+    "reason": "ArgsBaseLen of a layout the pins parser accepted is positive, and unresolved is only reached after build parsed the same pins; the zero layout of pinsLayout (pins that do not parse) cannot occur here, so `>= 0` and `> 0` agree."
+  },
+  {
+    "file": "build.go",
+    "function": "Builder.unresolved",
+    "operator": "int_literal",
+    "original": "lay.ArgsBaseLen > 0",
+    "mutated": "lay.ArgsBaseLen > 1",
+    "reason": "The pinned ArgsBaseLen is 136, so `> 1` and `> 0` agree."
+  },
+  {
+    "file": "build.go",
+    "function": "Builder.unresolved",
+    "operator": "int_literal",
+    "original": "g.Code[tl+116:tl+136]",
+    "mutated": "g.Code[tl+116:tl+137]",
+    "reason": "copy(pa[:], g.Code[tl+116:tl+137]) copies at most len(pa) = 20 bytes, the same as the 20-byte slice."
+  },
+  {
+    "file": "build.go",
+    "function": "Builder.unresolved",
+    "operator": "cmp_boundary",
+    "original": "remaining < 0",
+    "mutated": "remaining <= 0",
+    "reason": "At remaining == 0 the clamp assigns 0, the value it already has."
+  },
+  {
+    "file": "build.go",
+    "function": "Builder.attest",
+    "operator": "guard_off",
+    "original": "if encErr != nil",
+    "mutated": "if false",
+    "reason": "This entry excuses only the guard after Container.Encode, which fails only for a level that is not stored; the level here is the constant LevelFinalized, so it never fails. The other `if err != nil` guards of attest are killed by named tests."
+  },
+  {
+    "file": "capture.go",
+    "function": "MemStore.Rows",
+    "operator": "cmp_boundary",
+    "original": "out[i].L1Block > out[j].L1Block",
+    "mutated": "out[i].L1Block >= out[j].L1Block",
+    "reason": "Rows of equal block have no specified order; `>=` and `>` differ only for equal blocks, and the callers take every row."
+  },
+  {
+    "file": "capture.go",
+    "function": "DirStore.Rows",
+    "operator": "guard_off",
+    "original": "if readErr != nil",
+    "mutated": "if false",
+    "reason": "This entry excuses only the guard after os.ReadFile: an unreadable file yields no bytes, and the read of its item from no bytes fails with the same returned error. The other guards of Rows (the listing, the item, the data) are killed by named tests."
+  },
+  {
+    "file": "capture.go",
+    "function": "DirStore.Rows",
+    "operator": "cmp_boundary",
+    "original": "out[i].L1Block > out[j].L1Block",
+    "mutated": "out[i].L1Block >= out[j].L1Block",
+    "reason": "Rows of equal block have no specified order; `>=` and `>` differ only for equal blocks, and the callers take every row."
+  },
+  {
+    "file": "capture.go",
+    "function": "CaptureGame",
+    "operator": "int_literal",
+    "original": "args[20:52]",
+    "mutated": "args[20:53]",
+    "reason": "copy(rootClaim[:], args[20:53]) copies at most len(rootClaim) = 32 bytes, the same as the 32-byte slice."
+  },
+  {
+    "file": "pins.go",
+    "function": "sortedImplHashes",
+    "operator": "cmp_boundary",
+    "original": "string(out[i][:]) < string(out[j][:])",
+    "mutated": "string(out[i][:]) <= string(out[j][:])",
+    "reason": "The hashes are the distinct keys of a map and sort.Slice compares two different indices, so `<=` and `<` give the same order."
+  },
+  {
+    "file": "verify.go",
+    "function": "stateReader.account",
+    "operator": "guard_off",
+    "original": "if a, ok := r.accts[addr]; ok",
+    "mutated": "if a, ok := r.accts[addr]; false",
+    "reason": "The guarded branch only returns the memoised result of an earlier call: trie.VerifyProof over the same state root, key and node database is deterministic, so recomputing it returns the identical account (or the identical refusal) and nothing observable changes."
+  },
+  {
+    "file": "verify.go",
+    "function": "stateReader.slot",
+    "operator": "guard_off",
+    "original": "if acctErr != nil",
+    "mutated": "if false",
+    "reason": "account() returns the zero acctRead (exists=false) together with every error it returns, and the very next statement `if !a.exists` returns the identical state l1_state_proof_invalid{which:account}; with the guard removed the same state is returned one statement later."
+  },
+  {
+    "file": "verify.go",
+    "function": "GameState.finalizationPath",
+    "operator": "cmp_boundary",
+    "original": "d > slow",
+    "mutated": "d >= slow",
+    "reason": "d == slow is taken by the preceding case `d == slow` (path slow), so the case `d > slow` is only reached with d != slow and `d >= slow` selects the same inputs."
+  },
+  {
+    "file": "verify.go",
+    "function": "judge",
+    "operator": "int_literal",
+    "original": "w[10:30]",
+    "mutated": "w[10:31]",
+    "reason": "[20]byte(w[10:31]) converts a slice to an array of 20 bytes, which takes the first 20 elements of the slice (the conversion only requires len >= 20), the same 20 bytes as w[10:30]; both occurrences."
+  },
+  {
+    "file": "verify.go",
+    "function": "judge",
+    "operator": "guard_off",
+    "original": "if gaErr != nil",
+    "mutated": "if false",
+    "reason": "The guard after rd.account(body.GameProxy): on an error account returns the zero acctRead (exists=false) and the next statement `!ga.exists || ...` returns the identical l1_state_proof_invalid{which:account}."
+  },
+  {
+    "file": "verify.go",
+    "function": "judge",
+    "operator": "int_literal",
+    "original": "code[implOff:implOff+20]",
+    "mutated": "code[implOff:implOff+21]",
+    "reason": "copy(gimpl[:], code[implOff:implOff+21]) copies at most len(gimpl) = 20 bytes, the same as the 20-byte slice; len(code) >= tmplLen+2 > implOff+21 is checked before, so the longer slice is valid."
+  },
+  {
+    "file": "verify.go",
+    "function": "judge",
+    "operator": "int_literal",
+    "original": "args[20:52]",
+    "mutated": "args[20:53]",
+    "reason": "[32]byte(args[20:53]) takes the first 32 elements of the slice, the same as args[20:52]; the longer slice is within args (rest >= ArgsBaseLen >= 116)."
+  },
+  {
+    "file": "verify.go",
+    "function": "judge",
+    "operator": "int_literal",
+    "original": "args[84:116]",
+    "mutated": "args[84:117]",
+    "reason": "copy(l2seqW[:], args[84:117]) copies at most len(l2seqW) = 32 bytes, the same as the 32-byte slice."
+  },
+  {
+    "file": "verify.go",
+    "function": "judge",
+    "operator": "int_literal",
+    "original": "reg[0:4]",
+    "mutated": "reg[0:5]",
+    "reason": "binary.BigEndian.Uint32 reads only the first four bytes of its argument, so reg[0:5] gives the same number."
+  },
+  {
+    "file": "verify.go",
+    "function": "judge",
+    "operator": "int_literal",
+    "original": "w0[14]",
+    "mutated": "w0[13]",
+    "reason": "g.Initialized is decoded and never read by any decision or reported field (finding recorded in the check-in)."
+  },
+  {
+    "file": "verify.go",
+    "function": "judge",
+    "operator": "int_literal",
+    "original": "w0[14]",
+    "mutated": "w0[15]",
+    "reason": "g.Initialized is decoded and never read by any decision or reported field (finding recorded in the check-in)."
+  },
+  {
+    "file": "verify.go",
+    "function": "judge",
+    "operator": "int_literal",
+    "original": "reg[4:12]",
+    "mutated": "reg[4:13]",
+    "reason": "binary.BigEndian.Uint64 reads only the first eight bytes of its argument, so reg[4:13] gives the same number."
+  },
+  {
+    "file": "verify.go",
+    "function": "judge",
+    "operator": "int_literal",
+    "original": "rr[28:32]",
+    "mutated": "rr[27:32]",
+    "reason": "g.RespectedGameType is decoded and never read by any decision or reported field (finding recorded in the check-in); Uint32 reads the first four bytes of its argument."
+  },
+  {
+    "file": "verify.go",
+    "function": "judge",
+    "operator": "cmp_boundary",
+    "original": "A.Timestamp <= g.ResolvedAt",
+    "mutated": "A.Timestamp < g.ResolvedAt",
+    "reason": "At equality the second disjunct A.Timestamp-ResolvedAt <= delay holds (delay >= 0), so the same game_within_delay is returned."
+  },
+  {
+    "file": "verify.go",
+    "function": "judge",
+    "operator": "cmp_boundary",
+    "original": "l2seq < start",
+    "mutated": "l2seq <= start",
+    "reason": "At l2seq == start the total is 0, which matches no pinned pair, and the same interval_pair refusal with total 0 is returned."
+  },
+  {
+    "file": "verify.go",
+    "function": "judge",
+    "operator": "int_literal",
+    "original": "prev.Number == 0",
+    "mutated": "prev.Number == -1",
+    "reason": "The guard matters only for a header whose number is 2^64-1 and whose hash is the parent hash of a number-0 header (the chain check cur.Hash == prev.ParentHash comes first): that needs a preimage of the parent hash, which the headers of a real chain (genesis has the zero parent hash) and of the synthetic worlds do not have; the case `== 1` is killed by the spine down to block zero."
+  },
+  {
+    "file": "verify.go",
+    "function": "gameUUID",
+    "operator": "cmp_boundary",
+    "original": "pad > 0",
+    "mutated": "pad >= 0",
+    "reason": "At pad == 0 the guarded statement appends make([]byte, 0), an empty slice, which leaves b unchanged, so `pad >= 0` and `pad > 0` produce the same bytes for every input."
+  },
+  {
+    "file": "wire.go",
+    "function": "DecodeBody",
+    "operator": "guard_off",
+    "original": "if out.LC, err = ep.DecodeLC(body[:n]); err != nil",
+    "mutated": "if out.LC, err = ep.DecodeLC(body[:n]); false",
+    "reason": "DecodeLC reads the same grammar as lcExtent (length-prefixed profile, fixed anchor, anchor body, links counted against the same MaxLinks bound, final update) over exactly the slice lcExtent delimited, which it can only run short of or overrun if lcExtent had; lcExtent has already refused every such body, so DecodeLC cannot fail here and the guard never fires."
+  },
+  {
+    "file": "wire.go",
+    "function": "DecodeBody",
+    "operator": "cmp_boundary",
+    "original": "spineMax > lim.MaxSpineHeaders",
+    "mutated": "spineMax >= lim.MaxSpineHeaders",
+    "reason": "At spineMax == lim.MaxSpineHeaders the guarded assignment sets spineMax to lim.MaxSpineHeaders, the value it already has, so `>=` and `>` give the same bound for every input."
+  },
+  {
+    "file": "wire.go",
+    "function": "DecodeBody",
+    "operator": "cmp_boundary",
+    "original": "l2Max > lim.MaxL2Headers",
+    "mutated": "l2Max >= lim.MaxL2Headers",
+    "reason": "At l2Max == lim.MaxL2Headers the guarded assignment sets l2Max to lim.MaxL2Headers, the value it already has, so `>=` and `>` give the same bound for every input."
+  }
+]

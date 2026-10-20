@@ -1,0 +1,20 @@
+{
+  "format": "certen-base-posted-case/1",
+  "id": "deposit_epoch_number_altered",
+  "description": "the L1-info deposit's epoch number changed by one: it no longer equals the batch's epoch",
+  "pins": "pins/main.json",
+  "leg": "legs/a.json",
+  "evidence": "evidence/valid_a.bin",
+  "splice": {
+    "offset": 966772,
+    "delete": 1,
+    "insert": "0x30"
+  },
+  "expect": {
+    "result": "state",
+    "code": "batch_binding_mismatch",
+    "fields": {
+      "field": "epoch_num"
+    }
+  }
+}

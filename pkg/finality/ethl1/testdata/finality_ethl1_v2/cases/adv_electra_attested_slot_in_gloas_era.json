@@ -1,0 +1,17 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "adv_electra_attested_slot_in_gloas_era",
+ "kind": "head",
+ "description": "electra-shaped update whose attested slot lies in the Gloas era: the wrong gindex family for the fork of its own slot",
+ "pins": "pins/main.json",
+ "lc": "lc/adv_electra_attested_slot_in_gloas_era.bin",
+ "expect": {
+  "code": "finality_fork_unsupported",
+  "fields": {
+   "epoch": "353024",
+   "layout": "electra",
+   "slot": "11296778"
+  },
+  "result": "fault"
+ }
+}

@@ -1,0 +1,17 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "adv_window_exceeded",
+ "kind": "head",
+ "description": "weak-subjectivity window of 1 epoch against a link finalizing hundreds of epochs after the anchor",
+ "pins": "pins/wsp_1.json",
+ "lc": "lc/adv_window_exceeded.bin",
+ "expect": {
+  "code": "finality_pin_window",
+  "fields": {
+   "anchor_epoch": "355584",
+   "finalized_epoch": "355666",
+   "wsp_epochs": "1"
+  },
+  "result": "fault"
+ }
+}

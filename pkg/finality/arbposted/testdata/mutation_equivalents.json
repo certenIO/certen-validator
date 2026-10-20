@@ -1,0 +1,130 @@
+[
+  {
+    "file": "codec.go",
+    "function": "Decode",
+    "operator": "guard_off",
+    "original": "if err != nil",
+    "mutated": "if false",
+    "reason": "Three guards of the blob branch can never see an error: the versionedHashes B32 read, the blob commitment read and the blob proof read. Decode first reads Count(\"versionedHashes\", MaxBlobs, 32) and Count(\"blobs\", MaxBlobs, 4+BlobBytes+96); Reader.Count refuses (count_exceeds_remaining) unless n*minElem bytes remain, and every iteration consumes exactly minElem bytes (a B32; or a 4-byte length, exactly BlobBytes of raw - any other length is refused by the raw read or the length check before the next read - and 96 bytes of commitment and proof), so the bytes of every later read are already known to be there. The read of the blob raw (LP) is NOT in this class: its length prefix can be wrong, TestABlobLengthPrefixThatIsNotTheBlobSizeIsRefused kills its guard. The key matches every unkilled `if err != nil` -> `if false` in Decode, so a future untested guard would be hidden by this entry: TestACutAtAnyByteIsRefusedByTheFieldItFallsIn checks every other guard by part AND reason."
+  },
+  {
+    "file": "delayed.go",
+    "function": "headerNonce",
+    "operator": "guard_off",
+    "original": "if err != nil",
+    "mutated": "if false",
+    "reason": "headerNonce: when rlp.SplitList fails, `content` is nil; with the guard off the loop's first rlp.Split(nil) fails the same way and returns (0, false): the same answer by the next statement."
+  },
+  {
+    "file": "delayed.go",
+    "function": "headerNonce",
+    "operator": "int_literal",
+    "original": "i <= 14",
+    "mutated": "i <= 15",
+    "reason": "the loop returns at i == 14 on every path (the nonce item is read and returned, or a split fails and returns false), so an iteration with i == 15 is never entered: the bound 14 and 15 are the same."
+  },
+  {
+    "file": "derive.go",
+    "function": "msgReader.take",
+    "operator": "logic_swap",
+    "original": "r.bad || n < 0",
+    "mutated": "r.bad && n < 0",
+    "reason": "msgReader.take is called only with n >= 0 (a constant, a 20/32/1/8, or int(uint64) bounded by the 256 KiB message limit), so `n < 0` is never true and `r.bad || n < 0` equals `r.bad` for `||`; for the `&&` swap and the `-1` literal the guard is `r.bad` alone or never true: a take after a failed take either fails on the length test (the remaining bytes did not change) or returns bytes that every caller discards, because each caller tests r.bad (or nil) before using what it read: parseUnsigned and deriveDelayed check r.bad after all their reads; the batch loop returns on a nil take."
+  },
+  {
+    "file": "derive.go",
+    "function": "msgReader.take",
+    "operator": "int_literal",
+    "original": "n < 0",
+    "mutated": "n < -1",
+    "reason": "msgReader.take is called only with n >= 0 (a constant, a 20/32/1/8, or int(uint64) bounded by the 256 KiB message limit), so `n < 0` is never true and `r.bad || n < 0` equals `r.bad` for `||`; for the `&&` swap and the `-1` literal the guard is `r.bad` alone or never true: a take after a failed take either fails on the length test (the remaining bytes did not change) or returns bytes that every caller discards, because each caller tests r.bad (or nil) before using what it read: parseUnsigned and deriveDelayed check r.bad after all their reads; the batch loop returns on a nil take."
+  },
+  {
+    "file": "derive.go",
+    "function": "msgReader.addr256",
+    "operator": "int_literal",
+    "original": "w[12:]",
+    "mutated": "w[11:]",
+    "reason": "common.BytesToAddress keeps the LAST 20 bytes of a longer slice, so w[11:] (21 bytes) and w[12:] (20 bytes) give the same address."
+  },
+  {
+    "file": "derive.go",
+    "function": "msgReader.rest",
+    "operator": "guard_off",
+    "original": "if r.bad",
+    "mutated": "if false",
+    "reason": "msgReader.rest is called either right after a take(1) that succeeded (the signed-tx branch; r.bad is false) or as the last read of parseUnsigned, whose caller tests r.bad before using the result: with the guard off a failed reader returns its remaining bytes, which are discarded."
+  },
+  {
+    "file": "derive.go",
+    "function": "encTx",
+    "operator": "guard_off",
+    "original": "if err != nil",
+    "mutated": "if false",
+    "reason": "rlp.EncodeToBytes cannot fail for the field types encTx is called with (non-negative *big.Int, common.Address, common.Hash, uint64, byte slices), so the panic branch is unreachable."
+  },
+  {
+    "file": "derive.go",
+    "function": "parseL2Msg",
+    "operator": "guard_off",
+    "original": "if lenBytes == nil",
+    "mutated": "if false",
+    "reason": "with the guard off a nil lenBytes is read as a zero length, and take(0) on a reader whose take(8) failed returns nil (r.bad short-circuits), so the next guard returns the same `out, true`."
+  },
+  {
+    "file": "derive.go",
+    "function": "parseL2Msg",
+    "operator": "cmp_boundary",
+    "original": "tx.Type() >= 0x64",
+    "mutated": "tx.Type() > 0x64",
+    "reason": "the branch is reached only for a transaction that tx.UnmarshalBinary accepted; upstream go-ethereum (this module) knows no type above 0x04, so a decoded Type() is never 0x63 or more and `>= 0x64`, `> 0x64` and `>= 0x63` are all false for every decoded transaction."
+  },
+  {
+    "file": "derive.go",
+    "function": "parseL2Msg",
+    "operator": "int_literal",
+    "original": "tx.Type() >= 0x64",
+    "mutated": "tx.Type() >= 0x63",
+    "reason": "the branch is reached only for a transaction that tx.UnmarshalBinary accepted; upstream go-ethereum (this module) knows no type above 0x04, so a decoded Type() is never 0x63 or more and `>= 0x64`, `> 0x64` and `>= 0x63` are all false for every decoded transaction."
+  },
+  {
+    "file": "derive.go",
+    "function": "parseL2Msg",
+    "operator": "guard_off",
+    "original": "if err != nil",
+    "mutated": "if false",
+    "reason": "tx.MarshalBinary of a transaction that tx.UnmarshalBinary just accepted cannot fail, so the guard (and the return under it) is unreachable."
+  },
+  {
+    "file": "derive.go",
+    "function": "deriveDelayed",
+    "operator": "guard_off",
+    "original": "if err != nil",
+    "mutated": "if false",
+    "reason": "rlp.EncodeToBytes cannot fail for a depositTx of big.Int, Hash and Address fields built from non-negative values."
+  },
+  {
+    "file": "derive.go",
+    "function": "parseL2Msg",
+    "operator": "cmp_boundary",
+    "original": "n.Uint64() > maxL2MessageSize",
+    "mutated": "n.Uint64() >= maxL2MessageSize",
+    "reason": "since the top-level cap (parseL2 and deriveDelayed both refuse a message longer than maxL2MessageSize before parseL2Msg runs) a nested length of maxL2MessageSize or more is always longer than the bytes left of its outer message, so take(n) fails and the loop returns the same `out, true` as the size check: `>` and `>=` give the same result. The size check stays as the faithful port of Nitro's per-nested limit."
+  },
+  {
+    "file": "derive.go",
+    "function": "deriveDelayed",
+    "operator": "cmp_boundary",
+    "original": "dataLenW.Big().Uint64() > maxL2MessageSize",
+    "mutated": "dataLenW.Big().Uint64() >= maxL2MessageSize",
+    "reason": "the retryable data length is checked against the 256 KiB limit AFTER deriveDelayed refused any message longer than the limit; a message holds nine 32-byte words plus the data, so a data length of the limit or more is always longer than the bytes left and take() fails in both versions: `>` and `>=` give the same result."
+  },
+  {
+    "file": "zeroheavy.go",
+    "function": "zhDecoder.nextBit",
+    "operator": "bool_lit",
+    "original": "return false, false",
+    "mutated": "return true, false",
+    "reason": "nextBit's first result is ignored whenever its second result (ok) is false: readOne returns (0, false) without looking at the bit."
+  }
+]

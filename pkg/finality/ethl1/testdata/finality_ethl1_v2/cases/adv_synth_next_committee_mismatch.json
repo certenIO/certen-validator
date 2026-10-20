@@ -1,0 +1,19 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "adv_synth_next_committee_mismatch",
+ "kind": "head",
+ "description": "synthetic: the store already knows next (B); a second link in the same attested period carries a different, branch-valid next committee C",
+ "pins": "pins/synth.json",
+ "lc": "lc/adv_synth_next_committee_mismatch.bin",
+ "expect": {
+  "code": "finality_link_invalid",
+  "fields": {
+   "attested_slot": "86437",
+   "check": "next_committee_mismatch",
+   "index": "1",
+   "period": "10",
+   "signature_slot": "86438"
+  },
+  "result": "fault"
+ }
+}

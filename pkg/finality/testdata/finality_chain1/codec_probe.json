@@ -1,0 +1,71 @@
+{
+  "format": "certen-finality-vectors/1",
+  "grammar": "LPList(part probe.list, limit 4, element max 16) || Nodes(part probe.nodes, max_nodes from limits (default 8192), node max 8) || U64(probe.n) || End(probe.end)",
+  "kind": "codec_probe",
+  "set": "finality_chain1",
+  "vectors": [
+    {
+      "name": "probe_valid",
+      "note": "decode then re-encode is the identity",
+      "hex": "0000000300000002616200000000000000016300000003000000026e31000000026e32000000026e330000000000000007",
+      "expect": "ok"
+    },
+    {
+      "name": "probe_trailing_byte",
+      "note": "",
+      "hex": "0000000300000002616200000000000000016300000003000000026e31000000026e32000000026e33000000000000000700",
+      "expect": "{\"code\":\"finality_evidence_malformed\",\"fields\":{\"got_len\":\"1\",\"part\":\"probe.end\",\"reason\":\"trailing bytes\",\"want_len\":\"0\"}}"
+    },
+    {
+      "name": "probe_list_over_limit",
+      "note": "",
+      "hex": "000000050000000101000000010200000001030000000104000000010500000003000000026e31000000026e32000000026e330000000000000007",
+      "expect": "{\"code\":\"finality_evidence_too_large\",\"fields\":{\"count\":\"5\",\"limit\":\"4\",\"part\":\"probe.list\"}}"
+    },
+    {
+      "name": "probe_element_over_limit",
+      "note": "",
+      "hex": "0000000100000011000000000000000000000000000000000000000003000000026e31000000026e32000000026e330000000000000007",
+      "expect": "{\"code\":\"finality_evidence_too_large\",\"fields\":{\"count\":\"17\",\"index\":\"0\",\"limit\":\"16\",\"part\":\"probe.list\"}}"
+    },
+    {
+      "name": "probe_nodes_over_max_nodes",
+      "note": "max_nodes overridden to 2",
+      "hex": "0000000300000002616200000000000000016300000003000000026e31000000026e32000000026e330000000000000007",
+      "limits": {
+        "max_nodes": 2
+      },
+      "expect": "{\"code\":\"finality_evidence_too_large\",\"fields\":{\"count\":\"3\",\"limit\":\"2\",\"part\":\"probe.nodes\"}}"
+    },
+    {
+      "name": "probe_node_over_max_node_bytes",
+      "note": "",
+      "hex": "0000000300000002616200000000000000016300000001000000090000000000000000000000000000000007",
+      "expect": "{\"code\":\"finality_evidence_too_large\",\"fields\":{\"count\":\"9\",\"index\":\"0\",\"limit\":\"8\",\"part\":\"probe.nodes\"}}"
+    },
+    {
+      "name": "probe_nodes_descending",
+      "note": "",
+      "hex": "0000000300000002616200000000000000016300000002000000026e32000000026e310000000000000007",
+      "expect": "{\"code\":\"finality_evidence_malformed\",\"fields\":{\"got_len\":\"0\",\"index\":\"1\",\"part\":\"probe.nodes\",\"reason\":\"nodes are not strictly ascending by keccak256 and unique\",\"want_len\":\"0\"}}"
+    },
+    {
+      "name": "probe_nodes_duplicate",
+      "note": "",
+      "hex": "0000000300000002616200000000000000016300000002000000026e31000000026e310000000000000007",
+      "expect": "{\"code\":\"finality_evidence_malformed\",\"fields\":{\"got_len\":\"0\",\"index\":\"1\",\"part\":\"probe.nodes\",\"reason\":\"nodes are not strictly ascending by keccak256 and unique\",\"want_len\":\"0\"}}"
+    },
+    {
+      "name": "probe_truncated_u64",
+      "note": "",
+      "hex": "0000000300000002616200000000000000016300000003000000026e31000000026e32000000026e3300000000",
+      "expect": "{\"code\":\"finality_evidence_malformed\",\"fields\":{\"got_len\":\"4\",\"part\":\"probe.n\",\"reason\":\"truncated\",\"want_len\":\"8\"}}"
+    },
+    {
+      "name": "probe_count_exceeds_remaining",
+      "note": "a hostile count never allocates",
+      "hex": "0000000400000000",
+      "expect": "{\"code\":\"finality_evidence_malformed\",\"fields\":{\"got_len\":\"4\",\"part\":\"probe.list\",\"reason\":\"count exceeds the remaining bytes\",\"want_len\":\"16\"}}"
+    }
+  ]
+}

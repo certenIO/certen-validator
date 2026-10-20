@@ -1,0 +1,14 @@
+{
+  "format": "certen-finality-vectors/1",
+  "id": "pending_g030_28495",
+  "description": "live: an unresolved game (implementation and graph proven, status 0 at A): refused, never a weaker level",
+  "pins": "pins/main.json",
+  "leg": "legs/g030_28495.json",
+  "evidence": "evidence/pending_g030_28495.bin",
+  "expect": {
+    "code": "game_not_resolved",
+    "fields": {
+      "status": "0"
+    }
+  }
+}

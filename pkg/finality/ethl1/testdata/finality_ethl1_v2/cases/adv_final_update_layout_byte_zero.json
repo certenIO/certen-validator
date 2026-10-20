@@ -1,0 +1,19 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "adv_final_update_layout_byte_zero",
+ "kind": "head",
+ "description": "layout byte 0 on a finality update",
+ "pins": "pins/main.json",
+ "lc": "lc/adv_final_update_layout_byte_zero.bin",
+ "expect": {
+  "code": "finality_evidence_malformed",
+  "fields": {
+   "got_len": "0",
+   "index": "0",
+   "part": "final_update",
+   "reason": "layout_byte_zero",
+   "want_len": "1"
+  },
+  "result": "fault"
+ }
+}

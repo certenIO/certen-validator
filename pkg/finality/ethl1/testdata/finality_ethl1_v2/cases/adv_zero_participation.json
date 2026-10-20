@@ -1,0 +1,18 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "adv_zero_participation",
+ "kind": "head",
+ "description": "all sync-committee bits cleared",
+ "pins": "pins/main.json",
+ "lc": "lc/adv_zero_participation.bin",
+ "expect": {
+  "code": "finality_participation_insufficient",
+  "fields": {
+   "committee": "512",
+   "index": "0",
+   "participants": "0",
+   "required": "342"
+  },
+  "result": "fault"
+ }
+}

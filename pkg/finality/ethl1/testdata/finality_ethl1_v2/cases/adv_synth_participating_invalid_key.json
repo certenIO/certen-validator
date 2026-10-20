@@ -1,0 +1,18 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "adv_synth_participating_invalid_key",
+ "kind": "head",
+ "description": "synthetic: the same signed update against the committee whose seat 3 (a signer) holds an invalid key: refused",
+ "pins": "pins/synth_badkey_participating.json",
+ "lc": "lc/adv_synth_participating_invalid_key.bin",
+ "expect": {
+  "code": "finality_signature_invalid",
+  "fields": {
+   "fork_version": "0x900000a2",
+   "index": "0",
+   "participants": "400",
+   "signature_slot": "86406"
+  },
+  "result": "fault"
+ }
+}

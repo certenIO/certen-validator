@@ -1,0 +1,19 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "synth_valid_electra_era_finalized_header",
+ "kind": "head",
+ "description": "synthetic: a Gloas-shaped update whose finalized header lies in the Electra era is validated at gindex 812 over a zero-extended branch",
+ "pins": "pins/synth.json",
+ "lc": "lc/synth_valid_electra_era_finalized_header.bin",
+ "expect": {
+  "finalized_head": {
+   "beacon_root": "0xbe414333a8b97a4a7be7aeade76f5b7c91020e21e709c98fba06f0b70355367f",
+   "epoch": "2010",
+   "exec_hash": "0x45f10c3e75289d5e5245f21ffb84ab5f161b29839833d4788c814468e07a2ae3",
+   "participants": "512",
+   "periods_crossed": "0",
+   "slot": "64323"
+  },
+  "result": "ok"
+ }
+}

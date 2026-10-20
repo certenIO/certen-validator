@@ -1,0 +1,17 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "adv_electra_chain_learned_not_ledger",
+ "kind": "head",
+ "description": "the Fulu link learns the committee of period 1379 but the ledger holds another root",
+ "pins": "pins/ledger_1379_learned_wrong.json",
+ "lc": "lc/adv_electra_chain_learned_not_ledger.bin",
+ "expect": {
+  "code": "finality_pin_mismatch",
+  "fields": {
+   "got_root": "0xeca0dc8f9795664e3b6ed51bd7bdadd916fc41637d4eb2ba1d789a5d1d38096b",
+   "period": "1379",
+   "want_root": "0x4dd6054e54cd401be661534cee37e7126271890f151b217a7ea79f0958028207"
+  },
+  "result": "fault"
+ }
+}

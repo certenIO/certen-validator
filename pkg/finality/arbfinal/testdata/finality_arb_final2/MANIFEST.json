@@ -1,0 +1,16 @@
+{
+ "files": {
+  "evidence/adv_conf_contract_creation_with_wallet_batch_entry_point_bytes.bin": "1edb4ea5c6494419ad0799ad812a56dae43c89c1dbdebcfb043d8d724cb1bfd3",
+  "evidence/adv_conf_contract_creation_with_wallet_entry_point_bytes.bin": "57c0b1bc53ab44cfbd88def591b9b5e20cfddc54956a3f85b986225d5cf38f3c",
+  "evidence/adv_nodes_filler_of_100000_bytes.bin": "bbe7a18be361fdd62c96fd236b8e9c3277ef4301475e2243e26cde81068f781b",
+  "evidence/adv_nodes_filler_over_max_node_bytes_beside_a_large_receipt_leaf.bin": "14abc68b21a5717c79d2d739b1f2263edc425fc99d4304667fdbc784b31bdbdc",
+  "evidence/adv_nodes_filler_over_max_node_bytes_beside_a_large_tx_leaf.bin": "8c4c09404bcf316f64215a149add3e6bf33d2ed0ad99b04d984a6df9fde2309e",
+  "evidence/synth_valid_direct.bin": "4a41b60dc8b72a83eabfdecc898f58585dbdb4160c68f2b7e1a474598a073251",
+  "evidence/synth_valid_receipt_proof_leaf_over_max_node_bytes.bin": "e78e9f5a5025d84338bf976636fbc1c890d56ea032171a457f1b28b63d790b19",
+  "evidence/synth_valid_tx_proof_leaf_over_max_node_bytes.bin": "985ae93470291b78cb0d7dfe89589ea8a4f7d7d4f7d7470a156dcf7331896146",
+  "evidence/synth_valid_wallet_route_callee_code_is_not_examined.bin": "602be4fe2ce519be29567284badff77757d2d4410a325397cbb4b32715196cfe",
+  "pins/synth.json": "fe0df7f7287639bd109be157e8d82465ff5cbb116b2af05bd3aa10003cd1b023",
+  "vectors.json": "580376dbbe6f4b76be11de411a4340e4388a990d2fb5c85d91c4a757a647bd42"
+ },
+ "format": "finality_arb_final2/manifest/1"
+}

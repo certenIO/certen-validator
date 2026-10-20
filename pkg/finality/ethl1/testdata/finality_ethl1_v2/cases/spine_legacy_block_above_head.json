@@ -1,0 +1,18 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "spine_legacy_block_above_head",
+ "kind": "covers",
+ "description": "a block above the finalized head of the period-1378 update is not covered",
+ "exec_hash": "0xb85e88d18f511249bfa5815dfd0b7d2dc2244b2351e1cf13cfc81664d637f5cb",
+ "spine_file": "raw/spine_legacy.bin",
+ "max": 16384,
+ "block_number": "11849736",
+ "expect": {
+  "code": "finality_block_not_covered",
+  "fields": {
+   "block_number": "11849736",
+   "finalized_exec_number": "11849735"
+  },
+  "result": "fault"
+ }
+}

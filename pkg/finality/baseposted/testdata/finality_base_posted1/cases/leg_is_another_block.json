@@ -1,0 +1,17 @@
+{
+  "format": "certen-base-posted-case/1",
+  "id": "leg_is_another_block",
+  "description": "the leg is a block of the second channel but the container is about the first: finality_block_mismatch",
+  "pins": "pins/main.json",
+  "leg": "legs/b.json",
+  "evidence": "evidence/valid_a.bin",
+  "expect": {
+    "result": "state",
+    "code": "finality_block_mismatch",
+    "fields": {
+      "field": "blockNumber",
+      "got": "48357661",
+      "want": "48357729"
+    }
+  }
+}

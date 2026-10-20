@@ -1,0 +1,16 @@
+{
+  "format": "certen-base-posted-case/1",
+  "id": "batch_not_found_for_timestamp",
+  "description": "the leg's timestamp lies after the last batch of the channel",
+  "pins": "pins/main.json",
+  "leg": "legs/a_timestamp_outside.json",
+  "evidence": "evidence/valid_a_timestamp_outside.bin",
+  "expect": {
+    "result": "state",
+    "code": "batch_not_found",
+    "fields": {
+      "n_batches": "68",
+      "timestamp": "1792483678"
+    }
+  }
+}

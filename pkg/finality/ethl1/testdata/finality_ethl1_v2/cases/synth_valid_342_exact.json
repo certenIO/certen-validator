@@ -1,0 +1,19 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "synth_valid_342_exact",
+ "kind": "head",
+ "description": "synthetic: exactly 342 seats with a valid signature are accepted",
+ "pins": "pins/synth.json",
+ "lc": "lc/synth_valid_342_exact.bin",
+ "expect": {
+  "finalized_head": {
+   "beacon_root": "0x281bcb25bc30124328a80067c9e9160fd098a51ade7dd46f39ea04d8a6f6a512",
+   "epoch": "2571",
+   "exec_hash": "0x29a7da8ae815db90531667c7fd916044f6ff93e89c278cc1ebe57462dcdf19fd",
+   "participants": "342",
+   "periods_crossed": "0",
+   "slot": "82272"
+  },
+  "result": "ok"
+ }
+}

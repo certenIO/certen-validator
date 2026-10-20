@@ -1,0 +1,20 @@
+{
+ "format": "certen-finality-ethsepolia-ledger-case/1",
+ "id": "ledger1_bootstrap_byte_flipped_not_relinked",
+ "description": "one bootstrap byte flipped without recomputing link_sha256: the file is not the one the pin names",
+ "op": "verify_ledger",
+ "pins": "pins/embedded.json",
+ "links_dir": "raw/links",
+ "links_only": [
+  1378
+ ],
+ "link_patch": [
+  {
+   "period": 1378,
+   "offset": 24633,
+   "xor": 1,
+   "relink": false
+  }
+ ],
+ "expect_canonical": "{\"code\":\"finality_ledger_extension_invalid\",\"fields\":{\"period\":\"1378\",\"reason\":\"root_pin_unverifiable\"}}"
+}

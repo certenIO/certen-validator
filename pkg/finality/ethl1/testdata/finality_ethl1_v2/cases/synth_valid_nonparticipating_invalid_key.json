@@ -1,0 +1,19 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "synth_valid_nonparticipating_invalid_key",
+ "kind": "head",
+ "description": "synthetic: 400 seats sign; seat 511, which does not sign, holds an invalid key: the update verifies (only participating keys are decoded)",
+ "pins": "pins/synth_badkey_nonparticipating.json",
+ "lc": "lc/synth_valid_nonparticipating_invalid_key.bin",
+ "expect": {
+  "finalized_head": {
+   "beacon_root": "0x3dfba9990e74f8503345e3a101e1ef5477bf2393aa0b12f1783691fca0285f7f",
+   "epoch": "2690",
+   "exec_hash": "0x0adc42d12d0906ee9a96ee32523b61eda8bb08782e92f25037340c2d959295a6",
+   "participants": "400",
+   "periods_crossed": "0",
+   "slot": "86080"
+  },
+  "result": "ok"
+ }
+}

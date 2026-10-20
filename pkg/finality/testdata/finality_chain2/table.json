@@ -1,0 +1,62 @@
+{
+  "format": "certen-finality-vectors/1",
+  "kind": "table",
+  "queries": [
+    {
+      "chain": 11155111,
+      "expect": "kind:eth-sepolia/finalized/v1",
+      "level": 3
+    },
+    {
+      "chain": 11155111,
+      "expect": "{\"code\":\"level_not_applicable\",\"fields\":{\"chain\":\"11155111\",\"level\":\"l1_posted\",\"reason\":\"this chain is the L1\"}}",
+      "level": 2
+    },
+    {
+      "chain": 84532,
+      "expect": "kind:base-sepolia/l1_posted/v1",
+      "level": 2
+    },
+    {
+      "chain": 84532,
+      "expect": "kind:base-sepolia/finalized/v1",
+      "level": 3
+    },
+    {
+      "chain": 421614,
+      "expect": "kind:arb-sepolia/l1_posted/v1",
+      "level": 2
+    },
+    {
+      "chain": 421614,
+      "expect": "kind:arb-sepolia/finalized/v1",
+      "level": 3
+    },
+    {
+      "chain": 2017,
+      "expect": "kind:adiri/finalized/v1",
+      "level": 3
+    },
+    {
+      "chain": 2017,
+      "expect": "{\"code\":\"level_not_applicable\",\"fields\":{\"chain\":\"2017\",\"level\":\"l1_posted\",\"reason\":\"no L1 settlement exists\"}}",
+      "level": 2
+    },
+    {
+      "chain": 1,
+      "expect": "{\"code\":\"finality_chain_unsupported\",\"fields\":{\"chain\":\"1\"}}",
+      "level": 3
+    },
+    {
+      "chain": 0,
+      "expect": "{\"code\":\"finality_chain_unsupported\",\"fields\":{\"chain\":\"0\"}}",
+      "level": 3
+    },
+    {
+      "chain": 84532,
+      "expect": "{\"code\":\"finality_evidence_malformed\",\"fields\":{\"got_len\":\"1\",\"part\":\"level\",\"reason\":\"level_not_stored\",\"want_len\":\"2\"}}",
+      "level": 1
+    }
+  ],
+  "set": "finality_chain2"
+}

@@ -1,0 +1,18 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "adv_wrong_genesis_validators_root",
+ "kind": "head",
+ "description": "pins carry another genesis_validators_root",
+ "pins": "pins/wrong_gvr.json",
+ "lc": "lc/adv_wrong_genesis_validators_root.bin",
+ "expect": {
+  "code": "finality_signature_invalid",
+  "fields": {
+   "fork_version": "0x90000076",
+   "index": "0",
+   "participants": "511",
+   "signature_slot": "11394241"
+  },
+  "result": "fault"
+ }
+}

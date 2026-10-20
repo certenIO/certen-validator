@@ -1,0 +1,11 @@
+{
+ "format": "certen-finality-lcssz-case/1",
+ "id": "lcssz_exact_fit",
+ "description": "finalized header exactly holds the execution payload header's fixed part: accepted, hash and number read",
+ "len": 2056,
+ "att_off": 400,
+ "fin_off": 1228,
+ "exec_hash": "0x5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+ "exec_number": 11950125,
+ "expect": "ok"
+}

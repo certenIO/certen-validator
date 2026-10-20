@@ -1,0 +1,139 @@
+{
+ "format": "certen-finality-ethl1-test-pins/1",
+ "description": "ledger committee_root of period P replaced, block_root kept",
+ "chain_id": "11155111",
+ "genesis_validators_root": "0xd8ea171f3c94aea21ebc42a1ed61052acf3f9209c00e4efbaaddac09ed9b8078",
+ "forks": [
+  {
+   "name": "genesis",
+   "epoch": "0",
+   "version": "0x90000069",
+   "layout": 0
+  },
+  {
+   "name": "altair",
+   "epoch": "50",
+   "version": "0x90000070",
+   "layout": 0
+  },
+  {
+   "name": "bellatrix",
+   "epoch": "100",
+   "version": "0x90000071",
+   "layout": 0
+  },
+  {
+   "name": "capella",
+   "epoch": "56832",
+   "version": "0x90000072",
+   "layout": 0
+  },
+  {
+   "name": "deneb",
+   "epoch": "132608",
+   "version": "0x90000073",
+   "layout": 0
+  },
+  {
+   "name": "electra",
+   "epoch": "222464",
+   "version": "0x90000074",
+   "layout": 1
+  },
+  {
+   "name": "fulu",
+   "epoch": "272640",
+   "version": "0x90000075",
+   "layout": 1
+  },
+  {
+   "name": "gloas",
+   "epoch": "353024",
+   "version": "0x90000076",
+   "layout": 2
+  }
+ ],
+ "anchors": [
+  {
+   "period": "1378",
+   "committee_root": "0xcabeda493c59d9927d0d771f833c37015c1e1e0e1b66336601c1b04981ecbcdc",
+   "block_root": "0x5f71d7f650f9252b48749b5f062c0c234e01afd69f364ab600e2b6051494b20d",
+   "wsp_epochs": "279"
+  },
+  {
+   "period": "1379",
+   "committee_root": "0xeca0dc8f9795664e3b6ed51bd7bdadd916fc41637d4eb2ba1d789a5d1d38096b",
+   "block_root": null,
+   "wsp_epochs": "279"
+  },
+  {
+   "period": "1380",
+   "committee_root": "0xcc041cf91f82373e5e16d5a890ecef952080a430c2640bee7810bea7934ded46",
+   "block_root": null,
+   "wsp_epochs": "279"
+  },
+  {
+   "period": "1381",
+   "committee_root": "0xe86270e383ab11aa669434e882f9008fe2ec682ef785bf611fab677cc922c822",
+   "block_root": null,
+   "wsp_epochs": "279"
+  },
+  {
+   "period": "1382",
+   "committee_root": "0x95b74d051c4c5a5d46f9ba68f20b367e8bf3bbe45ab7ea678209539db160a9f2",
+   "block_root": null,
+   "wsp_epochs": "279"
+  },
+  {
+   "period": "1383",
+   "committee_root": "0x35a40c75345e291dd57db169c2b9ff40aa6982354e2283bb591a0c505f18a860",
+   "block_root": null,
+   "wsp_epochs": "279"
+  },
+  {
+   "period": "1384",
+   "committee_root": "0xc0b82c1173b30ef46b8ff7d46ba165dabf4c8e2a479cac5b3f4d74899af4c55f",
+   "block_root": null,
+   "wsp_epochs": "279"
+  },
+  {
+   "period": "1385",
+   "committee_root": "0x5087a97fd2d8f1034f40e69d3eb54abda117196e95440cf22ca94b62bfb06bb5",
+   "block_root": null,
+   "wsp_epochs": "279"
+  },
+  {
+   "period": "1386",
+   "committee_root": "0xe5c865dc0a4bcafad6ee029dc98e33822098e5df2f50e9b87bebfb6c5dfdab04",
+   "block_root": null,
+   "wsp_epochs": "279"
+  },
+  {
+   "period": "1387",
+   "committee_root": "0xae4a70ef55e850d628822e6f7e87bf5b42acbcd90561b7cf3032d70b0d329539",
+   "block_root": null,
+   "wsp_epochs": "279"
+  },
+  {
+   "period": "1388",
+   "committee_root": "0xd2e3cd3b3569bd743bb520188491d1688c98f29f0f6829de4e1abf268c75b0a5",
+   "block_root": null,
+   "wsp_epochs": "279"
+  },
+  {
+   "period": "1389",
+   "committee_root": "0x24b49c0a2a62ce55324997b8aea8149060e9e57459a6c3c4c4bba78573643986",
+   "block_root": null,
+   "wsp_epochs": "279"
+  },
+  {
+   "period": "1390",
+   "committee_root": "0x8dbe80991c41fb0dfb7f63fe12039e8af540cb9e0c336188f86c4234b9164e16",
+   "block_root": "0xb19e2dccb8c6c7b1482f0c8446972e996bf6276d1bf5a1e5fc2fdbef4279fee0",
+   "wsp_epochs": "279"
+  }
+ ],
+ "min_participants": 342,
+ "max_links": 64,
+ "max_spine_headers": 16384
+}

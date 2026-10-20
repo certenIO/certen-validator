@@ -1,0 +1,15 @@
+{
+  "format": "certen-base-posted-case/1",
+  "id": "leg_parent_hash_altered",
+  "description": "the leg's header has another parentHash: the batch for its timestamp commits the real one",
+  "pins": "pins/main.json",
+  "leg": "legs/a_parent_forged.json",
+  "evidence": "evidence/valid_a_parent_forged.bin",
+  "expect": {
+    "result": "state",
+    "code": "batch_binding_mismatch",
+    "fields": {
+      "field": "parent_hash"
+    }
+  }
+}

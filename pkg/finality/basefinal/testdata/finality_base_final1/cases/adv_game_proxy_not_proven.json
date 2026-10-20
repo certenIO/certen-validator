@@ -1,0 +1,19 @@
+{
+  "format": "certen-finality-vectors/1",
+  "id": "adv_game_proxy_not_proven",
+  "description": "the game proxy address is not one of the proven accounts",
+  "pins": "pins/main.json",
+  "leg": "legs/leg_47604755.json",
+  "evidence": "evidence/valid_leg_47604755.bin",
+  "splice": {
+    "offset": 35129,
+    "delete": 1,
+    "insert": "0x14"
+  },
+  "expect": {
+    "code": "l1_state_proof_invalid",
+    "fields": {
+      "which": "account"
+    }
+  }
+}

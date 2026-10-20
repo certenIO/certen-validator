@@ -1,0 +1,13 @@
+{
+  "format": "certen-base-posted-case/1",
+  "id": "channel_bomb_over_cap",
+  "description": "max_rlp_bytes_per_channel = 1,000,000 while the channel decompresses to about 2 MB",
+  "pins": "pins/channel_cap_1mb.json",
+  "leg": "legs/a.json",
+  "evidence": "evidence/valid_a.bin",
+  "expect": {
+    "result": "state",
+    "code": "channel_malformed",
+    "fields": {}
+  }
+}

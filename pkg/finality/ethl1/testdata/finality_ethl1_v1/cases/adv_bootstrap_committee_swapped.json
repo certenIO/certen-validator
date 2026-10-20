@@ -1,0 +1,16 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "adv_bootstrap_committee_swapped",
+ "kind": "head",
+ "description": "one public-key bit of the bootstrap committee flipped",
+ "pins": "pins/main.json",
+ "lc": "lc/adv_bootstrap_committee_swapped.bin",
+ "expect": {
+  "code": "finality_bootstrap_invalid",
+  "fields": {
+   "check": "committee_branch",
+   "slot": "11394208"
+  },
+  "result": "fault"
+ }
+}
