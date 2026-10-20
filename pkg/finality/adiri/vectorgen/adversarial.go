@@ -99,7 +99,7 @@ func adversarial(base vec, baseEv []byte, facts cacheFacts) []vec {
 		mut(m)
 		out = append(out, vec{Name: name, Group: "adversarial", Note: note, Leg: base.Leg, Pins: m, Base: base.Name, Expect: expect})
 	}
-	for _, e := range []int{300, 5, 7, 8, 9, 100, 110, 125, 130, 150, 200, 201, 250, 300} {
+	for _, e := range []int{300, 5, 7, 8, 9, 12, 13, 100, 110, 125, 130, 150, 200, 201, 250, 300} {
 		if e < len(facts.signers) && facts.signers[e] != 5 {
 			panic(fmt.Sprintf("record %d does not have 5 signers", e))
 		}
@@ -133,6 +133,24 @@ func adversarial(base vec, baseEv []byte, facts cacheFacts) []vec {
 			t[1] = t[0]
 			p.cf.Tables = append(p.cf.Tables, t)
 			p.cf.Records[9].CommitteeIdx = uint8(len(p.cf.Tables) - 1)
+		})
+	add("adv-public-key-invalid", "record 12's committee lists a 96-byte string that is not a G2 point as its fifth key",
+		canon("committee_chain_broken", "epoch", uint64(12), "check", "public_key_invalid", "index", uint64(4)),
+		func(p parsed) {
+			t := append([][]byte(nil), p.cf.Tables[p.cf.Records[12].CommitteeIdx]...)
+			t[4] = bytes.Repeat([]byte{0x11}, adiri.KeyBytes)
+			p.cf.Tables = append(p.cf.Tables, t)
+			p.cf.Records[12].CommitteeIdx = uint8(len(p.cf.Tables) - 1)
+		})
+	add("adv-public-key-identity", "record 13's committee lists the point at infinity as its fifth key",
+		canon("committee_chain_broken", "epoch", uint64(13), "check", "public_key_invalid", "index", uint64(4)),
+		func(p parsed) {
+			t := append([][]byte(nil), p.cf.Tables[p.cf.Records[13].CommitteeIdx]...)
+			id := make([]byte, adiri.KeyBytes)
+			id[0] = 0xc0
+			t[4] = id
+			p.cf.Tables = append(p.cf.Tables, t)
+			p.cf.Records[13].CommitteeIdx = uint8(len(p.cf.Tables) - 1)
 		})
 	add("adv-genesis-duplicate-key", "record 0's committee lists its first key twice (the genesis list with a duplicate)",
 		canon("committee_chain_broken", "epoch", uint64(0), "check", "committee_duplicate_key", "index", uint64(1)),

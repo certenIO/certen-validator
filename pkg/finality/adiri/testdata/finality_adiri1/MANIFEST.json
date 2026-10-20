@@ -16,7 +16,7 @@
   "evidence/syn-rotation.bin": "031d6a75c0e15f03c5af206fe4ef690ef18288f35e2ea2b461e5a13d261af9c3",
   "evidence/syn-shrink-not-a-subset.bin": "58d50c8d96ad117aee2ef7e22c1b96a054a64770355e6d62a6161f7bcb8fe25b",
   "evidence/syn-spine-single-header.bin": "85e2b6caa20619f7b5182320d7ff323b35ca7308d2c2c1537cec0719f2484cf1",
-  "vectors.json": "4a037ed650f86ccd6d9a8b4a75a934886ea689ad59ff533937ad9d93e67c1c86"
+  "vectors.json": "e7e9ded042937c3b3bad0ac6bd1bf27fd21e109da5e8d5d7578d2298e322c327"
  },
  "format": "finality_adiri1/manifest/1"
 }
