@@ -236,8 +236,10 @@ func MetricsHandler() http.Handler {
 	return promhttp.Handler()
 }
 
-// =====================================// Consensus Metrics Functions
-// =====================================
+// ============================================
+// Consensus Metrics Functions
+// ============================================
+
 // SetConsensusHeight sets the current consensus height
 func SetConsensusHeight(height int64) {
 	consensusHeight.Set(float64(height))
@@ -272,8 +274,10 @@ func IncrementConsecutiveStalls() {
 	validatorConsecutiveStalls.Inc()
 }
 
-// =====================================// Proof Metrics Functions
-// =====================================
+// ============================================
+// Proof Metrics Functions
+// ============================================
+
 // RecordProofGenerated records a generated proof
 func RecordProofGenerated(proofType string) {
 	proofsGeneratedTotal.WithLabelValues(proofType).Inc()
@@ -293,8 +297,10 @@ func RecordProofVerification(proofType string, success bool) {
 	proofVerificationTotal.WithLabelValues(proofType, result).Inc()
 }
 
-// =====================================// Attestation Metrics Functions
-// =====================================
+// ============================================
+// Attestation Metrics Functions
+// ============================================
+
 // RecordAttestationRequest records an attestation request
 func RecordAttestationRequest() {
 	attestationRequestsTotal.Inc()
@@ -310,8 +316,10 @@ func RecordQuorumReached() {
 	attestationQuorumReached.Inc()
 }
 
-// =====================================// Anchor Metrics Functions
-// =====================================
+// ============================================
+// Anchor Metrics Functions
+// ============================================
+
 // RecordAnchorCreated records an anchor creation
 func RecordAnchorCreated() {
 	anchorsCreatedTotal.Inc()
@@ -327,8 +335,10 @@ func RecordAnchorGasUsed(gas uint64) {
 	anchorGasUsed.Observe(float64(gas))
 }
 
-// =====================================// Intent Metrics Functions
-// =====================================
+// ============================================
+// Intent Metrics Functions
+// ============================================
+
 // RecordIntentDiscovered records an intent discovery
 func RecordIntentDiscovered() {
 	intentsDiscoveredTotal.Inc()
@@ -343,8 +353,10 @@ func RecordIntentProcessed(success bool) {
 	intentsProcessedTotal.WithLabelValues(result).Inc()
 }
 
-// =====================================// BFT Metrics Functions
-// =====================================
+// ============================================
+// BFT Metrics Functions
+// ============================================
+
 // RecordBFTBlockCommitted records a BFT block commit
 func RecordBFTBlockCommitted() {
 	bftBlocksCommittedTotal.Inc()
@@ -355,8 +367,10 @@ func SetBFTVotingPower(power int64) {
 	bftVotingPower.Set(float64(power))
 }
 
-// =====================================// System Metrics Functions
-// =====================================
+// ============================================
+// System Metrics Functions
+// ============================================
+
 // UpdateUptime updates the uptime metric
 func UpdateUptime() {
 	validatorUptime.Set(time.Since(startTime).Seconds())
@@ -371,8 +385,10 @@ func SetComponentStatus(component string, healthy bool) {
 	validatorStatus.WithLabelValues(component).Set(status)
 }
 
-// =====================================// Alert Thresholds (for documentation/reference)
-// =====================================//
+// ============================================
+// Alert Thresholds (for documentation/reference)
+// ============================================
+//
 // Recommended Prometheus alert rules:
 //
 // - alert: CertenConsensusStalled
