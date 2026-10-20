@@ -22,6 +22,47 @@
     "max_headers": 16384,
     "min_committee_size": 4
   },
+  "arb_sepolia": {
+    "bold_genesis_assertion": "0x940486661b708c53f29a6333667cb740969cbee0d9554b139b14567ba549d723",
+    "bold_genesis_l2_block": 105880604,
+    "bridge": "0x38f918D0E9F1b721EDaA41302E399fa1B79333a9",
+    "chain_id": 421614,
+    "confirm_path": {
+      "selectors": {
+        "confirm_assertion": "0x10b98a35",
+        "fast_confirm_assertion": "0x6096686d",
+        "fast_confirm_new_assertion": "0x6420fb9f",
+        "force_confirm_assertion": "0x5bf03833",
+        "wallet_execute_transaction": "0xce1d571f",
+        "wallet_execute_transaction_with_gas_refunder": "0x097da1f8",
+        "wallet_execute_transactions": "0x72f45866",
+        "wallet_execute_transactions_with_gas_refunder": "0xc179f1d9"
+      },
+      "topics": {
+        "assertion_confirmed": "0xfc42829b29c259a7370ab56c8f69fce23b5f351a9ce151da453281993ec0090c",
+        "assertion_force_confirmed": "0x0ef6ac64bd6b0fa95ed37aa19a1b16613fb89e2269c92639a9d516a64fea4938"
+      }
+    },
+    "layout": {
+      "assertions_slot": 117,
+      "config_slot_offset": 1,
+      "fast_confirmer_shift_bits": 8,
+      "fast_confirmer_slot": 123,
+      "name": "nitro-contracts-v3.1.0",
+      "status_shift_bits": 200
+    },
+    "logic_pins": {
+      "0xdd93a7606e6067aaae8ad5afa28b943a8272809eb72face4e2bb3bf4d0609445": "rollup_admin_logic",
+      "0xeadf786edd4819d0262d9679d43b878d7005408a822aa0c43cf79bd0043c09a3": "rollup_user_logic"
+    },
+    "max_header_chain": 32768,
+    "parent_chain_id": 11155111,
+    "proxy_slots": {
+      "admin_logic": "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc",
+      "user_logic": "0x2b1dbce74324248c222f0ec2d5ed7bd323cfc425b336f0253c5ccfda7265546d"
+    },
+    "rollup": "0x042B2E6C5E99d4c521bd49beeD5E99651D9B0Cf4"
+  },
   "eth_sepolia": {
     "anchors": [],
     "chain_id": 11155111,

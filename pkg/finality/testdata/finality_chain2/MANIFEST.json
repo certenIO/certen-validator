@@ -13,7 +13,7 @@
   "format": "certen-finality-manifest/1",
   "registry": {
     "path": "testdata/finality/states.json",
-    "sha256": "3012ee6e4028c8b6cc45d1124e96fde4e450312f5559af4683c7e6937859bfab"
+    "sha256": "62f56ceaed7f904efe78e1aea18bc3dfe2a09f0ae6b6c68a4a74692e6a6b6d4a"
   },
   "set": "finality_chain2",
   "supersedes": {
