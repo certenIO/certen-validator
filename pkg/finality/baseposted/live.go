@@ -121,28 +121,29 @@ func bigOf(s string) *big.Int {
 // layer append fields; the caller checks keccak(rlp) equals the block hash, so a field the encoder lacks is a refusal.
 func headerFromBlock(m map[string]any) ([]byte, error) {
 	s := func(k string) string { v, _ := m[k].(string); return v }
+	has := func(k string) bool { _, ok := m[k].(string); return ok } // a JSON null is an absent field
 	items := []any{
 		unhexBytes(s("parentHash")), unhexBytes(s("sha3Uncles")), unhexBytes(s("miner")), unhexBytes(s("stateRoot")), unhexBytes(s("transactionsRoot")),
 		unhexBytes(s("receiptsRoot")), unhexBytes(s("logsBloom")), bigOf(s("difficulty")), bigOf(s("number")), bigOf(s("gasLimit")),
 		bigOf(s("gasUsed")), bigOf(s("timestamp")), unhexBytes(s("extraData")), unhexBytes(s("mixHash")), unhexBytes(s("nonce")),
 	}
-	if _, ok := m["baseFeePerGas"]; ok {
+	if has("baseFeePerGas") {
 		items = append(items, bigOf(s("baseFeePerGas")))
 	}
-	if _, ok := m["withdrawalsRoot"]; ok {
+	if has("withdrawalsRoot") {
 		items = append(items, unhexBytes(s("withdrawalsRoot")))
 	}
 	for _, k := range []string{"blobGasUsed", "excessBlobGas"} {
-		if _, ok := m[k]; ok {
+		if has(k) {
 			items = append(items, bigOf(s(k)))
 		}
 	}
 	for _, k := range []string{"parentBeaconBlockRoot", "requestsHash", "blockAccessListHash"} {
-		if _, ok := m[k]; ok {
+		if has(k) {
 			items = append(items, unhexBytes(s(k)))
 		}
 	}
-	if _, ok := m["slotNumber"]; ok {
+	if has("slotNumber") {
 		items = append(items, bigOf(s("slotNumber")))
 	}
 	return rlp.EncodeToBytes(items)
