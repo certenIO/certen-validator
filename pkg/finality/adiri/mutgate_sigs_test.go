@@ -102,16 +102,17 @@ func TestEverySignatureRefusalIsNamedIdenticallyInBothModes(t *testing.T) {
 	}
 }
 
-// zeroThenOne yields a zero 128-bit scalar on every other draw. A verifier that accepted a zero scalar would drop the record from
-// the combination and accept any chain whose signatures merely decode.
+// zeroThenOne yields zero 128-bit scalars for its first three draws and distinct non-zero ones after. A verifier that accepted a zero
+// scalar would use blocks 0, 1, 2 for records 0, 1, 2 and drop them from the combination, accepting exchanged signatures; one that
+// redraws uses a non-zero block for each record.
 type zeroThenOne struct{ n int }
 
 func (r *zeroThenOne) Read(p []byte) (int, error) {
 	for i := range p {
 		p[i] = 0
 	}
-	if r.n%2 == 1 {
-		p[len(p)-1] = byte(r.n/2 + 1) // distinct non-zero scalars, so that exchanged signatures are detected
+	if r.n >= 3 {
+		p[len(p)-1] = byte(r.n) // distinct non-zero scalars, so that exchanged signatures are detected
 	}
 	r.n++
 	return len(p), nil
@@ -142,4 +143,40 @@ func TestBatchScalarIsNeverZeroAndARandomSourceFailureIsNamed(t *testing.T) {
 	if err := gateVerify(t, adiri.ModeOneByOne, gateCopy(cf), failingReader{}); err != nil {
 		t.Fatalf("one-by-one needs no randomness: %v", err)
 	}
+}
+
+func TestAOneRecordChainHasItsSignatureVerifiedInBothModes(t *testing.T) {
+	_, _, cf, _, _ := liveParts(t, "syn-rotation")
+	one := gateCopy(cf)
+	one.Records = one.Records[:1]
+	for _, mode := range []adiri.Mode{adiri.ModeOneByOne, adiri.ModeBatched} {
+		if err := gateVerify(t, mode, one, nil); err != nil {
+			t.Fatalf("mode %d: a valid one record chain: %v", mode, err)
+		}
+		bad := gateCopy(one)
+		bad.Records[0].Signature = cf.Records[1].Signature
+		err := gateVerify(t, mode, bad, nil)
+		st, ok := finality.AsNamed(err)
+		if !ok || st.Fields["epoch"] != uint64(0) || st.Fields["reason"] != adiri.ReasonPairing {
+			t.Errorf("mode %d: a one record chain with a foreign signature: %v", mode, err)
+		}
+	}
+}
+
+func TestAChainWithNoRecordsAndAGenesisSetThatIsOnlyASubsetAreRefusedByName(t *testing.T) {
+	_, _, cf, _, pins := liveParts(t, "syn-rotation")
+	par, err := adiri.ParsePins(pins)
+	if err != nil {
+		t.Fatal(err)
+	}
+	empty := gateCopy(cf)
+	empty.Records = nil
+	_, err = adiri.VerifyCommitteeChain(par, empty, adiri.ModeOneByOne, nil)
+	gateNamed(t, err, finality.CodeEvidenceMalformed, "part", "cfa1.n_records", "reason", finality.ReasonCFA1NoRecords)
+	// the pinned genesis committee holds every key of committee(0) and one more: not the same set
+	bigger := *par
+	bigger.GenesisCommittee = append(append([][]byte(nil), par.GenesisCommittee...), cf.Tables[0][0])
+	bigger.GenesisCommittee = append(bigger.GenesisCommittee[:len(par.GenesisCommittee)], gateKey(0x77))
+	_, err = adiri.VerifyCommitteeChain(&bigger, gateCopy(cf), adiri.ModeOneByOne, nil)
+	gateNamed(t, err, adiri.CodePinMismatch, "pin", "genesis_committee")
 }

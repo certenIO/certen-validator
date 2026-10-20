@@ -78,3 +78,29 @@ func TestSaturatingNumberLabels(t *testing.T) {
 		t.Error("numberBelow")
 	}
 }
+
+func TestSpineTipNumberAndTheCallersHeaderBytesAreEachChecked(t *testing.T) {
+	h0 := gateSpineHeader(t, 5, [32]byte{})
+	hash := crypto.Keccak256Hash(h0)
+	leg := finality.BlockRef{Chain: finality.ChainAdiri, Number: 5, Hash: hash}
+	// the sealed number differs from the tip header's number although the hash is right
+	_, err := verifySpine(&ChainResult{Final: NumHash{Number: 6, Hash: hash}}, [][]byte{h0}, leg)
+	if st, ok := finality.AsNamed(err); !ok || st.Code != CodeLinkBroken || st.Fields["check"] != LinkTipNotFinalState {
+		t.Fatalf("%v", err)
+	}
+	res := &ChainResult{Final: NumHash{Number: 5, Hash: hash}}
+	if _, err := verifySpine(res, [][]byte{h0}, leg); err != nil {
+		t.Fatalf("the single header spine: %v", err)
+	}
+	withBytes := leg
+	withBytes.HeaderRLP = append([]byte(nil), h0...)
+	if _, err := verifySpine(res, [][]byte{h0}, withBytes); err != nil {
+		t.Fatalf("the caller's header equal to the spine's: %v", err)
+	}
+	withBytes.HeaderRLP = append([]byte(nil), h0...)
+	withBytes.HeaderRLP[len(withBytes.HeaderRLP)-1] ^= 1
+	_, err = verifySpine(res, [][]byte{h0}, withBytes)
+	if st, ok := finality.AsNamed(err); !ok || st.Code != finality.CodeBlockMismatch || st.Fields["field"] != "spineLastHeader" {
+		t.Fatalf("the caller's header differs from the spine's last: %v", err)
+	}
+}
