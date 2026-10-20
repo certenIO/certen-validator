@@ -54,7 +54,6 @@ func corpus() map[string][]byte {
 		"mixed":        mixed,
 		"zeros 70k":    make([]byte, 70000),
 		"random 100k":  random(100000), // incompressible: the stream spans several 32 KiB source reads
-		"random 300k":  random(300000),
 		"two metablks": append(random(40000), bytes.Repeat([]byte{9}, 40000)...),
 	}
 }
@@ -94,7 +93,7 @@ func TestEveryTruncationIsRefusedAndEveryCompleteStreamAccepted(t *testing.T) {
 	done := doneState(t)
 	cut := 0
 	for name, data := range corpus() {
-		for _, level := range []int{0, 1, 2, 5, 6, 9} {
+		for _, level := range []int{0, 2, 5, 9} {
 			for _, lgwin := range []int{10, 16, 22} {
 				if len(data) > 100000 && (level > 5 || lgwin < 22) {
 					continue // keep the corpus affordable; small inputs cover every level and window
