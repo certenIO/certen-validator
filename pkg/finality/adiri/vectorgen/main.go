@@ -5,6 +5,7 @@
 //
 //	go run ./pkg/finality/adiri/vectorgen -mode fetch   -cache <dir>
 //	go run ./pkg/finality/adiri/vectorgen -mode vectors -cache <dir> -out pkg/finality/adiri/testdata/finality_adiri3
+//	go run ./pkg/finality/adiri/vectorgen -mode adiri5  -out pkg/finality/adiri/testdata/finality_adiri5   (set5.go: hand-built, offline)
 //
 // fetch reads the public data (tn_genesis, every sealed epoch record, the genesis link headers) from a public Adiri endpoint.
 // vectors builds the LIVE vectors with the Prover against the same endpoint, derives the ADVERSARIAL vectors by mutating the
@@ -33,10 +34,12 @@ import (
 )
 
 func main() {
-	mode := flag.String("mode", "", "fetch | vectors")
+	mode := flag.String("mode", "", "fetch | vectors | adiri5")
 	rpc := flag.String("rpc", "https://rpc.telcoin.network", "public Adiri endpoint")
 	cache := flag.String("cache", "", "directory of fetched public data")
 	out := flag.String("out", "", "vector output directory")
+	keys := flag.String("keys", "pkg/finality/adiri/vectorgen/keys", "adiri5: the gitignored directory of the synthetic test-key seed")
+	base := flag.String("base", "pkg/finality/adiri/testdata/finality_adiri3", "adiri5: the set whose syn-rotation evidence the pins vectors re-use")
 	flag.Parse()
 	var err error
 	switch *mode {
@@ -44,6 +47,8 @@ func main() {
 		err = fetchLive(*rpc, *cache, nil)
 	case "vectors":
 		err = writeVectors(*rpc, *cache, *out)
+	case "adiri5":
+		err = writeAdiri5(*out, *keys, *base)
 	default:
 		err = fmt.Errorf("unknown mode %q", *mode)
 	}

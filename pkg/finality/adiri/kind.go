@@ -21,8 +21,15 @@ const (
 	LinkSlot  = 2 // LP finalHeader || NODES: EIP-2935 account and slot N mod 8191 under stateRoot_F
 )
 
-// EIP2935Window is the ring size of the EIP-2935 history contract.
+// EIP2935Window is the ring size of the EIP-2935 history contract: under stateRoot_F the account holds the hashes of blocks
+// F-1 down to F-8191, in slot (block number mod 8191).
 const EIP2935Window = 8191
+
+// MaxSlotDistance is the greatest F.number - N a linkKind 2 proof binds: 8190, one block inside the ring, the bound at which the
+// spec's prover emits the form (V2_SPEC_S7 3.3 and annex A9: F.number - N <= 8190). A slot proves the hash of block N only for
+// distances inside the ring; further back the same slot holds the hash of a later block with the same residue (block 9000 and block
+// 809 share slot 809), so the distance is part of the claim and is judged here.
+const MaxSlotDistance = EIP2935Window - 1
 
 // Body is the adiri/finalized/v1 body after the CFE1 header: LP cfa1 || u8 linkKind || (1: LIST<LP> spine | 2: LP finalHeader
 // || NODES).
@@ -268,13 +275,35 @@ func numberBelow(n uint64) uint64 {
 	return n - 1
 }
 
-// verifySlot: linkKind 2, only when N < F.number. keccak256(finalHeader) = F.hash; the EIP-2935 account (codeHash = pin) and
-// storage slot N mod 8191 hold the leg block's hash under stateRoot_F.
+// verifySlot: linkKind 2, only when N < F.number. The leg is bound first (F.number - N <= MaxSlotDistance; a non-zero hash, since
+// a proven-absent slot reads as zero; and, when the caller holds the leg's header, keccak256(header) = the leg hash and the header
+// carries the leg number), then keccak256(finalHeader) = F.hash and the EIP-2935 account (codeHash = pin) and storage slot
+// N mod 8191 hold the leg block's hash under stateRoot_F. A zero proven slot value cannot equal the (non-zero) leg hash, so it is
+// refused as slot_value_mismatch.
 func verifySlot(par *Params, res *ChainResult, body *Body, leg finality.BlockRef) (linkResult, error) {
 	var out linkResult
 	F := res.Final
 	if leg.Number == F.Number {
 		return out, finality.Malformed("linkKind", finality.ReasonLinkKind2AtSeal, int(body.LinkKind), 1)
+	}
+	// verifyLink has refused N > F and the line above N = F, so this difference does not wrap
+	if d := F.Number - leg.Number; d > MaxSlotDistance {
+		return out, finality.BlockMismatch("slotDistance", uint64(MaxSlotDistance), d)
+	}
+	if leg.Hash == ([32]byte{}) {
+		return out, finality.BlockMismatch("legHash", "nonzero", leg.Hash)
+	}
+	if leg.HeaderRLP != nil {
+		lh, err := finality.ReadHeader(leg.HeaderRLP)
+		if err != nil {
+			return out, LinkBroken(LinkHeaderDecode, F.Number, leg.Number, leg.Number)
+		}
+		if lh.Hash != leg.Hash {
+			return out, finality.BlockMismatch("legHeaderHash", leg.Hash, lh.Hash)
+		}
+		if lh.Number != leg.Number {
+			return out, finality.BlockMismatch("legHeaderNumber", leg.Number, lh.Number)
+		}
 	}
 	h, err := finality.ReadHeader(body.FinalHeader)
 	if err != nil {

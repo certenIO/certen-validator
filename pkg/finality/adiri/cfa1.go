@@ -28,7 +28,10 @@
 //   - adiri_incarnation_mismatch{expected_genesis, served_genesis, expected_number, served_number, pin}.
 //   - epoch_record_codec_unsupported{epoch:0, pinned, supported}.
 //   - finality_link_broken{from=F, to=N, at, check, ...}; finality_header_chain_broken{spine:"adiri", at_number, want_hash,
-//     got_hash, reason}; finality_block_mismatch{field: spineLastNumber | spineLastHash | spineLastHeader | blockNumber | blockHash}.
+//     got_hash, reason}; finality_block_mismatch{field, want, got} with field spineLastNumber | spineLastHash | spineLastHeader |
+//     blockNumber | blockHash or, on linkKind 2 and in this order, slotDistance (want MaxSlotDistance = 8190, got F-N), legHash
+//     (want "nonzero"), legHeaderHash (want the leg hash, got keccak256 of the caller's header) and legHeaderNumber (want the leg
+//     number, got the header's); an unreadable caller's header on linkKind 2 is finality_link_broken{check:header_decode, at:N}.
 //   - the verdict (code "finalized" in the vectors): epoch, chain_len, committee_size, signers, final_number, final_hash,
 //     distance, link_kind, consensus_root_matches (F.parentBeaconBlockRoot == record(E).final_consensus.hash, reported),
 //     committee_shrunk (a list of the canonical committee_shrunk{epoch,size,expected} texts, ascending).
