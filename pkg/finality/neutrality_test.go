@@ -209,3 +209,63 @@ func TestMainWiresTheUpgraderAloneAndGivesItNoConsensusObject(t *testing.T) {
 		}
 	}
 }
+
+// RB11-F1 promotes lukechampine.com/blake3 (already an indirect requirement) to a direct one for the Adiri record digest. The
+// freeze rule is therefore: no requirement that existed at the framework base (9941b83) changes its version, every one of
+// them is still present, and the only difference in the direct/indirect marking is that promotion. The snapshot of the base
+// requirements is testdata/finality/gomod_requirements_9941b83.txt.
+func TestGoModKeepsEveryRequirementVersionOfTheFrameworkBase(t *testing.T) {
+	root := repoRoot(t)
+	snap, err := os.ReadFile(filepath.Join("testdata", "finality", "gomod_requirements_9941b83.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mod, err := os.ReadFile(filepath.Join(root, "go.mod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	have := map[string]string{}
+	direct := map[string]bool{}
+	inReq := false
+	for _, l := range strings.Split(string(mod), "\n") {
+		l = strings.TrimRight(l, "\r")
+		switch {
+		case strings.HasPrefix(l, "require ("):
+			inReq = true
+			continue
+		case inReq && l == ")":
+			inReq = false
+			continue
+		}
+		if !inReq {
+			continue
+		}
+		f := strings.Fields(l)
+		if len(f) >= 2 {
+			have[f[0]] = f[1]
+			direct[f[0]] = !strings.Contains(l, "// indirect")
+		}
+	}
+	n := 0
+	base := map[string]bool{}
+	for _, l := range strings.Split(strings.TrimSpace(string(snap)), "\n") {
+		f := strings.Fields(l)
+		n++
+		base[f[0]] = true
+		if v, ok := have[f[0]]; !ok || v != f[1] {
+			t.Errorf("go.mod requirement %s was %s at the base and is now %q", f[0], f[1], v)
+		}
+	}
+	if n < 300 {
+		t.Fatalf("the base snapshot lists only %d requirements", n)
+	}
+	if !direct["lukechampine.com/blake3"] || have["lukechampine.com/blake3"] != "v1.2.1" {
+		t.Errorf("lukechampine.com/blake3 must be a direct requirement at v1.2.1, got %q direct=%v", have["lukechampine.com/blake3"], direct["lukechampine.com/blake3"])
+	}
+	for k, v := range have {
+		if base[k] {
+			continue
+		}
+		t.Errorf("go.mod gained the requirement %s %s that the framework base did not have", k, v)
+	}
+}

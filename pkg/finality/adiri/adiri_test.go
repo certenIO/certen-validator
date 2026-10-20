@@ -5,6 +5,7 @@ package adiri_test
 import (
 	"bytes"
 	"encoding/hex"
+	"encoding/json"
 	"github.com/mr-tron/base58"
 	"go/ast"
 	"go/parser"
@@ -285,3 +286,110 @@ func mustEvidence(t *testing.T, name string) []byte {
 	t.Fatal(name)
 	return nil
 }
+
+// Every named state a vector expects, and every pending reason the builder emits, is in the machine registry
+// (testdata/finality/states.json) with all of its required fields.
+func TestEveryExpectedStateIsRegisteredWithItsRequiredFields(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "testdata", "finality", "states.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reg struct {
+		States map[string]struct {
+			Required []string `json:"required"`
+		} `json:"states"`
+		Pending map[string]struct {
+			Required []string `json:"required"`
+		} `json:"pending_reasons"`
+	}
+	if err := json.Unmarshal(raw, &reg); err != nil {
+		t.Fatal(err)
+	}
+	f := loadVectors(t)
+	codes := map[string]int{}
+	for _, v := range f.Vectors {
+		var e struct {
+			Code   string         `json:"code"`
+			Fields map[string]any `json:"fields"`
+		}
+		if err := json.Unmarshal([]byte(v.Expect), &e); err != nil {
+			t.Fatalf("%s: %v", v.Name, err)
+		}
+		if e.Code == "finalized" {
+			continue
+		}
+		codes[e.Code]++
+		st, ok := reg.States[e.Code]
+		if !ok {
+			t.Errorf("%s expects the unregistered code %s", v.Name, e.Code)
+			continue
+		}
+		for _, r := range st.Required {
+			if _, has := e.Fields[r]; !has {
+				t.Errorf("%s: %s lacks the required field %s", v.Name, e.Code, r)
+			}
+		}
+	}
+	for _, c := range []string{"committee_chain_broken", "evidence_pin_mismatch", "adiri_incarnation_mismatch", "epoch_record_codec_unsupported", "finality_link_broken", "finality_header_chain_broken", "finality_block_mismatch", "finality_evidence_too_large", "finality_evidence_malformed"} {
+		if codes[c] == 0 {
+			t.Errorf("no vector expects %s", c)
+		}
+	}
+	// the success verdict reports committee_shrunk (a reported attribute, not a refusal) with its three fields
+	if _, ok := reg.States["committee_shrunk"]; !ok {
+		t.Error("committee_shrunk is not registered")
+	}
+	shrunk := adiri.Shrunk(3, 4, 5)
+	for _, r := range reg.States["committee_shrunk"].Required {
+		if _, ok := shrunk.Fields[r]; !ok {
+			t.Errorf("Shrunk lacks %s", r)
+		}
+	}
+	for _, r := range []string{adiri.PendingEpochOpen, adiri.PendingCertPending, adiri.PendingEpochOverdue, adiri.PendingHistoryProof} {
+		if _, ok := reg.Pending[r]; !ok {
+			t.Errorf("pending reason %s is not registered", r)
+		}
+	}
+	for code, fields := range map[string]*finality.StateError{
+		"adiri_incarnation_mismatch":     adiri.IncarnationMismatch(adiri.NumHash{}, adiri.NumHash{}),
+		"evidence_pin_mismatch":          adiri.PinMismatch("x", 1, 2),
+		"committee_chain_broken":         adiri.ChainBroken(1, "x"),
+		"epoch_record_codec_unsupported": adiri.CodecUnsupported(1, "a", "b"),
+		"finality_link_broken":           adiri.LinkBroken("x", 1, 2, 3),
+		"finality_header_chain_broken":   adiri.HeaderChainBroken(1, [32]byte{}, [32]byte{}, "r"),
+		"finality_source_unavailable":    adiri.SourceUnavailable("r", []string{"e"}),
+	} {
+		st, ok := reg.States[code]
+		if !ok || fields.Code != code {
+			t.Errorf("%s: constructor/registry mismatch", code)
+			continue
+		}
+		for _, r := range st.Required {
+			if _, has := fields.Fields[r]; !has {
+				t.Errorf("%s constructor lacks %s", code, r)
+			}
+		}
+	}
+}
+
+func benchVerify(b *testing.B, mode adiri.Mode) {
+	f := loadVectors(b)
+	var v vVec
+	for _, x := range f.Vectors {
+		if x.Name == "live-513643-epoch651" {
+			v = x
+		}
+	}
+	ev, pins, leg := evidenceOf(b, f, v), pinsOf(b, v), legOf(b, v)
+	ver := &adiri.Verifier{Mode: mode}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := ver.Verify(pins, leg, ev); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// BenchmarkVerifyLive652Records measures a full verification of the real 652-record chain (V2_SPEC_S7 8.1: Go 4.06-8.0 s).
+func BenchmarkVerifyLive652RecordsOneByOne(b *testing.B) { benchVerify(b, adiri.ModeOneByOne) }
+func BenchmarkVerifyLive652RecordsBatched(b *testing.B)  { benchVerify(b, adiri.ModeBatched) }
