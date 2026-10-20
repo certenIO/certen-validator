@@ -27,3 +27,10 @@ pkg/crypto/bls_zkp/*.bin binary
 accumulate-lite-client-2/liteclient/proof/govsig/testdata/sigtypes/*.json text eol=lf
 # A golden is specification: its bytes are never normalised.
 accumulate-lite-client-2/liteclient/proof/consolidated_governance-proof/testdata/*.golden.json text eol=lf
+
+# The finality pins file is HASHED as raw bytes (pkg/finality PINS_SHA256) and mirrored byte-identically into the other
+# repos, and the finality vectors, states registry and manifest are copied byte-for-byte into the TypeScript verifier's repo.
+# A CRLF checkout would make the pinned hashes fail on Windows.
+pkg/finality/pins/*.json text eol=lf
+pkg/finality/testdata/finality/*.json text eol=lf
+pkg/finality/testdata/finality_chain1/* text eol=lf

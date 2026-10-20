@@ -43,11 +43,19 @@ func pgCode(err error) pq.ErrorCode {
 	return ""
 }
 
-// Append writes a as the next addendum of its proof. Inside one transaction it reads the proof's last addendum and refuses
-// (finality_addendum_chain_broken) an addendum that does not extend it exactly: wrong seq, a prevHash that is not the last
-// ownHash, a level that does not rise, another chain. A concurrent writer that appended the same seq first makes this a
-// finality_append_conflict, never an overwrite. The table's trigger refuses the same things for any other writer.
+// Append writes a as the next addendum of its proof. Inside one transaction it reads the proof's stored addenda and refuses
+// (finality_chain_broken) an addendum that does not extend them exactly: wrong seq, a prevHash that is not the last ownHash,
+// a level that is not stored (included is derived and never stored) or a chain other than the proof's, and refuses a second
+// addendum at a level the proof already holds (level_already_present). A concurrent writer that appended the same seq first
+// makes this a finality_append_conflict, never an overwrite. The table's trigger refuses the same things for any other writer.
+//
+// This minimal reconcile does NOT yet lock the proof's last row nor run the S7 verifier inside the transaction (V2_SPEC_S7
+// 2.4): that behavioural step belongs to the next package, RB11-B2B.
 func (r *FinalityAddendaRepository) Append(ctx context.Context, a finality.Addendum) error {
+	id := finality.ProofIDString(a.ProofID)
+	if !a.Level.Stored() {
+		return finality.ChainBroken(a.Seq, finality.CheckKind, "chain", a.Chain, "level", a.Level, "kind", a.Kind)
+	}
 	tx, err := r.client.DB().BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -55,54 +63,64 @@ func (r *FinalityAddendaRepository) Append(ctx context.Context, a finality.Adden
 	defer func() { _ = tx.Rollback() }()
 
 	var seq int64
-	var level int16
 	var chain int64
 	var own []byte
-	err = tx.QueryRowContext(ctx, `SELECT seq, level, chain, own_hash FROM proof_finality_addenda
-		WHERE proof_id = $1 ORDER BY seq DESC LIMIT 1`, a.ProofID).Scan(&seq, &level, &chain, &own)
+	err = tx.QueryRowContext(ctx, `SELECT seq, chain, own_hash FROM proof_finality_addenda
+		WHERE proof_id = $1 ORDER BY seq DESC LIMIT 1`, id).Scan(&seq, &chain, &own)
 	switch {
 	case err == sql.ErrNoRows:
-		if a.Seq != 1 || a.PrevHash != [32]byte{} {
-			return finality.NewState(finality.CodeChainBroken, "check", "first", "seq", a.Seq, "proof_id", a.ProofID)
+		if a.Seq != 1 {
+			return finality.ChainBroken(a.Seq, finality.CheckSeqGap, "want", uint64(1))
+		}
+		if a.PrevHash != [32]byte{} {
+			return finality.ChainBroken(a.Seq, finality.CheckPrevHash)
 		}
 	case err != nil:
 		return err
 	default:
 		if a.Seq != uint64(seq)+1 {
 			if a.Seq <= uint64(seq) {
-				return finality.NewState(finality.CodeAppendConflict, "proof_id", a.ProofID, "seq", a.Seq, "stored_through", seq)
+				return finality.NewState(finality.CodeAppendConflict, "proof_id", id, "seq", a.Seq, "stored_through", seq)
 			}
-			return finality.NewState(finality.CodeChainBroken, "check", "seq", "seq", a.Seq, "want", seq+1)
+			return finality.ChainBroken(a.Seq, finality.CheckSeqGap, "want", uint64(seq)+1)
 		}
 		if string(a.PrevHash[:]) != string(own) {
-			return finality.NewState(finality.CodeChainBroken, "check", "prev_hash", "seq", a.Seq)
-		}
-		if int16(a.Level) <= level {
-			return finality.NewState(finality.CodeChainBroken, "check", "level_not_monotone", "seq", a.Seq, "prev_level", finality.Level(level), "level", a.Level)
+			return finality.ChainBroken(a.Seq, finality.CheckPrevHash)
 		}
 		if a.Chain != uint64(chain) {
-			return finality.NewState(finality.CodeChainBroken, "check", "chain", "seq", a.Seq, "chain", a.Chain, "prev_chain", chain)
+			return finality.ChainBroken(a.Seq, finality.CheckKind, "chain", a.Chain, "stored_chain", uint64(chain))
+		}
+		var held int
+		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM proof_finality_addenda WHERE proof_id = $1 AND level = $2`, id, int16(a.Level)).Scan(&held); err != nil {
+			return err
+		}
+		if held > 0 {
+			return finality.NewState(finality.CodeLevelAlreadyPresent, "chain", a.Chain, "level", a.Level)
 		}
 	}
 
 	_, err = tx.ExecContext(ctx, `INSERT INTO proof_finality_addenda (proof_id, seq, level, chain, kind, evidence, prev_hash, own_hash)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-		a.ProofID, int64(a.Seq), int16(a.Level), int64(a.Chain), a.Kind, a.Evidence, a.PrevHash[:], a.OwnHash[:])
+		id, int64(a.Seq), int16(a.Level), int64(a.Chain), a.Kind, a.Evidence, a.PrevHash[:], a.OwnHash[:])
 	if err != nil {
 		switch pgCode(err) {
-		case "23505": // unique_violation: another writer took this seq between our read and our insert
-			return finality.NewState(finality.CodeAppendConflict, "proof_id", a.ProofID, "seq", a.Seq)
+		case "23505": // unique_violation: another writer took this seq (or this level) between our read and our insert
+			return finality.NewState(finality.CodeAppendConflict, "proof_id", id, "seq", a.Seq)
 		case "23001": // restrict_violation: the trigger refused it
-			return finality.NewState(finality.CodeChainBroken, "check", "database_guard", "seq", a.Seq, "cause", err.Error())
+			return finality.NewState(finality.CodeChainBroken, "seq", a.Seq, "check", "database_guard", "cause", err.Error())
 		}
 		return err
 	}
 	return tx.Commit()
 }
 
-// Chain returns a proof's addenda in ascending seq (empty when it has none). The original digest is not stored: the caller
-// holds it (the stored proof's artifact hash) and passes it to finality.VerifyChain.
+// Chain returns a proof's addenda in ascending seq (empty when it has none). D0 is not stored: it is the leg binding of the
+// proof's Settlement block, recomputed by the caller and passed to finality.VerifyChain.
 func (r *FinalityAddendaRepository) Chain(ctx context.Context, proofID string) ([]finality.Addendum, error) {
+	pid, err := finality.ParseProofID(proofID)
+	if err != nil {
+		return nil, err
+	}
 	rows, err := r.client.DB().QueryContext(ctx, `SELECT seq, level, chain, kind, evidence, prev_hash, own_hash
 		FROM proof_finality_addenda WHERE proof_id = $1 ORDER BY seq`, proofID)
 	if err != nil {
@@ -114,7 +132,7 @@ func (r *FinalityAddendaRepository) Chain(ctx context.Context, proofID string) (
 		var seq, chain int64
 		var level int16
 		var prev, own []byte
-		a := finality.Addendum{ProofID: proofID}
+		a := finality.Addendum{ProofID: pid}
 		if err := rows.Scan(&seq, &level, &chain, &a.Kind, &a.Evidence, &prev, &own); err != nil {
 			return nil, err
 		}
@@ -137,10 +155,10 @@ func (r *FinalityAddendaRepository) SettledLegs(ctx context.Context, after strin
 		limit = 200
 	}
 	query := `
-		SELECT pa.proof_id::text, pa.artifact_hash, pa.artifact_json #>> '{proof_components,5_execution_proof,chain_id}'
+		SELECT pa.proof_id::text, pa.artifact_json #>> '{proof_components,5_execution_proof,chain_id}'
 		FROM proof_artifacts pa
 		WHERE pa.artifact_json #> '{proof_components,5_execution_proof,block_header_rlp}' IS NOT NULL
-		  AND NOT EXISTS (SELECT 1 FROM proof_finality_addenda f WHERE f.proof_id = pa.proof_id::text AND f.level = 3)`
+		  AND NOT EXISTS (SELECT 1 FROM proof_finality_addenda f WHERE f.proof_id = pa.proof_id AND f.level = 3)`
 	args := []any{}
 	if after != "" {
 		query += ` AND pa.proof_id > $1::uuid`
@@ -156,15 +174,10 @@ func (r *FinalityAddendaRepository) SettledLegs(ctx context.Context, after strin
 	var out []finality.LegRef
 	for rows.Next() {
 		var ref finality.LegRef
-		var digest []byte
 		var chain sql.NullString
-		if err := rows.Scan(&ref.ProofID, &digest, &chain); err != nil {
+		if err := rows.Scan(&ref.ProofID, &chain); err != nil {
 			return nil, err
 		}
-		if len(digest) != 32 {
-			return nil, fmt.Errorf("proof %s: artifact_hash is %d bytes", ref.ProofID, len(digest))
-		}
-		copy(ref.Digest[:], digest)
 		id, perr := strconv.ParseUint(chain.String, 10, 64)
 		if perr != nil {
 			// A settlement that does not name its chain cannot be upgraded; the worker reports it by name (chain 0 has no profile).
@@ -197,21 +210,16 @@ func (r *FinalityAddendaRepository) LegSettlement(ctx context.Context, ref final
 	return finality.Settlement{Chain: ref.Chain, Subject: subject, Included: &settlement}, nil
 }
 
-// LegRef returns one stored proof's leg: its original digest and the chain its bundle's execution proof settled on. A proof
+// LegRef returns one stored proof's leg: the chain its bundle's execution proof settled on. A proof
 // whose bundle carries no execution proof (component 5) has no leg: the named finality_included_unavailable state.
 func (r *FinalityAddendaRepository) LegRef(ctx context.Context, proofID string) (finality.LegRef, error) {
 	ref := finality.LegRef{ProofID: proofID}
-	var digest []byte
 	var chain, header sql.NullString
-	err := r.client.DB().QueryRowContext(ctx, `SELECT artifact_hash, artifact_json #>> '{proof_components,5_execution_proof,chain_id}',
-		artifact_json #>> '{proof_components,5_execution_proof,block_header_rlp}' FROM proof_artifacts WHERE proof_id = $1::uuid`, proofID).Scan(&digest, &chain, &header)
+	err := r.client.DB().QueryRowContext(ctx, `SELECT artifact_json #>> '{proof_components,5_execution_proof,chain_id}',
+		artifact_json #>> '{proof_components,5_execution_proof,block_header_rlp}' FROM proof_artifacts WHERE proof_id = $1::uuid`, proofID).Scan(&chain, &header)
 	if err != nil {
 		return ref, err
 	}
-	if len(digest) != 32 {
-		return ref, fmt.Errorf("proof %s: artifact_hash is %d bytes", proofID, len(digest))
-	}
-	copy(ref.Digest[:], digest)
 	if !header.Valid || header.String == "" {
 		return ref, finality.NewState(finality.CodeIncludedUnavailable, "proof_id", proofID, "reason", "the stored bundle carries no execution proof (component 5)")
 	}

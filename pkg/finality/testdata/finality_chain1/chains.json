@@ -1,0 +1,544 @@
+{
+  "format": "certen-finality-vectors/1",
+  "kind": "chain",
+  "set": "finality_chain1",
+  "vectors": [
+    {
+      "name": "valid_empty",
+      "note": "no addenda: nothing is claimed beyond the proof itself",
+      "leg": {
+        "chain": 84532,
+        "blockNumber": 47368146,
+        "blockHash": "3333333333333333333333333333333333333333333333333333333333333333"
+      },
+      "carried": {
+        "chain": 84532,
+        "blockNumber": 47368146,
+        "blockHash": "3333333333333333333333333333333333333333333333333333333333333333"
+      },
+      "addenda": null,
+      "expect": "ok"
+    },
+    {
+      "name": "valid_sepolia_finalized",
+      "note": "one addendum",
+      "leg": {
+        "chain": 11155111,
+        "blockNumber": 11845679,
+        "blockHash": "2222222222222222222222222222222222222222222222222222222222222222"
+      },
+      "carried": {
+        "chain": 11155111,
+        "blockNumber": 11845679,
+        "blockHash": "2222222222222222222222222222222222222222222222222222222222222222"
+      },
+      "addenda": [
+        {
+          "proofId": "01234567-89ab-4def-8012-3456789abcde",
+          "seq": 1,
+          "level": "finalized",
+          "chain": 11155111,
+          "kind": "eth-sepolia/finalized/v1",
+          "evidence": "43464531000000186574682d7365706f6c69612f66696e616c697a65642f76310000000000aa36a7030000000000b4c02f22222222222222222222222222222222222222222222222222222222222222226c63",
+          "prevHash": "0000000000000000000000000000000000000000000000000000000000000000",
+          "ownHash": "600889312a4ca95082efe72b4cde4dffb0e19e0060b841a5c076cb9be64555c9"
+        }
+      ],
+      "expect": "ok"
+    },
+    {
+      "name": "valid_base_l1_posted_then_finalized",
+      "note": "levels in ascending order",
+      "leg": {
+        "chain": 84532,
+        "blockNumber": 47368146,
+        "blockHash": "3333333333333333333333333333333333333333333333333333333333333333"
+      },
+      "carried": {
+        "chain": 84532,
+        "blockNumber": 47368146,
+        "blockHash": "3333333333333333333333333333333333333333333333333333333333333333"
+      },
+      "addenda": [
+        {
+          "proofId": "01234567-89ab-4def-8012-3456789abcde",
+          "seq": 1,
+          "level": "l1_posted",
+          "chain": 84532,
+          "kind": "base-sepolia/l1_posted/v1",
+          "evidence": "4346453100000019626173652d7365706f6c69612f6c315f706f737465642f76310000000000014a34020000000002d2c7d2333333333333333333333333333333333333333333333333333333333333333361",
+          "prevHash": "0000000000000000000000000000000000000000000000000000000000000000",
+          "ownHash": "593af6c28fa54a4d75582dd3394bf10898cfe0d8582359e3c6e7479f590f5d5c"
+        },
+        {
+          "proofId": "01234567-89ab-4def-8012-3456789abcde",
+          "seq": 2,
+          "level": "finalized",
+          "chain": 84532,
+          "kind": "base-sepolia/finalized/v1",
+          "evidence": "4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34030000000002d2c7d2333333333333333333333333333333333333333333333333333333333333333362",
+          "prevHash": "593af6c28fa54a4d75582dd3394bf10898cfe0d8582359e3c6e7479f590f5d5c",
+          "ownHash": "f5d2c86cbad802c73cd42c5cc7ca872757a2a446fd9e2a2746103f26c95181d3"
+        }
+      ],
+      "expect": "ok"
+    },
+    {
+      "name": "valid_base_finalized_then_l1_posted",
+      "note": "any level order is valid: seq orders the chain, not the levels (R1)",
+      "leg": {
+        "chain": 84532,
+        "blockNumber": 47368146,
+        "blockHash": "3333333333333333333333333333333333333333333333333333333333333333"
+      },
+      "carried": {
+        "chain": 84532,
+        "blockNumber": 47368146,
+        "blockHash": "3333333333333333333333333333333333333333333333333333333333333333"
+      },
+      "addenda": [
+        {
+          "proofId": "01234567-89ab-4def-8012-3456789abcde",
+          "seq": 1,
+          "level": "finalized",
+          "chain": 84532,
+          "kind": "base-sepolia/finalized/v1",
+          "evidence": "4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34030000000002d2c7d2333333333333333333333333333333333333333333333333333333333333333362",
+          "prevHash": "0000000000000000000000000000000000000000000000000000000000000000",
+          "ownHash": "9ec71cd19ddbe01bf47212d9927fb9c61d88ba06ff55c0100fc87ad35971e0b3"
+        },
+        {
+          "proofId": "01234567-89ab-4def-8012-3456789abcde",
+          "seq": 2,
+          "level": "l1_posted",
+          "chain": 84532,
+          "kind": "base-sepolia/l1_posted/v1",
+          "evidence": "4346453100000019626173652d7365706f6c69612f6c315f706f737465642f76310000000000014a34020000000002d2c7d2333333333333333333333333333333333333333333333333333333333333333361",
+          "prevHash": "9ec71cd19ddbe01bf47212d9927fb9c61d88ba06ff55c0100fc87ad35971e0b3",
+          "ownHash": "1d1cd94415153d22e97460231d8f02d7c2df90eaad6450e9720085a02760750d"
+        }
+      ],
+      "expect": "ok"
+    },
+    {
+      "name": "tamper_seq_gap",
+      "note": "second addendum states seq 3",
+      "leg": {
+        "chain": 84532,
+        "blockNumber": 47368146,
+        "blockHash": "3333333333333333333333333333333333333333333333333333333333333333"
+      },
+      "carried": {
+        "chain": 84532,
+        "blockNumber": 47368146,
+        "blockHash": "3333333333333333333333333333333333333333333333333333333333333333"
+      },
+      "addenda": [
+        {
+          "proofId": "01234567-89ab-4def-8012-3456789abcde",
+          "seq": 1,
+          "level": "l1_posted",
+          "chain": 84532,
+          "kind": "base-sepolia/l1_posted/v1",
+          "evidence": "4346453100000019626173652d7365706f6c69612f6c315f706f737465642f76310000000000014a34020000000002d2c7d2333333333333333333333333333333333333333333333333333333333333333361",
+          "prevHash": "0000000000000000000000000000000000000000000000000000000000000000",
+          "ownHash": "593af6c28fa54a4d75582dd3394bf10898cfe0d8582359e3c6e7479f590f5d5c"
+        },
+        {
+          "proofId": "01234567-89ab-4def-8012-3456789abcde",
+          "seq": 3,
+          "level": "finalized",
+          "chain": 84532,
+          "kind": "base-sepolia/finalized/v1",
+          "evidence": "4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34030000000002d2c7d2333333333333333333333333333333333333333333333333333333333333333362",
+          "prevHash": "593af6c28fa54a4d75582dd3394bf10898cfe0d8582359e3c6e7479f590f5d5c",
+          "ownHash": "f5d2c86cbad802c73cd42c5cc7ca872757a2a446fd9e2a2746103f26c95181d3"
+        }
+      ],
+      "expect": "{\"code\":\"finality_chain_broken\",\"fields\":{\"check\":\"seq_gap\",\"seq\":\"3\",\"want\":\"2\"}}"
+    },
+    {
+      "name": "tamper_prev_hash",
+      "note": "second addendum's prevHash is not the first's ownHash",
+      "leg": {
+        "chain": 84532,
+        "blockNumber": 47368146,
+        "blockHash": "3333333333333333333333333333333333333333333333333333333333333333"
+      },
+      "carried": {
+        "chain": 84532,
+        "blockNumber": 47368146,
+        "blockHash": "3333333333333333333333333333333333333333333333333333333333333333"
+      },
+      "addenda": [
+        {
+          "proofId": "01234567-89ab-4def-8012-3456789abcde",
+          "seq": 1,
+          "level": "l1_posted",
+          "chain": 84532,
+          "kind": "base-sepolia/l1_posted/v1",
+          "evidence": "4346453100000019626173652d7365706f6c69612f6c315f706f737465642f76310000000000014a34020000000002d2c7d2333333333333333333333333333333333333333333333333333333333333333361",
+          "prevHash": "0000000000000000000000000000000000000000000000000000000000000000",
+          "ownHash": "593af6c28fa54a4d75582dd3394bf10898cfe0d8582359e3c6e7479f590f5d5c"
+        },
+        {
+          "proofId": "01234567-89ab-4def-8012-3456789abcde",
+          "seq": 2,
+          "level": "finalized",
+          "chain": 84532,
+          "kind": "base-sepolia/finalized/v1",
+          "evidence": "4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34030000000002d2c7d2333333333333333333333333333333333333333333333333333333333333333362",
+          "prevHash": "593af6c28fa54a4c75582dd3394bf10898cfe0d8582359e3c6e7479f590f5d5c",
+          "ownHash": "f5d2c86cbad802c73cd42c5cc7ca872757a2a446fd9e2a2746103f26c95181d3"
+        }
+      ],
+      "expect": "{\"code\":\"finality_chain_broken\",\"fields\":{\"check\":\"prev_hash\",\"seq\":\"2\"}}"
+    },
+    {
+      "name": "tamper_first_prev_hash_not_zero",
+      "note": "the first addendum's prevHash is not 32 zero bytes",
+      "leg": {
+        "chain": 84532,
+        "blockNumber": 47368146,
+        "blockHash": "3333333333333333333333333333333333333333333333333333333333333333"
+      },
+      "carried": {
+        "chain": 84532,
+        "blockNumber": 47368146,
+        "blockHash": "3333333333333333333333333333333333333333333333333333333333333333"
+      },
+      "addenda": [
+        {
+          "proofId": "01234567-89ab-4def-8012-3456789abcde",
+          "seq": 1,
+          "level": "l1_posted",
+          "chain": 84532,
+          "kind": "base-sepolia/l1_posted/v1",
+          "evidence": "4346453100000019626173652d7365706f6c69612f6c315f706f737465642f76310000000000014a34020000000002d2c7d2333333333333333333333333333333333333333333333333333333333333333361",
+          "prevHash": "0100000000000000000000000000000000000000000000000000000000000000",
+          "ownHash": "593af6c28fa54a4d75582dd3394bf10898cfe0d8582359e3c6e7479f590f5d5c"
+        },
+        {
+          "proofId": "01234567-89ab-4def-8012-3456789abcde",
+          "seq": 2,
+          "level": "finalized",
+          "chain": 84532,
+          "kind": "base-sepolia/finalized/v1",
+          "evidence": "4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34030000000002d2c7d2333333333333333333333333333333333333333333333333333333333333333362",
+          "prevHash": "593af6c28fa54a4d75582dd3394bf10898cfe0d8582359e3c6e7479f590f5d5c",
+          "ownHash": "f5d2c86cbad802c73cd42c5cc7ca872757a2a446fd9e2a2746103f26c95181d3"
+        }
+      ],
+      "expect": "{\"code\":\"finality_chain_broken\",\"fields\":{\"check\":\"prev_hash\",\"seq\":\"1\"}}"
+    },
+    {
+      "name": "tamper_own_hash",
+      "note": "stored ownHash flipped",
+      "leg": {
+        "chain": 84532,
+        "blockNumber": 47368146,
+        "blockHash": "3333333333333333333333333333333333333333333333333333333333333333"
+      },
+      "carried": {
+        "chain": 84532,
+        "blockNumber": 47368146,
+        "blockHash": "3333333333333333333333333333333333333333333333333333333333333333"
+      },
+      "addenda": [
+        {
+          "proofId": "01234567-89ab-4def-8012-3456789abcde",
+          "seq": 1,
+          "level": "l1_posted",
+          "chain": 84532,
+          "kind": "base-sepolia/l1_posted/v1",
+          "evidence": "4346453100000019626173652d7365706f6c69612f6c315f706f737465642f76310000000000014a34020000000002d2c7d2333333333333333333333333333333333333333333333333333333333333333361",
+          "prevHash": "0000000000000000000000000000000000000000000000000000000000000000",
+          "ownHash": "593af6c28fa54a4c75582dd3394bf10898cfe0d8582359e3c6e7479f590f5d5c"
+        },
+        {
+          "proofId": "01234567-89ab-4def-8012-3456789abcde",
+          "seq": 2,
+          "level": "finalized",
+          "chain": 84532,
+          "kind": "base-sepolia/finalized/v1",
+          "evidence": "4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34030000000002d2c7d2333333333333333333333333333333333333333333333333333333333333333362",
+          "prevHash": "593af6c28fa54a4d75582dd3394bf10898cfe0d8582359e3c6e7479f590f5d5c",
+          "ownHash": "f5d2c86cbad802c73cd42c5cc7ca872757a2a446fd9e2a2746103f26c95181d3"
+        }
+      ],
+      "expect": "{\"code\":\"finality_chain_broken\",\"fields\":{\"check\":\"own_hash\",\"seq\":\"1\"}}"
+    },
+    {
+      "name": "tamper_evidence_byte",
+      "note": "evidence changed after hashing",
+      "leg": {
+        "chain": 84532,
+        "blockNumber": 47368146,
+        "blockHash": "3333333333333333333333333333333333333333333333333333333333333333"
+      },
+      "carried": {
+        "chain": 84532,
+        "blockNumber": 47368146,
+        "blockHash": "3333333333333333333333333333333333333333333333333333333333333333"
+      },
+      "addenda": [
+        {
+          "proofId": "01234567-89ab-4def-8012-3456789abcde",
+          "seq": 1,
+          "level": "l1_posted",
+          "chain": 84532,
+          "kind": "base-sepolia/l1_posted/v1",
+          "evidence": "4346453100000019626173652d7365706f6c69612f6c315f706f737465642f76310000000000014a34020000000002d2c7d233333333333333333333333333333333333333333333333333333333333333336100",
+          "prevHash": "0000000000000000000000000000000000000000000000000000000000000000",
+          "ownHash": "593af6c28fa54a4d75582dd3394bf10898cfe0d8582359e3c6e7479f590f5d5c"
+        },
+        {
+          "proofId": "01234567-89ab-4def-8012-3456789abcde",
+          "seq": 2,
+          "level": "finalized",
+          "chain": 84532,
+          "kind": "base-sepolia/finalized/v1",
+          "evidence": "4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34030000000002d2c7d2333333333333333333333333333333333333333333333333333333333333333362",
+          "prevHash": "593af6c28fa54a4d75582dd3394bf10898cfe0d8582359e3c6e7479f590f5d5c",
+          "ownHash": "f5d2c86cbad802c73cd42c5cc7ca872757a2a446fd9e2a2746103f26c95181d3"
+        }
+      ],
+      "expect": "{\"code\":\"finality_chain_broken\",\"fields\":{\"check\":\"own_hash\",\"seq\":\"1\"}}"
+    },
+    {
+      "name": "tamper_level_duplicate",
+      "note": "two finalized addenda, correctly chained",
+      "leg": {
+        "chain": 84532,
+        "blockNumber": 47368146,
+        "blockHash": "3333333333333333333333333333333333333333333333333333333333333333"
+      },
+      "carried": {
+        "chain": 84532,
+        "blockNumber": 47368146,
+        "blockHash": "3333333333333333333333333333333333333333333333333333333333333333"
+      },
+      "addenda": [
+        {
+          "proofId": "01234567-89ab-4def-8012-3456789abcde",
+          "seq": 1,
+          "level": "finalized",
+          "chain": 84532,
+          "kind": "base-sepolia/finalized/v1",
+          "evidence": "4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34030000000002d2c7d2333333333333333333333333333333333333333333333333333333333333333362",
+          "prevHash": "0000000000000000000000000000000000000000000000000000000000000000",
+          "ownHash": "9ec71cd19ddbe01bf47212d9927fb9c61d88ba06ff55c0100fc87ad35971e0b3"
+        },
+        {
+          "proofId": "01234567-89ab-4def-8012-3456789abcde",
+          "seq": 2,
+          "level": "finalized",
+          "chain": 84532,
+          "kind": "base-sepolia/finalized/v1",
+          "evidence": "4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34030000000002d2c7d233333333333333333333333333333333333333333333333333333333333333336232",
+          "prevHash": "9ec71cd19ddbe01bf47212d9927fb9c61d88ba06ff55c0100fc87ad35971e0b3",
+          "ownHash": "c45cbd21046994ab2bfe3461ec54cb7cb4d144c93a196f1e983679b2ee618b71"
+        }
+      ],
+      "expect": "{\"code\":\"finality_chain_broken\",\"fields\":{\"check\":\"level_duplicate\",\"level\":\"finalized\",\"seq\":\"2\"}}"
+    },
+    {
+      "name": "tamper_kind_unregistered_version",
+      "note": "kind v2 is not a table row, correctly hashed",
+      "leg": {
+        "chain": 84532,
+        "blockNumber": 47368146,
+        "blockHash": "3333333333333333333333333333333333333333333333333333333333333333"
+      },
+      "carried": {
+        "chain": 84532,
+        "blockNumber": 47368146,
+        "blockHash": "3333333333333333333333333333333333333333333333333333333333333333"
+      },
+      "addenda": [
+        {
+          "proofId": "01234567-89ab-4def-8012-3456789abcde",
+          "seq": 1,
+          "level": "finalized",
+          "chain": 84532,
+          "kind": "base-sepolia/finalized/v2",
+          "evidence": "4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76320000000000014a34030000000002d2c7d2333333333333333333333333333333333333333333333333333333333333333362",
+          "prevHash": "0000000000000000000000000000000000000000000000000000000000000000",
+          "ownHash": "c1fa9f97bb8b753774d8d75f2b632757f553e7501fe88ec433ebfd35683749d0"
+        }
+      ],
+      "expect": "{\"code\":\"finality_chain_broken\",\"fields\":{\"chain\":\"84532\",\"check\":\"kind\",\"kind\":\"base-sepolia/finalized/v2\",\"level\":\"finalized\",\"seq\":\"1\"}}"
+    },
+    {
+      "name": "kind_level1_refused",
+      "note": "level 1 (included) is derived and never stored; correctly hashed",
+      "leg": {
+        "chain": 84532,
+        "blockNumber": 47368146,
+        "blockHash": "3333333333333333333333333333333333333333333333333333333333333333"
+      },
+      "carried": {
+        "chain": 84532,
+        "blockNumber": 47368146,
+        "blockHash": "3333333333333333333333333333333333333333333333333333333333333333"
+      },
+      "addenda": [
+        {
+          "proofId": "01234567-89ab-4def-8012-3456789abcde",
+          "seq": 1,
+          "level": "included",
+          "chain": 84532,
+          "kind": "included.eth-mpt/v1",
+          "evidence": "78",
+          "prevHash": "0000000000000000000000000000000000000000000000000000000000000000",
+          "ownHash": "e194226d4574cf04984034a7c6b3b0a7135cb7fc7a9316fcb6d69c6821be0ca1"
+        }
+      ],
+      "expect": "{\"code\":\"finality_addendum_malformed\",\"fields\":{\"field\":\"level\",\"reason\":\"level \\\"included\\\" is derived and never stored (stored levels: l1_posted, finalized)\"}}"
+    },
+    {
+      "name": "kind_wrong_level_for_kind",
+      "note": "the l1_posted kind at level finalized",
+      "leg": {
+        "chain": 84532,
+        "blockNumber": 47368146,
+        "blockHash": "3333333333333333333333333333333333333333333333333333333333333333"
+      },
+      "carried": {
+        "chain": 84532,
+        "blockNumber": 47368146,
+        "blockHash": "3333333333333333333333333333333333333333333333333333333333333333"
+      },
+      "addenda": [
+        {
+          "proofId": "01234567-89ab-4def-8012-3456789abcde",
+          "seq": 1,
+          "level": "finalized",
+          "chain": 84532,
+          "kind": "base-sepolia/l1_posted/v1",
+          "evidence": "78",
+          "prevHash": "0000000000000000000000000000000000000000000000000000000000000000",
+          "ownHash": "2755009d760d74c76105a3281be8c2ea0e40e3197593c58b05d5f7c23ba94ed5"
+        }
+      ],
+      "expect": "{\"code\":\"finality_chain_broken\",\"fields\":{\"chain\":\"84532\",\"check\":\"kind\",\"kind\":\"base-sepolia/l1_posted/v1\",\"level\":\"finalized\",\"seq\":\"1\"}}"
+    },
+    {
+      "name": "kind_l1_posted_on_sepolia",
+      "note": "Sepolia is the L1: it has no l1_posted row, so the file cannot supply one",
+      "leg": {
+        "chain": 11155111,
+        "blockNumber": 11845679,
+        "blockHash": "2222222222222222222222222222222222222222222222222222222222222222"
+      },
+      "carried": {
+        "chain": 11155111,
+        "blockNumber": 11845679,
+        "blockHash": "2222222222222222222222222222222222222222222222222222222222222222"
+      },
+      "addenda": [
+        {
+          "proofId": "01234567-89ab-4def-8012-3456789abcde",
+          "seq": 1,
+          "level": "l1_posted",
+          "chain": 11155111,
+          "kind": "base-sepolia/l1_posted/v1",
+          "evidence": "78",
+          "prevHash": "0000000000000000000000000000000000000000000000000000000000000000",
+          "ownHash": "0b6afb362e207b91f7ac12761ecbdcf0524f606a8deeafb555852c16e9c8f460"
+        }
+      ],
+      "expect": "{\"code\":\"finality_chain_broken\",\"fields\":{\"chain\":\"11155111\",\"check\":\"kind\",\"kind\":\"base-sepolia/l1_posted/v1\",\"level\":\"l1_posted\",\"seq\":\"1\"}}"
+    },
+    {
+      "name": "leg_binding_altered_leg_member",
+      "note": "the carried leg's blockNumber differs from the verified Settlement's: nothing else is judged",
+      "leg": {
+        "chain": 84532,
+        "blockNumber": 47368146,
+        "blockHash": "3333333333333333333333333333333333333333333333333333333333333333"
+      },
+      "carried": {
+        "chain": 84532,
+        "blockNumber": 47368147,
+        "blockHash": "3333333333333333333333333333333333333333333333333333333333333333"
+      },
+      "addenda": [
+        {
+          "proofId": "01234567-89ab-4def-8012-3456789abcde",
+          "seq": 1,
+          "level": "l1_posted",
+          "chain": 84532,
+          "kind": "base-sepolia/l1_posted/v1",
+          "evidence": "4346453100000019626173652d7365706f6c69612f6c315f706f737465642f76310000000000014a34020000000002d2c7d2333333333333333333333333333333333333333333333333333333333333333361",
+          "prevHash": "0000000000000000000000000000000000000000000000000000000000000000",
+          "ownHash": "593af6c28fa54a4d75582dd3394bf10898cfe0d8582359e3c6e7479f590f5d5c"
+        },
+        {
+          "proofId": "01234567-89ab-4def-8012-3456789abcde",
+          "seq": 2,
+          "level": "finalized",
+          "chain": 84532,
+          "kind": "base-sepolia/finalized/v1",
+          "evidence": "4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34030000000002d2c7d2333333333333333333333333333333333333333333333333333333333333333362",
+          "prevHash": "593af6c28fa54a4d75582dd3394bf10898cfe0d8582359e3c6e7479f590f5d5c",
+          "ownHash": "f5d2c86cbad802c73cd42c5cc7ca872757a2a446fd9e2a2746103f26c95181d3"
+        }
+      ],
+      "expect": "{\"code\":\"finality_chain_broken\",\"fields\":{\"check\":\"leg_binding\",\"got\":{\"blockHash\":\"3333333333333333333333333333333333333333333333333333333333333333\",\"blockNumber\":\"47368147\",\"chain\":\"84532\"},\"seq\":\"0\",\"want\":{\"blockHash\":\"3333333333333333333333333333333333333333333333333333333333333333\",\"blockNumber\":\"47368146\",\"chain\":\"84532\"}}}"
+    },
+    {
+      "name": "wrong_d0_with_matching_leg",
+      "note": "addenda chained under the D0 of another block, leg member untouched: fails own_hash at seq 1",
+      "leg": {
+        "chain": 84532,
+        "blockNumber": 47368146,
+        "blockHash": "3333333333333333333333333333333333333333333333333333333333333333"
+      },
+      "carried": {
+        "chain": 84532,
+        "blockNumber": 47368146,
+        "blockHash": "3333333333333333333333333333333333333333333333333333333333333333"
+      },
+      "addenda": [
+        {
+          "proofId": "01234567-89ab-4def-8012-3456789abcde",
+          "seq": 1,
+          "level": "l1_posted",
+          "chain": 84532,
+          "kind": "base-sepolia/l1_posted/v1",
+          "evidence": "4346453100000019626173652d7365706f6c69612f6c315f706f737465642f76310000000000014a34020000000002d2c7d2333333333333333333333333333333333333333333333333333333333333333361",
+          "prevHash": "0000000000000000000000000000000000000000000000000000000000000000",
+          "ownHash": "cb4e613965cc804d18817b14199c618948cd4b1bc5d7e7450f8660e3dcda98aa"
+        },
+        {
+          "proofId": "01234567-89ab-4def-8012-3456789abcde",
+          "seq": 2,
+          "level": "finalized",
+          "chain": 84532,
+          "kind": "base-sepolia/finalized/v1",
+          "evidence": "4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34030000000002d2c7d2333333333333333333333333333333333333333333333333333333333333333362",
+          "prevHash": "cb4e613965cc804d18817b14199c618948cd4b1bc5d7e7450f8660e3dcda98aa",
+          "ownHash": "d855189552358c9fbc4feb35b5690909437ee09d7d53b35ad72a9849e649716a"
+        }
+      ],
+      "expect": "{\"code\":\"finality_chain_broken\",\"fields\":{\"check\":\"own_hash\",\"seq\":\"1\"}}"
+    },
+    {
+      "name": "chain_unsupported",
+      "note": "a chain id that is not a row of the table has no S7 statement at all",
+      "leg": {
+        "chain": 1,
+        "blockNumber": 100,
+        "blockHash": "4444444444444444444444444444444444444444444444444444444444444444"
+      },
+      "carried": {
+        "chain": 1,
+        "blockNumber": 100,
+        "blockHash": "4444444444444444444444444444444444444444444444444444444444444444"
+      },
+      "addenda": null,
+      "expect": "{\"code\":\"finality_chain_unsupported\",\"fields\":{\"chain\":\"1\"}}"
+    }
+  ]
+}

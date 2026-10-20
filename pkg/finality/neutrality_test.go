@@ -142,7 +142,7 @@ func TestMainWiresTheUpgraderAloneAndGivesItNoConsensusObject(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	allowed := map[string]bool{"Enabled": true, "Launch": true, "Default": true, "NewPins": true, "UpgraderConfig": true}
+	allowed := map[string]bool{"Enabled": true, "Launch": true, "Default": true, "EmbeddedPins": true, "UpgraderConfig": true}
 	var launches []*ast.CallExpr
 	var repoCtors int
 	for _, decl := range f.Decls {
@@ -191,7 +191,7 @@ func TestMainWiresTheUpgraderAloneAndGivesItNoConsensusObject(t *testing.T) {
 	for i, arg := range launches[0].Args {
 		switch a := arg.(type) {
 		case *ast.Ident:
-			if a.Name != "finalityOn" && a.Name != "finalityRepo" {
+			if a.Name != "finalityOn" && a.Name != "finalityRepo" && a.Name != "finalityPins" {
 				t.Errorf("main.go: finality.Launch argument %d is %q; only the switch and the addendum repository may be passed", i, a.Name)
 			}
 		case *ast.CallExpr, *ast.SelectorExpr, *ast.CompositeLit:

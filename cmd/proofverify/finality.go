@@ -5,7 +5,6 @@ package main
 import (
 	"context"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -30,7 +29,9 @@ import (
 //	                proof carries no settlement evidence to attach finality to
 //	1  FAILED       the chain or some evidence is present and does not check out
 
-// reportFinality verifies a stored proof's finality: its bundle's L6 settlement, and the addenda stored for it.
+// reportFinality verifies a stored proof's finality (S7): its bundle's L6 settlement (level 1, derived, never stored), the
+// addenda stored for the leg, and each stored level's evidence, judged by the registered Kinds against the pins. D0 is
+// recomputed from the verified Settlement's block; the stored addenda never supply it.
 func reportFinality(ctx context.Context, w io.Writer, db *sql.DB, id uuid.UUID, reg *finality.Registry, pins *finality.Pins) int {
 	repo := database.NewFinalityAddendaRepository(database.NewClientFromDB(db))
 	ref, err := repo.LegRef(ctx, id.String())
@@ -52,37 +53,14 @@ func reportFinality(ctx context.Context, w io.Writer, db *sql.DB, id uuid.UUID, 
 		fmt.Fprintf(w, "FAILED (finality)  %s\n  reading the stored addenda: %v\n", id, err)
 		return exitFailed
 	}
-	if len(chain) == 0 {
-		// Nothing has been appended yet. The bundle's own L6 evidence is level 1, verified directly.
-		prover := finality.IncludedProver{ChainID: ref.Chain}
-		ev, _, err := prover.Build(ctx, settlement)
-		var rep finality.LegReport
-		if err == nil {
-			a, aerr := finality.NewAddendum(ref.Digest, id.String(), nil, ref.Chain, finality.LevelIncluded, ev)
-			if aerr != nil {
-				fmt.Fprintf(w, "FAILED (finality)  %s\n  %v\n", id, aerr)
-				return exitFailed
-			}
-			rep = reg.VerifyLeg(ref.Digest, []finality.Addendum{a}, pins)
-		} else {
-			fmt.Fprintf(w, "FAILED (finality)  %s\n  the bundle's L6 evidence does not verify as the included level: %v\n", id, err)
-			return exitFailed
-		}
-		fmt.Fprintf(w, "  S7  no finality addendum is stored for this proof yet; its bundle's own L6 evidence is judged as level 1\n")
-		return printLegReport(w, rep, id.String())
-	}
-	// A stored chain must be about the settlement the proof's own bundle proves.
-	rep := reg.VerifyLeg(ref.Digest, chain, pins)
-	if rep.ChainErr == nil && rep.Subject != settlement.Subject {
-		fmt.Fprintf(w, "FAILED (finality)  %s\n  the stored addenda are about block %d tx %x, the proof's bundle proves block %d tx %x\n",
-			id, rep.Subject.BlockNumber, rep.Subject.TxHash[:6], settlement.Subject.BlockNumber, settlement.Subject.TxHash[:6])
-		return exitFailed
-	}
-	return printLegReport(w, rep, id.String())
+	// The stored chain belongs to the leg this proof's bundle proves: its carried block is that block.
+	rep := reg.Verify(ref.Chain, settlement.Included, settlement.Block(), chain, pins)
+	return printReport(w, rep, id.String())
 }
 
-// reportFinalityFile verifies the `finality` section of a portable proof v2 document file (or a bare JSON array of
-// addenda) with no database: each leg's chain against the original digest its addenda carry, and every addendum's evidence.
+// reportFinalityFile reads the `finality` member (certen-finality-addenda/1) of a portable proof v2 document file with no
+// database. A verifier needs the leg's Settlement to recompute D0 (V2_SPEC_S7 2.6), and the portable document does not carry
+// one: until the Settlement source is wired (RB11-B2B) no level is judged and none is claimed, and the report says so by name.
 func reportFinalityFile(w io.Writer, path string, reg *finality.Registry, pins *finality.Pins) int {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -90,90 +68,73 @@ func reportFinalityFile(w io.Writer, path string, reg *finality.Registry, pins *
 		return exitFailed
 	}
 	var doc struct {
-		Finality []json.RawMessage `json:"finality"`
+		Finality json.RawMessage `json:"finality"`
 	}
-	section := []json.RawMessage(nil)
-	if err := json.Unmarshal(raw, &doc); err == nil {
-		section = doc.Finality
-	} else if err := json.Unmarshal(raw, &section); err != nil {
-		fmt.Fprintf(w, "FAILED (finality)  %s\n  neither a portable document nor a list of addenda: %v\n", path, err)
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		fmt.Fprintf(w, "FAILED (finality)  %s\n  not a portable document: %v\n", path, err)
 		return exitFailed
 	}
-	if len(section) == 0 {
+	if len(doc.Finality) == 0 || string(doc.Finality) == "null" {
 		fmt.Fprintf(w, "SUMMARY-ONLY (finality)  %s\n  the document carries no finality section: no level beyond the proof itself is evidenced.\n", path)
 		return exitSummaryOnly
 	}
-	reports, err := reg.VerifyDocumentSection(section, pins)
+	section, err := finality.ParseSection(doc.Finality)
 	if err != nil {
 		fmt.Fprintf(w, "FAILED (finality)  %s\n  %v\n", path, err)
 		return exitFailed
 	}
-	code := exitVerified
-	for _, rep := range reports {
-		code = worseExit(code, printLegReport(w, rep, path))
-	}
-	return code
+	st := finality.NewState(finality.CodeIncludedUnavailable, "chain", section.Leg.Chain, "reason",
+		"this verifier holds no Settlement for the leg, so D0 cannot be recomputed and no level is judged")
+	fmt.Fprintf(w, "SUMMARY-ONLY (finality)  %s\n  %v\n  S7  carried leg: chain %d block %d %s; %d addenda are not judged\n", path, st, section.Leg.Chain,
+		section.Leg.BlockNumber, section.Leg.BlockHash, len(section.Addenda))
+	return exitSummaryOnly
 }
 
-// printLegReport writes one leg's per-statement S7 verdicts and returns the leg's exit code.
-func printLegReport(w io.Writer, rep finality.LegReport, subject string) int {
-	if rep.ChainErr != nil {
-		fmt.Fprintf(w, "FAILED (finality)  %s  leg %s\n  the addendum chain does not verify: %v\n", subject, rep.ProofID, rep.ChainErr)
-		fmt.Fprintf(w, "  S7  level reached: none (a broken chain evidences nothing)\n")
+// printReport writes one leg's per-statement S7 verdicts and returns the leg's exit code.
+func printReport(w io.Writer, rep finality.Report, subject string) int {
+	if rep.Unsupported != nil {
+		fmt.Fprintf(w, "SUMMARY-ONLY (finality)  %s\n  %v\n", subject, rep.Unsupported)
+		return exitSummaryOnly
+	}
+	if st := rep.Levels[finality.LevelIncluded]; st.Status == finality.StatusRefused {
+		fmt.Fprintf(w, "FAILED (finality)  %s\n  the leg's Settlement does not verify as the included level: %v\n", subject, st.State)
 		return exitFailed
 	}
-	fmt.Fprintf(w, "  S7  chain %d  block %d  tx %s…  original digest %s…\n", rep.Chain, rep.Subject.BlockNumber,
-		hex.EncodeToString(rep.Subject.TxHash[:6]), hex.EncodeToString(rep.Digest[:6]))
-	byLevel := map[finality.Level]finality.AddendumVerdict{}
-	for _, a := range rep.Addenda {
-		byLevel[a.Level] = a
-		status := "verified"
-		switch {
-		case !a.Verified && a.Unjudged:
-			status = "UNJUDGED"
-		case !a.Verified:
-			status = "FAILED"
-		}
-		line := fmt.Sprintf("  S7    addendum %d  %-9s  %-9s  %s", a.Seq, a.Level, status, a.Kind)
-		if a.Err != nil {
-			line += "  " + a.Err.Error()
+	fmt.Fprintf(w, "  S7  chain %d  block %d  %x…  pins %s (%s)\n", rep.Block.Chain, rep.Block.Number, rep.Block.Hash[:6], rep.PinsSHA256, rep.PinsSource)
+	for _, l := range finality.Levels {
+		st := rep.Levels[l]
+		line := fmt.Sprintf("  S7    %-9s  %s", l, st.Status)
+		if st.State != nil {
+			line += "  " + st.State.Error()
 		}
 		fmt.Fprintln(w, line)
 	}
-	for _, l := range finality.Levels {
-		if _, done := byLevel[l]; done {
-			continue
-		}
-		var na *finality.NotApplicable
-		for _, n := range rep.NotApplicable {
-			if n.Level == l {
-				na = n
+	fmt.Fprintf(w, "  S7  level reached: %s\n", rep.Headline)
+	if rep.FinalizedBlock != nil {
+		fmt.Fprintf(w, "  S7  finalized_block: number %d hash %x stateRoot %x\n", rep.FinalizedBlock.Number, rep.FinalizedBlock.Hash, rep.FinalizedBlock.StateRoot)
+	}
+	if rep.Broken != nil {
+		fmt.Fprintf(w, "FAILED (finality)  %s\n  the addendum chain does not verify: %v\n", subject, rep.Broken)
+		return exitFailed
+	}
+	code := exitVerified
+	for _, l := range []finality.Level{finality.LevelL1Posted, finality.LevelFinalized} {
+		switch st := rep.Levels[l]; st.Status {
+		case finality.StatusRefused:
+			if st.State != nil && (st.State.Code == finality.CodeEvidenceUnrecognised || st.State.Code == finality.CodePinUnknown) {
+				code = worseExit(code, exitSummaryOnly)
+			} else {
+				code = exitFailed
 			}
 		}
-		switch {
-		case na != nil:
-			fmt.Fprintf(w, "  S7    %-9s  %s\n", l, na.Error())
-		case l > rep.Top:
-			// above the chain's top: not a level of this chain
-		case l <= rep.Reached:
-			// reached through a higher addendum
-		default:
-			fmt.Fprintf(w, "  S7    %-9s  not evidenced yet\n", l)
-		}
 	}
-	fmt.Fprintf(w, "  S7  level reached: %s (of %s)\n", rep.Reached, rep.Top)
-	if p := rep.PendingState(); p != nil {
-		fmt.Fprintf(w, "  S7  %s\n", p.Error())
+	switch code {
+	case exitFailed:
+		fmt.Fprintf(w, "FAILED (finality)  %s\n  an addendum's evidence is present and does not check out\n", subject)
+	case exitSummaryOnly:
+		fmt.Fprintf(w, "SUMMARY-ONLY (finality)  %s\n  an addendum's kind or pins are not known to this verifier; nothing is known to be wrong, and the levels above\n  %s are not judged here.\n", subject, rep.Headline)
+	default:
+		fmt.Fprintf(w, "VERIFIED (finality)  %s  level %s\n", subject, rep.Headline)
 	}
-	switch rep.Verdict {
-	case finality.VerdictFailed:
-		fmt.Fprintf(w, "FAILED (finality)  %s  leg %s\n  an addendum's evidence is present and does not check out\n", subject, rep.ProofID)
-		return exitFailed
-	case finality.VerdictSummaryOnly:
-		fmt.Fprintf(w, "SUMMARY-ONLY (finality)  %s  leg %s\n  an addendum's kind or pins are not known to this verifier; nothing is known to be wrong, and the levels above\n", subject, rep.ProofID)
-		fmt.Fprintf(w, "  %s are not judged here.\n", rep.Reached)
-		return exitSummaryOnly
-	}
-	fmt.Fprintf(w, "VERIFIED (finality)  %s  leg %s  level %s\n", subject, rep.ProofID, rep.Reached)
-	return exitVerified
+	return code
 }

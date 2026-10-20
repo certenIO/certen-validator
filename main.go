@@ -2307,7 +2307,7 @@ func startValidator(
 			"contradicted layer 5, schema-behind-binary)")
 
 		// Staged finality (RB11, PROOF_V2 S7, certen:finality:v1). For every settled leg this worker appends the strongest
-		// finality level now buildable (included, l1_posted, finalized) to the leg's append-only, hash-linked addendum chain,
+		// finality level now buildable (l1_posted, finalized; included is derived and never stored) to the leg's append-only, hash-linked addendum chain,
 		// beside the stored proof, and re-schedules until the chain's top level. It runs on its own goroutine under its own
 		// deadlines and shares nothing with settlement, attestation or write-back, none of which waits on it; nothing it writes
 		// is an input of any attestation message, outcome root or govRoot. CERTEN_FINALITY_UPGRADER_ENABLED (default on) turns
@@ -2317,7 +2317,12 @@ func startValidator(
 			return nil, nil, fmt.Errorf("finality upgrader: %w", ferr)
 		}
 		finalityRepo := database.NewFinalityAddendaRepository(dbClient)
-		if _, ferr := finality.Launch(context.Background(), finalityOn, finalityRepo, finalityRepo, finality.Default, finality.NewPins(),
+		// The finality pins are embedded and hash-checked: a verifier whose embedded bytes do not hash to PinsSHA256 refuses to start.
+		finalityPins, ferr := finality.EmbeddedPins()
+		if ferr != nil {
+			return nil, nil, fmt.Errorf("finality pins: %w", ferr)
+		}
+		if _, ferr := finality.Launch(context.Background(), finalityOn, finalityRepo, finalityRepo, finality.Default, finalityPins,
 			finality.UpgraderConfig{Logf: log.Printf}); ferr != nil {
 			return nil, nil, fmt.Errorf("finality upgrader: %w", ferr)
 		}

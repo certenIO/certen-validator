@@ -102,6 +102,12 @@ func main() {
 	incEvidencePath = *incEvidence
 	// The Groth16 verifier's debug lines are not part of a verdict.
 	gnarklogger.Disable()
+	// The finality pins are embedded and hash-checked (finality_pins_corrupt refuses to start).
+	pins, pinsErr := finality.EmbeddedPins()
+	if pinsErr != nil {
+		fmt.Fprintln(os.Stderr, pinsErr)
+		os.Exit(exitFailed)
+	}
 
 	if *finalityFile != "" {
 		if *proofID != "" || *outcome || *outcomeFile != "" || *l5 || *govern || *finalityOn {
@@ -109,7 +115,7 @@ func main() {
 			os.Exit(exitUsage)
 		}
 		cutNetwork()
-		os.Exit(reportFinalityFile(os.Stdout, *finalityFile, finality.Default, finality.NewPins()))
+		os.Exit(reportFinalityFile(os.Stdout, *finalityFile, finality.Default, pins))
 	}
 	if *outcomeFile != "" {
 		if *proofID != "" || *outcome || *l5 || *govern {
@@ -253,7 +259,7 @@ func main() {
 			code = worseExit(code, reportOutcome(ctx, os.Stdout, store, id, *online))
 		}
 		if *finalityOn {
-			code = worseExit(code, reportFinality(ctx, os.Stdout, db, id, finality.Default, finality.NewPins()))
+			code = worseExit(code, reportFinality(ctx, os.Stdout, db, id, finality.Default, pins))
 		}
 		os.Exit(code)
 
@@ -272,7 +278,7 @@ func main() {
 		}
 		if *finalityOn {
 			// Finality rests on the settlement's own evidence, not on L1-L4's, so it is checked all the same.
-			code = worseExit(code, reportFinality(ctx, os.Stdout, db, id, finality.Default, finality.NewPins()))
+			code = worseExit(code, reportFinality(ctx, os.Stdout, db, id, finality.Default, pins))
 		}
 		os.Exit(code)
 

@@ -7,18 +7,18 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
-	"sort"
 	"sync"
 	"time"
 
 	"github.com/certen/independant-validator/pkg/envvar"
+	"github.com/certen/independant-validator/pkg/ethproof"
 	"github.com/certen/independant-validator/pkg/metrics"
 )
 
-// LegRef names a settled leg cheaply: its stored proof, that proof's original digest, and the chain it settled on.
+// LegRef names a settled leg cheaply: its stored proof (one leg per proof_artifacts row) and the chain it settled on. The leg's
+// binding D0 is computed from its Settlement block, not carried here.
 type LegRef struct {
 	ProofID string
-	Digest  [32]byte // proof_artifacts.artifact_hash: what every addendum of the leg commits to
 	Chain   uint64
 }
 
@@ -308,15 +308,27 @@ func (u *Upgrader) publishGauges() {
 
 type legResult struct {
 	appended int
-	pending  *Pending
+	pending  *PendingState
 	failed   bool
 	broken   bool
 	conflict bool
 	unusable bool
 }
 
-// upgradeLeg appends every level above the chain's current top that a prover can build and the offline verifier confirms,
-// in ascending order, and schedules the leg's next attempt.
+// storedOffered are the stored levels (l1_posted, finalized) the chain's profile offers, ascending.
+func storedOffered(p ChainProfile) []Level {
+	var out []Level
+	for _, l := range p.Levels {
+		if l.Stored() {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// upgradeLeg appends every stored level the leg does not yet hold that a prover can build and the offline Kind confirms
+// (any order, at most one addendum per level, V2_SPEC_S7 R1) and schedules the leg's next attempt. D0 is the LegBinding of
+// the leg's Settlement block, recomputed on every pass; a stored chain that does not verify against it is never extended.
 func (u *Upgrader) upgradeLeg(ctx context.Context, ref LegRef) (res legResult) {
 	logf := u.cfg.Logf
 	defer func() {
@@ -335,6 +347,27 @@ func (u *Upgrader) upgradeLeg(ctx context.Context, ref LegRef) (res legResult) {
 		u.schedule(ref.ProofID, u.cfg.BrokenRetry)
 		return res
 	}
+	proofID, err := ParseProofID(ref.ProofID)
+	if err != nil {
+		res.failed = true
+		u.cfg.Recorder.BuildFailed(ref.Chain, codeOf(err))
+		logf("[FINALITY] leg %s: %v", ref.ProofID, err)
+		u.schedule(ref.ProofID, u.cfg.BrokenRetry)
+		return res
+	}
+
+	settlement, err := u.src.LegSettlement(ctx, ref)
+	if err != nil {
+		res.unusable = true
+		u.cfg.Recorder.BuildFailed(ref.Chain, codeOf(err))
+		logf("[FINALITY] leg %s chain %d: its L6 evidence cannot be used: %v", ref.ProofID, ref.Chain, err)
+		u.record(ref.ProofID, ref.Chain, LevelNone, false)
+		u.schedule(ref.ProofID, u.cfg.BrokenRetry)
+		return res
+	}
+	block := settlement.Block()
+	block.Chain = ref.Chain
+	d0 := LegBindingOf(block)
 
 	chain, err := u.store.Chain(ctx, ref.ProofID)
 	if err != nil {
@@ -344,134 +377,115 @@ func (u *Upgrader) upgradeLeg(ctx context.Context, ref LegRef) (res legResult) {
 		u.schedule(ref.ProofID, u.cfg.FailureRetry)
 		return res
 	}
-	if err := VerifyChain(ref.Digest, chain); err != nil {
+	if err := VerifyChain(d0, chain); err != nil {
 		return u.brokenChain(ref, err)
 	}
-	current := Top(chain)
 	if len(chain) > 0 && chain[0].Chain != ref.Chain {
-		return u.brokenChain(ref, NewState(CodeChainBroken, "check", "chain", "seq", 1, "stored", chain[0].Chain, "settled_on", ref.Chain))
+		return u.brokenChain(ref, ChainBroken(1, CheckKind, "stored", chain[0].Chain, "settled_on", ref.Chain))
 	}
-	if current >= profile.Top() {
+	have := LevelsOf(chain)
+	current := Top(chain)
+	var targets []Level
+	for _, l := range storedOffered(profile) {
+		if !have.Has(l) {
+			targets = append(targets, l)
+		}
+	}
+	if len(targets) == 0 {
 		u.record(ref.ProofID, ref.Chain, current, true)
 		return res
 	}
 
-	settlement, err := u.src.LegSettlement(ctx, ref)
-	if err != nil {
-		res.unusable = true
-		u.cfg.Recorder.BuildFailed(ref.Chain, codeOf(err))
-		logf("[FINALITY] leg %s chain %d: its L6 evidence cannot be used: %v", ref.ProofID, ref.Chain, err)
-		u.record(ref.ProofID, ref.Chain, current, false)
-		u.schedule(ref.ProofID, u.cfg.BrokenRetry)
-		return res
-	}
-	if len(chain) > 0 {
-		if subject, err := ChainSubject(chain); err != nil || subject != settlement.Subject {
-			return u.brokenChain(ref, NewState(CodeChainBroken, "check", "subject", "seq", 1, "reason", "the stored chain is about another settlement than the leg's"))
-		}
-	}
-
-	// Build with every prover that can still raise the leg; collect each candidate that the offline verifier confirms.
-	type candidate struct {
-		ev    Evidence
-		level Level
-	}
-	byLevel := map[Level]candidate{}
-	var pending *Pending
+	// For each missing level, ask every prover that can still serve it; keep the earliest pending.
+	var pendings []*PendingState
 	failure := ""
-	for _, p := range u.reg.Provers(ref.Chain) {
-		if c, ok := p.(Ceilinged); ok && c.Ceiling() <= current {
-			continue
-		}
-		ev, level, err := u.build(ctx, p, settlement)
-		if ctx.Err() != nil {
-			return res // cancelled: leave the schedule alone, nothing was judged
-		}
-		if err != nil {
-			var pd *Pending
-			var na *NotApplicable
-			switch {
-			case errors.As(err, &pd):
-				if pending == nil || pd.NextLevel > pending.NextLevel {
-					pending = pd
+	for _, target := range targets {
+		for _, p := range u.reg.Provers(ref.Chain) {
+			if c, ok := p.(Ceilinged); ok && c.Ceiling() < target {
+				continue
+			}
+			add, pd, err := u.build(ctx, p, settlement.Included, have, target)
+			if ctx.Err() != nil {
+				return res // cancelled: leave the schedule alone, nothing was judged
+			}
+			if err != nil {
+				if st, ok := AsNamed(err); ok && st.Code == CodeNotApplicable {
+					continue // the chain does not have that level: nothing to build, nothing wrong
 				}
-			case errors.As(err, &na):
-				continue // the chain does not have that level: nothing to build, nothing wrong
-			default:
 				failure = codeOf(err)
 				u.cfg.Recorder.BuildFailed(ref.Chain, failure)
-				logf("[FINALITY] leg %s chain %d: build refused at level %s: %v", ref.ProofID, ref.Chain, current, err)
+				logf("[FINALITY] leg %s chain %d: build of %s refused: %v", ref.ProofID, ref.Chain, target, err)
 				res.failed = true
 				continue // a refusal claims no level
 			}
-		}
-		if !level.Valid() || level <= current {
-			continue
-		}
-		// never append what the offline verifier does not confirm, and append the level IT reports
-		proven, verr := u.reg.Verify(ref.Chain, settlement, ev, u.pins)
-		if verr != nil {
-			res.failed = true
-			u.cfg.Recorder.BuildFailed(ref.Chain, codeOf(verr))
-			logf("[FINALITY] leg %s chain %d: built %s evidence that does not verify offline: %v", ref.ProofID, ref.Chain, level, verr)
-			continue
-		}
-		if proven <= current {
-			continue
-		}
-		if old, dup := byLevel[proven]; !dup || old.level < proven {
-			byLevel[proven] = candidate{ev, proven}
-		}
-	}
-
-	levels := make([]Level, 0, len(byLevel))
-	for l := range byLevel {
-		levels = append(levels, l)
-	}
-	sort.Slice(levels, func(i, j int) bool { return levels[i] < levels[j] })
-	for _, l := range levels {
-		var prev *Addendum
-		if len(chain) > 0 {
-			prev = &chain[len(chain)-1]
-		}
-		a, err := NewAddendum(ref.Digest, ref.ProofID, prev, ref.Chain, l, byLevel[l].ev)
-		if err != nil {
-			res.failed = true
-			u.cfg.Recorder.BuildFailed(ref.Chain, codeOf(err))
-			logf("[FINALITY] leg %s chain %d: cannot form the %s addendum: %v", ref.ProofID, ref.Chain, l, err)
-			break
-		}
-		if err := u.store.Append(ctx, a); err != nil {
-			if n, ok := AsNamed(err); ok && n.Code() == CodeAppendConflict {
-				res.conflict = true // another validator appended first; the next pass reads its chain
-				break
+			if pd != nil {
+				pendings = append(pendings, pd)
 			}
-			res.failed = true
-			u.cfg.Recorder.BuildFailed(ref.Chain, "store_write")
-			logf("[FINALITY] leg %s chain %d: appending the %s addendum: %v", ref.ProofID, ref.Chain, l, err)
-			break
+			if add == nil || add.Level != target {
+				continue
+			}
+			// never append what the offline Kind does not confirm
+			if _, verr := u.reg.JudgeAddendum(block, *add, u.pins); verr != nil {
+				res.failed = true
+				u.cfg.Recorder.BuildFailed(ref.Chain, codeOf(verr))
+				logf("[FINALITY] leg %s chain %d: built %s evidence that does not verify offline: %v", ref.ProofID, ref.Chain, target, verr)
+				continue
+			}
+			a, err := NewAddendum(d0, proofID, chain, ref.Chain, add.Level, add.Kind, add.Evidence)
+			if err != nil {
+				res.failed = true
+				u.cfg.Recorder.BuildFailed(ref.Chain, codeOf(err))
+				logf("[FINALITY] leg %s chain %d: cannot form the %s addendum: %v", ref.ProofID, ref.Chain, target, err)
+				continue
+			}
+			if err := u.store.Append(ctx, a); err != nil {
+				if n, ok := AsNamed(err); ok && n.Code == CodeAppendConflict {
+					res.conflict = true // another validator appended first; the next pass reads its chain
+					break
+				}
+				res.failed = true
+				u.cfg.Recorder.BuildFailed(ref.Chain, "store_write")
+				logf("[FINALITY] leg %s chain %d: appending the %s addendum: %v", ref.ProofID, ref.Chain, target, err)
+				continue
+			}
+			chain = append(chain, a)
+			have = have.With(a.Level)
+			if a.Level > current {
+				current = a.Level
+			}
+			res.appended++
+			u.cfg.Recorder.Appended(ref.Chain, a.Level)
+			logf("[FINALITY] leg %s chain %d reached %s (addendum %d, kind %s)", ref.ProofID, ref.Chain, a.Level, a.Seq, a.Kind)
+			break // one addendum per level
 		}
-		chain = append(chain, a)
-		current = l
-		res.appended++
-		u.cfg.Recorder.Appended(ref.Chain, l)
-		logf("[FINALITY] leg %s chain %d reached %s (addendum %d, kind %s)", ref.ProofID, ref.Chain, l, a.Seq, a.Kind)
 	}
 
-	done := current >= profile.Top()
+	done := true
+	for _, l := range storedOffered(profile) {
+		if !have.Has(l) {
+			done = false
+		}
+	}
 	u.record(ref.ProofID, ref.Chain, current, done)
 	if done {
 		return res
 	}
 	switch {
-	case pending != nil:
-		res.pending = pending
+	case len(pendings) > 0:
+		res.pending = pendings[0]
 		u.cfg.Recorder.Pending(ref.Chain, current)
-		wait := u.cfg.PendingRetry
-		if !pending.ETA.IsZero() {
-			wait = pending.ETA.Sub(u.cfg.Now())
-			if wait < time.Second {
-				wait = time.Second
+		// not before the earliest stated ETA; a pending without an ETA is retried at PendingRetry
+		wait := time.Duration(-1)
+		for _, pd := range pendings {
+			w := u.cfg.PendingRetry
+			if !pd.ETA.IsZero() {
+				w = pd.ETA.Sub(u.cfg.Now())
+				if w < time.Second {
+					w = time.Second
+				}
+			}
+			if wait < 0 || w < wait {
+				wait = w
 			}
 		}
 		u.schedule(ref.ProofID, wait)
@@ -492,13 +506,13 @@ func (u *Upgrader) brokenChain(ref LegRef, err error) legResult {
 
 // build runs one prover under BuildTimeout and recovers its panic. A prover that ignores its context is abandoned at the
 // deadline: the leg is reported as a named timeout and the worker moves on, so no prover can stall the pass.
-func (u *Upgrader) build(ctx context.Context, p Prover, s Settlement) (Evidence, Level, error) {
+func (u *Upgrader) build(ctx context.Context, p Prover, s *ethproof.Settlement, have LevelSet, target Level) (*Addendum, *PendingState, error) {
 	bctx, cancel := context.WithTimeout(ctx, u.cfg.BuildTimeout)
 	defer cancel()
 	type out struct {
-		ev    Evidence
-		level Level
-		err   error
+		add *Addendum
+		pd  *PendingState
+		err error
 	}
 	ch := make(chan out, 1)
 	go func() {
@@ -507,20 +521,20 @@ func (u *Upgrader) build(ctx context.Context, p Prover, s Settlement) (Evidence,
 				ch <- out{err: NewState(CodePanic, "chain", p.Chain(), "panic", fmt.Sprint(r))}
 			}
 		}()
-		ev, level, err := p.Build(bctx, s)
-		ch <- out{ev, level, err}
+		add, pd, err := p.Build(bctx, s, have, target)
+		ch <- out{add, pd, err}
 	}()
 	select {
 	case o := <-ch:
-		return o.ev, o.level, o.err
+		return o.add, o.pd, o.err
 	case <-bctx.Done():
-		return Evidence{}, LevelNone, NewState(CodeBuildTimeout, "chain", p.Chain(), "after", u.cfg.BuildTimeout, "cause", bctx.Err().Error())
+		return nil, nil, NewState(CodeBuildTimeout, "chain", p.Chain(), "after", u.cfg.BuildTimeout, "cause", bctx.Err().Error())
 	}
 }
 
 func codeOf(err error) string {
 	if n, ok := AsNamed(err); ok {
-		return n.Code()
+		return n.Code
 	}
 	return "unnamed_error"
 }
