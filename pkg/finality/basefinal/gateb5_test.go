@@ -122,6 +122,12 @@ func TestParsePinsReadsTheBaseSectionAndNamesTheKeyOfEveryBadValue(t *testing.T)
 		{"game_layout", func(m map[string]any) { lay(m)["args_base_len"] = 0 }},
 		{"game_layout", func(m map[string]any) { lay(m)["args_per_root"] = 0 }},
 		{"game_layout", func(m map[string]any) { lay(m)["args_per_root"] = -1 }},
+		// the judge and the builder index the fixed args up to byte 136 (the parent address at [116,136)) and read a 32-byte root per
+		// intermediate root: a layout that cannot hold them is refused when the pins are read, not when a game is judged
+		{"game_layout", func(m map[string]any) { lay(m)["args_base_len"] = 135 }},
+		{"game_layout", func(m map[string]any) { lay(m)["args_base_len"] = 1 }},
+		{"game_layout", func(m map[string]any) { lay(m)["args_per_root"] = 31 }},
+		{"game_layout", func(m map[string]any) { lay(m)["args_per_root"] = 1 }},
 	}
 	for i, c := range cases {
 		m := baseSection(t)

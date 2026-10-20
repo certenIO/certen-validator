@@ -442,6 +442,8 @@ func judge(in judgeInput) (map[string]any, error) {
 		return nil, err
 	}
 	g.CreatedAt, g.ResolvedAt = u64Of(w0, 0), u64Of(w0, 8)
+	// Initialized and (below) RespectedGameType are decoded for the record and gate nothing: isGameClaimValid is proper, respected
+	// (the game's own wasRespectedGameTypeWhenCreated flag, not the current respected type), finalized and DEFENDER_WINS (R11 Q5).
 	g.Status, g.Initialized, g.Respected = w0[15], w0[14], w0[13]
 	w2, err := slot(be32(slotGameStartL2Seq))
 	if err != nil {
