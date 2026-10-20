@@ -27,6 +27,12 @@ type synthAcct struct {
 	CodeHash [32]byte
 	Slots    map[[32]byte][32]byte
 	Prove    [][32]byte // extra slots to prove (absent ones included)
+	// Raw holds slot values stored exactly as given (the RLP of the leaf, not of the trimmed word): malformed values for the tests.
+	Raw map[[32]byte][]byte
+	// RawAcct, when set, is the account leaf stored as given instead of the encoded StateAccount.
+	RawAcct []byte
+	// Absent leaves the account out of the state trie (its absence is still proven).
+	Absent bool
 }
 
 // SynthWorld is a set of accounts.
@@ -56,6 +62,22 @@ func (w *SynthWorld) Set(a [20]byte, slot, val [32]byte) {
 	x.Slots[slot] = val
 }
 
+// SetRaw stores a slot value as the given leaf bytes (a malformed value for the tests); it replaces any value set before.
+func (w *SynthWorld) SetRaw(a [20]byte, slot [32]byte, leaf []byte) {
+	x := w.acct(a)
+	delete(x.Slots, slot)
+	if x.Raw == nil {
+		x.Raw = map[[32]byte][]byte{}
+	}
+	x.Raw[slot] = leaf
+}
+
+// SetRawAccount stores the account leaf as the given bytes (a malformed account for the tests).
+func (w *SynthWorld) SetRawAccount(a [20]byte, leaf []byte) { w.acct(a).RawAcct = leaf }
+
+// SetAbsent removes the account from the state trie; the proof of its absence is still given.
+func (w *SynthWorld) SetAbsent(a [20]byte) { w.acct(a).Absent = true }
+
 // SetCodeHash sets the account's code hash.
 func (w *SynthWorld) SetCodeHash(a [20]byte, h [32]byte) { w.acct(a).CodeHash = h }
 
@@ -84,12 +106,23 @@ func (w *SynthWorld) Build() (root [32]byte, nodes [][]byte, err error) {
 				return root, nil, err
 			}
 		}
+		for s, leaf := range a.Raw {
+			if err := tr.Update(crypto.Keccak256(s[:]), leaf); err != nil {
+				return root, nil, err
+			}
+		}
 		stor[addr] = built{tr, a}
+		if a.Absent {
+			continue
+		}
 		acc := types.NewEmptyStateAccount()
 		acc.Nonce, acc.Root, acc.CodeHash = 1, tr.Hash(), a.CodeHash[:]
 		enc, err := rlp.EncodeToBytes(acc)
 		if err != nil {
 			return root, nil, err
+		}
+		if a.RawAcct != nil {
+			enc = a.RawAcct
 		}
 		if err := st.Update(crypto.Keccak256(addr[:]), enc); err != nil {
 			return root, nil, err
@@ -101,8 +134,14 @@ func (w *SynthWorld) Build() (root [32]byte, nodes [][]byte, err error) {
 		if err := st.Prove(crypto.Keccak256(addr[:]), &set); err != nil {
 			return root, nil, err
 		}
+		if b.a.Absent || b.a.RawAcct != nil {
+			continue // nothing is proven under an account that is absent or malformed
+		}
 		slots := map[[32]byte]bool{}
 		for s := range b.a.Slots {
+			slots[s] = true
+		}
+		for s := range b.a.Raw {
 			slots[s] = true
 		}
 		for _, s := range b.a.Prove {

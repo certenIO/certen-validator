@@ -29,6 +29,7 @@ type liveWorld struct {
 	headers  map[[32]byte]HeaderInfo
 	l2       map[uint64]HeaderInfo
 	status   uint8
+	liveIdx  uint64 // the index of the live game in a scripted factory
 	finalNum uint64 // the finalized execution number the LC source reports (the spine top by default)
 }
 

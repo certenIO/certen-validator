@@ -109,6 +109,13 @@ type rawBase struct {
 	GameLayout   map[string]rawLayout       `json:"game_layout"`
 }
 
+// The game args the judge and the builder index: the fixed part up to the parent address at [116,136), and one 32-byte root per
+// intermediate root. A layout that cannot hold them is refused when the pins are read.
+const (
+	minArgsBaseLen = 136
+	minArgsPerRoot = 32
+)
+
 func unhex(s string, n int) ([]byte, bool) {
 	if !strings.HasPrefix(s, "0x") || s != strings.ToLower(s) {
 		return nil, false
@@ -189,7 +196,7 @@ func ParsePins(p *finality.Pins) (*Pins, error) {
 		head, ok1 := hexBytes(l.CloneHead)
 		mid, ok2 := hexBytes(l.CloneMid)
 		tail, ok3 := hexBytes(l.CloneTail)
-		if !ok1 || !ok2 || !ok3 || l.ArgsBaseLen <= 0 || l.ArgsPerRoot <= 0 {
+		if !ok1 || !ok2 || !ok3 || l.ArgsBaseLen < minArgsBaseLen || l.ArgsPerRoot < minArgsPerRoot {
 			return nil, bad("game_layout")
 		}
 		out.Layouts[name] = GameLayout{CloneHead: head, CloneMid: mid, CloneTail: tail, ArgsBaseLen: l.ArgsBaseLen, ArgsPerRoot: l.ArgsPerRoot}
