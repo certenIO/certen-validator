@@ -10,6 +10,7 @@ package basefinal
 import (
 	"encoding/hex"
 	"encoding/json"
+	"math"
 	"sort"
 	"strings"
 
@@ -230,7 +231,14 @@ func (r ImplRow) Complete(layouts map[string]GameLayout) bool {
 		return false
 	}
 	l, ok := layouts[r.CWIA]
-	if !ok || r.ArgsLen != l.ArgsBaseLen+l.ArgsPerRoot*r.NIntermediate {
+	if !ok || l.ArgsBaseLen < 0 || l.ArgsPerRoot < 0 {
+		return false
+	}
+	// base + per_root * n is compared without wrapping: a count whose product overflows int is no row of this layout
+	if l.ArgsPerRoot > 0 && r.NIntermediate > (math.MaxInt-l.ArgsBaseLen)/l.ArgsPerRoot {
+		return false
+	}
+	if r.ArgsLen != l.ArgsBaseLen+l.ArgsPerRoot*r.NIntermediate {
 		return false
 	}
 	for _, p := range r.IntervalPairs {
