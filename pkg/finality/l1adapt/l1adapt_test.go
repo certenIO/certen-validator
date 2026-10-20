@@ -73,7 +73,7 @@ func TestPinsOfWithoutTheSepoliaSectionIsPinUnknownNotAZeroPins(t *testing.T) {
 	}
 }
 
-func TestPinsLeaveAMalformedHexFieldZeroInsteadOfDecodingItLoosely(t *testing.T) {
+func TestPinsLeaveAMalformedHexFieldZero(t *testing.T) {
 	e := &finality.EthSepoliaPins{ChainID: 11155111, GenesisValidatorsRoot: "0X" + "ab"}
 	if got := Pins(e); got.Network.GenesisValidatorsRoot != ([32]byte{}) {
 		t.Fatalf("a malformed root decoded to %x", got.Network.GenesisValidatorsRoot)

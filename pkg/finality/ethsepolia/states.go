@@ -5,6 +5,7 @@ package ethsepolia
 import (
 	"github.com/certen/independant-validator/pkg/finality"
 	"github.com/certen/independant-validator/pkg/finality/ethl1"
+	"github.com/certen/independant-validator/pkg/finality/l1adapt"
 )
 
 // Names of the pending reasons of this kind (finality_pending{reason}; the closed set of testdata/finality/states.json).
@@ -22,7 +23,7 @@ const (
 	reasonNumberGap  = "number_gap"
 )
 
-// stateOf adapts an L1-head fault (pkg/finality/ethl1) to the framework's StateError with the SAME code and fields. The
+// stateOf adapts an L1-head fault (pkg/finality/ethl1) to the framework's StateError with the SAME code and fields (l1adapt's conversion). The
 // header-chain reasons of ethl1 ("hash", "number", "rlp") are mapped onto the registry's closed set (parent_hash_mismatch,
 // number_gap); an unreadable header cannot reach here because Verify reads every spine header first, but if it did it would be
 // finality_evidence_malformed, never a header-chain reason outside the set.
@@ -31,10 +32,7 @@ func stateOf(err error) error {
 	if !ok {
 		return err
 	}
-	s := finality.NewState(f.Code)
-	for k, v := range f.Fields {
-		s.Fields[k] = v
-	}
+	s := l1adapt.FaultState(f)
 	if f.Code == ethl1.CodeHeaderChainBroken {
 		switch f.Fields["reason"] {
 		case "hash":

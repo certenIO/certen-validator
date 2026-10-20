@@ -238,10 +238,10 @@ func (p *Prover) assemble(ctx context.Context, e *finality.EthSepoliaPins, leg f
 			return nil, unavailable(err), nil
 		}
 		for _, up := range ups {
-			lc.Links = append(lc.Links, ethl1.LB{Layout: ethl1Layout(lcssz.LayoutOfUpdate(up)), SSZ: up})
+			lc.Links = append(lc.Links, ethl1.LB{Layout: finality.L1Layout(lcssz.LayoutOfUpdate(up)), SSZ: up})
 		}
 	}
-	lc.FinalUpdate = ethl1.LB{Layout: ethl1Layout(c.layout), SSZ: c.final}
+	lc.FinalUpdate = ethl1.LB{Layout: finality.L1Layout(c.layout), SSZ: c.final}
 
 	// the spine h_0 = the finalized execution head ... h_k = the leg block
 	h0, err := p.Exec.HeaderByHash(ctx, c.execHash)
@@ -266,13 +266,6 @@ func (p *Prover) assemble(ctx context.Context, e *finality.EthSepoliaPins, leg f
 		return nil, nil, err
 	}
 	return &finality.Addendum{Level: finality.LevelFinalized, Chain: finality.ChainSepolia, Kind: Name, Evidence: ev}, nil, nil
-}
-
-func ethl1Layout(l lcssz.Layout) ethl1.Layout {
-	if l == lcssz.Gloas {
-		return ethl1.LayoutGloas
-	}
-	return ethl1.LayoutElectra
 }
 
 // anchorEvidence fills the anchor of lc: a committee_root anchor with the committee body (kind 1). The body is the next

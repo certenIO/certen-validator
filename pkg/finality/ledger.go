@@ -92,7 +92,9 @@ func rootOf(h string) [32]byte {
 	return r
 }
 
-func layoutOf(l lcssz.Layout) ethl1.Layout {
+// L1Layout is the L1 head verifier's layout of a light-client object layout (the one conversion, shared by the Sepolia kind, the
+// ledger and cmd/finalitypins).
+func L1Layout(l lcssz.Layout) ethl1.Layout {
 	if l == lcssz.Gloas {
 		return ethl1.LayoutGloas
 	}
@@ -112,12 +114,12 @@ func LedgerStepLC(pred AnchorPin, predBody, predBootstrap, link []byte) (ethl1.L
 	}
 	lc := ethl1.LC{
 		Profile: ethl1.ProfileLC, AnchorPeriod: pred.Period,
-		Links:       []ethl1.LB{{Layout: layoutOf(ll), SSZ: link}},
-		FinalUpdate: ethl1.LB{Layout: layoutOf(lcssz.LayoutOfFinalityUpdate(final)), SSZ: final},
+		Links:       []ethl1.LB{{Layout: L1Layout(ll), SSZ: link}},
+		FinalUpdate: ethl1.LB{Layout: L1Layout(lcssz.LayoutOfFinalityUpdate(final)), SSZ: final},
 	}
 	if pred.BlockRoot != "" {
 		lc.AnchorKind, lc.AnchorRoot = 2, rootOf(pred.BlockRoot)
-		lc.AnchorBody = ethl1.LB{Layout: layoutOf(lcssz.LayoutOfBootstrap(predBootstrap)), SSZ: predBootstrap}
+		lc.AnchorBody = ethl1.LB{Layout: L1Layout(lcssz.LayoutOfBootstrap(predBootstrap)), SSZ: predBootstrap}
 	} else {
 		lc.AnchorKind, lc.AnchorRoot = 1, rootOf(pred.CommitteeRoot)
 		lc.AnchorBody = ethl1.LB{Layout: ethl1.LayoutNone, SSZ: predBody}

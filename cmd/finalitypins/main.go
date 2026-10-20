@@ -658,7 +658,7 @@ func endToEnd(ctx context.Context, src *ethsepolia.HTTPSource, e *finality.EthSe
 		return err
 	}
 	lc := ethl1.LC{Profile: ethl1.ProfileLC, AnchorKind: 1, AnchorPeriod: a.Period, AnchorBody: ethl1.LB{Layout: ethl1.LayoutNone, SSZ: body},
-		FinalUpdate: ethl1.LB{Layout: layoutOf(l), SSZ: fu}}
+		FinalUpdate: ethl1.LB{Layout: finality.L1Layout(l), SSZ: fu}}
 	r, _ := hex.DecodeString(strings.TrimPrefix(a.CommitteeRoot, "0x"))
 	copy(lc.AnchorRoot[:], r)
 	if n := int(sig/slotsPerPeriod - a.Period); n > 0 {
@@ -667,7 +667,7 @@ func endToEnd(ctx context.Context, src *ethsepolia.HTTPSource, e *finality.EthSe
 			return err
 		}
 		for _, u := range ups {
-			lc.Links = append(lc.Links, ethl1.LB{Layout: layoutOf(lcssz.LayoutOfUpdate(u)), SSZ: u})
+			lc.Links = append(lc.Links, ethl1.LB{Layout: finality.L1Layout(lcssz.LayoutOfUpdate(u)), SSZ: u})
 		}
 	}
 	h, err := ethl1.VerifyFinalizedHead(ce.L1Pins(ce.Anchors), lc)
@@ -676,13 +676,6 @@ func endToEnd(ctx context.Context, src *ethsepolia.HTTPSource, e *finality.EthSe
 	}
 	fmt.Printf("live finality update: slot %d, %d participants, %d periods crossed from anchor %d: ok\n", h.Slot, h.Participants, h.PeriodsCrossed, a.Period)
 	return nil
-}
-
-func layoutOf(l lcssz.Layout) ethl1.Layout {
-	if l == lcssz.Gloas {
-		return ethl1.LayoutGloas
-	}
-	return ethl1.LayoutElectra
 }
 
 // rewriteAnchors replaces eth_sepolia.anchors in a pins file and re-renders it the way the file is committed: sorted keys,
