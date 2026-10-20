@@ -500,7 +500,7 @@ func judge(in judgeInput) (map[string]any, error) {
 	if g.ResolvedAt == 0 || (g.Status != StatusChallengerWins && g.Status != StatusDefenderWins) {
 		return nil, st(CodeGameNotResolved, "status", g.Status)
 	}
-	if A.Timestamp <= g.ResolvedAt+delay {
+	if A.Timestamp <= g.ResolvedAt || A.Timestamp-g.ResolvedAt <= delay { // the sum ResolvedAt+delay wraps for a delay near 2^64
 		return nil, st(CodeGameWithinDelay, "resolvedAt", g.ResolvedAt, "delay", delay, "T", A.Timestamp)
 	}
 	if g.Status != StatusDefenderWins {
