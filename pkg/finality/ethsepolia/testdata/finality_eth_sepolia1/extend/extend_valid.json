@@ -1,0 +1,9 @@
+{
+ "format": "certen-finality-ethsepolia-extend-case/1",
+ "id": "extend_valid",
+ "description": "five appended entries (1387..1391), each derived from its predecessor by the link named by its link_sha256",
+ "base": "extend/base_1386.json",
+ "extension": "extend/extend_valid.pins.json",
+ "links_dir": "raw/links",
+ "expect_canonical": "{\"code\":\"verified\",\"fields\":{\"anchors\":\"14\",\"pins_source\":\"extension:8d914fe42892062ac24e5da9e8b06814950da3820df14f6b31490e895fcf9fe5\"}}"
+}

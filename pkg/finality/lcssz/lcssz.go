@@ -229,3 +229,29 @@ func SplitFramedUpdates(body []byte) (objs [][]byte, digests [][4]byte, err erro
 	}
 	return objs, digests, nil
 }
+
+// FinalityUpdateParticipants is the number of set sync_committee_bits of a LightClientFinalityUpdate.
+func FinalityUpdateParticipants(l Layout, fu []byte) (int, error) {
+	var at int
+	switch l {
+	case Gloas:
+		if len(fu) != GloasFinalityUpdateSize {
+			return 0, fmt.Errorf("lcssz: a gloas finality update is %d bytes, got %d", GloasFinalityUpdateSize, len(fu))
+		}
+		at = 2*gloasHeader + gloasFinalityBranch
+	case Electra:
+		if len(fu) < electraFinalityUpdateFixed {
+			return 0, fmt.Errorf("lcssz: an electra finality update is at least %d bytes, got %d", electraFinalityUpdateFixed, len(fu))
+		}
+		at = 8 + 7*32
+	default:
+		return 0, fmt.Errorf("lcssz: unknown layout %d", l)
+	}
+	n := 0
+	for _, b := range fu[at : at+512/8] {
+		for ; b != 0; b &= b - 1 {
+			n++
+		}
+	}
+	return n, nil
+}

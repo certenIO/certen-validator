@@ -65,7 +65,19 @@
     "system_config": "0xf272670eb55e895584501d564afeb048bed26194"
   },
   "eth_sepolia": {
-    "anchors": [],
+    "anchors": [
+      {
+        "block_root": "0x5f71d7f650f9252b48749b5f062c0c234e01afd69f364ab600e2b6051494b20d",
+        "committee_root": "0xcabeda493c59d9927d0d771f833c37015c1e1e0e1b66336601c1b04981ecbcdc",
+        "derived_by": [
+          "bootstrap:Lodestar/v1.50.0/003bd66@lodestar-sepolia.chainsafe.io",
+          "bootstrap:Lighthouse/v8.3.0-rc.0-4920af7/x86_64-linux@ethereum-sepolia-beacon-api.publicnode.com"
+        ],
+        "link_sha256": "e55bc5ef6ede9cf7b1f09ba302d1723001bd03268672f2dd4875c8c38889c81d",
+        "period": 1378,
+        "wsp_epochs": 279
+      }
+    ],
     "chain_id": 11155111,
     "epochs_per_period": 256,
     "forks": [

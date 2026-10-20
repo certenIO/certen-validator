@@ -5,6 +5,8 @@ package ethsepolia
 import (
 	"bytes"
 
+	"github.com/ethereum/go-ethereum/crypto"
+
 	"github.com/certen/independant-validator/pkg/finality"
 	"github.com/certen/independant-validator/pkg/finality/ethl1"
 )
@@ -105,7 +107,7 @@ func (v *Verifier) Verify(p *finality.Pins, leg finality.BlockRef, evidence []by
 		return finality.Verdict{}, finality.Malformed("spine", finality.ReasonSpineNotEndingAtBlock, len(body.Spine), int(covered[0].Number-leg.Number)+1)
 	}
 	if leg.HeaderRLP != nil && !bytes.Equal(body.Spine[len(body.Spine)-1], leg.HeaderRLP) {
-		return finality.Verdict{}, finality.BlockMismatch("header", leg.Hash, covered[len(covered)-1].Hash)
+		return finality.Verdict{}, finality.BlockMismatch("header", crypto.Keccak256Hash(leg.HeaderRLP), covered[len(covered)-1].Hash)
 	}
 	return finality.Verdict{Level: finality.LevelFinalized, Kind: Name, Fields: map[string]any{
 		"finalized_slot":        head.Slot,

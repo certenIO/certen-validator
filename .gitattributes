@@ -35,3 +35,7 @@ pkg/finality/pins/*.json text eol=lf
 pkg/finality/testdata/finality/*.json text eol=lf
 pkg/finality/testdata/finality_chain1/* text eol=lf
 pkg/finality/testdata/finality_chain2/* text eol=lf
+
+# finality_eth_sepolia1 (RB11-C2): every file is hashed in its MANIFEST and copied byte-for-byte into the TypeScript repository; the link files are hashed by link_sha256.
+pkg/finality/ethsepolia/testdata/finality_eth_sepolia1/** -text
+pkg/finality/pins-links/* -text

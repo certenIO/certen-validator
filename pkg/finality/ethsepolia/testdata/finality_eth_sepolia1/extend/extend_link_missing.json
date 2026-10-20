@@ -1,0 +1,12 @@
+{
+ "format": "certen-finality-ethsepolia-extend-case/1",
+ "id": "extend_link_missing",
+ "description": "no link bytes for the appended period 1388",
+ "base": "extend/base_1386.json",
+ "extension": "extend/extend_link_missing.pins.json",
+ "links_dir": "raw/links",
+ "links_drop": [
+  1388
+ ],
+ "expect_canonical": "{\"code\":\"finality_ledger_extension_invalid\",\"fields\":{\"period\":\"1388\",\"reason\":\"link_missing\"}}"
+}

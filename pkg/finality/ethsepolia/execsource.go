@@ -171,7 +171,17 @@ func (r *RPCHeaders) post(ctx context.Context, url string, reqs []rpcReq) ([]rpc
 func (r *RPCHeaders) batch(ctx context.Context, reqs []rpcReq) ([][]byte, error) {
 	var fails []EndpointFailure
 	for _, ep := range r.Endpoints {
-		rs, err := r.post(ctx, ep, reqs)
+		var rs []rpcResp
+		var err error
+		for try := 0; try < 8; try++ {
+			if rs, err = r.post(ctx, ep, reqs); err == nil || !strings.Contains(err.Error(), "HTTP 429") {
+				break
+			}
+			select {
+			case <-ctx.Done():
+			case <-time.After(time.Duration(try+1) * 1500 * time.Millisecond):
+			}
+		}
 		name := (&HTTPSource{Base: ep}).Name()
 		if err != nil {
 			fails = append(fails, EndpointFailure{Endpoint: name, Op: "headers", Reason: ethrpc.RedactText(err.Error())})
@@ -225,7 +235,7 @@ func (r *RPCHeaders) HeaderByHash(ctx context.Context, hash [32]byte) ([]byte, e
 func (r *RPCHeaders) HeadersByNumber(ctx context.Context, from, to uint64) ([][]byte, error) {
 	bs := r.BatchSize
 	if bs <= 0 {
-		bs = 100
+		bs = 25
 	}
 	var out [][]byte
 	for f := from; f <= to; f += uint64(bs) {
