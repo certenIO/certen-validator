@@ -12,8 +12,13 @@ package lcssz
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 )
+
+// ErrFinalizedHeaderTooShort: the finalized header of an electra-layout finality update does not hold a whole execution payload
+// header (the fixed part of the beacon header, its execution branch and the execution payload header's fixed fields).
+var ErrFinalizedHeaderTooShort = errors.New("lcssz: the finalized header is too short for an execution payload header")
 
 // Layout is the LB layout byte of the evidence container.
 type Layout uint8
@@ -198,11 +203,13 @@ func FinalizedExec(l Layout, fu []byte) (hash [32]byte, number uint64, hasNumber
 		if _, _, _, err = FinalityUpdateSlots(l, fu); err != nil {
 			return hash, 0, false, err
 		}
+		// FinalityUpdateSlots only established finOff+8 <= len(fu); the execution payload header's fixed part must lie inside the
+		// object before it is sliced (V-C2-A1 D3: a 2,056-byte update with finOff 2,048 panicked here).
 		finOff := int(binary.LittleEndian.Uint32(fu[4:]))
-		ex := fu[finOff+electraHeaderFixed:]
-		if len(ex) < electraExecFixed {
-			return hash, 0, false, fmt.Errorf("lcssz: the finalized header is %d bytes, too short for an execution payload header", len(fu)-finOff)
+		if finOff > len(fu)-(electraHeaderFixed+electraExecFixed) {
+			return hash, 0, false, fmt.Errorf("%w: %d bytes at offset %d, need %d", ErrFinalizedHeaderTooShort, len(fu)-finOff, finOff, electraHeaderFixed+electraExecFixed)
 		}
+		ex := fu[finOff+electraHeaderFixed:]
 		copy(hash[:], ex[electraExecHashAt:electraExecHashAt+32])
 		return hash, binary.LittleEndian.Uint64(ex[electraExecNumberAt:]), true, nil
 	}
