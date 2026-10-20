@@ -1,20 +1,31 @@
 // Copyright 2026 Certen Protocol
 
-// Command vectorgen records the finality_adiri1 vector set and re-derives the Adiri pins from public data.
+// Command vectorgen records the finality_adiri1 vector set (V2_SPEC_S7 5.8, annex R11-adiri) and re-derives the Adiri pins
+// inputs from public data.
 //
-//	go run ./pkg/finality/adiri/vectorgen -mode fetch -cache <dir>
-//	go run ./pkg/finality/adiri/vectorgen -mode pins  -cache <dir>
+//	go run ./pkg/finality/adiri/vectorgen -mode fetch   -cache <dir>
 //	go run ./pkg/finality/adiri/vectorgen -mode vectors -cache <dir> -out pkg/finality/adiri/testdata/finality_adiri1
+//
+// fetch reads the public data (tn_genesis, every sealed epoch record, the genesis link headers) from a public Adiri endpoint.
+// vectors builds the LIVE vectors with the Prover against the same endpoint, derives the ADVERSARIAL vectors by mutating the
+// real bytes, and generates the SYNTHETIC vectors with test keys that live only in the gitignored keys/ directory next to this
+// file (the vectors contain public material only). Every expected verdict is a literal written in this package, not computed
+// by the verifier under test.
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
+	"sort"
 )
 
 func main() {
-	mode := flag.String("mode", "", "fetch | pins | vectors")
+	mode := flag.String("mode", "", "fetch | vectors")
 	rpc := flag.String("rpc", "https://rpc.telcoin.network", "public Adiri endpoint")
 	cache := flag.String("cache", "", "directory of fetched public data")
 	out := flag.String("out", "", "vector output directory")
@@ -23,6 +34,8 @@ func main() {
 	switch *mode {
 	case "fetch":
 		err = fetchLive(*rpc, *cache, nil)
+	case "vectors":
+		err = writeVectors(*rpc, *cache, *out)
 	default:
 		err = fmt.Errorf("unknown mode %q", *mode)
 	}
@@ -30,5 +43,61 @@ func main() {
 		fmt.Fprintln(os.Stderr, "vectorgen:", err)
 		os.Exit(1)
 	}
-	_ = out
+}
+
+func writeVectors(rpc, cache, out string) error {
+	if cache == "" || out == "" {
+		return fmt.Errorf("-cache and -out are required")
+	}
+	facts := loadFacts(cache)
+	evidence, live := recordLive(rpc, cache, out, facts)
+	all := append([]vec(nil), live...)
+	var base vec
+	for _, v := range live {
+		if v.Name == "live-513643-epoch651" {
+			base = v
+		}
+	}
+	all = append(all, adversarial(base, evidence[base.Name], facts)...)
+	sev, svs := synthetic("pkg/finality/adiri/vectorgen/keys")
+	for k, v := range sev {
+		evidence[k] = v
+	}
+	all = append(all, svs...)
+	if err := os.MkdirAll(filepath.Join(out, "evidence"), 0o755); err != nil {
+		return err
+	}
+	files := map[string]string{}
+	names := make([]string, 0, len(evidence))
+	for k := range evidence {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	for _, k := range names {
+		p := filepath.Join("evidence", k+".bin")
+		if err := os.WriteFile(filepath.Join(out, p), evidence[k], 0o644); err != nil {
+			return err
+		}
+		files[filepath.ToSlash(p)] = sha(evidence[k])
+	}
+	vj, err := json.MarshalIndent(map[string]any{"format": "finality_adiri1/1", "vectors": all}, "", " ")
+	if err != nil {
+		return err
+	}
+	vj = append(vj, '\n')
+	if err := os.WriteFile(filepath.Join(out, "vectors.json"), vj, 0o644); err != nil {
+		return err
+	}
+	files["vectors.json"] = sha(vj)
+	mj, _ := json.MarshalIndent(map[string]any{"format": "finality_adiri1/manifest/1", "files": files}, "", " ")
+	mj = append(mj, '\n')
+	if err := os.WriteFile(filepath.Join(out, "MANIFEST.json"), mj, 0o644); err != nil {
+		return err
+	}
+	sum := sha256.Sum256(mj)
+	if err := os.WriteFile(filepath.Join(out, "MANIFEST.json.sha256"), []byte(hex.EncodeToString(sum[:])+"\n"), 0o644); err != nil {
+		return err
+	}
+	fmt.Printf("wrote %d vectors, %d evidence files; MANIFEST sha256 %x\n", len(all), len(evidence), sum)
+	return nil
 }

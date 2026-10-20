@@ -49,11 +49,11 @@ func decodeSignature(b []byte) (bls12381.G1Affine, string) {
 	if err := d.Decode(&p); err != nil || len(b) != SigBytes {
 		return p, ReasonEncoding
 	}
-	if !p.IsOnCurve() {
-		return p, ReasonEncoding
-	}
 	if p.IsInfinity() {
 		return p, ReasonIdentity
+	}
+	if !p.IsOnCurve() {
+		return p, ReasonEncoding
 	}
 	if !p.IsInSubGroup() {
 		return p, ReasonSubgroup
