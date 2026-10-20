@@ -493,3 +493,55 @@ func TestHashTreeRootsAgainstLiveRoots(t *testing.T) {
 		t.Fatalf("hash_tree_root(SyncCommittee) of the bootstrap = %x, the link chain derived %x", r, last.CommitteeRoot)
 	}
 }
+
+// TestEveryByteOfTheEvidenceMatters flips one bit at every byte of the container prefix and of the final update, and at a
+// deterministic spread of positions inside the committee body, of the valid kind-1 evidence. The only bytes whose flip may
+// still verify are the eight bytes of signature_slot, which the specification marks untrusted (the sync committee signs the
+// attested header, not the signature slot; a nearby slot of the same period and fork selects the same committee and domain).
+// Every other flip must be a named fault, and none may panic.
+func TestEveryByteOfTheEvidenceMatters(t *testing.T) {
+	c := cases(t)["valid_k1_k0"]
+	pins := loadPins(t, c.Pins)
+	raw, err := os.ReadFile(filepath.Join(vectorDir, c.LC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := len(raw)
+	var positions []int
+	prefix := 4 + len(ProfileLC) + 1 + 8 + 32 + 1 + 4
+	for i := 0; i < prefix+4; i++ {
+		positions = append(positions, i)
+	}
+	x := uint64(88172645463325252)
+	for i := 0; i < 150; i++ {
+		x ^= x << 13
+		x ^= x >> 7
+		x ^= x << 17
+		positions = append(positions, prefix+4+int(x%uint64(SyncCommitteeBytes)))
+	}
+	for i := n - LightClientFinalityUpdateSize - 5; i < n; i++ {
+		positions = append(positions, i)
+	}
+	verified := 0
+	for _, pos := range positions {
+		mut := append([]byte(nil), raw...)
+		mut[pos] ^= 0x01
+		lc, err := DecodeLC(mut, pins.MaxLinks)
+		if err == nil {
+			_, err = VerifyFinalizedHead(pins, lc)
+		}
+		if err == nil {
+			verified++
+			if pos < n-8 {
+				t.Errorf("flipping bit 0 of byte %d (of %d) still verifies", pos, n)
+			}
+			continue
+		}
+		if _, isFault := err.(*Fault); !isFault {
+			t.Errorf("byte %d: error is not a Fault: %v", pos, err)
+		}
+	}
+	if verified > 1 {
+		t.Errorf("%d flips verified; only the signature_slot low byte may", verified)
+	}
+}

@@ -78,6 +78,11 @@
  ],
  "files": [
   {
+   "path": "README.md",
+   "sha256": "2ec3faa04736d9e1dbef40627e3b87941a3df30812ea6c3f21afd999a7f27578",
+   "bytes": 5115
+  },
+  {
    "path": "cases/adv_342_bits_506_signature.json",
    "sha256": "e501e04ecea36be1a21034253fc98244210c035f4e1cf0b8d185a28ea10ab978",
    "bytes": 450
