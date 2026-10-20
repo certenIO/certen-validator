@@ -92,8 +92,9 @@ func main() {
 			"committed validator set belongs to rests on the anchor alone")
 		finalityOn = flag.Bool("finality", false, "also verify the proof's staged finality (S7): its bundle's L6 settlement and the "+
 			"finality addenda stored for it (certen:finality:v1), reporting the level reached")
-		finalityFile = flag.String("finality-file", "", "verify the finality section of a portable proof v2 document (or a JSON list of "+
-			"addenda) offline, with no database")
+		finalityFile = flag.String("finality-file", "", "read and strictly parse the finality section of a portable proof v2 document "+
+			"(carried leg and addenda) offline, with no database; it reports the carried leg and judges no level until it is "+
+			"given the leg's Settlement, from which D0 is recomputed (use --finality for the judged report)")
 		incEvidence = flag.String("incarnation-evidence", "", "with --governance: the incarnation's genesis evidence (JSON, "+
 			"cmd/incarnation), from which a v3 intent certificate's proof v2 is verified, walking the Directory's major "+
 			"blocks stored in the database from that genesis")

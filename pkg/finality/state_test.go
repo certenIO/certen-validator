@@ -4,6 +4,7 @@ package finality
 
 import (
 	"encoding/json"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -17,14 +18,21 @@ import (
 )
 
 type stateSpec struct {
-	Group    string   `json:"group"`
-	Optional []string `json:"optional"`
-	Required []string `json:"required"`
-	Scope    string   `json:"scope"`
+	Group               string              `json:"group"`
+	Optional            []string            `json:"optional"`
+	Required            []string            `json:"required"`
+	Scope               string              `json:"scope"`
+	Enums               map[string][]string `json:"enums"`
+	EnumsDefinedBy      map[string]string   `json:"enums_defined_by"`
+	ConditionalRequired []struct {
+		When     map[string]string `json:"when"`
+		Required []string          `json:"required"`
+	} `json:"conditional_required"`
 }
 
 type stateRegistry struct {
 	Format         string                                 `json:"format"`
+	Notes          []string                               `json:"notes"`
 	PendingReasons map[string]struct{ Required []string } `json:"pending_reasons"`
 	States         map[string]stateSpec                   `json:"states"`
 }
@@ -80,7 +88,7 @@ var section7PendingReasons = []string{
 
 func TestTheRegistryHoldsEveryCodeOfSection7AndNothingElseUnderSpecScope(t *testing.T) {
 	reg := loadRegistry(t)
-	if reg.Format != "certen-finality-states/1" {
+	if reg.Format != "certen-finality-states/2" {
 		t.Fatalf("format %q", reg.Format)
 	}
 	want := map[string]bool{}
@@ -132,10 +140,38 @@ func conforms(reg stateRegistry, s *StateError) string {
 		}
 		required = append(required, pr.Required...)
 	}
+	// conditional requirements: when every key of `when` equals the state's field, more fields are required
+	for _, c := range spec.ConditionalRequired {
+		hit := true
+		for k, v := range c.When {
+			if fmt.Sprint(s.Fields[k]) != v {
+				hit = false
+			}
+		}
+		if hit {
+			required = append(required, c.Required...)
+		}
+	}
 	for _, f := range required {
 		allowed[f] = true
 		if _, has := s.Fields[f]; !has {
 			return s.Code + " lacks required field " + f
+		}
+	}
+	// closed enums: a field with a recorded set carries a member of it
+	for f, set := range spec.Enums {
+		v, has := s.Fields[f]
+		if !has {
+			continue
+		}
+		found := false
+		for _, m := range set {
+			if fmt.Sprint(v) == m {
+				found = true
+			}
+		}
+		if !found {
+			return s.Code + " field " + f + " = " + fmt.Sprint(v) + " is not in its closed set"
 		}
 	}
 	for _, f := range spec.Optional {
@@ -157,8 +193,13 @@ func TestEveryConstructorYieldsARegisteredCodeWithExactlyItsFields(t *testing.T)
 	_, levelOneErr := KindFor(ChainBaseSepolia, LevelIncluded)
 	_, dupErr := NewAddendum(LegBindingOf(b), testProofID, buildChain(t, b, LevelFinalized), b.Chain, LevelFinalized, kBaseFin, nil)
 	cases := map[string]*StateError{
-		"Malformed":            Malformed("part", "reason", 1, 2),
-		"MalformedAt":          MalformedAt("part", 3, "reason", 1, 2),
+		"Malformed":            Malformed("part", ReasonTruncated, 1, 2),
+		"MalformedAt":          MalformedAt("part", 3, ReasonHeaderItemIsList, 1, 2),
+		"AddendumMalformed":    AddendumMalformed("seq", AddendumBadValue),
+		"AddendumMalformedKey": AddendumMalformed("addendum", AddendumUnknownKey, "key", "Seq"),
+		"IncludedUnavailable":  IncludedUnavailable(IncludedNoSettlement, "chain", uint64(1)),
+		"FinalizedBlockState":  FinalizedBlockUnavailable(1, 2, FinalizedBlockHeaderUnreadable, "index", uint64(8)),
+		"Guard":                NewState(CodeGuardRefused, "proof_id", "x", "seq", uint64(1), "cause", "y"),
 		"EvidenceTooLarge":     EvidenceTooLarge("part", 5, 4),
 		"EvidenceUnrecognised": EvidenceUnrecognised("k", "v1"),
 		"ChainUnsupported":     ChainUnsupported(1),
@@ -166,7 +207,8 @@ func TestEveryConstructorYieldsARegisteredCodeWithExactlyItsFields(t *testing.T)
 		"ChainBroken legbind":  ChainBroken(0, CheckLegBinding, "want", b.Triple(), "got", b.Triple()),
 		"ChainBroken kind":     ChainBroken(1, CheckKind, "chain", uint64(1), "level", LevelFinalized, "kind", "x"),
 		"BlockMismatch":        BlockMismatch("blockNumber", uint64(1), uint64(2)),
-		"PinsCorrupt":          PinsCorrupt("why", "want_sha256", fill(1), "got_sha256", fill(2)),
+		"PinsCorrupt":          PinsCorrupt(PinsSHA256Mismatch, "want_sha256", fill(1), "got_sha256", fill(2)),
+		"PinsCorrupt indexed":  PinsCorrupt(PinsAnchorWspBelow256, "index", uint64(3)),
 		"NotApplicableState":   NotApplicableState(ChainSepolia, LevelL1Posted, ReasonChainIsL1),
 		"NoEvidenceInFile":     NoEvidenceInFile(ChainSepolia, LevelIncluded, LevelFinalized).State(),
 		"Pending with eta":     (&PendingState{Chain: 1, LevelReached: LevelIncluded, NextLevel: LevelFinalized, Reason: "epoch_open", ETA: time.Unix(1, 0)}).State(),

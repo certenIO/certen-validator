@@ -107,7 +107,7 @@ func (r *FinalityAddendaRepository) Append(ctx context.Context, a finality.Adden
 		case "23505": // unique_violation: another writer took this seq (or this level) between our read and our insert
 			return finality.NewState(finality.CodeAppendConflict, "proof_id", id, "seq", a.Seq)
 		case "23001": // restrict_violation: the trigger refused it
-			return finality.NewState(finality.CodeChainBroken, "seq", a.Seq, "check", "database_guard", "cause", err.Error())
+			return finality.NewState(finality.CodeGuardRefused, "proof_id", id, "seq", a.Seq, "cause", err.Error())
 		}
 		return err
 	}
@@ -221,7 +221,7 @@ func (r *FinalityAddendaRepository) LegRef(ctx context.Context, proofID string) 
 		return ref, err
 	}
 	if !header.Valid || header.String == "" {
-		return ref, finality.NewState(finality.CodeIncludedUnavailable, "proof_id", proofID, "reason", "the stored bundle carries no execution proof (component 5)")
+		return ref, finality.IncludedUnavailable(finality.IncludedNoExecutionProof, "proof_id", proofID)
 	}
 	if id, perr := strconv.ParseUint(chain.String, 10, 64); perr == nil {
 		ref.Chain = id

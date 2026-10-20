@@ -44,7 +44,7 @@ var (
 	}, []string{"chain", "level_reached"})
 	finalityChainBroken = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "certen_finality_chain_broken_total",
-		Help: "Stored addendum chains that failed verification against the proof's original digest. Should be 0.",
+		Help: "Stored addendum chains that failed verification against the leg binding D0 recomputed from the leg's verified Settlement (sequence, previous-hash links, own hashes, one addendum per level, table rows). Should be 0.",
 	}, []string{"chain"})
 	finalityPassSeconds = prometheus.NewHistogram(prometheus.HistogramOpts{
 		Name:    "certen_finality_pass_seconds",

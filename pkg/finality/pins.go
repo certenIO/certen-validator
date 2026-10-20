@@ -8,9 +8,7 @@ import (
 	_ "embed"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
-	"io"
-	"sort"
+	"reflect"
 	"strings"
 	"unicode/utf8"
 )
@@ -116,7 +114,7 @@ func (p *Pins) Identity() (string, string) {
 func LoadPins(raw []byte, want [32]byte) (*Pins, error) {
 	got := sha256.Sum256(raw)
 	if got != want {
-		return nil, PinsCorrupt("sha256 mismatch", "want_sha256", want, "got_sha256", got)
+		return nil, PinsCorrupt(PinsSHA256Mismatch, "want_sha256", want, "got_sha256", got)
 	}
 	return parsePins(raw, got, PinsSourceEmbedded)
 }
@@ -132,35 +130,41 @@ func ParsePinsOverride(raw []byte) (*Pins, error) {
 func EmbeddedPins() (*Pins, error) {
 	want, err := hex.DecodeString(PinsSHA256)
 	if err != nil || len(want) != 32 {
-		return nil, PinsCorrupt("PinsSHA256 constant is not 32 bytes of hex")
+		return nil, PinsCorrupt(PinsSHA256ConstantMalformed)
 	}
 	return LoadPins(embeddedPins, [32]byte(want))
 }
 
 func parsePins(raw []byte, sum [32]byte, source string) (*Pins, error) {
 	if !utf8.Valid(raw) {
-		return nil, PinsCorrupt("not UTF-8")
+		return nil, PinsCorrupt(PinsNotUTF8)
 	}
 	if bytes.ContainsRune(raw, '\r') {
-		return nil, PinsCorrupt("contains CR: the file is LF only")
+		return nil, PinsCorrupt(PinsContainsCR)
 	}
 	if bytes.HasPrefix(raw, []byte{0xEF, 0xBB, 0xBF}) {
-		return nil, PinsCorrupt("starts with a byte order mark")
+		return nil, PinsCorrupt(PinsByteOrderMark)
 	}
-	if err := checkSortedKeys(raw); err != nil {
-		return nil, PinsCorrupt(err.Error())
+	if !json.Valid(raw) {
+		return nil, PinsCorrupt(PinsNotJSON)
+	}
+	if reason, key := walkKeys(json.NewDecoder(bytes.NewReader(raw)), reflect.TypeOf(pinsFile{})); reason != "" {
+		if key != "" {
+			return nil, PinsCorrupt(reason, "key", key)
+		}
+		return nil, PinsCorrupt(reason)
 	}
 	var f pinsFile
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&f); err != nil {
-		return nil, PinsCorrupt("does not parse: " + err.Error())
+		return nil, PinsCorrupt(PinsBadValue)
 	}
 	if f.Format != PinsFormat {
-		return nil, PinsCorrupt(fmt.Sprintf("format is %q, want %q", f.Format, PinsFormat))
+		return nil, PinsCorrupt(PinsWrongFormat)
 	}
 	if f.PublishedUTC == "" {
-		return nil, PinsCorrupt("published_utc is empty")
+		return nil, PinsCorrupt(PinsPublishedUTCEmpty)
 	}
 	p := &Pins{Format: f.Format, PublishedUTC: f.PublishedUTC, OnchainCommitment: f.OnchainCommitment, EthSepolia: f.EthSepolia, sum: sum, source: source}
 	for name, r := range map[string]json.RawMessage{"base_sepolia": f.BaseSepolia, "arb_sepolia": f.ArbSepolia, "adiri": f.Adiri} {
@@ -173,7 +177,7 @@ func parsePins(raw []byte, sum [32]byte, source string) (*Pins, error) {
 	}
 	if p.EthSepolia != nil {
 		if err := p.EthSepolia.validate(); err != nil {
-			return nil, PinsCorrupt("eth_sepolia: " + err.Error())
+			return nil, err
 		}
 	}
 	return p, nil
@@ -190,45 +194,69 @@ func hexN(s string, n int, prefixed bool) bool {
 	return err == nil && len(b) == n && s == strings.ToLower(s)
 }
 
+// MinWspEpochs is the smallest valid wsp_epochs of a ledger anchor: V2_SPEC_S7 5.2 step 3 (r2:F10) makes the window rule vacuous
+// for wsp_epochs >= 256 (one period), and "a ledger entry with wsp_epochs < 256 is invalid".
+const MinWspEpochs = 256
+
+// validate enforces the invariants the Sepolia verifier relies on, each with its own reason (and the index of the offending
+// fork or anchor), in this order: the chain id and genesis root; the bounds (present and positive, in the order
+// sync_committee_size, min_participants, epochs_per_period, max_links, max_spine_headers) and the two-thirds participation
+// floor; the fork table (non-empty, first fork at epoch 0, epochs strictly ascending, layouts null/electra/gloas); the ledger
+// (roots and hashes well formed, periods unique and ascending, wsp_epochs >= 256, derived_by non-empty).
 func (e *EthSepoliaPins) validate() error {
 	if e.ChainID != ChainSepolia {
-		return fmt.Errorf("chain_id is %d, want %d", e.ChainID, ChainSepolia)
+		return PinsCorrupt(PinsChainIDMismatch)
 	}
 	if !hexN(e.GenesisValidatorsRoot, 32, true) {
-		return fmt.Errorf("genesis_validators_root is not 0x + 32 bytes of lowercase hex")
+		return PinsCorrupt(PinsGenesisRootMalformed)
 	}
-	if e.SyncCommitteeSize <= 0 || e.MinParticipants <= 0 || e.MinParticipants*3 < e.SyncCommitteeSize*2 || e.MinParticipants > e.SyncCommitteeSize {
-		return fmt.Errorf("min_participants %d of sync_committee_size %d is not a two-thirds floor", e.MinParticipants, e.SyncCommitteeSize)
+	for _, b := range []struct {
+		key string
+		ok  bool
+	}{
+		{"sync_committee_size", e.SyncCommitteeSize > 0}, {"min_participants", e.MinParticipants > 0},
+		{"epochs_per_period", e.EpochsPerPeriod > 0}, {"max_links", e.MaxLinks > 0}, {"max_spine_headers", e.MaxSpineHeaders > 0},
+	} {
+		if !b.ok {
+			return PinsCorrupt(PinsBoundMissing, "key", b.key)
+		}
 	}
-	if e.EpochsPerPeriod == 0 || e.MaxLinks <= 0 || e.MaxSpineHeaders <= 0 {
-		return fmt.Errorf("epochs_per_period, max_links and max_spine_headers must be positive")
+	if e.MinParticipants*3 < e.SyncCommitteeSize*2 || e.MinParticipants > e.SyncCommitteeSize {
+		return PinsCorrupt(PinsParticipationFloor)
 	}
 	if len(e.Forks) == 0 {
-		return fmt.Errorf("the fork table is empty")
+		return PinsCorrupt(PinsForksEmpty)
+	}
+	if e.Forks[0].Epoch != 0 {
+		return PinsCorrupt(PinsFirstForkNotEpochZero)
 	}
 	for i, f := range e.Forks {
 		if f.Name == "" || !hexN(f.Version, 4, true) {
-			return fmt.Errorf("fork %d (%q): name empty or version not 0x + 4 bytes", i, f.Name)
+			return PinsCorrupt(PinsForkMalformed, "index", uint64(i))
 		}
 		if i > 0 && f.Epoch <= e.Forks[i-1].Epoch {
-			return fmt.Errorf("fork %q epoch %d does not ascend", f.Name, f.Epoch)
+			return PinsCorrupt(PinsForkEpochNotAscending, "index", uint64(i))
 		}
 		if f.Layout != nil && *f.Layout != "electra" && *f.Layout != "gloas" {
-			return fmt.Errorf("fork %q layout %q is not null, electra or gloas", f.Name, *f.Layout)
+			return PinsCorrupt(PinsForkLayoutUnknown, "index", uint64(i))
 		}
-	}
-	if e.Forks[0].Epoch != 0 {
-		return fmt.Errorf("the first fork must start at epoch 0")
 	}
 	for i, a := range e.Anchors {
+		idx := uint64(i)
 		if !hexN(a.CommitteeRoot, 32, true) || (a.BlockRoot != "" && !hexN(a.BlockRoot, 32, true)) || !hexN(a.LinkSHA256, 32, false) {
-			return fmt.Errorf("anchor %d (period %d): a root or hash is malformed", i, a.Period)
+			return PinsCorrupt(PinsAnchorMalformed, "index", idx)
 		}
-		if i > 0 && a.Period <= e.Anchors[i-1].Period {
-			return fmt.Errorf("anchor periods must ascend (%d after %d)", a.Period, e.Anchors[i-1].Period)
+		if i > 0 && a.Period == e.Anchors[i-1].Period {
+			return PinsCorrupt(PinsAnchorPeriodDuplicate, "index", idx)
 		}
-		if a.WspEpochs == 0 || len(a.DerivedBy) == 0 {
-			return fmt.Errorf("anchor %d (period %d): wsp_epochs and derived_by are required", i, a.Period)
+		if i > 0 && a.Period < e.Anchors[i-1].Period {
+			return PinsCorrupt(PinsAnchorPeriodNotAscending, "index", idx)
+		}
+		if a.WspEpochs < MinWspEpochs {
+			return PinsCorrupt(PinsAnchorWspBelow256, "index", idx)
+		}
+		if len(a.DerivedBy) == 0 {
+			return PinsCorrupt(PinsAnchorDerivedByEmpty, "index", idx)
 		}
 	}
 	return nil
@@ -257,56 +285,79 @@ func (e *EthSepoliaPins) AnchorFor(sigPeriod uint64) (AnchorPin, error) {
 	return *best, nil
 }
 
-// checkSortedKeys requires every object's keys to be strictly ascending (no duplicates) and a single JSON document.
-func checkSortedKeys(raw []byte) error {
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	var walk func() error
-	walk = func() error {
-		tok, err := dec.Token()
-		if err != nil {
-			return err
-		}
-		d, ok := tok.(json.Delim)
-		if !ok {
-			return nil
-		}
-		switch d {
-		case '{':
-			var keys []string
-			for dec.More() {
-				kt, err := dec.Token()
-				if err != nil {
-					return err
-				}
-				k, _ := kt.(string)
-				keys = append(keys, k)
-				if err := walk(); err != nil {
-					return err
-				}
-			}
-			if !sort.SliceIsSorted(keys, func(i, j int) bool { return keys[i] < keys[j] }) {
-				return fmt.Errorf("object keys are not sorted: %v", keys)
-			}
-			for i := 1; i < len(keys); i++ {
-				if keys[i] == keys[i-1] {
-					return fmt.Errorf("duplicate key %q", keys[i])
-				}
-			}
-		case '[':
-			for dec.More() {
-				if err := walk(); err != nil {
-					return err
-				}
-			}
-		}
-		_, err = dec.Token() // closing delimiter
-		return err
+// walkKeys reads one JSON value from dec and returns the FIRST structural violation in document order, as a pins reason and the
+// offending key: inside every object a key smaller than its predecessor is keys_unsorted{key}, a key equal to it
+// duplicate_key{key} (sorted keys make a duplicate adjacent), and, where t is a struct type, a key that is not EXACTLY (case-
+// sensitively) one of its json names is unknown_key{key}. Where t is nil, or not a struct (the raw sections of the other
+// chains), only the order and duplicate rules apply. The text has already passed json.Valid, so a token error is not_json.
+func walkKeys(dec *json.Decoder, t reflect.Type) (PinsReason, string) {
+	for t != nil && t.Kind() == reflect.Ptr {
+		t = t.Elem()
 	}
-	if err := walk(); err != nil {
-		return err
+	tok, err := dec.Token()
+	if err != nil {
+		return PinsNotJSON, ""
 	}
-	if _, err := dec.Token(); err != io.EOF {
-		return fmt.Errorf("data after the JSON document")
+	d, ok := tok.(json.Delim)
+	if !ok {
+		return "", ""
+	}
+	switch d {
+	case '{':
+		prev, first := "", true
+		for dec.More() {
+			kt, err := dec.Token()
+			if err != nil {
+				return PinsNotJSON, ""
+			}
+			k, _ := kt.(string)
+			if !first {
+				if k < prev {
+					return PinsKeysUnsorted, k
+				}
+				if k == prev {
+					return PinsDuplicateKey, k
+				}
+			}
+			first, prev = false, k
+			var ft reflect.Type
+			if t != nil && t.Kind() == reflect.Struct {
+				if ft = jsonFieldType(t, k); ft == nil {
+					return PinsUnknownKey, k
+				}
+			}
+			if r, key := walkKeys(dec, ft); r != "" {
+				return r, key
+			}
+		}
+	case '[':
+		var et reflect.Type
+		if t != nil && t.Kind() == reflect.Slice {
+			et = t.Elem()
+		}
+		for dec.More() {
+			if r, key := walkKeys(dec, et); r != "" {
+				return r, key
+			}
+		}
+	}
+	if _, err := dec.Token(); err != nil { // the closing delimiter
+		return PinsNotJSON, ""
+	}
+	return "", ""
+}
+
+// jsonFieldType is the type of the struct field whose json name is exactly name, or nil.
+func jsonFieldType(t reflect.Type, name string) reflect.Type {
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		n := strings.Split(f.Tag.Get("json"), ",")[0]
+		if n == "" {
+			n = f.Name
+		}
+		if n != "-" && n == name {
+			return f.Type
+		}
 	}
 	return nil
 }

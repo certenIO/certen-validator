@@ -169,7 +169,7 @@ func (r *Registry) JudgeAddendum(b BlockRef, a Addendum, p *Pins) (Verdict, erro
 		differs bool
 	}{{"header.kind", h.Kind != a.Kind}, {"header.chain", h.Chain != a.Chain}, {"header.level", h.Level != a.Level}} {
 		if f.differs {
-			return Verdict{}, Malformed(f.part, "differs from the addendum's", 0, 0)
+			return Verdict{}, Malformed(f.part, ReasonDiffersFromAddendum, 0, 0)
 		}
 	}
 	if h.Chain != b.Chain {

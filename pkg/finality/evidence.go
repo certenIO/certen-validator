@@ -62,7 +62,7 @@ func (s Settlement) Block() BlockRef {
 // addendum; its result is the BlockRef every other level binds to.
 func DeriveIncluded(chain uint64, s *ethproof.Settlement) (BlockRef, error) {
 	if s == nil {
-		return BlockRef{}, NewState(CodeIncludedUnavailable, "chain", chain, "reason", "the leg carries no settlement")
+		return BlockRef{}, IncludedUnavailable(IncludedNoSettlement, "chain", chain)
 	}
 	if _, _, err := s.Verify(); err != nil {
 		return BlockRef{}, NewState(CodeIncludedInvalid, "chain", chain, "cause", err.Error())

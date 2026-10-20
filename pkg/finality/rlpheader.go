@@ -27,44 +27,55 @@ type HeaderFields struct {
 	Items           int
 }
 
+// headerItem is one RLP item of the header: its content bytes and whether it was an RLP list.
+type headerItem struct {
+	val    []byte
+	isList bool
+}
+
 // ReadHeader reads the fields positionally from a raw RLP header. It refuses (finality_evidence_malformed, part "header")
-// anything that is not one RLP list of at least 12 items whose positional fields have the right shapes.
+// anything that is not one RLP list of at least 12 items whose positional fields (items 0, 3, 4, 5, 8, 11 and, when the header
+// has 17 or more items, 16) are RLP STRINGS of the right shape: an item that is an RLP list in one of those slots is refused
+// as header_item_is_list with its index, in ascending slot order. The first failing slot is the one reported.
 func ReadHeader(raw []byte) (HeaderFields, error) {
 	var h HeaderFields
 	content, rest, err := rlp.SplitList(raw)
 	if err != nil {
-		return h, Malformed("header", "not an RLP list: "+err.Error(), len(raw), 0)
+		return h, Malformed("header", ReasonHeaderNotRLPList, len(raw), 0)
 	}
 	if len(rest) != 0 {
-		return h, Malformed("header", "trailing bytes after the RLP list", len(rest), 0)
+		return h, Malformed("header", ReasonHeaderTrailingBytes, len(rest), 0)
 	}
-	var items [][]byte
+	var items []headerItem
 	for len(content) > 0 {
 		kind, val, tail, err := rlp.Split(content)
 		if err != nil {
-			return h, MalformedAt("header", len(items), "bad RLP item: "+err.Error(), len(content), 0)
+			return h, MalformedAt("header", len(items), ReasonHeaderBadItem, len(content), 0)
 		}
-		if kind == rlp.List {
-			val = nil // positional fields are strings; a list in a positional slot fails the shape check below
-		}
-		items = append(items, val)
+		items = append(items, headerItem{val: val, isList: kind == rlp.List})
 		content = tail
 	}
 	h.Items = len(items)
 	if h.Items < 12 {
-		return h, Malformed("header", "fewer than 12 items", h.Items, 12)
+		return h, Malformed("header", ReasonHeaderTooFewItems, h.Items, 12)
 	}
 	hashAt := func(i int, dst *[32]byte) error {
-		if len(items[i]) != 32 {
-			return MalformedAt("header", i, "not a 32-byte string", len(items[i]), 32)
+		if items[i].isList {
+			return MalformedAt("header", i, ReasonHeaderItemIsList, len(items[i].val), 32)
 		}
-		copy(dst[:], items[i])
+		if len(items[i].val) != 32 {
+			return MalformedAt("header", i, ReasonHeaderItemNot32Bytes, len(items[i].val), 32)
+		}
+		copy(dst[:], items[i].val)
 		return nil
 	}
 	uintAt := func(i int, dst *uint64) error {
-		v := items[i]
+		if items[i].isList {
+			return MalformedAt("header", i, ReasonHeaderItemIsList, len(items[i].val), 8)
+		}
+		v := items[i].val
 		if len(v) > 8 || (len(v) > 0 && v[0] == 0) {
-			return MalformedAt("header", i, "not a canonical unsigned integer of at most 8 bytes", len(v), 8)
+			return MalformedAt("header", i, ReasonHeaderItemNotCanonUint, len(v), 8)
 		}
 		var n uint64
 		for _, c := range v {
@@ -73,25 +84,25 @@ func ReadHeader(raw []byte) (HeaderFields, error) {
 		*dst = n
 		return nil
 	}
-	for _, f := range []struct {
-		i   int
-		dst *[32]byte
-	}{{0, &h.ParentHash}, {3, &h.StateRoot}, {4, &h.TransactionRoot}, {5, &h.ReceiptsRoot}} {
-		if err := hashAt(f.i, f.dst); err != nil {
-			return h, err
-		}
-	}
-	if err := uintAt(8, &h.Number); err != nil {
-		return h, err
-	}
-	if err := uintAt(11, &h.Timestamp); err != nil {
-		return h, err
+	var w [32]byte
+	// ascending slot order: 0, 3, 4, 5, 8, 11, 16
+	steps := []func() error{
+		func() error { return hashAt(0, &h.ParentHash) },
+		func() error { return hashAt(3, &h.StateRoot) },
+		func() error { return hashAt(4, &h.TransactionRoot) },
+		func() error { return hashAt(5, &h.ReceiptsRoot) },
+		func() error { return uintAt(8, &h.Number) },
+		func() error { return uintAt(11, &h.Timestamp) },
 	}
 	if h.Items >= 17 {
-		var w [32]byte
-		if err := hashAt(16, &w); err != nil {
+		steps = append(steps, func() error { return hashAt(16, &w) })
+	}
+	for _, step := range steps {
+		if err := step(); err != nil {
 			return h, err
 		}
+	}
+	if h.Items >= 17 {
 		h.WithdrawalsRoot = &w
 	}
 	h.Hash = [32]byte(crypto.Keccak256Hash(raw))
