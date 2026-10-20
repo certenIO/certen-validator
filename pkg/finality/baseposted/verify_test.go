@@ -559,3 +559,25 @@ func TestKindVerifyRefusesGarbageMissingSepoliaPinsHeaderNumberSpineGapAndABlobC
 	_, err = Kind{}.Verify(wide, ref, many)
 	wantCode(t, err, finality.CodeEvidenceTooLarge, map[string]string{"part": "frameTx.blobs", "count": "33", "limit": "32"})
 }
+
+func TestSynthFramesAcrossBlocksOrderEpochEqualToTheFrameBlockAndBlobsOnACalldataTx(t *testing.T) {
+	// frames in two consecutive L1 blocks are accepted in block order and refused in the opposite order
+	ok := makeSynth(t, synthOpts{compression: "zlib", calldata: true, nFrames: 2, frameBlocks: []uint64{1000, 1001}})
+	v := mustOK(t, ok)
+	if got := v.Fields["l1_blocks"].([]uint64); len(got) != 2 || got[0] != 1000 || got[1] != 1001 {
+		t.Fatalf("l1_blocks %v", got)
+	}
+	rev := makeSynth(t, synthOpts{compression: "zlib", calldata: true, nFrames: 2, frameBlocks: []uint64{1000, 1001}})
+	rev.body.Frames[0], rev.body.Frames[1] = rev.body.Frames[1], rev.body.Frames[0]
+	_, err := rev.verify()
+	wantCode(t, err, CodeChannelIncomplete, nil)
+
+	// the epoch may equal the frame block exactly (the window is closed on both sides)
+	mustOK(t, makeSynth(t, synthOpts{compression: "zlib", calldata: true, epochNum: 1000, frameBlocks: []uint64{1000}}))
+
+	// a transaction that is not a blob transaction carries no blobs
+	cd := makeSynth(t, synthOpts{compression: "zlib", calldata: true})
+	cd.body.Frames[0].Blobs = []Blob{{Raw: make([]byte, BlobSize)}}
+	_, err = cd.verify()
+	wantCode(t, err, CodeBlobMismatch, nil)
+}
