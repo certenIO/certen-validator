@@ -146,7 +146,7 @@ func NewEVMStrategy(config *EVMStrategyConfig) (*EVMStrategy, error) {
 		}
 		pool, err := ethrpc.NewPool(dialed, cooldown, nil)
 		if err != nil {
-			return nil, fmt.Errorf("%s: read failover pool over %d endpoints: %w", config.ChainConfig.NetworkName, len(dialed), err)
+			return nil, fmt.Errorf("%s: read failover pool over %d endpoints: %w", config.ChainConfig.NetworkName, len(dialed), ethrpc.RedactError(err))
 		}
 		strategy.pool = pool
 	}
@@ -157,7 +157,7 @@ func NewEVMStrategy(config *EVMStrategyConfig) (*EVMStrategy, error) {
 
 	chainID, err := client.ChainID(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("get chain ID: %w", err)
+		return nil, fmt.Errorf("get chain ID: %w", ethrpc.RedactError(err))
 	}
 	strategy.chainID = chainID
 
@@ -400,7 +400,7 @@ func (s *EVMStrategy) GetTransactionReceipt(ctx context.Context, txHash string) 
 		return e
 	})
 	if err != nil {
-		return nil, fmt.Errorf("get receipt: %w", err)
+		return nil, fmt.Errorf("get receipt: %w", ethrpc.RedactError(err))
 	}
 
 	result := &ObservationResult{
@@ -424,7 +424,7 @@ func (s *EVMStrategy) GetTransactionReceipt(ctx context.Context, txHash string) 
 		return e
 	})
 	if err != nil {
-		return nil, fmt.Errorf("get block %s header for the receipt's time: %w", receipt.BlockHash.Hex(), err)
+		return nil, fmt.Errorf("get block %s header for the receipt's time: %w", receipt.BlockHash.Hex(), ethrpc.RedactError(err))
 	}
 	if header == nil || header.Hash() != receipt.BlockHash {
 		return nil, fmt.Errorf("get block %s header for the receipt's time: the provider served another block", receipt.BlockHash.Hex())
@@ -474,7 +474,7 @@ func (s *EVMStrategy) EstimateGas(ctx context.Context, req *AnchorRequest) (uint
 
 	gas, err := s.client.EstimateGas(ctx, msg)
 	if err != nil {
-		return 0, fmt.Errorf("estimate gas: %w", err)
+		return 0, fmt.Errorf("estimate gas: %w", ethrpc.RedactError(err))
 	}
 
 	// Add 20% buffer
@@ -486,13 +486,13 @@ func (s *EVMStrategy) HealthCheck(ctx context.Context) error {
 	// Check client connection
 	_, err := s.client.BlockNumber(ctx)
 	if err != nil {
-		return fmt.Errorf("get block number: %w", err)
+		return fmt.Errorf("get block number: %w", ethrpc.RedactError(err))
 	}
 
 	// Check chain ID matches
 	chainID, err := s.client.ChainID(ctx)
 	if err != nil {
-		return fmt.Errorf("get chain ID: %w", err)
+		return fmt.Errorf("get chain ID: %w", ethrpc.RedactError(err))
 	}
 
 	if chainID.Cmp(s.chainID) != 0 {
