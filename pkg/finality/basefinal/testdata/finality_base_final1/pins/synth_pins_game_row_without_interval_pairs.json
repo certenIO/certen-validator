@@ -1,0 +1,201 @@
+{
+  "base_sepolia": {
+    "chain_id": 84532,
+    "game_layout": {
+      "aggregate_v1": {
+        "args": "creator(20)|rootClaim(32)|l1Head(32)|l2seq(32)|parent(20)|roots(32*n); trailer be16(args_len+2); template = head|be16(args_len+2)|mid|impl(20)|tail (98 B)",
+        "args_base_len": 136,
+        "args_per_root": 32,
+        "clone_head": "0x36602c57343d527f9e4ac34f21c619cefc926c8bd93b54bf5a39c7ab2127a895af1cc0691d7e3dff593da1005b363d3d373d3d3d3d61",
+        "clone_mid": "0x806062363936013d73",
+        "clone_tail": "0x5af43d3d93803e606057fd5bf3",
+        "game_slots": {
+          "0": "createdAt@0 u64, resolvedAt@8 u64, status@16 u8, initialized@17, wasRespected@18",
+          "1": "startingOutputRoot.root",
+          "2": "startingOutputRoot.l2SequenceNumber",
+          "5": "counteredByIntermediateRootIndexPlusOne",
+          "6": "proofTypeToProver mapping (TEE key 0, ZK key 1)",
+          "7": "expectedResolution@0 u64, proofCount@8",
+          "8": "scheduleId"
+        }
+      }
+    },
+    "impl_pins": {
+      "0x35c04acf3bb541d90092bf3e328475377142f70760fa82f372ac0c4e4b3ff4f6": {
+        "role": "syscfg_impl"
+      },
+      "0x80e5c0bb48b8a222e8883e2f0729264857211cc906da8971fe8309466981ecaf": {
+        "args_len": 776,
+        "asr": "0x2ff5cc82dbf333ea30d8ee462178ab1707315355",
+        "build": "solc 0.8.15 london runs 999999 bytecodeHash none",
+        "code_bytes": 20379,
+        "config_hash": "0x12e9c45f19f9817c6d4385fad29e7a70c355502cf0883e76a9a7e478a85d1360",
+        "cwia": "aggregate_v1",
+        "delayed_weth": "0xd6e2d9d4f1f8865ac983ee848983fb1979429914",
+        "dgf": "0xd6e6dbf4f7ea0ac412fd8b65ed297e64bb7a06e1",
+        "fast_blocks_per_second": 5,
+        "fast_finalization_delay": 86400,
+        "fast_upgrade_index": 13,
+        "first_game_created": 1792451160,
+        "first_game_dgf_index": 28495,
+        "game_type": 621,
+        "impl": "0xb5abcf8656e3f26990eceeec99d22023e7eb7e3b",
+        "interval_pairs": [
+          [
+            600,
+            30
+          ],
+          [
+            6000,
+            300
+          ]
+        ],
+        "l2_block_time_slow": 2,
+        "l2_chain_id": 84532,
+        "l2_genesis_block": 0,
+        "l2_genesis_timestamp": 1695768288,
+        "n_intermediate": 20,
+        "proof_threshold": 1,
+        "protocol_versions": "0x15b721b12cf3b0c4400c8a2935a0ae391c2ef65b",
+        "role": "game_impl",
+        "slow_finalization_delay": 432000,
+        "source": "base/contracts@8c21f6d0 v8.4.0 src/L1/proofs/AggregateVerifier.sol",
+        "tee_image_hash": "0x44cca4430eaac037ec451534ff7c9361095fa36e0f53fac9fa03f8305c879ef7",
+        "tee_verifier": "0x92f6dd3501e51b8b20c77b959becaaebeb210e17",
+        "version": "0.3.0",
+        "zk_aggregate_hash": "0x0046d94f58f278df6197b4f433b63085aa95999893811f6ba6dff7e001425ca7",
+        "zk_range_hash": "0x6b1c20d0762f77b5278bd8aa5a0bb0ef3d6f3d9411bdad6d4f929a0701876e35",
+        "zk_verifier": "0xa738e13d97a3f10b307c2cd190edd3e227a72d68"
+      },
+      "0x910d7bf9e11f1a95aab4e3fceb71f647c8db0431b4510e2155c54dca2b50e444": {
+        "role": "dgf_impl"
+      },
+      "0x9edef3a3cf703488a47cc7a4e6c595cc4f13fa0c14fdd4710ba143b146ce51fb": {
+        "role": "portal_impl"
+      },
+      "0xd01ffe5bb9bdf9cb1e42b2dd12188f9bc2a163e8301b24451d7d8485280148b7": {
+        "finality_delay_seconds": 0,
+        "role": "asr_impl"
+      },
+      "0xdcfac30da8e1e7fbd5231636a9e34c65381c5f5ddd35ba257ba595c5ce0fb1f4": {
+        "role": "superchain_impl"
+      },
+      "0xf7f8a640ea3ffadf55e9f425a039e879471a1cda9988e92e2c96d423e08869c7": {
+        "args_len": 776,
+        "asr": "0x2ff5cc82dbf333ea30d8ee462178ab1707315355",
+        "build": "solc 0.8.15 london runs 999999 bytecodeHash none",
+        "code_bytes": 19060,
+        "config_hash": "0x12e9c45f19f9817c6d4385fad29e7a70c355502cf0883e76a9a7e478a85d1360",
+        "cwia": "aggregate_v1",
+        "fast_finalization_delay": 86400,
+        "game_type": 621,
+        "impl": "0xd702aae6221f36dfe7e8ebc4315d64344a9db4cb",
+        "l2_chain_id": 84532,
+        "l2_genesis_block": 0,
+        "l2_genesis_timestamp": 1695768288,
+        "last_game_created": 1792442352,
+        "last_game_dgf_index": 28494,
+        "n_intermediate": 20,
+        "proof_threshold": 1,
+        "role": "game_impl",
+        "slow_finalization_delay": 432000,
+        "source": "base/contracts@385f21a4 v8.3.0 src/L1/proofs/AggregateVerifier.sol",
+        "tee_image_hash": "0xb3d3746cf4b830046e9196dc196244d69fd96d3d436bd45ab84e35a9236f351f",
+        "version": "0.2.0",
+        "zk_aggregate_hash": "0x002663a1072dc1e1938e13d3b269fff88e843eb4ef76d6c6953dde4f5152973b",
+        "zk_range_hash": "0x776848834e7efcb029c48cf7215175b77098e8db28f27d2b074a64106f1c2b16"
+      }
+    },
+    "l1_chain_id": 11155111,
+    "max_l2_headers": 1024,
+    "portal": "0x49f53e41452c74589e85ca1677426ba426459e85",
+    "proxy_pins": {
+      "0x33920c8270353487e486debc0d8ddbb187fa86727f2daf412d794589e6f26cb5": {
+        "bytes": 2100,
+        "role": "superchain_proxy",
+        "source": "unverified (B30 OQ2)"
+      },
+      "0xfa8c9db6c6cab7108dea276f4cd09d575674eb0852c0fa3187e59e98ef977998": {
+        "applies_to": "portal, system_config, asr, dgf",
+        "bytes": 2059,
+        "role": "op_proxy"
+      }
+    },
+    "system_config": "0xf272670eb55e895584501d564afeb048bed26194"
+  },
+  "eth_sepolia": {
+    "anchors": [
+      {
+        "committee_root": "0xe0a6ede4f641fa171bd6cdca25356f98b48039fbe01454685ea4b234ace4fac9",
+        "derived_by": [
+          "vector-set pin: next_sync_committee of the Lodestar light_client update of period 1390 captured 2026-10-20 (single source; not a published ledger entry)"
+        ],
+        "link_sha256": "ea25e10e8ceab99407290f671513f5702dc153abf5b3e8702649029b435a2b8d",
+        "period": 1391,
+        "wsp_epochs": 279
+      }
+    ],
+    "chain_id": 11155111,
+    "epochs_per_period": 256,
+    "forks": [
+      {
+        "epoch": 0,
+        "layout": null,
+        "name": "genesis",
+        "version": "0x90000069"
+      },
+      {
+        "epoch": 50,
+        "layout": null,
+        "name": "altair",
+        "version": "0x90000070"
+      },
+      {
+        "epoch": 100,
+        "layout": null,
+        "name": "bellatrix",
+        "version": "0x90000071"
+      },
+      {
+        "epoch": 56832,
+        "layout": null,
+        "name": "capella",
+        "version": "0x90000072"
+      },
+      {
+        "epoch": 132608,
+        "layout": null,
+        "name": "deneb",
+        "version": "0x90000073"
+      },
+      {
+        "epoch": 222464,
+        "layout": "electra",
+        "name": "electra",
+        "version": "0x90000074"
+      },
+      {
+        "epoch": 272640,
+        "layout": "electra",
+        "name": "fulu",
+        "version": "0x90000075"
+      },
+      {
+        "epoch": 353024,
+        "layout": "gloas",
+        "name": "gloas",
+        "version": "0x90000076"
+      }
+    ],
+    "genesis_time": 1655733600,
+    "genesis_validators_root": "0xd8ea171f3c94aea21ebc42a1ed61052acf3f9209c00e4efbaaddac09ed9b8078",
+    "max_links": 64,
+    "max_spine_headers": 16384,
+    "min_participants": 342,
+    "spec": "consensus-specs v1.7.0-beta.4 aa16bb4c",
+    "sync_committee_size": 512
+  },
+  "format": "certen-finality-pins/1",
+  "onchain_commitment": null,
+  "published_utc": "2026-10-20T02:35:00Z"
+}
