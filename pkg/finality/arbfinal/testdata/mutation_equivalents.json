@@ -102,5 +102,37 @@
   "original": "if leg.HeaderRLP != nil && !bytes.Equal(last, leg.HeaderRLP) { return 0, finality.BlockMismatch(\"spineLastHead…",
   "mutated": "if leg.HeaderRLP != nil && !true { return 0, finality.BlockMismatch(\"spineLastHead…",
   "reason": "keccak256(leg.HeaderRLP) = leg.Hash was checked in Verify and the last header of the spine hashes to the same value, so the bytes are equal by collision resistance; the byte comparison restates the spec (O3b) and is unreachable"
+ },
+ {
+  "file": "confirm.go",
+  "function": "proveLeaf",
+  "operator": "bool_lit",
+  "original": "return false",
+  "mutated": "return true",
+  "reason": "unreachable branch (the guard in front of it cannot fire: memorydb.Put and rlp.EncodeToBytes(uint64) do not fail); same reason as the guard entry"
+ },
+ {
+  "file": "confirm.go",
+  "function": "proveLeaf",
+  "operator": "bool_lit",
+  "original": "return false",
+  "mutated": "return true",
+  "reason": "unreachable branch (the guard in front of it cannot fire: memorydb.Put and rlp.EncodeToBytes(uint64) do not fail); same reason as the guard entry"
+ },
+ {
+  "file": "verify.go",
+  "function": "Kind.Verify",
+  "operator": "int_literal",
+  "original": "covered[0]",
+  "mutated": "covered[1]",
+  "reason": "unreachable branch (see the entry for the guard in front of it): BlockAt has found confBlock on the covered spine, so headerNumbered cannot miss"
+ },
+ {
+  "file": "verify.go",
+  "function": "headerNumbered",
+  "operator": "bool_lit",
+  "original": "return finality.HeaderFields{}, false",
+  "mutated": "return finality.HeaderFields{}, true",
+  "reason": "unreachable return (see the entry for headerNumbered): the number was found on the spine by BlockAt before this lookup, so the loop always returns from inside"
  }
 ]
