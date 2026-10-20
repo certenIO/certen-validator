@@ -1,0 +1,13 @@
+{
+  "format": "certen-base-posted-case/1",
+  "id": "batch_outside_sequencing_window",
+  "description": "seq_window_size = 1 while the frames sit more than one block above the epoch",
+  "pins": "pins/seq_window_1.json",
+  "leg": "legs/a.json",
+  "evidence": "evidence/valid_a.bin",
+  "expect": {
+    "result": "state",
+    "code": "batch_outside_sequencing_window",
+    "fields": {}
+  }
+}

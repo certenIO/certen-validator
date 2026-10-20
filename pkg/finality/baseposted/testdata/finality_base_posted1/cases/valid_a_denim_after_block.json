@@ -1,0 +1,25 @@
+{
+  "format": "certen-base-posted-case/1",
+  "id": "valid_a_denim_after_block",
+  "description": "the Denim guard is a strict \u003e=: denim_time one second after the block is accepted",
+  "pins": "pins/denim_after_block_a.json",
+  "leg": "legs/a.json",
+  "evidence": "evidence/valid_a.bin",
+  "expect": {
+    "result": "ok",
+    "fields": {
+      "batch_type": "0",
+      "batcher": "0xfc56e7272eebbba5bc6c544e159483c4a38f8ba3",
+      "channel_id": "0xad691fdbeabedfc7f4a1c37935fac007",
+      "epoch_hash_bits": "256",
+      "finalized_epoch": "356121",
+      "finalized_slot": "11395872",
+      "l1_blocks": [
+        "11954001"
+      ],
+      "parent_hash_bits": "256",
+      "span_blocks": "1",
+      "span_index": "0"
+    }
+  }
+}

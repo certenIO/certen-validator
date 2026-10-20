@@ -63,3 +63,21 @@ func timestampOf(raw []byte) uint64 {
 }
 
 func hashOf(b []byte) [32]byte { return [32]byte(crypto.Keccak256Hash(b)) }
+
+// depositData returns the data string of a type-0x7e deposit (its last RLP item, which ends the encoding) and its offset.
+func depositData(dep []byte) (int, []byte) {
+	content, _, err := rlp.SplitList(dep[1:])
+	if err != nil {
+		panic(err)
+	}
+	var last []byte
+	for len(content) > 0 {
+		_, val, tail, err := rlp.Split(content)
+		if err != nil {
+			panic(err)
+		}
+		last = val
+		content = tail
+	}
+	return len(dep) - len(last), last
+}

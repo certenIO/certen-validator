@@ -286,7 +286,9 @@ func buildSet(capDir, rawDir, outDir string) error {
 
 	// okFields: everything but the hand-checked invariants comes from the run; the invariants are asserted here
 	okFor := func(ev []byte, l leg) map[string]string {
+		tv := time.Now()
 		v, verr := baseposted.Kind{}.Verify(pins, finality.BlockRef{Chain: 84532, Number: l.num, Hash: l.hsh, HeaderRLP: l.hdr}, ev)
+		fmt.Printf("verify %d bytes of evidence: %s (the first call includes the one-time KZG context)\n", len(ev), time.Since(tv).Round(time.Millisecond))
 		if verr != nil {
 			failures = append(failures, fmt.Sprintf("valid case does not verify: %v", verr))
 			return nil
@@ -371,11 +373,11 @@ func buildSet(capDir, rawDir, outDir string) error {
 		append(append([]byte(nil), evA...), 0), "finality_evidence_malformed", map[string]string{"got_len": "1", "part": "body", "reason": "trailing_bytes", "want_len": "0"}, nil)
 	// deposits: locate the L1-info data inside the deposit
 	dep := append([]byte(nil), bodyA.Deposits[0]...)
-	hi := bytes.Index(dep, depositHash(dep))
-	if hi < 100 {
-		return fmt.Errorf("could not locate the L1-info hash in the deposit")
+	dataStart, ddata := depositData(dep)
+	if len(ddata) < 132 {
+		return fmt.Errorf("the L1-info deposit data is %d bytes", len(ddata))
 	}
-	dataStart := hi - 100
+	hi := dataStart + 100
 	numOff := dataStart + 28 + 7
 	addCase("deposit_epoch_number_altered", "the L1-info deposit's epoch number changed by one: it no longer equals the batch's epoch", "main", "a", "evidence/valid_a.bin", evA,
 		enc(func(b *baseposted.Body) { d := append([]byte(nil), dep...); d[numOff] ^= 1; b.Deposits[0] = d }), "batch_binding_mismatch", map[string]string{"field": "epoch_num"}, nil)
@@ -567,22 +569,4 @@ func setFrameCount(ev []byte, b baseposted.Body, c finality.Container, n uint32)
 	off := len(ev) - len(body) + i + 16
 	binary.BigEndian.PutUint32(out[off:], n)
 	return out
-}
-
-func depositHash(dep []byte) []byte {
-	// the epoch hash is the 32 bytes at data[100:132]; find the data string by scanning for the L1-info selector region: the
-	// deposit's data is the last RLP item, a string of at least 132 bytes
-	for i := len(dep) - 164; i >= 0; i-- {
-		if dep[i] == 0xb8 || dep[i] == 0xb9 {
-			continue
-		}
-	}
-	// the data string is the tail: its payload starts after its RLP header; take the last len-? bytes
-	// a string header of 0xb8 0xa4 (164 bytes) precedes it in every post-Ecotone L1-info deposit
-	j := bytes.LastIndex(dep, []byte{0xb8, 0xa4})
-	if j < 0 {
-		panic("L1-info data header not found")
-	}
-	data := dep[j+2:]
-	return data[100:132]
 }

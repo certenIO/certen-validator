@@ -1,0 +1,25 @@
+{
+  "format": "certen-base-posted-case/1",
+  "id": "valid_b",
+  "description": "an interior L2 block of the second captured channel",
+  "pins": "pins/main.json",
+  "leg": "legs/b.json",
+  "evidence": "evidence/valid_b.bin",
+  "expect": {
+    "result": "ok",
+    "fields": {
+      "batch_type": "0",
+      "batcher": "0xfc56e7272eebbba5bc6c544e159483c4a38f8ba3",
+      "channel_id": "0xd93d2e4441cfd303952a39563bc67e61",
+      "epoch_hash_bits": "256",
+      "finalized_epoch": "356121",
+      "finalized_slot": "11395872",
+      "l1_blocks": [
+        "11954013"
+      ],
+      "parent_hash_bits": "256",
+      "span_blocks": "1",
+      "span_index": "0"
+    }
+  }
+}

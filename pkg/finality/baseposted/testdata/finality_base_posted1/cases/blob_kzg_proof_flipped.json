@@ -1,0 +1,18 @@
+{
+  "format": "certen-base-posted-case/1",
+  "id": "blob_kzg_proof_flipped",
+  "description": "one byte of blob 0's KZG proof flipped: versioned hash holds, verify_blob_kzg_proof fails",
+  "pins": "pins/main.json",
+  "leg": "legs/a.json",
+  "evidence": "evidence/valid_a.bin",
+  "splice": {
+    "offset": 179390,
+    "delete": 1,
+    "insert": "0xd6"
+  },
+  "expect": {
+    "result": "state",
+    "code": "blob_commitment_mismatch",
+    "fields": {}
+  }
+}

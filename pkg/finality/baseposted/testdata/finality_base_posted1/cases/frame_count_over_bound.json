@@ -1,0 +1,22 @@
+{
+  "format": "certen-base-posted-case/1",
+  "id": "frame_count_over_bound",
+  "description": "the frame count field set to 257: finality_evidence_too_large before anything is read",
+  "pins": "pins/main.json",
+  "leg": "legs/a.json",
+  "evidence": "evidence/valid_a.bin",
+  "splice": {
+    "offset": 47916,
+    "delete": 2,
+    "insert": "0x0101"
+  },
+  "expect": {
+    "result": "state",
+    "code": "finality_evidence_too_large",
+    "fields": {
+      "count": "257",
+      "limit": "256",
+      "part": "frameTxs"
+    }
+  }
+}

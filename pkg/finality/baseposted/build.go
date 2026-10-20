@@ -197,8 +197,13 @@ func (b *Builder) Build(ctx context.Context, s *ethproof.Settlement, have finali
 	}
 	_ = raw0
 	if top < maxBlock {
-		observed, _ := b.L1.Head(ctx)
-		return pend("block_not_yet_covered", map[string]any{"latest_finalized_exec_number": top, "latest_finalized_slot": head.Slot, "observed_head_slot": observed})
+		var observedSlot uint64
+		if n, err := b.L1.Head(ctx); err == nil {
+			if blk, err := b.L1.Block(ctx, n); err == nil && blk.Timestamp >= eth.GenesisTime {
+				observedSlot = (blk.Timestamp - eth.GenesisTime) / 12
+			}
+		}
+		return pend("block_not_yet_covered", map[string]any{"latest_finalized_exec_number": top, "latest_finalized_slot": head.Slot, "observed_head_slot": observedSlot})
 	}
 	// The spine: finalized head down to the lowest block the evidence cites.
 	var spine [][]byte

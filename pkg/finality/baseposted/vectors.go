@@ -109,6 +109,10 @@ func CanonicalVerdict(v finality.Verdict, err error) []byte {
 
 // ExpectBytes renders an Expect in the canonical form CanonicalVerdict produces.
 func ExpectBytes(e Expect) []byte {
+	var cf bytes.Buffer
+	if err := json.Compact(&cf, e.Fields); err == nil {
+		e.Fields = cf.Bytes()
+	}
 	if e.Result == "ok" {
 		return []byte(`{"fields":` + string(e.Fields) + `,"result":"ok"}`)
 	}

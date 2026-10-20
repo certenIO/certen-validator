@@ -1,0 +1,18 @@
+{
+  "format": "certen-base-posted-case/1",
+  "id": "blob_commitment_flipped",
+  "description": "one byte of blob 0's commitment flipped: the versioned hash no longer matches the transaction",
+  "pins": "pins/main.json",
+  "leg": "legs/a.json",
+  "evidence": "evidence/valid_a.bin",
+  "splice": {
+    "offset": 179342,
+    "delete": 1,
+    "insert": "0x65"
+  },
+  "expect": {
+    "result": "state",
+    "code": "blob_commitment_mismatch",
+    "fields": {}
+  }
+}
