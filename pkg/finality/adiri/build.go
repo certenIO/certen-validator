@@ -127,7 +127,8 @@ func (p *Prover) post(ctx context.Context, url string, reqs []rpcReq) ([]rpcResp
 		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, truncate(string(raw), 200))
+		// the body is the provider's text: it is never echoed into a state, only its status
+		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 	var out []rpcResp
 	if err := json.Unmarshal(raw, &out); err != nil {
@@ -146,13 +147,6 @@ func (p *Prover) post(ctx context.Context, url string, reqs []rpcReq) ([]rpcResp
 		ordered[i] = r
 	}
 	return ordered, nil
-}
-
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n]
 }
 
 // endpointNote renders one endpoint failure with the endpoint and the error redacted.
