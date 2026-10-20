@@ -34,33 +34,36 @@ func ethSection(m map[string]any) map[string]any { return m["eth_sepolia"].(map[
 
 func TestPinsBoundsOfOneAreValidAndTheParticipationFloorIsExact(t *testing.T) {
 	keys := []string{"sync_committee_size", "min_participants", "epochs_per_period", "max_links", "max_spine_headers"}
+	// the committee size, epochs per period and the participation floor are what the L1 head verifier runs on (512, 256, 342): they
+	// are accepted at those values only; the two DoS bounds are valid down to their smallest positive value
 	_, err := pinsMutated(t, func(m map[string]any) {
-		for _, k := range keys {
-			ethSection(m)[k] = json.Number("1")
-		}
+		ethSection(m)["sync_committee_size"] = json.Number("512")
+		ethSection(m)["min_participants"] = json.Number("342")
+		ethSection(m)["epochs_per_period"] = json.Number("256")
+		ethSection(m)["max_links"] = json.Number("1")
+		ethSection(m)["max_spine_headers"] = json.Number("1")
 	})
 	if err != nil {
-		t.Fatalf("every bound at its smallest positive value (1) must be accepted: %v", err)
+		t.Fatalf("the two DoS bounds at their smallest positive value (1) must be accepted: %v", err)
 	}
 	for _, k := range keys {
 		_, err := pinsMutated(t, func(m map[string]any) { ethSection(m)[k] = json.Number("0") })
 		wantNamed(t, err, CodePinsCorrupt, "reason", PinsBoundMissing, "key", k)
 	}
-	floor := func(size, min string) error {
+	floor := func(min string) error {
 		_, err := pinsMutated(t, func(m map[string]any) {
-			ethSection(m)["sync_committee_size"] = json.Number(size)
 			ethSection(m)["min_participants"] = json.Number(min)
 		})
 		return err
 	}
-	if err := floor("3", "2"); err != nil { // 2*3 == 3*2: exactly two thirds
-		t.Fatalf("exactly two thirds is the floor and is valid: %v", err)
+	if err := floor("342"); err != nil { // 3*342 >= 2*512: the smallest count that is two thirds
+		t.Fatalf("the smallest two-thirds count is the floor and is valid: %v", err)
 	}
-	if err := floor("3", "3"); err != nil {
+	if err := floor("512"); err != nil {
 		t.Fatalf("min_participants == sync_committee_size is valid: %v", err)
 	}
-	wantNamed(t, floor("4", "2"), CodePinsCorrupt, "reason", PinsParticipationFloor)
-	wantNamed(t, floor("3", "4"), CodePinsCorrupt, "reason", PinsParticipationFloor)
+	wantNamed(t, floor("341"), CodePinsCorrupt, "reason", PinsParticipationFloor)
+	wantNamed(t, floor("513"), CodePinsCorrupt, "reason", PinsParticipationFloor)
 }
 
 func TestPinsForkAndAnchorOrderingAndShapeAreEnforcedAtEveryIndex(t *testing.T) {

@@ -19,6 +19,9 @@ import (
 // patch is applied here by code independent of cmd/finalityethsepolia3record, which wrote the expected verdict.
 const set3 = "ethsepolia/testdata/finality_eth_sepolia3"
 
+// set3EmbeddedPinsSHA256 is the hash of pins/embedded.json of the set: the embedded pins file (PinsSHA256) at its publication.
+const set3EmbeddedPinsSHA256 = "12217758b3a8074a07873cd3d26cc46edab7782d31f393d7f540c3e3077062d5"
+
 func set3Read(t testing.TB, rel string) []byte {
 	t.Helper()
 	b, err := os.ReadFile(filepath.Join(set3, filepath.FromSlash(rel)))
@@ -69,8 +72,23 @@ func TestSet3ManifestPinsEveryFileAndOnlyThoseFiles(t *testing.T) {
 			t.Errorf("%s is in the set directory but not in the manifest", rel)
 		}
 	}
-	if got := sha256.Sum256(set3Read(t, "pins/embedded.json")); hex.EncodeToString(got[:]) != PinsSHA256 {
-		t.Errorf("pins/embedded.json is not the embedded pins file (PinsSHA256)")
+	// the set's pins/embedded.json is the embedded pins file as it was when the set was published (its bytes are never edited, and the
+	// embedded file has been extended since: the Granite pins of base_sepolia, RB11-D2FIX); what the ledger cases judge under is the
+	// Sepolia section, which must still be the embedded file's
+	if got := sha256.Sum256(set3Read(t, "pins/embedded.json")); hex.EncodeToString(got[:]) != set3EmbeddedPinsSHA256 {
+		t.Errorf("pins/embedded.json is not the embedded pins file as published (%x)", got)
+	}
+	section := func(raw []byte) string {
+		var doc struct {
+			Eth json.RawMessage `json:"eth_sepolia"`
+		}
+		if err := json.Unmarshal(raw, &doc); err != nil {
+			t.Fatal(err)
+		}
+		return string(doc.Eth)
+	}
+	if section(set3Read(t, "pins/embedded.json")) != section(embeddedPins) {
+		t.Errorf("the eth_sepolia section of the embedded pins differs from the one the set's ledger cases were judged under")
 	}
 	if len(m.Cases) < 21 {
 		t.Errorf("%d cases", len(m.Cases))

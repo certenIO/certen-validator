@@ -153,6 +153,14 @@
   },
   {
     "file": "pins.go",
+    "function": "EthSepoliaPins.validate",
+    "operator": "cmp_boundary",
+    "original": "e.MinParticipants*3 < e.SyncCommitteeSize*2",
+    "mutated": "e.MinParticipants*3 <= e.SyncCommitteeSize*2",
+    "reason": "The comparison is reached only with sync_committee_size == 512 (any other value is refused just before it as bad_value{sync_committee_size}), and 3*min_participants == 1024 has no integer solution, so < and <= agree for every reachable input."
+  },
+  {
+    "file": "pins.go",
     "function": "walkKeys",
     "operator": "guard_off",
     "original": "if err != nil",
