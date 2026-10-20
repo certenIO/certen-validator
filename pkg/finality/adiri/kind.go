@@ -114,6 +114,12 @@ func (v *Verifier) limits() finality.Limits {
 	return finality.DefaultLimits()
 }
 
+var (
+	_ finality.Kind      = (*Verifier)(nil)
+	_ finality.Prover    = (*Prover)(nil)
+	_ finality.Ceilinged = (*Prover)(nil)
+)
+
 // Name, Chain and Level implement finality.Kind.
 func (v *Verifier) Name() string          { return Name }
 func (v *Verifier) Chain() uint64         { return finality.ChainAdiri }

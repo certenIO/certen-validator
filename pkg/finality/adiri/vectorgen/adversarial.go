@@ -242,6 +242,9 @@ func adversarial(base vec, baseEv []byte, facts cacheFacts) []vec {
 	addPins("adv-pin-mismatch-chain-id", "the pins name chain id 2018",
 		canon("evidence_pin_mismatch", "pin", "chain_id", "want", uint64(2017), "got", uint64(2018)),
 		func(m map[string]any) { m["chain_id"] = float64(2018) })
+	addPins("adv-max-headers-pin", "the pins bound the spine at 10 headers; the real spine has 173",
+		canon("finality_evidence_too_large", "part", "spine", "count", F-n+1, "limit", uint64(10)),
+		func(m map[string]any) { m["max_headers"] = float64(10) })
 	addPins("adv-codec-unsupported", "the pins name another record codec",
 		canon("epoch_record_codec_unsupported", "epoch", uint64(0), "pinned", "telcoin-epoch-record/bcs-keccak/9", "supported", "telcoin-epoch-record/bcs-blake3/1"),
 		func(m map[string]any) { m["epoch_record_codec"] = "telcoin-epoch-record/bcs-keccak/9" })
