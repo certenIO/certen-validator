@@ -558,6 +558,20 @@ type BeaconLC struct {
 	AnchorPeriod uint64
 	AnchorRoot   [32]byte
 	AnchorBody   ethl1.LB
+	// MaxLinks bounds the links requested (the pins' max_links, spec 8.2); 0 is no bound. More links than that is *TooManyLinksError, raised
+	// before any link is requested.
+	MaxLinks int
+}
+
+// TooManyLinksError is the refusal of a final update signed more than MaxLinks periods after the anchor: the evidence the pins can carry
+// does not reach it. Period and Anchor are the signature period and the anchor period.
+type TooManyLinksError struct {
+	Signature, Anchor uint64
+	Max               int
+}
+
+func (e *TooManyLinksError) Error() string {
+	return fmt.Sprintf("the final update was signed in period %d, %d periods after the anchor %d; the pins allow %d links", e.Signature, e.Signature-e.Anchor, e.Anchor, e.Max)
 }
 
 var _ LCSource = (*BeaconLC)(nil)
@@ -610,6 +624,9 @@ func (b *BeaconLC) LC(ctx context.Context) (ethl1.LC, error) {
 	sigPeriod := sigSlot / 32 / 256
 	if sigPeriod < b.AnchorPeriod {
 		return lc, redacted("the finality update's signature period %d is below the anchor period %d", sigPeriod, b.AnchorPeriod)
+	}
+	if b.MaxLinks > 0 && sigPeriod-b.AnchorPeriod > uint64(b.MaxLinks) {
+		return lc, &TooManyLinksError{Signature: sigPeriod, Anchor: b.AnchorPeriod, Max: b.MaxLinks}
 	}
 	if n := sigPeriod - b.AnchorPeriod; n > 0 {
 		body, err := b.get(ctx, fmt.Sprintf("/eth/v1/beacon/light_client/updates?start_period=%d&count=%d", b.AnchorPeriod, n))

@@ -62,6 +62,8 @@ func main() {
 		err = recordCmd(os.Args[2:])
 	case "build":
 		err = buildCmd(os.Args[2:])
+	case "build2":
+		err = build2Cmd(os.Args[2:])
 	default:
 		err = fmt.Errorf("unknown command %q", os.Args[1])
 	}
@@ -426,6 +428,8 @@ func u64(v uint64) string { var b [8]byte; binary.BigEndian.PutUint64(b[:], v); 
 func replaceAt(at int, b []byte) patch { return patch{At: at, Del: len(b), Ins: hx(b)} }
 
 type builder struct {
+	set    string // manifest set name (setName when empty)
+	readme string // README text (the set 1 text when empty)
 	out    string
 	cases  []vecCase
 	extend []extendCase
@@ -615,21 +619,29 @@ func (b *builder) write() error {
 	for _, c := range b.cases {
 		ids = append(ids, c.ID)
 	}
-	for id := range b.extendIDs() {
-		ids = append(ids, id)
+	for _, c := range b.extend { // in generation order: the manifest is deterministic
+		ids = append(ids, c.ID)
 	}
-	m := map[string]any{"format": "certen-finality-manifest/1", "set": setName, "cases": ids, "files": sums}
+	name := b.set
+	if name == "" {
+		name = setName
+	}
+	m := map[string]any{"format": "certen-finality-manifest/1", "set": name, "cases": ids, "files": sums}
 	mj, _ := json.MarshalIndent(m, "", " ")
 	mj = append(mj, '\n')
 	b.files["MANIFEST.json"] = mj
 	ms := sha256.Sum256(mj)
 	b.files["MANIFEST.json.sha256"] = []byte(hex.EncodeToString(ms[:]) + "\n")
-	b.files["README.md"] = []byte(readme)
+	if b.readme != "" {
+		b.files["README.md"] = []byte(b.readme)
+	} else {
+		b.files["README.md"] = []byte(readme)
+	}
 	for rel, d := range b.files {
 		if err := writeFile(filepath.Join(b.out, filepath.FromSlash(rel)), d); err != nil {
 			return err
 		}
 	}
-	fmt.Printf("%s: %d verify cases, %d extend cases, MANIFEST sha256 %x\n", setName, len(b.cases), len(b.extend), ms)
+	fmt.Printf("%s: %d verify cases, %d extend cases, MANIFEST sha256 %x\n", name, len(b.cases), len(b.extend), ms)
 	return nil
 }
