@@ -51,10 +51,11 @@ type Ceilinged interface{ Ceiling() Level }
 // Registry holds the provers and Kinds of every chain package. Chain packages register into Default from an explicit call at
 // startup; tests build their own with NewRegistry.
 type Registry struct {
-	mu       sync.RWMutex
-	provers  map[uint64][]Prover
-	kinds    map[string]Kind
-	profiles map[uint64]ChainProfile
+	mu        sync.RWMutex
+	provers   map[uint64][]Prover
+	kinds     map[string]Kind
+	profiles  map[uint64]ChainProfile
+	capturers map[uint64][]Capturer
 }
 
 // NewRegistry returns a registry holding the chain profiles (profile.go). No Kind or Prover is registered: level 1 is
@@ -131,6 +132,10 @@ func (r *Registry) Profile(chain uint64) (ChainProfile, error) {
 func (r *Registry) Chains() []uint64 {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	return r.sortedChainsLocked()
+}
+
+func (r *Registry) sortedChainsLocked() []uint64 {
 	out := make([]uint64, 0, len(r.profiles))
 	for c := range r.profiles {
 		out = append(out, c)
