@@ -357,15 +357,9 @@ func TestLCAllEndpointsDownIsTheNamedStateWithHostLabelsOnly(t *testing.T) {
 	}
 }
 
-// (4) A ledger without a block_root anchor (the embedded ledger is empty until the ledger PR lands) is finality_pin_unknown, and
-// no endpoint is contacted for it.
+// (4) A ledger without a block_root anchor is finality_pin_unknown, and no endpoint is contacted for it.
 func TestLCWithoutAKindTwoAnchorIsPinUnknownAndAsksNobody(t *testing.T) {
-	embedded, err := finality.EmbeddedPins()
-	if err != nil {
-		t.Fatal(err)
-	}
 	cases := map[string]*finality.Pins{
-		"embedded_empty_ledger":      embedded,
 		"no_block_root_in_any_entry": lctPins(t, func(uint64) bool { return false }),
 		"nil_pins":                   nil,
 	}
@@ -550,5 +544,35 @@ func TestLCBootstrapLayoutByLength(t *testing.T) {
 		if _, _, ok := bootstrapLayout(b); ok {
 			t.Errorf("%s accepted as a bootstrap", name)
 		}
+	}
+}
+
+// (4b) The embedded ledger carries the Sepolia root pin (period 1378 with its block_root): the source anchors there and asks the
+// first endpoint for exactly that bootstrap, by that block root.
+func TestLCEmbeddedRootPinIsTheAnchorOfTheFirstRequest(t *testing.T) {
+	embedded, err := finality.EmbeddedPins()
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, err := embedded.Sepolia()
+	if err != nil || len(e.Anchors) == 0 {
+		t.Fatalf("the embedded ledger has no anchor: %v", err)
+	}
+	last := e.Anchors[len(e.Anchors)-1]
+	if last.BlockRoot == "" {
+		t.Fatalf("the embedded ledger's last entry has no block_root: %+v", last)
+	}
+	var first atomic.Value
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		first.CompareAndSwap(nil, r.URL.Path)
+		http.Error(w, "no", http.StatusNotFound)
+	}))
+	defer srv.Close()
+	_, err = (&LC{URLs: []string{srv.URL}, Pins: embedded}).LC(context.Background())
+	if st, ok := finality.AsNamed(err); !ok || st.Code != "finality_lc_unavailable" {
+		t.Fatalf("a refusing endpoint must be finality_lc_unavailable, got %v", err)
+	}
+	if got, _ := first.Load().(string); got != "/eth/v1/beacon/light_client/bootstrap/"+last.BlockRoot {
+		t.Fatalf("the first request was %q, want the bootstrap of the ledger's root pin %s", got, last.BlockRoot)
 	}
 }
