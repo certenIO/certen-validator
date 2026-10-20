@@ -143,7 +143,15 @@ func baseFamilyCase(t *testing.T, set, id string, expect func(json.RawMessage) s
 	if err := json.Unmarshal(readFileT(t, filepath.Join(dir, c.Leg)), &leg); err != nil {
 		t.Fatal(err)
 	}
-	p, err := finality.ParsePinsOverride(readFileT(t, filepath.Join(dir, c.Pins)))
+	pinsRaw := readFileT(t, filepath.Join(dir, c.Pins))
+	if strings.HasPrefix(set, "baseposted/") {
+		// the published l1_posted set predates the Granite pins; the harness supplies them explicitly (baseposted.PublishedSetPinSupply)
+		var err error
+		if pinsRaw, err = baseposted.SupplyBaseSepoliaPins(pinsRaw, baseposted.PublishedSetPinSupply); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p, err := finality.ParsePinsOverride(pinsRaw)
 	if err != nil {
 		t.Fatal(err)
 	}
