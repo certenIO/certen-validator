@@ -450,6 +450,15 @@ func (p *Prover) Build(ctx context.Context, s *ethproof.Settlement, have finalit
 	if err != nil {
 		return nil, nil, err
 	}
+	return p.BuildLeg(ctx, leg)
+}
+
+// BuildLeg builds the evidence for a leg block already derived at level 1 (Build derives it from the Settlement; the
+// vector recorder names it directly).
+func (p *Prover) BuildLeg(ctx context.Context, leg finality.BlockRef) (*finality.Addendum, *finality.PendingState, error) {
+	if p.Verifier == nil {
+		p.Verifier = NewVerifier()
+	}
 	curResp, err := p.one(ctx, p.Endpoints, SourceEpochRecord, "tn_getCurrentEpoch")
 	if err != nil {
 		return nil, nil, err
@@ -657,4 +666,78 @@ func (p *Prover) slotBody(ctx context.Context, cfa1 []byte, F NumHash, leg final
 		nodes = append(nodes, b)
 	}
 	return Body{CFA1: cfa1, LinkKind: LinkSlot, FinalHeader: fh, Nodes: finality.EncodeNodes(nodes)}, true
+}
+
+// HeaderRLPFromJSON rebuilds the raw consensus RLP of an eth_getBlockByNumber result and requires it to hash to the hash the
+// node reported.
+func HeaderRLPFromJSON(raw json.RawMessage) (rlpBytes []byte, hash [32]byte, err error) {
+	return headerRLP(raw)
+}
+
+// ReadEpochRecords reads tn_epochRecord(from..to-1) in JSON-RPC batches from the first endpoint that answers.
+func (p *Prover) ReadEpochRecords(ctx context.Context, from, to uint64) ([]json.RawMessage, error) {
+	var out []json.RawMessage
+	for f := from; f < to; f += uint64(p.batchSize()) {
+		t := f + uint64(p.batchSize())
+		if t > to {
+			t = to
+		}
+		reqs := make([]rpcReq, 0, t-f)
+		for e := f; e < t; e++ {
+			reqs = append(reqs, rpcReq{JSONRPC: "2.0", ID: int(e) + 1, Method: "tn_epochRecord", Params: []any{e}})
+		}
+		rs, err := p.call(ctx, p.Endpoints, SourceEpochRecord, reqs)
+		if err != nil {
+			return nil, err
+		}
+		for i, r := range rs {
+			if r.Error != nil {
+				return nil, SourceUnavailable(SourceEpochRecord, []string{fmt.Sprintf("tn_epochRecord(%d): %s", f+uint64(i), ethrpc.RedactText(rpcErrText(r)))})
+			}
+			out = append(out, r.Result)
+		}
+	}
+	return out, nil
+}
+
+// ReadHeaders reads the raw headers of blocks from..to inclusive, ascending.
+func (p *Prover) ReadHeaders(ctx context.Context, from, to uint64) ([][]byte, error) {
+	var out [][]byte
+	for f := from; f <= to; f += uint64(p.batchSize()) {
+		t := f + uint64(p.batchSize()) - 1
+		if t > to {
+			t = to
+		}
+		reqs := make([]rpcReq, 0, t-f+1)
+		for n := f; n <= t; n++ {
+			reqs = append(reqs, rpcReq{JSONRPC: "2.0", ID: int(n-f) + 1, Method: "eth_getBlockByNumber", Params: []any{hexU(n), false}})
+		}
+		rs, err := p.call(ctx, p.Endpoints, SourceHeaders, reqs)
+		if err != nil {
+			return nil, err
+		}
+		for i, r := range rs {
+			if r.Error != nil || len(r.Result) == 0 || string(r.Result) == "null" {
+				return nil, SourceUnavailable(SourceHeaders, []string{fmt.Sprintf("eth_getBlockByNumber(%d): %s", f+uint64(i), ethrpc.RedactText(rpcErrText(r)))})
+			}
+			enc, _, err := headerRLP(r.Result)
+			if err != nil {
+				return nil, SourceUnavailable(SourceHeaders, []string{ethrpc.RedactText(err.Error())})
+			}
+			out = append(out, enc)
+		}
+	}
+	return out, nil
+}
+
+// RawCall sends one JSON-RPC request to the endpoints and returns its result (for the recorder's tn_genesis read).
+func (p *Prover) RawCall(ctx context.Context, method string, params ...any) (json.RawMessage, error) {
+	r, err := p.one(ctx, p.Endpoints, SourceEpochRecord, method, params...)
+	if err != nil {
+		return nil, err
+	}
+	if r.Error != nil {
+		return nil, SourceUnavailable(SourceEpochRecord, []string{method + ": " + ethrpc.RedactText(rpcErrText(r))})
+	}
+	return r.Result, nil
 }

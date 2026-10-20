@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"os"
 	"strings"
 	"testing"
@@ -40,7 +41,7 @@ func TestTheInitialPinsHoldExactlyTheSepoliaNetworkSectionOfSection42(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.Format != PinsFormat || p.OnchainCommitment != nil || len(p.Sections) != 0 {
+	if p.Format != PinsFormat || p.OnchainCommitment != nil || !onlyChainSections(p.Sections) {
 		t.Fatalf("%+v", p)
 	}
 	e, err := p.Sepolia()
@@ -148,4 +149,15 @@ func TestLoadPinsAcceptsAnAbsentSectionAndKeepsOtherChainsSectionsRaw(t *testing
 	if err != nil || len(q.Sections["base_sepolia"]) == 0 {
 		t.Fatalf("%v %v", err, q)
 	}
+}
+
+// onlyChainSections: besides the Sepolia network section, the file may carry the raw sections of the chain packages
+// (adiri from RB11-F1; base_sepolia and arb_sepolia are added by their own work packages). Any other key is a defect.
+func onlyChainSections(s map[string]json.RawMessage) bool {
+	for k := range s {
+		if k != "adiri" && k != "base_sepolia" && k != "arb_sepolia" {
+			return false
+		}
+	}
+	return true
 }
