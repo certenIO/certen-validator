@@ -21,6 +21,7 @@ import (
 	"github.com/certen/independant-validator/pkg/ethproof"
 	"github.com/certen/independant-validator/pkg/execution"
 	"github.com/certen/independant-validator/pkg/finality"
+	"github.com/certen/independant-validator/pkg/finality/ethl1"
 )
 
 // S7: staged finality (PROOF_V2 section 7, pkg/finality, domain tag certen:finality:v1).
@@ -226,7 +227,7 @@ func printReport(w io.Writer, rep finality.Report, subject string) int {
 	for _, l := range []finality.Level{finality.LevelL1Posted, finality.LevelFinalized} {
 		switch st := rep.Levels[l]; st.Status {
 		case finality.StatusRefused:
-			if st.State != nil && (st.State.Code == finality.CodeEvidenceUnrecognised || st.State.Code == finality.CodePinUnknown) {
+			if notCoveredByThePins(st.State) {
 				code = worseExit(code, exitSummaryOnly)
 			} else {
 				code = exitFailed
@@ -242,6 +243,26 @@ func printReport(w io.Writer, rep finality.Report, subject string) int {
 		fmt.Fprintf(w, "VERIFIED (finality)  %s  level %s\n", subject, rep.Headline)
 	}
 	return code
+}
+
+// notCoveredByThePins is true for a refusal that does not say the evidence is wrong, only that this verifier cannot judge it: its kind is
+// unknown (finality_evidence_unrecognised), the pins hold no entry for the period it names (finality_pin_unknown), or the pins' ledger ends
+// before the period it is anchored at (finality_ledger_behind, also when a rollup kind carries it as the inner code of
+// l1_finality_unproven). Those are the summary-only class, exit 3; every other refusal means evidence that does not check out, exit 1.
+// A wrapped finality_pin_unknown is deliberately NOT in the class: it was FAILED before and this change does not move it (recorded as
+// a finding).
+func notCoveredByThePins(st *finality.StateError) bool {
+	if st == nil {
+		return false
+	}
+	switch st.Code {
+	case finality.CodeEvidenceUnrecognised, finality.CodePinUnknown, ethl1.CodeLedgerBehind:
+		return true
+	case ethl1.CodeL1FinalityUnproven:
+		inner, _ := st.Fields["inner"].(string)
+		return inner == ethl1.CodeLedgerBehind
+	}
+	return false
 }
 
 // reportPinsSelfcheck re-derives the whole Sepolia ledger of the pins from its root pin through the link files embedded beside
