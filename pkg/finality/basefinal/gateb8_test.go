@@ -26,6 +26,7 @@ type scriptGames struct {
 	count    uint64
 	countErr error
 	atErr    error
+	failAt   map[uint64]error // GameAt fails for these indexes only
 	codeErr  error
 	slotErr  error
 	l2seq    map[[20]byte]uint64 // per proxy: the end of its range (its code carries it); the live game when absent
@@ -38,6 +39,9 @@ func (g *scriptGames) GameCount(context.Context) (uint64, error) { return g.coun
 func (g *scriptGames) GameAt(ctx context.Context, i uint64) (GameInfo, error) {
 	if g.atErr != nil {
 		return GameInfo{}, g.atErr
+	}
+	if err := g.failAt[i]; err != nil {
+		return GameInfo{}, err
 	}
 	info, _ := g.base.GameAt(ctx, i)
 	if i != g.liveIndex() {
