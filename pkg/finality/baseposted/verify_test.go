@@ -349,10 +349,15 @@ func TestSynthEachStateProofGapIsNamed(t *testing.T) {
 	_, err = s.verify()
 	wantCode(t, err, CodeL1StateProofInvalid, map[string]string{"which": "account"})
 
-	// a batcherHash that is not a plain address (a non-zero byte above the 20) never matches a sender
-	s = makeSynth(t, synthOpts{compression: "zlib", calldata: true, dirtyBatcherHash: true})
-	_, err = s.verify()
-	wantCode(t, err, CodeBatcherSender, nil)
+	// a batcherHash that is not a plain address (any non-zero byte above the 20, first and last, any value) never matches a sender
+	for _, d := range []struct {
+		at  int
+		val byte
+	}{{0, 1}, {11, 1}, {11, 0xff}, {5, 2}} {
+		s = makeSynth(t, synthOpts{compression: "zlib", calldata: true, dirtyBatcherHash: true, dirtyIndex: d.at, dirtyValue: d.val})
+		_, err = s.verify()
+		wantCode(t, err, CodeBatcherSender, nil)
+	}
 }
 
 func TestKindVerifyRefusesAMislabelledContainerAndAnUnreadableLeg(t *testing.T) {
@@ -469,4 +474,88 @@ func TestBodyBoundsMaxBlobsMaxDepositsAndLeafSizeAreNamed(t *testing.T) {
 	short.Frames = []FrameTx{{L1Block: 1, TxRaw: []byte{1}, Blobs: []Blob{{Raw: make([]byte, BlobSize-1)}}}}
 	_, err = DecodeBody(EncodeBody(short), lim, ep, 32)
 	wantCode(t, err, finality.CodeEvidenceMalformed, map[string]string{"part": "blob.raw", "reason": "truncated"})
+}
+
+func TestKindVerifyRefusesGarbageMissingSepoliaPinsHeaderNumberSpineGapAndABlobCountOverTheClamp(t *testing.T) {
+	set := filepath.Join("testdata", SetName)
+	pinsRaw, _ := ReadFile(set, "pins/main.json")
+	pins, err := finality.ParsePinsOverride(pinsRaw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legRaw, _ := ReadFile(set, "legs/a.json")
+	var leg Leg
+	_ = json.Unmarshal(legRaw, &leg)
+	num, _ := strconv.ParseUint(leg.Number, 10, 64)
+	hdr, _ := hex.DecodeString(strings.TrimPrefix(leg.Header, "0x"))
+	hb, _ := hex.DecodeString(strings.TrimPrefix(leg.Hash, "0x"))
+	var hash [32]byte
+	copy(hash[:], hb)
+	ev, _ := ReadFile(set, "evidence/valid_a.bin")
+	ref := finality.BlockRef{Chain: 84532, Number: num, Hash: hash, HeaderRLP: hdr}
+	c, err := finality.DecodeContainer(ev, finality.DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := DecodeBody(c.Body, finality.DefaultLimits(), EthL1Pins(pins), 32)
+	if err != nil {
+		t.Fatal(err)
+	}
+	enc := func(mod func(*Body)) []byte {
+		bd := body
+		bd.L1Spine = append([][]byte(nil), body.L1Spine...)
+		bd.Frames = append([]FrameTx(nil), body.Frames...)
+		mod(&bd)
+		out, err := finality.Container{Header: c.Header, Body: EncodeBody(bd)}.Encode()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	// not a container at all
+	_, err = Kind{}.Verify(pins, ref, []byte{1, 2, 3})
+	if _, ok := finality.AsNamed(err); !ok {
+		t.Fatalf("garbage evidence must be a named state, got %v", err)
+	}
+	// base_sepolia pins present, no Sepolia network section
+	var m map[string]any
+	_ = json.Unmarshal(pinsRaw, &m)
+	delete(m, "eth_sepolia")
+	nb, _ := json.MarshalIndent(m, "", "  ")
+	noEth, err := finality.ParsePinsOverride(append(nb, '\n'))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = Kind{}.Verify(noEth, ref, ev)
+	wantCode(t, err, finality.CodePinUnknown, map[string]string{"kind": "eth_sepolia"})
+	// the leg header has another number than the leg claims while hash and container agree
+	wrongNum := ref
+	wrongNum.Number = num + 1
+	cc := c
+	cc.Header.BlockNumber = num + 1
+	evN, _ := cc.Encode()
+	_, err = Kind{}.Verify(pins, wrongNum, evN)
+	wantCode(t, err, finality.CodeBlockMismatch, map[string]string{"field": "blockNumber"})
+	// a hole in the L1 spine
+	_, err = Kind{}.Verify(pins, ref, enc(func(b *Body) { b.L1Spine = append(b.L1Spine[:3:3], b.L1Spine[4:]...) }))
+	wantCode(t, err, "finality_header_chain_broken", map[string]string{"spine": "l1"})
+	// max_blobs raised in the pins cannot exceed the code bound of 32 per container
+	var mm map[string]any
+	_ = json.Unmarshal(pinsRaw, &mm)
+	mm["base_sepolia"].(map[string]any)["max_blobs"] = 64
+	wb, _ := json.MarshalIndent(mm, "", "  ")
+	wide, err := finality.ParsePinsOverride(append(wb, '\n'))
+	if err != nil {
+		t.Fatal(err)
+	}
+	many := enc(func(b *Body) {
+		f := b.Frames[0]
+		f.Blobs = nil
+		for i := 0; i < 33; i++ {
+			f.Blobs = append(f.Blobs, Blob{Raw: make([]byte, BlobSize)})
+		}
+		b.Frames = []FrameTx{f}
+	})
+	_, err = Kind{}.Verify(wide, ref, many)
+	wantCode(t, err, finality.CodeEvidenceTooLarge, map[string]string{"part": "frameTx.blobs", "count": "33", "limit": "32"})
 }

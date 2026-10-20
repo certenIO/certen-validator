@@ -191,8 +191,11 @@ func (Kind) Verify(p *finality.Pins, b finality.BlockRef, evidence []byte) (fina
 	if err != nil {
 		return finality.Verdict{}, err
 	}
-	if l2.Hash != b.Hash || l2.Number != b.Number {
+	if l2.Hash != b.Hash {
 		return finality.Verdict{}, finality.BlockMismatch("blockHash", b.Hash, l2.Hash)
+	}
+	if l2.Number != b.Number {
+		return finality.Verdict{}, finality.BlockMismatch("blockNumber", b.Number, l2.Number)
 	}
 	// O6: post-Denim blocks (200 ms blocks, shared timestamps, new batch format) are not yet pinned.
 	if l2.Timestamp >= bp.DenimTime {

@@ -53,6 +53,8 @@ type synthOpts struct {
 	chainBatch       *ecdsa.PrivateKey // the batcher recorded in the SystemConfig (default: the signing key)
 	toInbox          bool
 	dirtyBatcherHash bool // the recorded batcherHash has a non-zero byte above its 20-byte address
+	dirtyIndex       int  // which of the 12 upper bytes
+	dirtyValue       byte // and its value
 	omitImpl         bool // the implementation account is absent from the state
 }
 
@@ -180,7 +182,7 @@ func makeSynth(t *testing.T, o synthOpts) *synth {
 	}
 	batcherHash := common.BytesToHash(crypto.PubkeyToAddress(o.chainBatch.PublicKey).Bytes())
 	if o.dirtyBatcherHash {
-		batcherHash[0] = 1
+		batcherHash[o.dirtyIndex] = o.dirtyValue
 	}
 	for _, blk := range order {
 		var raws [][]byte
