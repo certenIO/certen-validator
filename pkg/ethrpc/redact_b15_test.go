@@ -72,6 +72,12 @@ var b15Shapes = []struct{ name, text string }{
 	{"http-schemes", b15Rep("http://", 4<<20)},
 	{"odd-scheme", b15Rep("a://", 4<<20)},
 	{"escaped-pairs", b15Rep(b15bs("https:~/~/h.io~/v2~/KEY "), 4<<20)},
+	// RB10-B17 (V-R10B8 D1): quoted URLs that close each other, the shapes the iterative cut took seconds on.
+	{"alt-quotes", b15Rep(b17AltUnits[0].unit, 4<<20)},
+	{"alt-quotes-nospace", b15Rep(b17AltUnits[1].unit, 4<<20)},
+	{"alt-quotes-2", b15Rep(b17AltUnits[2].unit, 4<<20)},
+	{"alt-quotes-3", b15Rep(b17AltUnits[3].unit, 4<<20)},
+	{"alt-quotes-long", b15Rep(b17AltUnits[4].unit, 4<<20)},
 }
 
 func TestB15_D1_FourMiBOfEveryShapeIsRedactedInABoundedTime(t *testing.T) {

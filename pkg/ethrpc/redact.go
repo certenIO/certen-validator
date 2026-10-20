@@ -35,20 +35,29 @@ import (
 //     (RegisterProviderURL) when a client or pool is constructed, in raw, URL-encoded and JSON-escaped spellings. This
 //     catches the echoes that are not URLs (a path-only echo, a header).
 //
-// It is idempotent, linear in the length of the text (RE2, no backtracking), and text with no URL and no registered literal
-// is returned byte for byte.
+// It is linear in the length of the text (RE2, no backtracking; the cut of the read bound is one pass; the rounds below are
+// bounded), it is stable (FIXED POINT below), and text with no URL and no registered literal is returned byte for byte.
 //
 // THE BOUND (RB10-B15). A provider's text is not bounded by anything but the provider: go-ethereum reads a whole non-2xx
 // body into an error. RedactText therefore never works on more than the first MaxRedactedText (64 KiB) of its input, and
 // never returns more: the input is cut, then redacted, then ended at a token boundary, and a cut text says so with the
 // visible suffix "…(truncated N bytes)" (BoundRedacted is the same rule at any limit; ethproof.BoundProviderText is it at
-// 1024). The cut text is ended where no secret can straddle it: before the last token of the text (a user:password in the
-// middle of being read), before a URL that has no path yet, before a quoted URL whose closing quote is not in the prefix,
-// and before any registered literal whose first bytes end the prefix; so no fragment of a URL or of a literal survives the
-// cut, and the result is a fixed point (RedactText of it is itself). The suffix is separated from the text by a space, so no
-// URL token runs into it. N counts the bytes of the input not shown, plus the bytes of the redacted prefix dropped to fit the
-// limit. No caller may hold a lock while it calls RedactText on text it does not control; the pool and the provider health
-// compute the text first and lock after.
+// 1024). The cut text is ended where no secret can straddle it, by ONE linear pass over the prefix (endOfClosed): at a
+// delimiter, so that the last token (a user:password in the middle of being read, a URL with no path yet) is not shown; not
+// inside a quoted URL whose closing quote is not in the prefix; and not inside, or right after the first bytes of, a
+// registered literal. So no fragment of a URL or of a literal survives the cut. The suffix is separated from the text by a
+// space, so no URL token runs into it. N counts the bytes of the input not shown, plus the bytes of the redacted prefix
+// dropped to fit the limit. No caller may hold a lock while it calls RedactText on text it does not control; the pool and
+// the provider health compute the text first and lock after.
+//
+// FIXED POINT (RB10-B17). The pattern and literal passes are repeated until the text is stable: at most maxRedactRounds (6)
+// rounds, each of at most maxRedactPasses (4) pattern passes and one literal pass (a literal replaced by the marker changes
+// the host of a URL and the distance between a quote and its closing quote, which the pattern pass reads again; a marker that
+// stands as the host of a quoted URL is kept). In every text tried the result is a fixed point (RedactText of it is itself):
+// 50 000 hostile texts with literals registered, around both bounds, and 120 000 more through three further applications,
+// changed in none. The loop is bounded, so what is guaranteed is the weaker property the callers rely on: redacting an
+// already redacted text never reveals anything (a pass only replaces URLs and literals by the marker) and is stable after
+// one more pass; a text that had not settled in six rounds (none has been found) would be returned as the sixth left it.
 //
 // WHAT IT DOES NOT CLAIM (the honest limits; pkg/ethrpc/REDACTION.md has the same list):
 //
@@ -67,8 +76,10 @@ import (
 //   - the registry only grows in a process (production never unregisters), and a literal registered after a wrapper was built
 //     with fmt.Errorf("...%w", RedactError(err)) is NOT applied to that wrapper: the wrapper froze the text when it was made;
 //   - look-alike characters (a fullwidth solidus) that no HTTP stack produces;
-//   - everything past the 64 KiB prefix, and the last token or URL start of the prefix (see the bound above): that text is
-//     not shown at all.
+//   - everything past the 64 KiB prefix, and the end of the prefix back to the last place where no secret can straddle the cut
+//     (see the bound above): that text is not shown at all. A run with no white space, quote, angle bracket or backslash
+//     that reaches the end of the prefix is dropped back to its START, however long it is (a 70 KB body that is one token,
+//     or 4 MiB of "a" or "/", shows only the truncation suffix, even at the 1024 bound): information loss, nothing more.
 
 // RedactedMarker replaces what is hidden.
 const RedactedMarker = "<redacted>"
@@ -121,8 +132,9 @@ func RedactText(s string) string {
 // BoundRedacted is s redacted and at most limit bytes long. The first MaxRedactedText bytes of s are read (never more), cut
 // where no secret can straddle the cut (see above), redacted by the pattern and literal passes, and, when the result does
 // not fit limit, ended at a token boundary of the redacted text and followed by " …(truncated N bytes)". Text within both
-// bounds is returned as the redaction returns it. The result is a fixed point: BoundRedacted(BoundRedacted(s, n), n) is
-// itself. limit must leave room for the suffix; a smaller limit gets the suffix alone.
+// bounds is returned as the redaction returns it. The result is stable under a second application,
+// BoundRedacted(BoundRedacted(s, n), n) is itself, within the honest limit of FIXED POINT above. limit must leave room for
+// the suffix; a smaller limit gets the suffix alone.
 func BoundRedacted(s string, limit int) string {
 	if s == "" {
 		return s
@@ -135,25 +147,37 @@ func BoundRedacted(s string, limit int) string {
 	return cutRedacted(r, unread, limit)
 }
 
-// redactAll is the two passes on text already within the read bound.
+// redactAll is the two passes on text already within the read bound, repeated until the text no longer changes.
 func redactAll(s string) string {
 	// The pattern pass is applied until nothing changes (at most four times): what one pass leaves (a userinfo glued in front
-	// of a host that a replacement then exposed as a URL) the next removes, so the result is a fixed point.
-	for i := 0; i < maxRedactPasses; i++ {
-		t := redactBareURLs(redactSchemeURLs(s))
+	// of a host that a replacement then exposed as a URL) the next removes. The literal pass then follows, and the two are
+	// repeated until the text is stable (RB10-B17, V-R10B8 D2): a literal replaced by the marker changes the length of what
+	// stands between a quote and its closing quote (the window of a quoted URL is maxQuotedURL bytes) and the host of a URL,
+	// which the pattern pass reads again. The rounds are bounded, so a text that has not settled after maxRedactRounds is
+	// returned as that round left it: nothing is revealed by another round, but another application may change it once more.
+	for round := 0; round < maxRedactRounds; round++ {
+		u := s
+		for i := 0; i < maxRedactPasses; i++ {
+			t := redactBareURLs(redactSchemeURLs(u))
+			if t == u {
+				break
+			}
+			u = t
+		}
+		t := redactLiterals(u)
 		if t == s {
-			break
+			return t
 		}
 		s = t
 	}
-	return redactLiterals(s)
+	return s
 }
 
-// maxRedactPasses bounds the pattern passes.
-const maxRedactPasses = 4
-
-// tailWindow is how many bytes at the end of a cut text are searched for an open structure (twice the longest quoted URL).
-const tailWindow = 2 * maxQuotedURL
+// maxRedactPasses bounds the pattern passes of one round, maxRedactRounds the rounds of pattern and literal passes.
+const (
+	maxRedactPasses = 4
+	maxRedactRounds = 6
+)
 
 // readPrefix is the part of s that is read and how many bytes of s are not: s itself when it is within MaxRedactedText,
 // otherwise a prefix of at most MaxRedactedText bytes that ends where nothing is open (see endOfClosed).
@@ -169,91 +193,139 @@ func readPrefix(s string) (read string, unread int) {
 	return s[:end], len(s) - end
 }
 
-// endOfClosed is the end, at most len(p), of the longest prefix of the cut text p that no secret straddles: the prefix does
-// not end inside a token (the last run of bytes with no white space, quote or angle bracket may be the userinfo of a URL
-// whose @ was cut off), inside a URL with no path yet, inside a quoted URL whose closing quote was cut off (its wrapped
-// pieces are not yet recognised as the URL), or inside a registered literal. Each rule only moves the end left, and the
-// rules are applied until none does.
+// endOfClosed is the end, at most len(p), of the longest prefix of the cut text p that no secret straddles (RB10-B17: ONE
+// linear pass, nothing is re-evaluated). A cut at j is refused when it
+//
+//   - falls inside a token: the prefix must end at a delimiter (white space, a quote, an angle bracket, a backslash that is not
+//     an escape), because the last run of bytes may be the userinfo of a URL whose @ was cut off;
+//   - falls between a quoted URL's opening quote and the closing quote that the full text has within maxQuotedURL bytes of its
+//     body (the pattern pass reads a quoted URL as an unquoted one when the closing quote is not in the prefix, and the pieces of
+//     a URL wrapped at white space are then not recognised); or
+//   - falls inside a registered literal (any spelling), or after the first bytes of one that the prefix ends in.
+//
+// Each refusal is a range of cut positions computed once for the whole prefix (a difference array, so that the cost is the
+// length of the prefix and not the number of ranges), and the answer is the largest position no range refuses. A range depends
+// only on the text of the prefix, never on where the cut ends up, so there is nothing to repeat: the end is a fixed point of the
+// three rules by construction (the loop this replaced moved the end by one open URL at a time and was quadratic on quoted
+// URLs that close each other). A run with no delimiter is dropped back to its start, however long it is. The pass is over the
+// whole prefix (at most MaxRedactedText bytes), so a text of any length costs the same.
 func endOfClosed(p string) int {
-	end := len(p)
-	for {
-		e := min(end, openTokenStart(p[:end]), openLiteralStart(p[:end]))
-		if e == end {
-			return end
+	norm, off := decodeURLEscapes(p)
+	quoted := openQuotedCover(norm)
+	lits := literalCover(p)
+	for j := len(norm); j > 0; j-- {
+		if !endsToken(norm[j-1]) || quoted != nil && quoted[j] > 0 {
+			continue
 		}
-		end = e
+		at := original(off, j)
+		if lits != nil && lits[at] > 0 {
+			continue
+		}
+		return at
 	}
+	return 0
 }
 
-// openTokenStart is the start of the part of p that the cut may have left open: the last token of p, and a quoted URL whose
-// closing quote is not in p. The last token is the run after the last white space, quote, angle bracket or backslash that is
-// not an escape, read the way the pattern pass reads text (escapes decoded): a run that ends the prefix may be the
-// user:password of a URL whose @ and host were cut off. It is searched for in the last tailWindow bytes; a run with no
-// delimiter in them is cut at the window's start (a user:password longer than that is not a credential any provider
-// issues). len(p) when p ends in a delimiter and holds no open quoted URL.
-func openTokenStart(p string) int {
-	w := min(tailWindow, len(p))
-	base := len(p) - w
-	norm, off := decodeURLEscapes(p[base:])
-	start := len(p)
-	last := -1
-	for i := len(norm) - 1; i >= 0; i-- {
-		if endsToken(norm[i]) {
-			last = i
-			break
-		}
+// coverSums turns a difference array into the number of ranges that cover each position.
+func coverSums(diff []int32) []int32 {
+	for j := 1; j < len(diff); j++ {
+		diff[j] += diff[j-1]
 	}
-	switch {
-	case last < 0:
-		start = base
-	case last+1 < len(norm):
-		start = base + original(off, last+1)
-	}
-	if s := openQuotedURLStart(norm, off, base); s < start {
-		start = s
-	}
-	return start
+	return diff
 }
 
-// openQuotedURLStart is the earliest start, in p, of the scheme of a quoted URL in the decoded tail norm (whose offsets are off,
-// norm[0] being p[base]) that has no closing quote in the text (the cut is after the opening quote, so that it still closes the
-// URL before it): the pattern pass reads such a URL as an unquoted one, which ends at
-// the first white space, so the pieces of a URL wrapped at white space after it are not recognised. len(p) when none.
-func openQuotedURLStart(norm string, off []int32, base int) int {
-	best := base + original(off, len(norm))
-	for pos := 0; pos < len(norm); {
-		loc := schemeStart.FindStringIndex(norm[pos:])
-		if loc == nil {
-			break
+// openQuotedCover counts, for every cut position j of the decoded prefix norm (the prefix norm[:j]), the quoted URLs that the
+// cut would leave open: a scheme directly after a quote q, with no q between its body and j, while the body is not yet
+// maxQuotedURL bytes long (a URL whose closing quote is further away is read as an unquoted one in the full text too, and
+// the same in the prefix). nil when no scheme stands after a quote. Positions j = start (the cut right before the scheme,
+// after its opening quote) and j after the closing quote are not refused.
+func openQuotedCover(norm string) []int32 {
+	var diff []int32
+	for _, loc := range schemeStart.FindAllStringIndex(norm, -1) {
+		start, body := loc[0], loc[1]
+		if start == 0 || !isQuote(norm[start-1]) {
+			continue
 		}
-		start, bodyStart := pos+loc[0], pos+loc[1]
-		pos = bodyStart
-		if start > 0 && isQuote(norm[start-1]) && strings.IndexByte(norm[bodyStart:], norm[start-1]) < 0 {
-			if at := base + original(off, start); at < best {
-				best = at
-			}
+		hi := len(norm) // the cuts start+1 .. hi are refused
+		if z := strings.IndexByte(norm[body:min(len(norm), body+maxQuotedURL+1)], norm[start-1]); z >= 0 {
+			hi = body + z
+		} else if body+maxQuotedURL < len(norm) {
+			continue // the whole window is in the prefix and holds no closing quote
 		}
+		if diff == nil {
+			diff = make([]int32, len(norm)+2)
+		}
+		diff[start+1]++
+		diff[hi+1]--
 	}
-	return best
+	if diff == nil {
+		return nil
+	}
+	return coverSums(diff)
 }
 
-// openLiteralStart is the start of the longest suffix of p that is a proper prefix of a registered literal (any spelling),
-// and len(p) when there is none: a literal whose first bytes end the prefix is not a literal in it.
-func openLiteralStart(p string) int {
+// literalCover counts, for every cut position j of p, the registered literals that a cut at j would split or end in: a
+// position i of p where a literal (any spelling) starts, or where p[i:] starts one, refuses the cuts i+1 .. i+m, m the bytes
+// they share. (A literal that stands whole in p and is cut right after its last byte is refused too: over-cautious by one
+// position, never under.) The shared prefix of p[i:] and the registered literals is found by a binary search in the sorted
+// literals, at the positions whose first byte starts some literal; so the cost is the length of p, not the length of p times
+// the number of literals. nil when nothing is registered or nothing in p starts a literal.
+func literalCover(p string) []int32 {
 	set := currentSecrets()
 	if set == nil {
-		return len(p)
+		return nil
 	}
-	best := len(p)
-	for _, lit := range set.lits {
-		for i := max(0, len(p)-(len(lit)-1)); i < best; i++ {
-			if strings.HasPrefix(lit, p[i:]) {
-				best = i
-				break
-			}
+	var diff []int32
+	for i := 0; i < len(p); i++ {
+		if !set.first[p[i]] {
+			continue
+		}
+		m := set.sharedPrefix(p[i:min(len(p), i+set.maxLen)])
+		if m == 0 {
+			continue
+		}
+		if diff == nil {
+			diff = make([]int32, len(p)+2)
+		}
+		diff[i+1]++
+		diff[i+m+1]--
+	}
+	if diff == nil {
+		return nil
+	}
+	return coverSums(diff)
+}
+
+// sharedPrefix is the most bytes that w has in common with the start of a registered literal.
+func (s *secretSet) sharedPrefix(w string) int {
+	lo, hi := 0, len(s.sorted)
+	for lo < hi {
+		mid := int(uint(lo+hi) >> 1)
+		if s.sorted[mid] < w {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	best := 0
+	if lo < len(s.sorted) {
+		best = commonPrefix(w, s.sorted[lo])
+	}
+	if lo > 0 {
+		if c := commonPrefix(w, s.sorted[lo-1]); c > best {
+			best = c
 		}
 	}
 	return best
+}
+
+func commonPrefix(a, b string) int {
+	n := min(len(a), len(b))
+	i := 0
+	for i < n && a[i] == b[i] {
+		i++
+	}
+	return i
 }
 
 // cutRedacted ends the redacted prefix r at a token boundary so that the result, with the suffix, is at most limit bytes.
@@ -603,12 +675,25 @@ func redactSchemeToken(core string) (string, bool) {
 	if !userinfo && (remainder == "" || remainder == "/") {
 		return "", false // nothing after the host
 	}
-	// A host never holds a character that ends or changes a token (a quoted token can hold any): what follows one is dropped,
-	// so that the result reads the same when it is redacted again.
-	if i := strings.IndexFunc(host, func(r rune) bool { return r < utf8.RuneSelf && (endsToken(byte(r))) }); i >= 0 {
-		host = host[:i]
+	return scheme + hostPrefix(host) + redactedPath, true
+}
+
+// hostPrefix is the part of host that is kept: a host never holds a character that ends or changes a token (a quoted token can
+// hold any), and what follows one is dropped, so that the result reads the same when it is redacted again. The marker is
+// kept whole (RB10-B17, V-R10B8 D2): a registered literal that stood in a host position was replaced by it, and a host that
+// is the marker reads the same when it is redacted again (the angle brackets of the marker are token-ending bytes).
+func hostPrefix(host string) string {
+	for i := 0; i < len(host); {
+		if strings.HasPrefix(host[i:], RedactedMarker) {
+			i += len(RedactedMarker)
+			continue
+		}
+		if endsToken(host[i]) {
+			return host[:i]
+		}
+		i++
 	}
-	return scheme + host + redactedPath, true
+	return host
 }
 
 // bareDelimiter: the bytes no part of a bare URL (its userinfo, host, port, path or query) can hold: RE2 white space (not
@@ -670,8 +755,11 @@ func redactBareToken(core string) (string, bool) {
 
 // secretSet is the registered literals, longest first, and the replacer built from them.
 type secretSet struct {
-	lits []string
-	rep  *strings.Replacer
+	lits   []string
+	rep    *strings.Replacer
+	sorted []string  // the same literals in byte order (the search of the cut, see sharedPrefix)
+	first  [256]bool // the first bytes of the literals
+	maxLen int       // the length of the longest literal
 }
 
 var secrets struct {
@@ -794,7 +882,13 @@ func rebuildSecretsLocked() {
 	for _, l := range lits {
 		pairs = append(pairs, l, RedactedMarker)
 	}
-	secrets.current.Store(&secretSet{lits: lits, rep: strings.NewReplacer(pairs...)})
+	set := &secretSet{lits: lits, rep: strings.NewReplacer(pairs...), sorted: append([]string(nil), lits...)}
+	sort.Strings(set.sorted)
+	for _, l := range lits {
+		set.first[l[0]] = true
+		set.maxLen = max(set.maxLen, len(l))
+	}
+	secrets.current.Store(set)
 }
 
 func redactLiterals(s string) string {

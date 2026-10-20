@@ -21,7 +21,13 @@ doc comment of `RedactText` too; this file is the list a reviewer or an operator
   is cut where no secret can straddle the cut (the last token, a quoted URL whose closing quote is not in the prefix, a
   prefix of a registered literal), redacted, ended at a token boundary, and followed by a space and the visible suffix
   `…(truncated N bytes)`. Redaction is never run on unbounded text and never under a mutex: the pool and the provider
-  health compute the redacted reason first and lock after. The result is a fixed point (a second pass changes nothing).
+  health compute the redacted reason first and lock after. Pattern and literal passes are repeated until the text is
+  stable (at most six rounds), so a quoted URL whose host is a registered literal (`"https://<key>/v2/"`) is a fixed point.
+  Tried on 50 000 hostile texts with literals registered and 120 000 more through three further applications: none changed.
+  What is guaranteed is weaker than "forever": redacting an already redacted text never reveals anything and is stable after
+  one more pass; a text that had not settled in six rounds (none has been found) is returned as the sixth round left it.
+- The cut of the 64 KiB bound is one linear pass over the prefix (`endOfClosed`), not a loop: the cost of a text is the same
+  whatever its shape (quoted URLs that close each other took seconds before).
 - A redacted error (`RedactError`) redacts its text once, when `Error` is first called. `errors.Is`, `errors.As` and every
   classification (`ShouldFailover`, `IsTransient`, `Retry-After`) run on the original, raw error.
 
@@ -42,7 +48,13 @@ doc comment of `RedactText` too; this file is the list a reviewer or an operator
 8. The registry only grows in a process (production never unregisters). A literal registered after
    `fmt.Errorf("...%w", RedactError(err))` built its wrapper is not applied to the wrapper: the wrapper froze the text
    when it was made. A `redactedError` itself applies a literal registered before its first `Error()` call, not after.
-9. The 64 KiB prefix rule: everything past the first 64 KiB, and the last token or open quoted URL of the prefix, is not
-   shown at all, and a user:password longer than 4096 bytes at the cut is not recognised as one. A 1024-byte bound shows
-   only the first 1024 bytes of the redacted prefix.
+9. The 64 KiB prefix rule: everything past the first 64 KiB is not shown at all, and the prefix is ended where no secret
+   can straddle the cut: a run with no white space, quote, angle bracket or backslash that reaches the end of the prefix is
+   dropped back to its start, however long it is (a 70 KB body that is one token, or 4 MiB of `a` or `/`, shows only the
+   truncation suffix, even at the 1024 bound), and so is an open quoted URL or the start of a registered literal. Information
+   loss only: nothing that is shown is a secret. A 1024-byte bound shows only the first 1024 bytes of the redacted prefix.
 10. Look-alike characters (a fullwidth solidus) that no HTTP stack produces.
+11. `ethproof.BoundProviderText` removes NUL bytes before it redacts (PostgreSQL refuses the escape for them in a jsonb
+    document); the N of its truncation suffix counts the bytes of the text without them. `ethrpc.RedactText` itself keeps
+    them, so a registered key split by NUL bytes is not a literal to it: text that is stored goes through
+    `BoundProviderText`, text for an error or a log may go through `RedactText`.
