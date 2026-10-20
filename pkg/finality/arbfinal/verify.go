@@ -130,8 +130,11 @@ func (k *Kind) Verify(p *finality.Pins, b finality.BlockRef, evidence []byte) (f
 	if err != nil {
 		return finality.Verdict{}, err
 	}
-	if hdr.Hash != b.Hash || hdr.Number != b.Number {
-		return finality.Verdict{}, finality.BlockMismatch("settlementHeader", b.Hash, hdr.Hash)
+	if hdr.Hash != b.Hash {
+		return finality.Verdict{}, finality.BlockMismatch("settlementHeaderHash", b.Hash, hdr.Hash)
+	}
+	if hdr.Number != b.Number {
+		return finality.Verdict{}, finality.BlockMismatch("settlementHeaderNumber", b.Number, hdr.Number)
 	}
 	if hdr.Number <= arb.BoldGenesisL2Block {
 		return finality.Verdict{}, finality.NewState(CodePreBold, "n", hdr.Number, "bold_genesis_l2_block", arb.BoldGenesisL2Block)
@@ -156,20 +159,26 @@ func (k *Kind) Verify(p *finality.Pins, b finality.BlockRef, evidence []byte) (f
 	if kb.Number > s.Number {
 		return finality.Verdict{}, finality.BlockMismatch("confBlockAboveStateBlock", e.StateBlock, e.ConfBlock)
 	}
-	kHeader, err := headerOf(e.L1Spine, covered, kb.Number)
+	kHeader, err := headerNumbered(e.L1Spine, kb.Number)
 	if err != nil {
 		return finality.Verdict{}, err
 	}
 	return k.verifyState(arb, s, kb, kHeader, b, e)
 }
 
-// headerOf returns the fields of the covered spine header with this number (the spine is already walked and covered).
-func headerOf(spine [][]byte, covered []ethl1.L1Block, number uint64) (finality.HeaderFields, error) {
-	i := int(covered[0].Number - number)
-	if i < 0 || i >= len(spine) {
-		return finality.HeaderFields{}, ethl1.BlockNotCovered(number, covered[0].Number)
+// headerNumbered returns the fields of the spine header with this number. The spine is already walked and covered and the number
+// was found on it, so the header exists; a caller whose spine lacks it gets finality_block_not_covered.
+func headerNumbered(spine [][]byte, number uint64) (finality.HeaderFields, error) {
+	for _, raw := range spine {
+		h, err := finality.ReadHeader(raw)
+		if err != nil {
+			return finality.HeaderFields{}, err
+		}
+		if h.Number == number {
+			return h, nil
+		}
 	}
-	return finality.ReadHeader(spine[i])
+	return finality.HeaderFields{}, ethl1.BlockNotCovered(number, 0)
 }
 
 // verifyState is the part of the judgement that runs under the state roots of the covered L1 blocks S and K; it is separate

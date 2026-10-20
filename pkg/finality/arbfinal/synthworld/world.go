@@ -95,13 +95,17 @@ type Parts struct {
 	RollupAbsent bool // the Rollup account does not exist at S (an exclusion proof)
 
 	// The confirmation transaction.
-	TxTo      *common.Address // nil: the Rollup
-	TxInput   []byte          // nil: SelConfirm || 160 bytes
-	Logs      []Log           // nil: the AssertionConfirmed log of the Rollup for the assertion
-	NoLogs    bool
-	RcStatus  uint64 // 1
-	TxIndex   int    // position in K's block (default 1 of 3)
-	TxPadding int    // transactions before and after (default 1 each)
+	TxTo         *common.Address // nil: the Rollup
+	TxInput      []byte          // nil: SelConfirm || 160 bytes
+	Logs         []Log           // nil: the AssertionConfirmed log of the Rollup for the assertion
+	NoLogs       bool
+	RcStatus     uint64   // 1
+	TxIndex      int      // position in K's block (default 1 of 3)
+	TxPadding    int      // transactions before and after (default 1 each)
+	TxLeaf       []byte   // when set: the leaf stored at the transaction index instead of the transaction (provable, but not a transaction)
+	RcLeaf       []byte   // when set: the receipt leaf likewise
+	OmitS, OmitK []string // proofs left out of the state at S and K: admin_slot, user_slot, node_slot, config_slot, admin_account, user_account
+	NoFastProof  bool     // leave out the proof of the anyTrustFastConfirmer slot
 }
 
 // NewParts is the valid world named by label.
@@ -177,12 +181,13 @@ func (c *collector) Delete([]byte) error { return nil }
 type acct struct {
 	addr    common.Address
 	storage map[common.Hash]common.Hash
-	absent  []common.Hash // slots proved absent
+	absent  []common.Hash        // slots proved absent
+	skip    map[common.Hash]bool // slots whose proof is left out
 	code    common.Hash
 }
 
 // stateOf builds a state trie over the accounts and returns its root and the proofs of every account and every storage slot.
-func stateOf(accts []acct, absent []common.Address) (common.Hash, [][]byte) {
+func stateOf(accts []acct, absent []common.Address, skipAccounts map[common.Address]bool) (common.Hash, [][]byte) {
 	st := trie.NewEmpty(nil)
 	var nodes [][]byte
 	for _, a := range accts {
@@ -197,6 +202,9 @@ func stateOf(accts []acct, absent []common.Address) (common.Hash, [][]byte) {
 			slots = append(slots, s)
 		}
 		for _, s := range slots {
+			if a.skip[s] {
+				continue
+			}
 			var c collector
 			if err := sto.Prove(crypto.Keccak256(s[:]), &c); err != nil {
 				panic(err)
@@ -209,6 +217,9 @@ func stateOf(accts []acct, absent []common.Address) (common.Hash, [][]byte) {
 		}
 	}
 	for _, a := range append(accountsOf(accts), absent...) {
+		if skipAccounts[a] {
+			continue
+		}
 		var c collector
 		if err := st.Prove(crypto.Keccak256(a[:]), &c); err != nil {
 			panic(err)
@@ -230,7 +241,7 @@ func word(a common.Address) common.Hash { var h common.Hash; copy(h[12:], a[:]);
 
 func u64w(v uint64) common.Hash { var h common.Hash; binary.BigEndian.PutUint64(h[24:], v); return h }
 
-func (p Parts) rollupState(admin, user common.Hash, adminWord, userWord *common.Hash, assertion [32]byte, absentRollup bool) (common.Hash, [][]byte) {
+func (p Parts) rollupState(admin, user common.Hash, adminWord, userWord *common.Hash, assertion [32]byte, absentRollup bool, omit []string) (common.Hash, [][]byte) {
 	aw, uw := word(AdminLogic), word(UserLogic)
 	if adminWord != nil {
 		aw = *adminWord
@@ -257,6 +268,29 @@ func (p Parts) rollupState(admin, user common.Hash, adminWord, userWord *common.
 	} else {
 		rollup.absent = append(rollup.absent, arbfinal.NodeSlot(assertion, 117))
 	}
+	rollup.skip = map[common.Hash]bool{}
+	skipAcc := map[common.Address]bool{}
+	if p.NoFastProof {
+		rollup.skip[common.BigToHash(new(big.Int).SetUint64(123))] = true
+	}
+	for _, o := range omit {
+		switch o {
+		case "admin_slot":
+			rollup.skip[AdminSlot] = true
+		case "user_slot":
+			rollup.skip[UserSlot] = true
+		case "node_slot":
+			rollup.skip[arbfinal.NodeSlot(assertion, 117)] = true
+		case "config_slot":
+			rollup.skip[arbfinal.ConfigSlot(p.Parent, 117, 1)] = true
+		case "admin_account":
+			skipAcc[AdminLogic] = true
+		case "user_account":
+			skipAcc[UserLogic] = true
+		default:
+			panic("unknown proof to omit: " + o)
+		}
+	}
 	accts := []acct{
 		{addr: AdminLogic, code: admin},
 		{addr: UserLogic, code: user},
@@ -276,7 +310,7 @@ func (p Parts) rollupState(admin, user common.Hash, adminWord, userWord *common.
 			}
 		}
 	}
-	return stateOf(accts, absent)
+	return stateOf(accts, absent, skipAcc)
 }
 
 // ---- the synthetic Sepolia head ----
@@ -471,8 +505,8 @@ func Assemble(p Parts) *World {
 
 	// States at S and K.
 	S, K := p.F-p.SBack, p.F-p.SBack-p.KBack
-	rootS, nodesS := p.rollupState(p.AdminCodeS, p.UserCodeS, p.AdminWordS, p.UserWordS, assertion, p.RollupAbsent)
-	rootK, nodesK := p.rollupState(p.AdminCodeK, p.UserCodeK, p.AdminWordK, p.UserWordK, assertion, false)
+	rootS, nodesS := p.rollupState(p.AdminCodeS, p.UserCodeS, p.AdminWordS, p.UserWordS, assertion, p.RollupAbsent, p.OmitS)
+	rootK, nodesK := p.rollupState(p.AdminCodeK, p.UserCodeK, p.AdminWordK, p.UserWordK, assertion, false, p.OmitK)
 	if S == K {
 		rootK, nodesK = rootS, nodesS
 	}
@@ -534,6 +568,12 @@ func Assemble(p Parts) *World {
 		rb, err := rc.MarshalBinary()
 		if err != nil {
 			panic(err)
+		}
+		if i == idx && p.TxLeaf != nil {
+			tb = p.TxLeaf
+		}
+		if i == idx && p.RcLeaf != nil {
+			rb = p.RcLeaf
 		}
 		txs, rcs = append(txs, tb), append(rcs, rb)
 	}
@@ -641,3 +681,19 @@ func linkSum() string { s := sum("link"); return common.Bytes2Hex(s[:]) }
 
 // ThisAssertion, as a log topic of Parts.Logs, stands for the assertion hash of the world being assembled.
 var ThisAssertion = common.HexToHash("0xa55e0000000000000000000000000000000000000000000000000000000000a5")
+
+// WalletInputAmounts is WalletInput for executeTransactions with a chosen number of amounts (a mismatch with the other arrays).
+func WalletInputAmounts(datas [][]byte, dests []common.Address, amounts int) []byte {
+	bytesArr, _ := abi.NewType("bytes[]", "", nil)
+	addrArr, _ := abi.NewType("address[]", "", nil)
+	uintArr, _ := abi.NewType("uint256[]", "", nil)
+	am := make([]*big.Int, amounts)
+	for i := range am {
+		am[i] = new(big.Int)
+	}
+	b, err := abi.Arguments{{Type: bytesArr}, {Type: addrArr}, {Type: uintArr}}.Pack(datas, dests, am)
+	if err != nil {
+		panic(err)
+	}
+	return append(append([]byte(nil), SelWalletTxs[:]...), b...)
+}

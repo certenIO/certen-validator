@@ -223,6 +223,7 @@ func generate(out, live string) error {
 	mismatches = nil
 	g := newGen()
 	synthetic(g)
+	synthetic2(g)
 	if live != "" {
 		if err := realVectors(g, live); err != nil {
 			return err
