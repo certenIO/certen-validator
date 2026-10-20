@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"math"
 	"math/rand"
 	"reflect"
 	"testing"
@@ -157,6 +158,9 @@ func TestTheCapIsExactAndAnExcessStreamIsReportedNotRead(t *testing.T) {
 	c := compress(t, data, 5, 22)
 	if got, ex, err := Decompress(c, 5000); err != nil || ex || len(got) != 5000 {
 		t.Fatalf("exactly the cap: %d %v %v", len(got), ex, err)
+	}
+	if got, ex, err := Decompress(c, math.MaxInt); err != nil || ex || len(got) != 5000 {
+		t.Fatalf("the largest cap must not wrap into a negative limit: %d %v %v", len(got), ex, err)
 	}
 	if got, ex, err := Decompress(c, 4999); err != nil || !ex || got != nil {
 		t.Fatalf("one over: %d %v %v", len(got), ex, err)

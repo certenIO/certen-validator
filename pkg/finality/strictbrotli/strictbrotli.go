@@ -21,6 +21,7 @@ package strictbrotli
 import (
 	"errors"
 	"io"
+	"math"
 
 	"github.com/andybalholm/brotli"
 )
@@ -67,7 +68,11 @@ func Decompress(in []byte, max int) (out []byte, exceeded bool, err error) {
 	}
 	src := &source{in: in}
 	rd := brotli.NewReader(src)
-	out, err = io.ReadAll(io.LimitReader(rd, int64(max)+1))
+	limit := int64(max) // one byte past the cap proves an excess; max+1 would wrap at the largest int, which is then no cap at all
+	if limit < math.MaxInt64 {
+		limit++
+	}
+	out, err = io.ReadAll(io.LimitReader(rd, limit))
 	return classify(out, err, src.probed, max)
 }
 
