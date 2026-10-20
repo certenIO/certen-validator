@@ -1,0 +1,17 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "adv_ledger_committee_wrong_k1",
+ "kind": "head",
+ "description": "ledger committee_root of the anchor period replaced",
+ "pins": "pins/ledger_committee_wrong.json",
+ "lc": "lc/adv_ledger_committee_wrong_k1.bin",
+ "expect": {
+  "code": "finality_pin_mismatch",
+  "fields": {
+   "got_root": "0x343e466c91eb25084bf4a64d15a00ebddb0a2e1703aec4b7f5734ae344aba5ee",
+   "period": "1390",
+   "want_root": "0x9b7c073f65bf6a4f69e2ff28e4447662618ced0d520c7fcd45a5e9b88f065c3d"
+  },
+  "result": "fault"
+ }
+}

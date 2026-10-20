@@ -45,6 +45,9 @@ type Report struct {
 	Broken *StateError
 	// FinalizedBlock is exposed when finalized is verified (R6).
 	FinalizedBlock *FinalizedBlock
+	// FinalizedBlockState is the named state raised when finalized is verified and the leg block still cannot be exposed (the
+	// BlockRef has no header, or its header is unreadable): R6 is never silently omitted.
+	FinalizedBlockState *StateError
 	// PinsSHA256 and PinsSource name the pins judged against (4.1).
 	PinsSHA256 string
 	PinsSource string
@@ -126,9 +129,23 @@ func (r *Registry) VerifyLeg(b BlockRef, carried BlockRef, adds []Addendum, p *P
 		}
 		rep.Levels[l] = r.absentOrNA(b.Chain, l, rep.Headline, nil)
 	}
-	if st := rep.Levels[LevelFinalized]; st.Status == StatusVerified && len(b.HeaderRLP) > 0 {
-		if h, err := ReadHeader(b.HeaderRLP); err == nil {
-			rep.FinalizedBlock = &FinalizedBlock{Number: b.Number, Hash: b.Hash, StateRoot: h.StateRoot}
+	if st := rep.Levels[LevelFinalized]; st.Status == StatusVerified {
+		switch {
+		case len(b.HeaderRLP) == 0:
+			rep.FinalizedBlockState = FinalizedBlockUnavailable(b.Chain, b.Number, FinalizedBlockNoHeader)
+		default:
+			h, err := ReadHeader(b.HeaderRLP)
+			if err != nil {
+				kv := []any{}
+				if hs, ok := AsNamed(err); ok {
+					if idx, has := hs.Fields["index"]; has {
+						kv = append(kv, "index", idx)
+					}
+				}
+				rep.FinalizedBlockState = FinalizedBlockUnavailable(b.Chain, b.Number, FinalizedBlockHeaderUnreadable, kv...)
+			} else {
+				rep.FinalizedBlock = &FinalizedBlock{Number: b.Number, Hash: b.Hash, StateRoot: h.StateRoot}
+			}
 		}
 	}
 	return rep

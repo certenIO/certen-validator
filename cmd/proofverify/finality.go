@@ -18,10 +18,14 @@ import (
 
 // S7: staged finality (PROOF_V2 section 7, pkg/finality, domain tag certen:finality:v1).
 //
-// A proof's finality addenda are append-only evidence beside the proof. They are verified here offline: the chain of
-// addenda (sequence, previous-hash links, own hashes against the proof's original digest, levels strictly rising, one
-// settlement), then each addendum's evidence by its registered verifier. The report names every level - verified, pending
-// or not applicable - and the level reached. Exit codes are the tool's own:
+// A proof's finality addenda are append-only evidence beside the proof. The database path (--finality) verifies them offline
+// against the leg's own Settlement: D0 (the leg binding, V2_SPEC_S7 2.6) is recomputed from the verified Settlement's block
+// and never read from the file; then the chain of addenda (sequence, previous-hash links, own hashes under that D0, each
+// level at most once and in any order, every (chain, level, kind) a row of the table) and the carried leg member are checked,
+// then each addendum's evidence by its registered verifier. The report names every level - verified, pending or not
+// applicable - and the level reached. The file path (--finality-file) reads and strictly parses the carried leg and addenda
+// but holds no Settlement, so it judges nothing until it is given one (RB11-B2B): it reports finality_included_unavailable.
+// Exit codes are the tool's own:
 //
 //	0  verified     the chain verifies and every addendum verifies to exactly its level (a level not yet reached is
 //	                reported as finality_pending with the level reached, never as a failure)
@@ -83,8 +87,7 @@ func reportFinalityFile(w io.Writer, path string, reg *finality.Registry, pins *
 		fmt.Fprintf(w, "FAILED (finality)  %s\n  %v\n", path, err)
 		return exitFailed
 	}
-	st := finality.NewState(finality.CodeIncludedUnavailable, "chain", section.Leg.Chain, "reason",
-		"this verifier holds no Settlement for the leg, so D0 cannot be recomputed and no level is judged")
+	st := finality.IncludedUnavailable(finality.IncludedSettlementNotJudged, "chain", section.Leg.Chain)
 	fmt.Fprintf(w, "SUMMARY-ONLY (finality)  %s\n  %v\n  S7  carried leg: chain %d block %d %s; %d addenda are not judged\n", path, st, section.Leg.Chain,
 		section.Leg.BlockNumber, section.Leg.BlockHash, len(section.Addenda))
 	return exitSummaryOnly
@@ -112,6 +115,10 @@ func printReport(w io.Writer, rep finality.Report, subject string) int {
 	fmt.Fprintf(w, "  S7  level reached: %s\n", rep.Headline)
 	if rep.FinalizedBlock != nil {
 		fmt.Fprintf(w, "  S7  finalized_block: number %d hash %x stateRoot %x\n", rep.FinalizedBlock.Number, rep.FinalizedBlock.Hash, rep.FinalizedBlock.StateRoot)
+	}
+	if rep.FinalizedBlockState != nil {
+		fmt.Fprintf(w, "FAILED (finality)  %s\n  the finalized level is verified but the leg block cannot be exposed for S8: %v\n", subject, rep.FinalizedBlockState)
+		return exitFailed
 	}
 	if rep.Broken != nil {
 		fmt.Fprintf(w, "FAILED (finality)  %s\n  the addendum chain does not verify: %v\n", subject, rep.Broken)

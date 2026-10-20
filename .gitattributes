@@ -34,3 +34,4 @@ accumulate-lite-client-2/liteclient/proof/consolidated_governance-proof/testdata
 pkg/finality/pins/*.json text eol=lf
 pkg/finality/testdata/finality/*.json text eol=lf
 pkg/finality/testdata/finality_chain1/* text eol=lf
+pkg/finality/testdata/finality_chain2/* text eol=lf

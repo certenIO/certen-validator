@@ -1,0 +1,25 @@
+{
+  "files": {
+    "canonical.json": "d38ab25c93e74caa44c00b0154a6e0aba87419a4c557168208b13c4db3dd4b61",
+    "chains.json": "fe430d589f48013e6deb4ffba1be85247b4685433e138c614b9b94f438237b08",
+    "codec_probe.json": "40d42544a0b899cf83de9ccea8e1c386b0487c6b74cc2720ba0b4de1a70cdf47",
+    "containers.json": "415fedc29234672827e79bb4d095a459f499e984485c87cb9e5b98f050c669c8",
+    "header.json": "c172cb879beeeae163cbc60fc86dc818c4e16695e88982e5c1b6e7e1e8d4e156",
+    "json.json": "b285dfb536f292acb63fdb9428755baeddc51e7ed7f54e9736353329ab89d37c",
+    "judge.json": "eaa3c53f1d46649fda5c1b78a6073b2ae43c7b4697f0afc5abe0d3eb8d3206ae",
+    "pins.json": "85287fbf7920ef37a8dcb52b9b834fd348f84d48bed1068ebbe0fee37fd2fbbf",
+    "table.json": "7e512a12ef471191c090484ea068510ea49564538c862e34434e68ef4ab9fa1a"
+  },
+  "format": "certen-finality-manifest/1",
+  "registry": {
+    "path": "testdata/finality/states.json",
+    "sha256": "d0e2d25048ba1dfe40e910538e6870675b2fbe3a4b0b47cdb9b1e0ffb084b73a"
+  },
+  "set": "finality_chain2",
+  "supersedes": {
+    "goldens": "finality_chain1/goldens.json is unchanged and still the golden of G0 and G1",
+    "manifest_sha256": "d6b275d6b2878960c3dba61d26f55ae9bef0e206b95e9fa09ed2aacb272666ca",
+    "replaced_expectations": 13,
+    "set": "finality_chain1"
+  }
+}

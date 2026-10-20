@@ -1,0 +1,17 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "adv_too_many_links",
+ "kind": "head",
+ "description": "two links against max_links 1",
+ "pins": "pins/max_links_1.json",
+ "lc": "lc/adv_too_many_links.bin",
+ "expect": {
+  "code": "finality_evidence_too_large",
+  "fields": {
+   "count": "2",
+   "limit": "1",
+   "part": "links"
+  },
+  "result": "fault"
+ }
+}

@@ -8,8 +8,6 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
-	"strings"
 )
 
 // Domain is the hash domain of every addendum (PROOF_V2 section 10.3: new evidence gets a new tag, never a reused one). It
@@ -173,16 +171,31 @@ func VerifyChain(d0 [32]byte, adds []Addendum) error {
 
 // ---- proof ids ----
 
-// ParseProofID reads a uuid in its canonical text form.
+// ParseProofID reads a uuid in its ONE canonical text form: 8-4-4-4-12 lower-case hex digits separated by dashes (36
+// characters). Anything else (no dashes, upper case, braces, a urn prefix, a wrong dash position) is refused as
+// finality_addendum_malformed{field:"proofId", reason:"not_canonical_uuid"}, so a Go and a TypeScript verifier accept exactly
+// the same set of proof ids.
 func ParseProofID(s string) ([16]byte, error) {
 	var out [16]byte
-	t := strings.ReplaceAll(s, "-", "")
-	if len(s) != 36 || len(t) != 32 {
-		return out, NewState(CodeAddendumMalformed, "field", "proofId", "reason", fmt.Sprintf("not a uuid (%q)", s))
+	if len(s) != 36 {
+		return out, AddendumMalformed("proofId", AddendumNotUUID)
 	}
-	raw, err := hex.DecodeString(t)
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch i {
+		case 8, 13, 18, 23:
+			if c != '-' {
+				return out, AddendumMalformed("proofId", AddendumNotUUID)
+			}
+		default:
+			if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+				return out, AddendumMalformed("proofId", AddendumNotUUID)
+			}
+		}
+	}
+	raw, err := hex.DecodeString(s[0:8] + s[9:13] + s[14:18] + s[19:23] + s[24:36])
 	if err != nil {
-		return out, NewState(CodeAddendumMalformed, "field", "proofId", "reason", fmt.Sprintf("not a uuid (%q)", s))
+		return out, AddendumMalformed("proofId", AddendumNotUUID)
 	}
 	copy(out[:], raw)
 	return out, nil
@@ -215,38 +228,162 @@ func (a Addendum) MarshalJSON() ([]byte, error) {
 	})
 }
 
-// UnmarshalJSON reads MarshalJSON's form strictly: unknown fields, a level that is not l1_posted or finalized ("included" is
-// derived and never stored), hashes that are not 32 bytes of hex and evidence that is not hex are each refused by name.
-func (a *Addendum) UnmarshalJSON(b []byte) error {
-	var j addendumJSON
-	dec := json.NewDecoder(bytes.NewReader(b))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&j); err != nil {
-		return NewState(CodeAddendumMalformed, "field", "json", "reason", err.Error())
+// UnmarshalJSON-side strict reading shared by Addendum, Section and the carried leg. A Go and a TypeScript verifier must accept
+// the same documents, and encoding/json is lenient in ways JSON.parse is not (case-insensitive keys, a repeated key silently
+// taking the last value, null leaving a zero value, hex of either case), so a document is read in four fixed steps:
+//
+//  1. the whole text is valid JSON (json.Valid; trailing data is invalid)             -> not_json
+//  2. an object whose keys are EXACTLY the schema's keys (case-sensitive), none twice  -> unknown_key{key}, duplicate_key{key},
+//     in document order, decided on the decoded key (a key spelled with a unicode escape is the key it decodes to)
+//  3. every schema key is present                                                      -> missing_key{key}, in schema order
+//  4. members are decoded in SCHEMA order and the first failure is reported            -> bad_value, level_not_stored,
+//     unknown_level, not_lowercase_hex, not_32_bytes, wrong_format
+//
+// The state is always finality_addendum_malformed{field, reason[, key][, index]}: field names the member, or the object for a
+// key refusal. Hex is lower case only; an integer is a JSON integer that fits uint64; null is never a value.
+
+func strictObject(raw []byte, field string, keys []string) (map[string]json.RawMessage, error) {
+	if !json.Valid(raw) {
+		return nil, AddendumMalformed(field, AddendumNotJSON)
 	}
-	level, err := ParseStoredLevel(j.Level)
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	tok, err := dec.Token()
+	if d, ok := tok.(json.Delim); err != nil || !ok || d != '{' {
+		return nil, AddendumMalformed(field, AddendumNotJSON)
+	}
+	allowed := map[string]bool{}
+	for _, k := range keys {
+		allowed[k] = true
+	}
+	out := map[string]json.RawMessage{}
+	for dec.More() {
+		kt, err := dec.Token()
+		if err != nil {
+			return nil, AddendumMalformed(field, AddendumNotJSON)
+		}
+		k, _ := kt.(string)
+		if !allowed[k] {
+			return nil, AddendumMalformed(field, AddendumUnknownKey, "key", k)
+		}
+		if _, dup := out[k]; dup {
+			return nil, AddendumMalformed(field, AddendumDuplicateKey, "key", k)
+		}
+		var v json.RawMessage
+		if err := dec.Decode(&v); err != nil {
+			return nil, AddendumMalformed(field, AddendumNotJSON)
+		}
+		out[k] = v
+	}
+	for _, k := range keys {
+		if _, ok := out[k]; !ok {
+			return nil, AddendumMalformed(field, AddendumMissingKey, "key", k)
+		}
+	}
+	return out, nil
+}
+
+func strictString(raw json.RawMessage, field string) (string, error) {
+	var s string
+	if string(bytes.TrimSpace(raw)) == "null" || json.Unmarshal(raw, &s) != nil {
+		return "", AddendumMalformed(field, AddendumBadValue)
+	}
+	return s, nil
+}
+
+func strictUint(raw json.RawMessage, field string) (uint64, error) {
+	var u uint64
+	if string(bytes.TrimSpace(raw)) == "null" || json.Unmarshal(raw, &u) != nil {
+		return 0, AddendumMalformed(field, AddendumBadValue)
+	}
+	return u, nil
+}
+
+// strictHex decodes lower-case hex; want >= 0 also fixes the decoded length.
+func strictHex(s, field string, want int) ([]byte, error) {
+	if len(s)%2 != 0 {
+		return nil, AddendumMalformed(field, AddendumNotLowerHex)
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+			return nil, AddendumMalformed(field, AddendumNotLowerHex)
+		}
+	}
+	b, err := hex.DecodeString(s)
 	if err != nil {
-		return NewState(CodeAddendumMalformed, "field", "level", "reason", err.Error())
+		return nil, AddendumMalformed(field, AddendumNotLowerHex)
 	}
-	id, err := ParseProofID(j.ProofID)
+	if want >= 0 && len(b) != want {
+		return nil, AddendumMalformed(field, AddendumNot32Bytes)
+	}
+	return b, nil
+}
+
+func strictHex32(raw json.RawMessage, field string) ([32]byte, error) {
+	var out [32]byte
+	s, err := strictString(raw, field)
+	if err != nil {
+		return out, err
+	}
+	b, err := strictHex(s, field, 32)
+	if err != nil {
+		return out, err
+	}
+	copy(out[:], b)
+	return out, nil
+}
+
+var addendumKeys = []string{"proofId", "seq", "level", "chain", "kind", "evidence", "prevHash", "ownHash"}
+
+// UnmarshalJSON reads MarshalJSON's form strictly (rules above): a key that is not exactly one of the eight, a repeated or
+// missing key, a level that is not "l1_posted" or "finalized" ("included" is derived and never stored), hex that is not lower
+// case, hashes that are not 32 bytes and a proof id that is not a canonical lower-case uuid are each refused by name.
+func (a *Addendum) UnmarshalJSON(b []byte) error {
+	m, err := strictObject(b, "addendum", addendumKeys)
 	if err != nil {
 		return err
 	}
-	ev, err := hex.DecodeString(j.Evidence)
+	var out Addendum
+	idStr, err := strictString(m["proofId"], "proofId")
 	if err != nil {
-		return NewState(CodeAddendumMalformed, "field", "evidence", "reason", err.Error())
+		return err
 	}
-	out := Addendum{ProofID: id, Seq: j.Seq, Level: level, Chain: j.Chain, Kind: j.Kind, Evidence: ev}
-	for _, f := range []struct {
-		name string
-		src  string
-		dst  *[32]byte
-	}{{"prevHash", j.PrevHash, &out.PrevHash}, {"ownHash", j.OwnHash, &out.OwnHash}} {
-		raw, err := hex.DecodeString(f.src)
-		if err != nil || len(raw) != 32 {
-			return NewState(CodeAddendumMalformed, "field", f.name, "reason", fmt.Sprintf("not 32 bytes of hex (%q)", f.src))
-		}
-		copy(f.dst[:], raw)
+	if out.ProofID, err = ParseProofID(idStr); err != nil {
+		return err
+	}
+	if out.Seq, err = strictUint(m["seq"], "seq"); err != nil {
+		return err
+	}
+	levelStr, err := strictString(m["level"], "level")
+	if err != nil {
+		return err
+	}
+	level, perr := ParseLevel(levelStr)
+	switch {
+	case perr != nil:
+		return AddendumMalformed("level", AddendumUnknownLevel)
+	case !level.Stored():
+		return AddendumMalformed("level", AddendumLevelNotStored)
+	}
+	out.Level = level
+	if out.Chain, err = strictUint(m["chain"], "chain"); err != nil {
+		return err
+	}
+	if out.Kind, err = strictString(m["kind"], "kind"); err != nil {
+		return err
+	}
+	evStr, err := strictString(m["evidence"], "evidence")
+	if err != nil {
+		return err
+	}
+	if out.Evidence, err = strictHex(evStr, "evidence", -1); err != nil {
+		return err
+	}
+	if out.PrevHash, err = strictHex32(m["prevHash"], "prevHash"); err != nil {
+		return err
+	}
+	if out.OwnHash, err = strictHex32(m["ownHash"], "ownHash"); err != nil {
+		return err
 	}
 	*a = out
 	return nil
@@ -262,11 +399,11 @@ type CarriedLeg struct {
 	BlockHash   string `json:"blockHash"` // hex32
 }
 
-// Ref is the carried leg as a BlockRef (no header).
+// Ref is the carried leg as a BlockRef (no header). blockHash is 32 bytes of lower-case hex.
 func (c CarriedLeg) Ref() (BlockRef, error) {
-	raw, err := hex.DecodeString(c.BlockHash)
-	if err != nil || len(raw) != 32 {
-		return BlockRef{}, NewState(CodeAddendumMalformed, "field", "leg.blockHash", "reason", fmt.Sprintf("not 32 bytes of hex (%q)", c.BlockHash))
+	raw, err := strictHex(c.BlockHash, "leg.blockHash", 32)
+	if err != nil {
+		return BlockRef{}, err
 	}
 	var h [32]byte
 	copy(h[:], raw)
@@ -290,18 +427,69 @@ func NewSection(leg BlockRef, chain []Addendum) Section {
 	return Section{Format: SectionFormat, Leg: CarriedLegOf(leg), Addenda: append([]Addendum{}, chain...)}
 }
 
-// ParseSection reads the member strictly (unknown fields and a wrong format are refused by name).
+var (
+	sectionKeys = []string{"format", "leg", "addenda"}
+	legKeys     = []string{"chain", "blockNumber", "blockHash"}
+)
+
+// ParseSection reads the member strictly by the rules above: the format string must be SectionFormat (wrong_format), the leg
+// has exactly chain, blockNumber and blockHash, and every addendum is read by Addendum.UnmarshalJSON (a refusal there carries
+// the element's index). Members are judged in schema order: format, leg, addenda.
 func ParseSection(raw []byte) (Section, error) {
-	var s Section
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&s); err != nil {
-		return Section{}, NewState(CodeAddendumMalformed, "field", "finality", "reason", err.Error())
+	m, err := strictObject(raw, "finality", sectionKeys)
+	if err != nil {
+		return Section{}, err
 	}
-	if s.Format != SectionFormat {
-		return Section{}, NewState(CodeAddendumMalformed, "field", "format", "reason", fmt.Sprintf("want %q, got %q", SectionFormat, s.Format))
+	format, err := strictString(m["format"], "format")
+	if err != nil {
+		return Section{}, err
+	}
+	if format != SectionFormat {
+		return Section{}, AddendumMalformed("format", AddendumWrongFormat)
+	}
+	lm, err := strictObject(m["leg"], "leg", legKeys)
+	if err != nil {
+		return Section{}, err
+	}
+	var s Section
+	s.Format = format
+	if s.Leg.Chain, err = strictUint(lm["chain"], "leg.chain"); err != nil {
+		return Section{}, err
+	}
+	if s.Leg.BlockNumber, err = strictUint(lm["blockNumber"], "leg.blockNumber"); err != nil {
+		return Section{}, err
+	}
+	hash, err := strictHex32(lm["blockHash"], "leg.blockHash")
+	if err != nil {
+		return Section{}, err
+	}
+	s.Leg.BlockHash = hex.EncodeToString(hash[:])
+	var list []json.RawMessage
+	if string(bytes.TrimSpace(m["addenda"])) == "null" || json.Unmarshal(m["addenda"], &list) != nil {
+		return Section{}, AddendumMalformed("addenda", AddendumBadValue)
+	}
+	s.Addenda = make([]Addendum, 0, len(list))
+	for i, el := range list {
+		var a Addendum
+		if err := a.UnmarshalJSON(el); err != nil {
+			if st, ok := AsNamed(err); ok {
+				st.Fields["index"] = uint64(i)
+			}
+			return Section{}, err
+		}
+		s.Addenda = append(s.Addenda, a)
 	}
 	return s, nil
+}
+
+// UnmarshalJSON makes every decoding path of a Section the strict one (ParseSection).
+func (s *Section) UnmarshalJSON(b []byte) error {
+	v, err := ParseSection(b)
+	if err != nil {
+		return err
+	}
+	*s = v
+	return nil
 }
 
 // CheckLegChain is the chain-level judgement of one leg without judging any evidence: the leg's chain must be a row of the

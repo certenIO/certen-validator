@@ -133,6 +133,7 @@ type Upgrader struct {
 	next     map[string]time.Time // proof id -> earliest next attempt
 	complete map[string]Level     // proof id -> level it completed at (skipped from now on)
 	stand    map[string]legStand  // proof id -> where its chain stood at the last attempt, for the gauges
+	noProver map[uint64]bool      // chains already announced as having no registered prover
 }
 
 type legStand struct {
@@ -147,7 +148,7 @@ func NewUpgrader(src LegSource, store AddendumStore, reg *Registry, pins *Pins, 
 	}
 	return &Upgrader{
 		src: src, store: store, reg: reg, pins: pins, cfg: cfg.withDefaults(),
-		next: map[string]time.Time{}, complete: map[string]Level{}, stand: map[string]legStand{},
+		next: map[string]time.Time{}, complete: map[string]Level{}, stand: map[string]legStand{}, noProver: map[uint64]bool{},
 	}, nil
 }
 
@@ -162,6 +163,7 @@ type PassReport struct {
 	Failed   int // attempts that ended in another named state
 	Broken   int // legs whose stored chain failed verification (nothing appended)
 	Conflict int // appends another validator won
+	NoProver int // legs of a chain with no registered prover: not loaded, not verified, not scheduled (logged once per chain)
 	Unusable int // legs whose L6 evidence could not be loaded
 	// SourceErr is a failure listing legs (the pass ended early).
 	SourceErr error
@@ -213,6 +215,12 @@ page:
 		for _, ref := range refs {
 			rep.Listed++
 			switch {
+			case len(u.reg.Provers(ref.Chain)) == 0:
+				// nothing can be built for this chain until a prover is registered: its L6 evidence is not reloaded and
+				// re-verified on every retry. Counted in every pass and announced once per chain.
+				rep.NoProver++
+				u.announceNoProver(ref.Chain)
+				continue
 			case u.isComplete(ref.ProofID):
 				rep.Complete++
 				continue
@@ -256,6 +264,16 @@ func b2i(b bool) int {
 		return 1
 	}
 	return 0
+}
+
+func (u *Upgrader) announceNoProver(chain uint64) {
+	u.mu.Lock()
+	seen := u.noProver[chain]
+	u.noProver[chain] = true
+	u.mu.Unlock()
+	if !seen {
+		u.cfg.Logf("[FINALITY] chain %d has no registered prover: its legs are counted as no_prover and are not loaded or attempted until one is registered", chain)
+	}
 }
 
 func (u *Upgrader) isComplete(id string) bool {
@@ -365,8 +383,17 @@ func (u *Upgrader) upgradeLeg(ctx context.Context, ref LegRef) (res legResult) {
 		u.schedule(ref.ProofID, u.cfg.BrokenRetry)
 		return res
 	}
-	block := settlement.Block()
-	block.Chain = ref.Chain
+	// The leg's block is DERIVED from the verified L6 evidence (level 1): never taken from the source's Subject, which is a
+	// stored claim. D0 is the binding of the derived block.
+	block, err := DeriveIncluded(ref.Chain, settlement.Included)
+	if err != nil {
+		res.unusable = true
+		u.cfg.Recorder.BuildFailed(ref.Chain, codeOf(err))
+		logf("[FINALITY] leg %s chain %d: its L6 evidence cannot be used: %v", ref.ProofID, ref.Chain, err)
+		u.record(ref.ProofID, ref.Chain, LevelNone, false)
+		u.schedule(ref.ProofID, u.cfg.BrokenRetry)
+		return res
+	}
 	d0 := LegBindingOf(block)
 
 	chain, err := u.store.Chain(ctx, ref.ProofID)

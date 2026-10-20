@@ -1,0 +1,27 @@
+{
+ "captured_utc": "2026-10-20T02:53:36Z",
+ "lodestar": "https://lodestar-sepolia.chainsafe.io",
+ "exec_endpoint": "https://ethereum-sepolia-rpc.publicnode.com",
+ "final_signature_period": 1390,
+ "final_attested_slot": 11394240,
+ "final_signature_slot": 11394241,
+ "bootstrap_block_root": "0xb19e2dccb8c6c7b1482f0c8446972e996bf6276d1bf5a1e5fc2fdbef4279fee0",
+ "bootstrap_header_slot": 11394208,
+ "link_periods": [
+  1379,
+  1380,
+  1381,
+  1382,
+  1383,
+  1384,
+  1385,
+  1386,
+  1387,
+  1388,
+  1389
+ ],
+ "final_finalized_exec_hash": "0xd10922c78306346f1c1f769558eda4c63528f7b778258781c477bee518c9bb08",
+ "lodestar_node_version": "{\"data\":{\"version\":\"Lodestar/v1.50.0/003bd66\"}}",
+ "eth_getBlockByNumber_finalized_hash": "0xd10922c78306346f1c1f769558eda4c63528f7b778258781c477bee518c9bb08",
+ "eth_getBlockByNumber_finalized_number": "0xb660df"
+}

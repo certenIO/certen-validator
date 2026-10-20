@@ -382,7 +382,7 @@ func TestUpgraderRefusesAChainChainedUnderAnotherLegsBinding(t *testing.T) {
 }
 
 func TestUpgraderReportsALegWithoutUsableL6EvidenceByName(t *testing.T) {
-	f := newFixture(t, nil, UpgraderConfig{}, nil)
+	f := newFixture(t, allLevels(t), UpgraderConfig{}, nil)
 	delete(f.src.settlements, legID)
 	rep := f.u.RunOnce(context.Background())
 	if rep.Unusable != 1 || f.rec.failures[CodeIncludedInvalid] != 1 || !strings.Contains(f.logs.Joined(), "L6 evidence cannot be used") {

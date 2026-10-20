@@ -99,8 +99,20 @@ func rehash(d0 [32]byte, chain []finality.Addendum) []finality.Addendum {
 
 func main() {
 	out := flag.String("out", "pkg/finality/testdata/finality_chain1", "output directory")
+	set := flag.String("set", "chain1", "chain1 or chain2 (chain2 reads -chain1 and -registry and never changes chain1)")
+	chain1 := flag.String("chain1", "pkg/finality/testdata/finality_chain1", "chain2: the committed chain1 set")
+	registry := flag.String("registry", "pkg/finality/testdata/finality/states.json", "chain2: the state registry whose hash the manifest records")
 	flag.Parse()
-	if err := generate(*out); err != nil {
+	var err error
+	switch *set {
+	case "chain1":
+		err = generate(*out)
+	case "chain2":
+		err = generate2(*out, *chain1, *registry)
+	default:
+		err = fmt.Errorf("unknown set %q", *set)
+	}
+	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}

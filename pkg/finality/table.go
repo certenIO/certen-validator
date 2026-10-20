@@ -15,8 +15,8 @@ type KindRow struct {
 
 // The reasons of the two not-applicable cells, verbatim from section 1.
 const (
-	ReasonChainIsL1     = "this chain is the L1"
-	ReasonNoL1Settlment = "no L1 settlement exists"
+	ReasonChainIsL1     NotApplicableReason = "this chain is the L1"
+	ReasonNoL1Settlment NotApplicableReason = "no L1 settlement exists"
 )
 
 var kindTable = []KindRow{
@@ -29,7 +29,7 @@ var kindTable = []KindRow{
 }
 
 // notApplicable are the cells of the table that are not kinds.
-var notApplicableTable = map[uint64]map[Level]string{
+var notApplicableTable = map[uint64]map[Level]NotApplicableReason{
 	ChainSepolia: {LevelL1Posted: ReasonChainIsL1},
 	ChainAdiri:   {LevelL1Posted: ReasonNoL1Settlment},
 }
@@ -65,7 +65,7 @@ func KindFor(chain uint64, level Level) (string, error) {
 		return "", ChainUnsupported(chain)
 	}
 	if !level.Stored() {
-		return "", Malformed("level", "included (1) is derived and never stored; only l1_posted (2) and finalized (3) have kinds", int(level), 2)
+		return "", Malformed("level", ReasonLevelNotStored, int(level), 2)
 	}
 	for _, r := range kindTable {
 		if r.Chain == chain && r.Level == level {

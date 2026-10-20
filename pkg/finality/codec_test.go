@@ -64,8 +64,8 @@ func TestContainerVectorsDecodeStrictly(t *testing.T) {
 					t.Fatalf("encode(decode(x)) != x: %v", eerr)
 				}
 			}
-			if got != v.Expect {
-				t.Fatalf("\n got  %s\n want %s", got, v.Expect)
+			if got != supersededExpect(v.Expect) {
+				t.Fatalf("\n got  %s\n want %s", got, supersededExpect(v.Expect))
 			}
 		})
 	}
@@ -115,8 +115,8 @@ func TestCodecProbeVectorsAreStrict(t *testing.T) {
 		t.Run(v.Name, func(t *testing.T) {
 			raw, _ := hex.DecodeString(v.Hex)
 			err := probeDecode(raw, limitsFrom(t, v.Limits))
-			if got := canonOf(err); got != v.Expect {
-				t.Fatalf("\n got  %s\n want %s", got, v.Expect)
+			if got := canonOf(err); got != supersededExpect(v.Expect) {
+				t.Fatalf("\n got  %s\n want %s", got, supersededExpect(v.Expect))
 			}
 			if err == nil && !bytes.Equal(probeEncode(t, raw), raw) {
 				t.Fatal("encode(decode(x)) != x")

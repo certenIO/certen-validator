@@ -87,7 +87,7 @@ func NewReader(b []byte, lim Limits) *Reader { return &Reader{b: b, lim: lim} }
 func (r *Reader) Left() int { return len(r.b) - r.off }
 
 func (r *Reader) short(part string, want int) *StateError {
-	return Malformed(part, "truncated", r.Left(), want)
+	return Malformed(part, ReasonTruncated, r.Left(), want)
 }
 
 func (r *Reader) U8(part string) (uint8, error) {
@@ -148,7 +148,7 @@ func (r *Reader) LP(part string, max int) ([]byte, error) {
 		return nil, EvidenceTooLarge(part, uint64(n), uint64(max))
 	}
 	if uint64(n) > uint64(r.Left()) {
-		return nil, Malformed(part, "length exceeds the remaining bytes", r.Left(), int(n))
+		return nil, Malformed(part, ReasonLengthExceedsRemaining, r.Left(), int(n))
 	}
 	out := append([]byte(nil), r.b[r.off:r.off+int(n)]...)
 	r.off += int(n)
@@ -163,7 +163,7 @@ func (r *Reader) STR(part string) (string, error) {
 	}
 	for i, c := range b {
 		if c == 0 || c > 0x7f {
-			return "", MalformedAt(part, i, "a STR is ASCII with no NUL", len(b), len(b))
+			return "", MalformedAt(part, i, ReasonStrNotASCIIOrNUL, len(b), len(b))
 		}
 	}
 	return string(b), nil
@@ -180,7 +180,7 @@ func (r *Reader) Count(part string, limit, minElem int) (int, error) {
 		return 0, EvidenceTooLarge(part, uint64(n), uint64(limit))
 	}
 	if minElem > 0 && uint64(n)*uint64(minElem) > uint64(r.Left()) {
-		return 0, Malformed(part, "count exceeds the remaining bytes", r.Left(), int(n)*minElem)
+		return 0, Malformed(part, ReasonCountExceedsRemaining, r.Left(), int(n)*minElem)
 	}
 	return int(n), nil
 }
@@ -213,7 +213,7 @@ func (r *Reader) Nodes(part string, maxNodeBytes int) ([][]byte, error) {
 	for i, n := range nodes {
 		h := crypto.Keccak256Hash(n)
 		if i > 0 && string(h[:]) <= string(prev[:]) {
-			return nil, MalformedAt(part, i, "nodes are not strictly ascending by keccak256 and unique", 0, 0)
+			return nil, MalformedAt(part, i, ReasonNodesNotAscendingUnique, 0, 0)
 		}
 		prev = h
 	}
@@ -223,7 +223,7 @@ func (r *Reader) Nodes(part string, maxNodeBytes int) ([][]byte, error) {
 // End refuses a trailing byte.
 func (r *Reader) End(part string) error {
 	if r.Left() != 0 {
-		return Malformed(part, "trailing bytes", r.Left(), 0)
+		return Malformed(part, ReasonTrailingBytes, r.Left(), 0)
 	}
 	return nil
 }
@@ -294,7 +294,7 @@ type Container struct {
 // Encode is the canonical encoding. A level that is not stored (1 included is derived, 0 none) is refused.
 func (c Container) Encode() ([]byte, error) {
 	if !c.Header.Level.Stored() {
-		return nil, Malformed("header.level", "only levels l1_posted (2) and finalized (3) are carried; included is derived", int(c.Header.Level), 2)
+		return nil, Malformed("header.level", ReasonLevelNotStored, int(c.Header.Level), 2)
 	}
 	var w Writer
 	w.Fixed([]byte(ContainerMagic))
@@ -333,7 +333,7 @@ func DecodeContainer(b []byte, lim Limits) (Container, error) {
 		return c, err
 	}
 	if !Level(lv).Stored() {
-		return c, Malformed("header.level", "only levels l1_posted (2) and finalized (3) are carried; included is derived", int(lv), 2)
+		return c, Malformed("header.level", ReasonLevelNotStored, int(lv), 2)
 	}
 	c.Header.Level = Level(lv)
 	if c.Header.BlockNumber, err = r.U64("header.blockNumber"); err != nil {

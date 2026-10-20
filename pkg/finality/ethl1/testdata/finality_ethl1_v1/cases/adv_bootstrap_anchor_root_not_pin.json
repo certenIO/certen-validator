@@ -1,0 +1,17 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "adv_bootstrap_anchor_root_not_pin",
+ "kind": "head",
+ "description": "anchorRoot differs from the ledger block_root",
+ "pins": "pins/main.json",
+ "lc": "lc/adv_bootstrap_anchor_root_not_pin.bin",
+ "expect": {
+  "code": "finality_pin_mismatch",
+  "fields": {
+   "got_root": "0x86196a535f8aec42ca2a05630e7cc64517c5ac8e1d7c01edbdbdd1bb85977475",
+   "period": "1390",
+   "want_root": "0xb19e2dccb8c6c7b1482f0c8446972e996bf6276d1bf5a1e5fc2fdbef4279fee0"
+  },
+  "result": "fault"
+ }
+}

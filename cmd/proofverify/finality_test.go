@@ -103,7 +103,7 @@ func TestFinalityFileNamesWhyItJudgesNothingAndNeverTakesD0FromTheFile(t *testin
 
 	t.Run("a finality section is reported by name, not judged", func(t *testing.T) {
 		code, out := verifyFile(t, writeDoc(t, doc))
-		if code != exitSummaryOnly || !strings.Contains(out, finality.CodeIncludedUnavailable) || !strings.Contains(out, "D0 cannot be recomputed") || !strings.Contains(out, "1 addenda are not judged") {
+		if code != exitSummaryOnly || !strings.Contains(out, finality.CodeIncludedUnavailable) || !strings.Contains(out, string(finality.IncludedSettlementNotJudged)) || !strings.Contains(out, "1 addenda are not judged") {
 			t.Fatalf("exit %d\n%s", code, out)
 		}
 		if strings.Contains(out, "VERIFIED") {

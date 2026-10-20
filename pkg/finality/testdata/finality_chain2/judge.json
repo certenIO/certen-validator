@@ -1,0 +1,163 @@
+{
+  "format": "certen-finality-vectors/1",
+  "kind": "judge",
+  "runner": "NewRegistry() with no kind registered; JudgeAddendum(leg, addendum, nil) -\u003e canonical state",
+  "set": "finality_chain2",
+  "vectors": [
+    {
+      "name": "judge_container_about_the_leg_but_no_kind_registered",
+      "note": "everything binds; only the kind is missing",
+      "leg": {
+        "chain": 84532,
+        "blockNumber": 47368146,
+        "blockHash": "3333333333333333333333333333333333333333333333333333333333333333"
+      },
+      "addendum": {
+        "proofId": "01234567-89ab-4def-8012-3456789abcde",
+        "seq": 1,
+        "level": "finalized",
+        "chain": 84532,
+        "kind": "base-sepolia/finalized/v1",
+        "evidence": "4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34030000000002d2c7d23333333333333333333333333333333333333333333333333333333333333333626f6479",
+        "prevHash": "0000000000000000000000000000000000000000000000000000000000000000",
+        "ownHash": "29125615167e0cbce84f4051f0fa1d9565f5e40c011836c34f83d729e1510306"
+      },
+      "expect": "{\"code\":\"finality_evidence_unrecognised\",\"fields\":{\"kind\":\"base-sepolia/finalized/v1\",\"version\":\"v1\"}}"
+    },
+    {
+      "name": "judge_same_chain_and_number_other_block_hash",
+      "note": "the container is about another block of the same height",
+      "leg": {
+        "chain": 84532,
+        "blockNumber": 47368146,
+        "blockHash": "3333333333333333333333333333333333333333333333333333333333333333"
+      },
+      "addendum": {
+        "proofId": "01234567-89ab-4def-8012-3456789abcde",
+        "seq": 1,
+        "level": "finalized",
+        "chain": 84532,
+        "kind": "base-sepolia/finalized/v1",
+        "evidence": "4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34030000000002d2c7d29999999999999999999999999999999999999999999999999999999999999999626f6479",
+        "prevHash": "0000000000000000000000000000000000000000000000000000000000000000",
+        "ownHash": "2e7673e9c0c0148aae2fd909936dd287a3556d52ca68e0ca47801da8c6ff23d7"
+      },
+      "expect": "{\"code\":\"finality_block_mismatch\",\"fields\":{\"field\":\"blockHash\",\"got\":\"0x9999999999999999999999999999999999999999999999999999999999999999\",\"want\":\"0x3333333333333333333333333333333333333333333333333333333333333333\"}}"
+    },
+    {
+      "name": "judge_other_block_number",
+      "leg": {
+        "chain": 84532,
+        "blockNumber": 47368146,
+        "blockHash": "3333333333333333333333333333333333333333333333333333333333333333"
+      },
+      "addendum": {
+        "proofId": "01234567-89ab-4def-8012-3456789abcde",
+        "seq": 1,
+        "level": "finalized",
+        "chain": 84532,
+        "kind": "base-sepolia/finalized/v1",
+        "evidence": "4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34030000000002d2c7d33333333333333333333333333333333333333333333333333333333333333333626f6479",
+        "prevHash": "0000000000000000000000000000000000000000000000000000000000000000",
+        "ownHash": "5246225a244672cb23c6ec988eeb770eb17497c56a3d2a1748612491017cf91e"
+      },
+      "expect": "{\"code\":\"finality_block_mismatch\",\"fields\":{\"field\":\"blockNumber\",\"got\":\"47368147\",\"want\":\"47368146\"}}"
+    },
+    {
+      "name": "judge_container_and_addendum_both_carry_another_chain",
+      "note": "the hash chain and the row are consistent for chain 421614, but the leg settled on 84532",
+      "leg": {
+        "chain": 84532,
+        "blockNumber": 47368146,
+        "blockHash": "3333333333333333333333333333333333333333333333333333333333333333"
+      },
+      "addendum": {
+        "proofId": "01234567-89ab-4def-8012-3456789abcde",
+        "seq": 1,
+        "level": "finalized",
+        "chain": 421614,
+        "kind": "arb-sepolia/finalized/v1",
+        "evidence": "43464531000000186172622d7365706f6c69612f66696e616c697a65642f76310000000000066eee030000000002d2c7d23333333333333333333333333333333333333333333333333333333333333333626f6479",
+        "prevHash": "0000000000000000000000000000000000000000000000000000000000000000",
+        "ownHash": "502c71e36652ecf02f3d2086466b1cea4e8409956c2113dedf23ce586807c03b"
+      },
+      "expect": "{\"code\":\"finality_block_mismatch\",\"fields\":{\"field\":\"chain\",\"got\":\"421614\",\"want\":\"84532\"}}"
+    },
+    {
+      "name": "judge_header_kind_differs_from_the_addendum",
+      "leg": {
+        "chain": 84532,
+        "blockNumber": 47368146,
+        "blockHash": "3333333333333333333333333333333333333333333333333333333333333333"
+      },
+      "addendum": {
+        "proofId": "01234567-89ab-4def-8012-3456789abcde",
+        "seq": 1,
+        "level": "finalized",
+        "chain": 84532,
+        "kind": "base-sepolia/finalized/v1",
+        "evidence": "4346453100000019626173652d7365706f6c69612f6c315f706f737465642f76310000000000014a34030000000002d2c7d23333333333333333333333333333333333333333333333333333333333333333626f6479",
+        "prevHash": "0000000000000000000000000000000000000000000000000000000000000000",
+        "ownHash": "170f1ed6665da85ec66c6aefeea7540dc66a5c0259043981d8c5124977029030"
+      },
+      "expect": "{\"code\":\"finality_evidence_malformed\",\"fields\":{\"got_len\":\"0\",\"part\":\"header.kind\",\"reason\":\"differs_from_addendum\",\"want_len\":\"0\"}}"
+    },
+    {
+      "name": "judge_header_chain_differs_from_the_addendum",
+      "leg": {
+        "chain": 84532,
+        "blockNumber": 47368146,
+        "blockHash": "3333333333333333333333333333333333333333333333333333333333333333"
+      },
+      "addendum": {
+        "proofId": "01234567-89ab-4def-8012-3456789abcde",
+        "seq": 1,
+        "level": "finalized",
+        "chain": 84532,
+        "kind": "base-sepolia/finalized/v1",
+        "evidence": "4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000066eee030000000002d2c7d23333333333333333333333333333333333333333333333333333333333333333626f6479",
+        "prevHash": "0000000000000000000000000000000000000000000000000000000000000000",
+        "ownHash": "e20997c5c884c3e8d9a63cb3828ca1a77bb512e955ab270fb816d4d26ff2e480"
+      },
+      "expect": "{\"code\":\"finality_evidence_malformed\",\"fields\":{\"got_len\":\"0\",\"part\":\"header.chain\",\"reason\":\"differs_from_addendum\",\"want_len\":\"0\"}}"
+    },
+    {
+      "name": "judge_header_level_differs_from_the_addendum",
+      "leg": {
+        "chain": 84532,
+        "blockNumber": 47368146,
+        "blockHash": "3333333333333333333333333333333333333333333333333333333333333333"
+      },
+      "addendum": {
+        "proofId": "01234567-89ab-4def-8012-3456789abcde",
+        "seq": 1,
+        "level": "finalized",
+        "chain": 84532,
+        "kind": "base-sepolia/finalized/v1",
+        "evidence": "4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34020000000002d2c7d23333333333333333333333333333333333333333333333333333333333333333626f6479",
+        "prevHash": "0000000000000000000000000000000000000000000000000000000000000000",
+        "ownHash": "dbeb478e5493a5a008dc099d7623e67a12c3c55120b2ca016b84d3a9d0b656ee"
+      },
+      "expect": "{\"code\":\"finality_evidence_malformed\",\"fields\":{\"got_len\":\"0\",\"part\":\"header.level\",\"reason\":\"differs_from_addendum\",\"want_len\":\"0\"}}"
+    },
+    {
+      "name": "judge_evidence_is_not_a_container",
+      "leg": {
+        "chain": 84532,
+        "blockNumber": 47368146,
+        "blockHash": "3333333333333333333333333333333333333333333333333333333333333333"
+      },
+      "addendum": {
+        "proofId": "01234567-89ab-4def-8012-3456789abcde",
+        "seq": 1,
+        "level": "finalized",
+        "chain": 84532,
+        "kind": "base-sepolia/finalized/v1",
+        "evidence": "78",
+        "prevHash": "0000000000000000000000000000000000000000000000000000000000000000",
+        "ownHash": "b0a6a7004abe8501caeec3a6447a52d071b5e949169a23cda62c0dbeda7644f6"
+      },
+      "expect": "{\"code\":\"finality_evidence_malformed\",\"fields\":{\"got_len\":\"1\",\"part\":\"header.magic\",\"reason\":\"truncated\",\"want_len\":\"4\"}}"
+    }
+  ]
+}

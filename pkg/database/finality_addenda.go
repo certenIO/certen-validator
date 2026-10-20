@@ -43,6 +43,21 @@ func pgCode(err error) pq.ErrorCode {
 	return ""
 }
 
+// appendInsertError names the database refusal of the INSERT of addendum seq of proof id: a unique violation is the append
+// race (finality_append_conflict); a restrict violation is the table trigger refusing a row the repository did not refuse itself
+// (a concurrent writer changed the chain between the read and the insert), the registered go_operational state
+// finality_guard_refused carrying the database message in its cause - it is not one of the closed finality_chain_broken checks.
+// Any other error is returned unchanged.
+func appendInsertError(id string, seq uint64, err error) error {
+	switch pgCode(err) {
+	case "23505": // unique_violation: another writer took this seq (or this level) between our read and our insert
+		return finality.NewState(finality.CodeAppendConflict, "proof_id", id, "seq", seq)
+	case "23001": // restrict_violation: the trigger refused it
+		return finality.NewState(finality.CodeGuardRefused, "proof_id", id, "seq", seq, "cause", err.Error())
+	}
+	return err
+}
+
 // Append writes a as the next addendum of its proof. Inside one transaction it reads the proof's stored addenda and refuses
 // (finality_chain_broken) an addendum that does not extend them exactly: wrong seq, a prevHash that is not the last ownHash,
 // a level that is not stored (included is derived and never stored) or a chain other than the proof's, and refuses a second
@@ -103,13 +118,7 @@ func (r *FinalityAddendaRepository) Append(ctx context.Context, a finality.Adden
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
 		id, int64(a.Seq), int16(a.Level), int64(a.Chain), a.Kind, a.Evidence, a.PrevHash[:], a.OwnHash[:])
 	if err != nil {
-		switch pgCode(err) {
-		case "23505": // unique_violation: another writer took this seq (or this level) between our read and our insert
-			return finality.NewState(finality.CodeAppendConflict, "proof_id", id, "seq", a.Seq)
-		case "23001": // restrict_violation: the trigger refused it
-			return finality.NewState(finality.CodeChainBroken, "seq", a.Seq, "check", "database_guard", "cause", err.Error())
-		}
-		return err
+		return appendInsertError(id, a.Seq, err)
 	}
 	return tx.Commit()
 }
@@ -221,7 +230,7 @@ func (r *FinalityAddendaRepository) LegRef(ctx context.Context, proofID string) 
 		return ref, err
 	}
 	if !header.Valid || header.String == "" {
-		return ref, finality.NewState(finality.CodeIncludedUnavailable, "proof_id", proofID, "reason", "the stored bundle carries no execution proof (component 5)")
+		return ref, finality.IncludedUnavailable(finality.IncludedNoExecutionProof, "proof_id", proofID)
 	}
 	if id, perr := strconv.ParseUint(chain.String, 10, 64); perr == nil {
 		ref.Chain = id

@@ -1,0 +1,79 @@
+{
+  "format": "certen-finality-vectors/1",
+  "kind": "container",
+  "set": "finality_chain2",
+  "vectors": [
+    {
+      "expect": "{\"blockHash\":\"0x3333333333333333333333333333333333333333333333333333333333333333\",\"blockNumber\":\"47368146\",\"body\":\"0x424f4459\",\"chain\":\"84532\",\"kind\":\"base-sepolia/finalized/v1\",\"level\":\"3\"}",
+      "hex": "4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34030000000002d2c7d23333333333333333333333333333333333333333333333333333333333333333424f4459",
+      "name": "header_l3",
+      "note": "valid finalized header with a 4-byte body"
+    },
+    {
+      "expect": "{\"blockHash\":\"0x3333333333333333333333333333333333333333333333333333333333333333\",\"blockNumber\":\"47368146\",\"body\":\"0x\",\"chain\":\"84532\",\"kind\":\"base-sepolia/l1_posted/v1\",\"level\":\"2\"}",
+      "hex": "4346453100000019626173652d7365706f6c69612f6c315f706f737465642f76310000000000014a34020000000002d2c7d23333333333333333333333333333333333333333333333333333333333333333",
+      "name": "header_l2_empty_body",
+      "note": "valid l1_posted header, empty body"
+    },
+    {
+      "expect": "{\"code\":\"finality_evidence_unrecognised\",\"fields\":{\"kind\":\"\",\"version\":\"magic:43464532\"}}",
+      "hex": "4346453200000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34030000000002d2c7d23333333333333333333333333333333333333333333333333333333333333333424f4459",
+      "name": "header_bad_magic",
+      "note": "CFE2"
+    },
+    {
+      "expect": "{\"code\":\"finality_evidence_malformed\",\"fields\":{\"got_len\":\"0\",\"part\":\"header.level\",\"reason\":\"level_not_stored\",\"want_len\":\"2\"}}",
+      "hex": "4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34000000000002d2c7d23333333333333333333333333333333333333333333333333333333333333333424f4459",
+      "name": "header_level_0",
+      "note": "levels other than 2 and 3 are never carried"
+    },
+    {
+      "expect": "{\"code\":\"finality_evidence_malformed\",\"fields\":{\"got_len\":\"1\",\"part\":\"header.level\",\"reason\":\"level_not_stored\",\"want_len\":\"2\"}}",
+      "hex": "4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34010000000002d2c7d23333333333333333333333333333333333333333333333333333333333333333424f4459",
+      "name": "header_level_1",
+      "note": "levels other than 2 and 3 are never carried"
+    },
+    {
+      "expect": "{\"code\":\"finality_evidence_malformed\",\"fields\":{\"got_len\":\"4\",\"part\":\"header.level\",\"reason\":\"level_not_stored\",\"want_len\":\"2\"}}",
+      "hex": "4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34040000000002d2c7d23333333333333333333333333333333333333333333333333333333333333333424f4459",
+      "name": "header_level_4",
+      "note": "levels other than 2 and 3 are never carried"
+    },
+    {
+      "expect": "{\"code\":\"finality_evidence_malformed\",\"fields\":{\"got_len\":\"10\",\"part\":\"header.blockHash\",\"reason\":\"truncated\",\"want_len\":\"32\"}}",
+      "hex": "4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34030000000002d2c7d233333333333333333333",
+      "name": "header_truncated_in_blockhash",
+      "note": "cut inside the block hash"
+    },
+    {
+      "expect": "{\"code\":\"finality_evidence_malformed\",\"fields\":{\"got_len\":\"3\",\"part\":\"header.magic\",\"reason\":\"truncated\",\"want_len\":\"4\"}}",
+      "hex": "434645",
+      "name": "header_truncated_in_magic",
+      "note": "three bytes"
+    },
+    {
+      "expect": "{\"code\":\"finality_evidence_malformed\",\"fields\":{\"got_len\":\"25\",\"index\":\"2\",\"part\":\"header.kind\",\"reason\":\"str_not_ascii_or_nul\",\"want_len\":\"25\"}}",
+      "hex": "4346453100000019626100652d7365706f6c69612f66696e616c697a65642f76310000000000014a34030000000002d2c7d23333333333333333333333333333333333333333333333333333333333333333424f4459",
+      "name": "header_kind_has_nul",
+      "note": "a STR holds no NUL"
+    },
+    {
+      "expect": "{\"code\":\"finality_evidence_too_large\",\"fields\":{\"count\":\"86\",\"limit\":\"64\",\"part\":\"evidence\"}}",
+      "hex": "4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34030000000002d2c7d23333333333333333333333333333333333333333333333333333333333333333424f4459",
+      "limits": {
+        "max_evidence_bytes": 64
+      },
+      "name": "evidence_too_large",
+      "note": "the container exceeds max_evidence_bytes (overridden to 64 for the vector)"
+    },
+    {
+      "expect": "{\"code\":\"finality_evidence_too_large\",\"fields\":{\"count\":\"25\",\"limit\":\"8\",\"part\":\"header.kind\"}}",
+      "hex": "4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34030000000002d2c7d23333333333333333333333333333333333333333333333333333333333333333424f4459",
+      "limits": {
+        "max_string_bytes": 8
+      },
+      "name": "header_kind_str_too_long",
+      "note": "kind STR over max_string_bytes (overridden to 8)"
+    }
+  ]
+}

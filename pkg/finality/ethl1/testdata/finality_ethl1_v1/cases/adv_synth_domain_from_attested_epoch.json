@@ -1,0 +1,18 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "adv_synth_domain_from_attested_epoch",
+ "kind": "head",
+ "description": "synthetic: the same update signed under the attested epoch's version (gloas) is refused",
+ "pins": "pins/synth.json",
+ "lc": "lc/adv_synth_domain_from_attested_epoch.bin",
+ "expect": {
+  "code": "finality_signature_invalid",
+  "fields": {
+   "fork_version": "0x900000a2",
+   "index": "0",
+   "participants": "512",
+   "signature_slot": "82401"
+  },
+  "result": "fault"
+ }
+}

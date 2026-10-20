@@ -1,0 +1,19 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "synth_valid_fork_boundary_domain",
+ "kind": "head",
+ "description": "synthetic: attested slot in the last epoch before the heze fork, signature_slot-1 in the first heze epoch: the domain version is heze's",
+ "pins": "pins/synth.json",
+ "lc": "lc/synth_valid_fork_boundary_domain.bin",
+ "expect": {
+  "finalized_head": {
+   "beacon_root": "0x686727e1f9b8aae67c747608328efccd8f862d2377f330d5c355817a9493e245",
+   "epoch": "2571",
+   "exec_hash": "0xa31f98001ffa988d64904bb286889813eb7ef8f919b3e65c8e01cddd8219e01c",
+   "participants": "512",
+   "periods_crossed": "0",
+   "slot": "82272"
+  },
+  "result": "ok"
+ }
+}

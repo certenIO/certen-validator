@@ -246,8 +246,8 @@ func TestChainVectorsGiveTheExpectedVerdicts(t *testing.T) {
 			} else {
 				got = canonOf(CheckLegChain(legRef, carriedRef, adds))
 			}
-			if got != expect {
-				t.Fatalf("verdict\n got  %s\n want %s", got, expect)
+			if got != supersededExpect(expect) {
+				t.Fatalf("verdict\n got  %s\n want %s", got, supersededExpect(expect))
 			}
 		})
 	}
@@ -278,8 +278,8 @@ func TestTableVectorsGiveTheExpectedAnswers(t *testing.T) {
 		if err != nil {
 			got = canonOf(err)
 		}
-		if got != q.Expect {
-			t.Errorf("chain %d level %d: got %s, want %s", q.Chain, q.Level, got, q.Expect)
+		if got != supersededExpect(q.Expect) {
+			t.Errorf("chain %d level %d: got %s, want %s", q.Chain, q.Level, got, supersededExpect(q.Expect))
 		}
 	}
 }

@@ -1,0 +1,19 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "adv_period_skip_first_link_missing",
+ "kind": "head",
+ "description": "link of period P-2 dropped: the first link is signed in the next period",
+ "pins": "pins/main.json",
+ "lc": "lc/adv_period_skip_first_link_missing.bin",
+ "expect": {
+  "code": "finality_link_invalid",
+  "fields": {
+   "attested_slot": "11381395",
+   "check": "period_skip",
+   "index": "0",
+   "period": "1389",
+   "signature_slot": "11381396"
+  },
+  "result": "fault"
+ }
+}

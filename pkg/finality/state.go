@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -18,8 +19,9 @@ import (
 //
 // The machine registry of the codes and their field names is testdata/finality/states.json (V2_SPEC_S7 section 7); a code
 // that is not in it, or a state that lacks a required field, fails the conformance test. The canonical form (Canonical) is
-// what the Go and TypeScript verifiers compare on every vector: JSON with sorted keys, no whitespace, every unsigned
-// integer as a decimal string, byte strings as lowercase hex without a prefix.
+// what the Go and TypeScript verifiers compare on every vector: JSON with sorted keys, no whitespace, EVERY integer field of
+// ANY width and signedness (int, int8..int64, uint, uint8..uint64, uintptr and every named integer type that is not a Level)
+// as a decimal string, EVERY byte string and fixed byte array ([]byte, [4]byte, [32]byte, any [N]byte) as 0x-prefixed lower-case hex ("0x" for the empty string), a named string type as its string.
 type StateError struct {
 	Code   string
 	Fields map[string]any
@@ -63,14 +65,16 @@ const (
 	CodeLevelAlreadyPresent  = "level_already_present"
 
 	// Operational states of this Go implementation that V2_SPEC_S7 section 7 does not list (registry scope "go_operational").
-	CodeAddendumMalformed   = "finality_addendum_malformed"
-	CodeVerifierFailed      = "finality_verifier_failed"
-	CodeIncludedUnavailable = "finality_included_unavailable"
-	CodeIncludedInvalid     = "finality_included_invalid"
-	CodeAppendConflict      = "finality_append_conflict"
-	CodePanic               = "finality_prover_panicked"
-	CodeBuildTimeout        = "finality_build_timeout"
-	CodeUpgraderDisabled    = "finality_upgrader_disabled"
+	CodeAddendumMalformed         = "finality_addendum_malformed"
+	CodeVerifierFailed            = "finality_verifier_failed"
+	CodeIncludedUnavailable       = "finality_included_unavailable"
+	CodeIncludedInvalid           = "finality_included_invalid"
+	CodeAppendConflict            = "finality_append_conflict"
+	CodePanic                     = "finality_prover_panicked"
+	CodeBuildTimeout              = "finality_build_timeout"
+	CodeUpgraderDisabled          = "finality_upgrader_disabled"
+	CodeFinalizedBlockUnavailable = "finality_finalized_block_unavailable"
+	CodeGuardRefused              = "finality_guard_refused"
 )
 
 // The check names of finality_chain_broken (section 2.3), exactly.
@@ -82,6 +86,105 @@ const (
 	CheckKind           = "kind"
 	CheckLegBinding     = "leg_binding"
 )
+
+// ---- the closed reason sets ----
+//
+// Every `reason` of a state is a member of a CLOSED set recorded in testdata/finality/states.json (`enums.reason` of the
+// state), so a TypeScript port reproduces a token, never a Go sentence. The constructors below take the typed token, and
+// the conformance tests assert (1) the typed constants of each set equal the registry's set, (2) every literal reason in
+// the package's own sources, in pkg/database and in cmd/* is a member, (3) every state built by a constructor conforms.
+// Free text that helps a human (a Go error message) goes in a `cause` field of a go_operational state, never in a reason.
+
+// EvidenceReason is the reason of finality_evidence_malformed.
+type EvidenceReason string
+
+const (
+	ReasonTruncated               EvidenceReason = "truncated"
+	ReasonLengthExceedsRemaining  EvidenceReason = "length_exceeds_remaining"
+	ReasonStrNotASCIIOrNUL        EvidenceReason = "str_not_ascii_or_nul"
+	ReasonCountExceedsRemaining   EvidenceReason = "count_exceeds_remaining"
+	ReasonNodesNotAscendingUnique EvidenceReason = "nodes_not_ascending_unique"
+	ReasonTrailingBytes           EvidenceReason = "trailing_bytes"
+	ReasonLevelNotStored          EvidenceReason = "level_not_stored"
+	ReasonDiffersFromAddendum     EvidenceReason = "differs_from_addendum"
+	ReasonHeaderNotRLPList        EvidenceReason = "header_not_rlp_list"
+	ReasonHeaderTrailingBytes     EvidenceReason = "header_trailing_bytes"
+	ReasonHeaderBadItem           EvidenceReason = "header_bad_item"
+	ReasonHeaderTooFewItems       EvidenceReason = "header_too_few_items"
+	ReasonHeaderItemNot32Bytes    EvidenceReason = "header_item_not_32_bytes"
+	ReasonHeaderItemNotCanonUint  EvidenceReason = "header_item_not_canonical_uint"
+	ReasonHeaderItemIsList        EvidenceReason = "header_item_is_list"
+)
+
+// AddendumReason is the reason of finality_addendum_malformed (the JSON form of an addendum, a section and a proof id).
+type AddendumReason string
+
+const (
+	AddendumNotJSON        AddendumReason = "not_json"
+	AddendumUnknownKey     AddendumReason = "unknown_key"
+	AddendumDuplicateKey   AddendumReason = "duplicate_key"
+	AddendumMissingKey     AddendumReason = "missing_key"
+	AddendumBadValue       AddendumReason = "bad_value"
+	AddendumLevelNotStored AddendumReason = "level_not_stored"
+	AddendumUnknownLevel   AddendumReason = "unknown_level"
+	AddendumNotLowerHex    AddendumReason = "not_lowercase_hex"
+	AddendumNot32Bytes     AddendumReason = "not_32_bytes"
+	AddendumNotUUID        AddendumReason = "not_canonical_uuid"
+	AddendumWrongFormat    AddendumReason = "wrong_format"
+)
+
+// PinsReason is the reason of finality_pins_corrupt.
+type PinsReason string
+
+const (
+	PinsSHA256Mismatch           PinsReason = "sha256_mismatch"
+	PinsSHA256ConstantMalformed  PinsReason = "sha256_constant_malformed"
+	PinsNotUTF8                  PinsReason = "not_utf8"
+	PinsContainsCR               PinsReason = "contains_cr"
+	PinsByteOrderMark            PinsReason = "byte_order_mark"
+	PinsKeysUnsorted             PinsReason = "keys_unsorted"
+	PinsDuplicateKey             PinsReason = "duplicate_key"
+	PinsUnknownKey               PinsReason = "unknown_key"
+	PinsNotJSON                  PinsReason = "not_json"
+	PinsBadValue                 PinsReason = "bad_value"
+	PinsWrongFormat              PinsReason = "wrong_format"
+	PinsPublishedUTCEmpty        PinsReason = "published_utc_empty"
+	PinsChainIDMismatch          PinsReason = "chain_id_mismatch"
+	PinsGenesisRootMalformed     PinsReason = "genesis_validators_root_malformed"
+	PinsParticipationFloor       PinsReason = "participation_floor_invalid"
+	PinsBoundMissing             PinsReason = "bound_missing"
+	PinsForksEmpty               PinsReason = "forks_empty"
+	PinsForkMalformed            PinsReason = "fork_malformed"
+	PinsForkEpochNotAscending    PinsReason = "fork_epoch_not_ascending"
+	PinsForkLayoutUnknown        PinsReason = "fork_layout_unknown"
+	PinsFirstForkNotEpochZero    PinsReason = "first_fork_not_epoch_zero"
+	PinsAnchorMalformed          PinsReason = "anchor_malformed"
+	PinsAnchorPeriodDuplicate    PinsReason = "anchor_period_duplicate"
+	PinsAnchorPeriodNotAscending PinsReason = "anchor_period_not_ascending"
+	PinsAnchorWspBelow256        PinsReason = "anchor_wsp_epochs_below_256"
+	PinsAnchorDerivedByEmpty     PinsReason = "anchor_derived_by_empty"
+)
+
+// IncludedReason is the reason of finality_included_unavailable.
+type IncludedReason string
+
+const (
+	IncludedNoSettlement        IncludedReason = "no_settlement"
+	IncludedNoExecutionProof    IncludedReason = "no_execution_proof_component"
+	IncludedSettlementNotJudged IncludedReason = "no_settlement_to_recompute_d0"
+)
+
+// FinalizedBlockReason is the reason of finality_finalized_block_unavailable: a verified finalized level whose leg block cannot
+// be exposed for S8 (R6) because the BlockRef carries no header, or the header cannot be read.
+type FinalizedBlockReason string
+
+const (
+	FinalizedBlockNoHeader         FinalizedBlockReason = "no_header"
+	FinalizedBlockHeaderUnreadable FinalizedBlockReason = "header_unreadable"
+)
+
+// NotApplicableReason is the reason of level_not_applicable: the two cells of the section 1 table, verbatim.
+type NotApplicableReason string
 
 // NewState builds a StateError from alternating key, value pairs.
 func NewState(code string, kv ...any) *StateError {
@@ -163,9 +266,11 @@ func canonValue(v any) []byte {
 	case int64:
 		return canonString(strconv.FormatInt(x, 10))
 	case [32]byte:
-		return canonString(hexLower(x[:]))
+		return canonString("0x" + hexLower(x[:]))
+	case [4]byte:
+		return canonString("0x" + hexLower(x[:]))
 	case []byte:
-		return canonString(hexLower(x))
+		return canonString("0x" + hexLower(x))
 	case time.Time:
 		return canonString(x.UTC().Format(time.RFC3339))
 	case time.Duration:
@@ -203,18 +308,33 @@ func canonValue(v any) []byte {
 	case fmt.Stringer:
 		return canonString(x.String())
 	}
+	rv := reflect.ValueOf(v)
+	switch rv.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return canonString(strconv.FormatInt(rv.Int(), 10))
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+		return canonString(strconv.FormatUint(rv.Uint(), 10))
+	case reflect.String:
+		return canonString(rv.String())
+	case reflect.Array, reflect.Slice:
+		if rv.Type().Elem().Kind() == reflect.Uint8 { // every fixed byte array and every named byte slice
+			b := make([]byte, rv.Len())
+			reflect.Copy(reflect.ValueOf(b), rv)
+			return canonString("0x" + hexLower(b))
+		}
+	}
 	return canonString(fmt.Sprint(v))
 }
 
 // ---- constructors of the framework states (section 7, Framework R and N) ----
 
 // Malformed is finality_evidence_malformed for a part; got and want are byte or element counts (0 when not meaningful).
-func Malformed(part, reason string, got, want int) *StateError {
+func Malformed(part string, reason EvidenceReason, got, want int) *StateError {
 	return NewState(CodeEvidenceMalformed, "part", part, "reason", reason, "got_len", uint64(maxInt(got, 0)), "want_len", uint64(maxInt(want, 0)))
 }
 
 // MalformedAt is Malformed for element index of a list or item of a header.
-func MalformedAt(part string, index int, reason string, got, want int) *StateError {
+func MalformedAt(part string, index int, reason EvidenceReason, got, want int) *StateError {
 	s := Malformed(part, reason, got, want)
 	s.Fields["index"] = uint64(index)
 	return s
@@ -252,15 +372,31 @@ func BlockMismatch(field string, want, got any) *StateError {
 	return NewState(CodeBlockMismatch, "field", field, "want", want, "got", got)
 }
 
-// PinsCorrupt is finality_pins_corrupt.
-func PinsCorrupt(reason string, kv ...any) *StateError {
+// PinsCorrupt is finality_pins_corrupt{reason, ...}.
+func PinsCorrupt(reason PinsReason, kv ...any) *StateError {
 	return NewState(CodePinsCorrupt, append([]any{"reason", reason}, kv...)...)
 }
 
 // NotApplicableState is level_not_applicable{chain,level,reason}: complete as an answer; a chain whose only missing levels
 // are not applicable has reached its top.
-func NotApplicableState(chain uint64, level Level, reason string) *StateError {
+func NotApplicableState(chain uint64, level Level, reason NotApplicableReason) *StateError {
 	return NewState(CodeNotApplicable, "chain", chain, "level", level, "reason", reason)
+}
+
+// AddendumMalformed is finality_addendum_malformed{field, reason}: the JSON form of an addendum, a section or a proof id was
+// refused. field names the member (or the object, for a key refusal) and key the offending key.
+func AddendumMalformed(field string, reason AddendumReason, kv ...any) *StateError {
+	return NewState(CodeAddendumMalformed, append([]any{"field", field, "reason", reason}, kv...)...)
+}
+
+// IncludedUnavailable is finality_included_unavailable{reason}: level 1 cannot be derived because a leg has no Settlement.
+func IncludedUnavailable(reason IncludedReason, kv ...any) *StateError {
+	return NewState(CodeIncludedUnavailable, append([]any{"reason", reason}, kv...)...)
+}
+
+// FinalizedBlockUnavailable is finality_finalized_block_unavailable{chain, number, reason[, index]}.
+func FinalizedBlockUnavailable(chain, number uint64, reason FinalizedBlockReason, kv ...any) *StateError {
+	return NewState(CodeFinalizedBlockUnavailable, append([]any{"chain", chain, "number", number, "reason", reason}, kv...)...)
 }
 
 // PendingState is the builder-side (and offline) "not yet" of a level: the level reached (proven), the next level, the
