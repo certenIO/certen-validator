@@ -347,3 +347,102 @@ func TestElectraEmptyHeaderIsTheGenuineEmptyEncoding(t *testing.T) {
 		}
 	}
 }
+
+// TestElectraDecoderBoundaries pins the exact size boundaries of the strict electra decoders with minimally-shaped blobs: a header of
+// 828..860 bytes (extra_data 0..32) decodes and 827 and 861 are refused, and each container accepts its minimum size and refuses one
+// byte less, with a header of either extreme on either side of the second offset.
+func TestElectraDecoderBoundaries(t *testing.T) {
+	hdr := func(extra int) []byte {
+		b := make([]byte, electraHeaderMin+extra)
+		binary.LittleEndian.PutUint32(b[BeaconBlockHeaderSize:], electraHeaderFixed)
+		binary.LittleEndian.PutUint32(b[electraHeaderFixed+electraExecExtraOffAt:], electraExecFixed)
+		return b
+	}
+	reason := func(f *Fault) string {
+		if f == nil {
+			return ""
+		}
+		r, _ := f.Fields["reason"].(string)
+		return r
+	}
+	for _, extra := range []int{0, 1, 31, 32} {
+		if _, f := decodeElectraHeader(hdr(extra), "t", 0); f != nil {
+			t.Errorf("header with %d bytes of extra_data refused: %v", extra, f)
+		}
+	}
+	if _, f := decodeElectraHeader(hdr(33), "t", 0); reason(f) != "header_length" {
+		t.Errorf("861-byte header: %v", f)
+	}
+	if _, f := decodeElectraHeader(hdr(0)[:electraHeaderMin-1], "t", 0); reason(f) != "header_length" {
+		t.Errorf("827-byte header: %v", f)
+	}
+	// bootstrap
+	boot := func(extra int) []byte {
+		b := make([]byte, electraBootstrapFixed)
+		binary.LittleEndian.PutUint32(b, electraBootstrapFixed)
+		return append(b, hdr(extra)...)
+	}
+	for _, extra := range []int{0, 32} {
+		if _, f := decodeElectraBootstrap(boot(extra)); f != nil {
+			t.Errorf("bootstrap with a %d-byte extra_data refused: %v", extra, f)
+		}
+	}
+	if b := boot(0); len(b) != electraMinBootstrap {
+		t.Fatalf("minimum bootstrap is %d bytes, constant says %d", len(b), electraMinBootstrap)
+	}
+	if _, f := decodeElectraBootstrap(boot(0)[:electraMinBootstrap-1]); reason(f) != "length" {
+		t.Errorf("bootstrap one byte under the minimum: %v", f)
+	}
+	if _, f := decodeElectraBootstrap(boot(33)); reason(f) != "header_length" {
+		t.Errorf("bootstrap with a 861-byte header: %v", f)
+	}
+	// update and finality update: first header a bytes of extra_data, second header b bytes
+	upd := func(fixed, secondAt, a, b int) []byte {
+		ha, hb := hdr(a), hdr(b)
+		out := make([]byte, fixed)
+		binary.LittleEndian.PutUint32(out, uint32(fixed))
+		binary.LittleEndian.PutUint32(out[secondAt:], uint32(fixed+len(ha)))
+		return append(append(out, ha...), hb...)
+	}
+	updAt, finAt := 4+SyncCommitteeBytes+32*electraCommitteeBranchLen, 4
+	for _, ab := range [][2]int{{0, 0}, {32, 32}, {0, 32}, {32, 0}} {
+		if _, f := decodeElectraUpdate(upd(electraUpdateFixed, updAt, ab[0], ab[1]), 0); f != nil {
+			t.Errorf("update with extra_data %v refused: %v", ab, f)
+		}
+		if _, f := decodeElectraFinalityUpdate(upd(electraFinalityUpdateFixed, finAt, ab[0], ab[1])); f != nil {
+			t.Errorf("finality update with extra_data %v refused: %v", ab, f)
+		}
+	}
+	if b := upd(electraUpdateFixed, updAt, 0, 0); len(b) != electraMinUpdate {
+		t.Fatalf("minimum update is %d bytes, constant says %d", len(b), electraMinUpdate)
+	}
+	if b := upd(electraFinalityUpdateFixed, finAt, 0, 0); len(b) != electraMinFinalityUpdate {
+		t.Fatalf("minimum finality update is %d bytes, constant says %d", len(b), electraMinFinalityUpdate)
+	}
+	if _, f := decodeElectraUpdate(upd(electraUpdateFixed, updAt, 0, 0)[:electraMinUpdate-1], 0); reason(f) != "length" {
+		t.Errorf("update one byte under the minimum: %v", f)
+	}
+	if _, f := decodeElectraFinalityUpdate(upd(electraFinalityUpdateFixed, finAt, 0, 0)[:electraMinFinalityUpdate-1]); reason(f) != "length" {
+		t.Errorf("finality update one byte under the minimum: %v", f)
+	}
+	if _, f := decodeElectraUpdate(upd(electraUpdateFixed, updAt, 33, 0), 0); reason(f) != "finalized_offset" {
+		t.Errorf("update with an 861-byte first header: %v", f)
+	}
+	if _, f := decodeElectraUpdate(upd(electraUpdateFixed, updAt, 0, 33), 0); reason(f) != "header_length" {
+		t.Errorf("update with an 861-byte second header: %v", f)
+	}
+	if _, f := decodeElectraFinalityUpdate(upd(electraFinalityUpdateFixed, finAt, 33, 0)); reason(f) != "finalized_offset" {
+		t.Errorf("finality update with an 861-byte first header: %v", f)
+	}
+	if _, f := decodeElectraFinalityUpdate(upd(electraFinalityUpdateFixed, finAt, 0, 33)); reason(f) != "header_length" {
+		t.Errorf("finality update with an 861-byte second header: %v", f)
+	}
+	// the first header may also be one byte short: the second offset then falls under fixed + 828
+	if _, f := decodeElectraUpdate(func() []byte {
+		b := upd(electraUpdateFixed, updAt, 0, 0)
+		binary.LittleEndian.PutUint32(b[updAt:], electraUpdateFixed+electraHeaderMin-1)
+		return b
+	}(), 0); reason(f) != "finalized_offset" {
+		t.Errorf("update whose first header is 827 bytes: %v", f)
+	}
+}
