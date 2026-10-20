@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/rlp"
+
+	"github.com/certen/independant-validator/pkg/ethrpc"
 	"golang.org/x/crypto/sha3"
 )
 
@@ -66,10 +68,10 @@ func rpc(method string, params ...any) (json.RawMessage, error) {
 		Error  *struct{ Message string }
 	}
 	if err := json.Unmarshal(b, &out); err != nil {
-		return nil, fmt.Errorf("rpc %s: %v: %.200s", method, err, b)
+		return nil, redactedErr("rpc %s: %v: %.200s", method, err, b)
 	}
 	if out.Error != nil {
-		return nil, fmt.Errorf("rpc %s: %s", method, out.Error.Message)
+		return nil, redactedErr("rpc %s: %s", method, out.Error.Message)
 	}
 	return out.Result, nil
 }
@@ -136,7 +138,7 @@ func blockByHash(h string) (map[string]any, error) {
 	}
 	var m map[string]any
 	if err := json.Unmarshal(raw, &m); err != nil || m == nil {
-		return nil, fmt.Errorf("block %s not served: %v", h, err)
+		return nil, redactedErr("block %s not served: %v", h, err)
 	}
 	return m, nil
 }
@@ -164,11 +166,11 @@ func record(rawDir string) error {
 	}
 	cap := capture{CapturedUTC: time.Now().UTC().Format(time.RFC3339), Lodestar: lodestar, ExecEndpoint: publicnode}
 	if b, _, err := get(lodestar+"/eth/v1/node/version", ""); err == nil {
-		cap.NodeVersion = strings.TrimSpace(string(b))
+		cap.NodeVersion = ethrpc.RedactText(strings.TrimSpace(string(b)))
 	}
 	fu, code, err := get(lodestar+"/eth/v1/beacon/light_client/finality_update", "application/octet-stream")
 	if err != nil || code != 200 || len(fu) != gloasFinalityUpdSize {
-		return fmt.Errorf("finality_update: code %d len %d err %v", code, len(fu), err)
+		return redactedErr("finality_update: code %d len %d err %v", code, len(fu), err)
 	}
 	attested := binary.LittleEndian.Uint64(fu[0:8])
 	sigSlot := binary.LittleEndian.Uint64(fu[len(fu)-8:])
@@ -182,7 +184,7 @@ func record(rawDir string) error {
 	// bootstrap: Lodestar serves it only for the checkpoint roots of the head epoch and the two before it.
 	cp, code, err := get(lodestar+"/eth/v1/beacon/states/head/finality_checkpoints", "")
 	if err != nil || code != 200 {
-		return fmt.Errorf("finality_checkpoints: %d %v", code, err)
+		return redactedErr("finality_checkpoints: %d %v", code, err)
 	}
 	var cps struct {
 		Data struct {
@@ -218,7 +220,7 @@ func record(rawDir string) error {
 	count := int(sigPeriod) - fulu1378Period
 	body, code, err := get(fmt.Sprintf("%s/eth/v1/beacon/light_client/updates?start_period=%d&count=%d", lodestar, fulu1378Period, count), "application/octet-stream")
 	if err != nil || code != 200 {
-		return fmt.Errorf("updates: %d %v", code, err)
+		return redactedErr("updates: %d %v", code, err)
 	}
 	pos, i := 0, 0
 	for pos < len(body) {
