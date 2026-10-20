@@ -63,3 +63,65 @@ func TestASpanBatchThatDeclaresMoreTransactionsThanItCarriesAllocatesNothingForT
 		t.Fatalf("%d bytes allocated for 2^20 declared transactions the payload cannot carry", got)
 	}
 }
+
+// The span decoder names which check refused a stream (the verifier folds every one of them into channel_malformed, but the
+// checks are distinct and each is pinned here): the bound on the exact sum of the counts, a bit list longer than its length, and a
+// payload too short for the declared transactions.
+func TestTheSpanDecoderNamesTheCheckThatRefusedTheCounts(t *testing.T) {
+	sp := spanParams{GenesisTime: 1695768288, BlockTime: 2, ChainID: 84532}
+	head := func(blocks uint64) []byte {
+		var p []byte
+		p = binary.AppendUvarint(p, 0)
+		p = binary.AppendUvarint(p, 9)
+		p = append(p, bytes.Repeat([]byte{0x11}, 20)...)
+		p = append(p, bytes.Repeat([]byte{0x22}, 20)...)
+		p = binary.AppendUvarint(p, blocks)
+		return append(p, make([]byte, (blocks+7)/8)...)
+	}
+	counts := func(blocks uint64, cs ...uint64) []byte {
+		p := head(blocks)
+		for _, c := range cs {
+			p = binary.AppendUvarint(p, c)
+		}
+		return p
+	}
+	for _, c := range []struct {
+		name    string
+		payload []byte
+		want    string
+	}{
+		{"total = bound + 1", counts(2, 1<<20, 1), "span: tx count"},
+		{"one count over the bound", counts(1, 1<<20+1), "span: tx count"},
+		{"wrapped sum", counts(2, 1, math.MaxUint64), "span: tx count"},
+		{"total = bound but nothing carried", counts(1, 1<<20), "span: short"},
+		{"creation bit beyond the list", append(counts(1, 3), 0x08), "span: bit list longer than its length"},
+	} {
+		_, err := decodeSpanBatch(c.payload, sp)
+		if err == nil || err.Error() != c.want {
+			t.Errorf("%s: %v, want %q", c.name, err, c.want)
+		}
+	}
+	// the allocation bound follows the payload: a stream that carries a little more than nothing for 2^20 transactions, or
+	// almost all of the signatures for 2^16, still allocates nothing for them
+	for _, c := range []struct {
+		name  string
+		total uint64
+		extra int
+	}{
+		{"2^20 transactions, 100 KB carried", 1 << 20, 100 * 1024},
+		{"2^16 transactions, 63.5 signatures each carried", 1 << 16, (1 << 16) * 127 / 2},
+	} {
+		p := append(counts(1, c.total), make([]byte, c.extra)...)
+		var before, after runtime.MemStats
+		runtime.GC()
+		runtime.ReadMemStats(&before)
+		_, err := decodeSpanBatch(p, sp)
+		runtime.ReadMemStats(&after)
+		if err == nil {
+			t.Fatalf("%s: accepted", c.name)
+		}
+		if got := after.TotalAlloc - before.TotalAlloc; got > 1<<20 {
+			t.Errorf("%s: %d bytes allocated", c.name, got)
+		}
+	}
+}
