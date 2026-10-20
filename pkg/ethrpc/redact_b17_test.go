@@ -10,6 +10,7 @@ import (
 	"math/rand"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -175,23 +176,27 @@ func b17Leaked(out, key string) string { return b15Leak(out, key, 3) }
 // b17Forms are the places a key can stand where a text is cut (every form of the reviewer's matrix and the forms of TestB15).
 var b17Forms = []struct {
 	name, before, after string
-	register            bool
-	sep                 string // between the two pieces of a key written in two (a wrap); "" for one piece
+	register            bool   // the key is registered as a literal: one piece, or three joined by white space when pieces is 3
+	sep                 string // between the pieces of a key written in several (a wrap); "" for one piece
+	pieces              int    // how many (2 when sep is set and pieces is not)
 }{
-	{"registered literal", " ", " and more text after the key", true, ""},
-	{"URL path", " https://rpc.example.org/v2/", " and more text after the key", false, ""},
-	{"userinfo password", " https://user:", "@h.example.org/x and more text after the key", false, ""},
-	{"bare user:key@", " user:", "@h.example.org/x and more text after the key", false, ""},
-	{"bare key@", " ", "@h.example.org/x and more text after the key", false, ""},
-	{"quoted URL wrapped at a space", ` Post "https://h.example.org/v2/`, `": EOF and more text after the key`, false, " "},
-	{"quoted URL wrapped at a newline", ` Post "https://h.example.org/v2/`, `": EOF and more text after the key`, false, "\n"},
-	{"quoted URL", ` Post "https://h.example.org/v2/`, `" and more text after the key`, false, ""},
-	{"JSON-escaped URL", b15bs(" https:~/~/rpc.example.org~/v2~/"), " and more text after the key", false, ""},
-	{"unicode-escaped URL", b15bs(" https:~u002f~u002frpc.example.org~u002fv2~u002f"), " and more text after the key", false, ""},
-	{"double-escaped URL", b15bs(" https:~~/~~/rpc.example.org~~/v2~~/"), " and more text after the key", false, ""},
-	{"percent-encoded URL", " https%3A%2F%2Frpc.example.org%2Fv2%2F", " and more text after the key", false, ""},
-	{"query value", " https://rpc.example.org/api?apikey=", " and more text after the key", false, ""},
-	{"JSON string with escaped slashes", b15bs(`{"url":"https:~/~/rpc.example.org~/v2~/`), `"} and more text after the key`, false, ""},
+	{"registered literal", " ", " and more text after the key", true, "", 0},
+	{"registered literal with white space", " ", " and more text after the key", true, " ", 3},
+	{"URL path", " https://rpc.example.org/v2/", " and more text after the key", false, "", 0},
+	{"userinfo password", " https://user:", "@h.example.org/x and more text after the key", false, "", 0},
+	{"bare user:key@", " user:", "@h.example.org/x and more text after the key", false, "", 0},
+	{"bare key@", " ", "@h.example.org/x and more text after the key", false, "", 0},
+	{"quoted URL wrapped at a space", ` Post "https://h.example.org/v2/`, `": EOF and more text after the key`, false, " ", 2},
+	{"quoted URL wrapped at a newline", ` Post "https://h.example.org/v2/`, `": EOF and more text after the key`, false, "\n", 2},
+	{"quoted URL wrapped twice", ` Post "https://h.example.org/v2/`, `": EOF and more text after the key`, false, " ", 3},
+	{"quoted URL wrapped five times", ` Post "https://h.example.org/v2/`, `": EOF and more text after the key`, false, " ", 5},
+	{"quoted URL", ` Post "https://h.example.org/v2/`, `" and more text after the key`, false, "", 0},
+	{"JSON-escaped URL", b15bs(" https:~/~/rpc.example.org~/v2~/"), " and more text after the key", false, "", 0},
+	{"unicode-escaped URL", b15bs(" https:~u002f~u002frpc.example.org~u002fv2~u002f"), " and more text after the key", false, "", 0},
+	{"double-escaped URL", b15bs(" https:~~/~~/rpc.example.org~~/v2~~/"), " and more text after the key", false, "", 0},
+	{"percent-encoded URL", " https%3A%2F%2Frpc.example.org%2Fv2%2F", " and more text after the key", false, "", 0},
+	{"query value", " https://rpc.example.org/api?apikey=", " and more text after the key", false, "", 0},
+	{"JSON string with escaped slashes", b15bs(`{"url":"https:~/~/rpc.example.org~/v2~/`), `"} and more text after the key`, false, "", 0},
 }
 
 // b17Fronts are texts of exactly n bytes that stand in front of the key form: ordinary words, one delimiter-free run, URLs that
@@ -232,6 +237,10 @@ var b17Fronts = []struct {
 func TestB17_D1_NoFragmentOfAKeySurvivesEitherCutBehindAnyFront(t *testing.T) {
 	regKey := b17Key(rand.New(rand.NewSource(1717)))
 	t.Cleanup(RegisterProviderURL("https://rpc.example.org/v2/" + regKey))
+	// a registered literal that holds white space (a path segment with %20 in it): the cut can fall inside it between words
+	spacedKey := b17Key(rand.New(rand.NewSource(1718)))
+	spacedParts := []string{spacedKey[:10], spacedKey[10:21], spacedKey[21:]}
+	t.Cleanup(RegisterProviderURL("https://rpc.example.org/" + url.PathEscape(strings.Join(spacedParts, " "))))
 	var offsets []int
 	for off := -300; off < -40; off += 13 {
 		offsets = append(offsets, off)
@@ -253,9 +262,16 @@ func TestB17_D1_NoFragmentOfAKeySurvivesEitherCutBehindAnyFront(t *testing.T) {
 							key = b17Key(r)
 						}
 						keyText, pieces := key, []string{key}
-						if f.sep != "" {
-							pieces = []string{key[:16], key[16:]}
-							keyText = pieces[0] + f.sep + pieces[1]
+						switch {
+						case f.register && f.sep != "":
+							keyText, pieces = strings.Join(spacedParts, f.sep), spacedParts
+						case f.sep != "":
+							n := max(f.pieces, 2)
+							pieces = nil
+							for k := 0; k < n; k++ {
+								pieces = append(pieces, key[k*len(key)/n:(k+1)*len(key)/n])
+							}
+							keyText = strings.Join(pieces, f.sep)
 						}
 						pad := limit + off - len(f.before)
 						if pad < 0 {
