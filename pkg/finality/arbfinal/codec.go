@@ -165,7 +165,7 @@ func readL2Spine(r *finality.Reader, max int) ([][]byte, error) {
 	if uint64(n) > uint64(max) {
 		return nil, HeaderChainExceeds(uint64(n), uint64(max))
 	}
-	if uint64(n)*4 > uint64(r.Left()) {
+	if uint64(n)*lpPrefixBytes > uint64(r.Left()) {
 		return nil, finality.Malformed("l2Spine", finality.ReasonCountExceedsRemaining, r.Left(), int(n)*4)
 	}
 	out := make([][]byte, 0, n)
@@ -268,3 +268,9 @@ func BuildContainer(leg finality.BlockRef, e Evidence) ([]byte, error) {
 }
 
 func u64be(v uint64) []byte { return binary.BigEndian.AppendUint64(nil, v) }
+
+// lpPrefixBytes is the least size of one LP element (its u32 length); blockStep is the number step between a block and its parent.
+const (
+	lpPrefixBytes uint64 = 4
+	blockStep     uint64 = 1
+)

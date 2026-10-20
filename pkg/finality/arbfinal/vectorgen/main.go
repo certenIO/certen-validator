@@ -183,6 +183,9 @@ func (g *gen) write(out string) error {
 			return err
 		}
 	}
+	if err := put("README.md", []byte(readmeText)); err != nil {
+		return err
+	}
 	vj, err := json.MarshalIndent(map[string]any{"format": "finality_arb_final1/1", "vectors": g.vecs}, "", " ")
 	if err != nil {
 		return err

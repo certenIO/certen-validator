@@ -292,7 +292,7 @@ func verifyL2Spine(e Evidence, leg finality.BlockRef) (uint64, error) {
 			if h.Hash != prev.ParentHash {
 				return 0, HeaderChainBroken(prev.Number-1, prev.ParentHash, h.Hash, ReasonParentHash)
 			}
-			if h.Number+1 != prev.Number {
+			if h.Number+blockStep != prev.Number {
 				return 0, HeaderChainBroken(prev.Number-1, prev.ParentHash, h.Hash, ReasonNumberGap)
 			}
 		}
