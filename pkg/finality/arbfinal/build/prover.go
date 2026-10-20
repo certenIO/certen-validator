@@ -98,7 +98,7 @@ func (p *Prover) pending(have finality.LevelSet, reason string, kv ...any) *fina
 // Build implements finality.Prover: it derives the leg's block from the Settlement and builds level 3.
 func (p *Prover) Build(ctx context.Context, s *ethproof.Settlement, have finality.LevelSet, target finality.Level) (*finality.Addendum, *finality.PendingState, error) {
 	if target != finality.LevelFinalized {
-		return nil, nil, finality.NewState(finality.CodeEvidenceUnrecognised, "kind", "level:"+target.String(), "version", "")
+		return nil, nil, nil // l1_posted is the sibling prover's level: "not mine" must not become the leg's status (pkg/finality/runtime prover conformance)
 	}
 	if have.Has(finality.LevelFinalized) {
 		return nil, nil, finality.NewState(finality.CodeLevelAlreadyPresent, "chain", finality.ChainArbitrumSepolia, "level", finality.LevelFinalized)

@@ -76,7 +76,10 @@ func pending(chain uint64, reason string, eta time.Time, judged map[string]any) 
 
 // Build implements finality.Prover.
 func (b *Builder) Build(ctx context.Context, s *ethproof.Settlement, have finality.LevelSet, target finality.Level) (*finality.Addendum, *finality.PendingState, error) {
-	if target != finality.LevelL1Posted || have.Has(finality.LevelL1Posted) {
+	if target != finality.LevelL1Posted {
+		return nil, nil, nil // finalized is the sibling prover's level (arbfinal/build)
+	}
+	if have.Has(finality.LevelL1Posted) {
 		return nil, nil, finality.NewState(finality.CodeLevelAlreadyPresent, "chain", b.Chain(), "level", finality.LevelL1Posted)
 	}
 	ref, err := finality.DeriveIncluded(b.Chain(), s)

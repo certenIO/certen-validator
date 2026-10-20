@@ -226,8 +226,9 @@ func TestBuilderPendingWhenNoCapturedChannelCoversTheBlockAndPostDenimIsNamed(t 
 	if err != nil || ad != nil || pend == nil || pend.Reason != "l1_posted_unproven" || pend.LevelReached != finality.LevelIncluded || pend.NextLevel != finality.LevelL1Posted {
 		t.Fatalf("%v %v %v", ad, pend, err)
 	}
-	if _, _, err := b.Build(context.Background(), &ethproof.Settlement{Header: s.l2Raw}, 0, finality.LevelFinalized); err == nil {
-		t.Fatal("this prover builds l1_posted only")
+	// finalized is the sibling prover's level: "not mine" is (nil, nil, nil), never a refusal the upgrader would keep as the status
+	if ad, pend, err := b.Build(context.Background(), &ethproof.Settlement{Header: s.l2Raw}, 0, finality.LevelFinalized); ad != nil || pend != nil || err != nil {
+		t.Fatalf("this prover builds l1_posted only and is silent for any other level: %v %v %v", ad, pend, err)
 	}
 	if _, _, err := b.Build(context.Background(), &ethproof.Settlement{Header: s.l2Raw}, finality.LevelSet(0).With(finality.LevelL1Posted), finality.LevelL1Posted); err == nil {
 		t.Fatal("a level already present is never rebuilt")

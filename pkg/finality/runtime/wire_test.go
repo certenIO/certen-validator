@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/certen/independant-validator/pkg/ethproof"
 	"github.com/certen/independant-validator/pkg/finality"
 	"github.com/certen/independant-validator/pkg/finality/ethl1"
 )
@@ -130,29 +129,6 @@ func TestRTLoadPinsEmbeddedOrExplicitOverrideReportingItsSource(t *testing.T) {
 	_ = os.WriteFile(bad, []byte(`{"format":"nope"}`), 0o600)
 	if _, _, _, err = LoadPins(bad); err == nil {
 		t.Fatal("a pins file that does not parse was accepted")
-	}
-}
-
-type rtProver struct{ calls atomic.Int64 }
-
-func (r *rtProver) Chain() uint64 { return finality.ChainArbitrumSepolia }
-func (r *rtProver) Build(context.Context, *ethproof.Settlement, finality.LevelSet, finality.Level) (*finality.Addendum, *finality.PendingState, error) {
-	r.calls.Add(1)
-	return nil, nil, nil
-}
-
-func TestRTLevelOnlyAnswersNothingForALevelItDoesNotServe(t *testing.T) {
-	inner := &rtProver{}
-	p := levelOnly{inner, finality.LevelFinalized}
-	if p.Ceiling() != finality.LevelFinalized || p.Chain() != finality.ChainArbitrumSepolia {
-		t.Fatalf("%v %d", p.Ceiling(), p.Chain())
-	}
-	if a, pd, err := p.Build(context.Background(), nil, 0, finality.LevelL1Posted); a != nil || pd != nil || err != nil || inner.calls.Load() != 0 {
-		t.Fatalf("a level outside the prover's own was passed through or answered: %v %v %v calls=%d", a, pd, err, inner.calls.Load())
-	}
-	_, _, _ = p.Build(context.Background(), nil, 0, finality.LevelFinalized)
-	if inner.calls.Load() != 1 {
-		t.Fatalf("its own level was not passed to the prover: %d", inner.calls.Load())
 	}
 }
 

@@ -64,7 +64,7 @@ func (p *Prover) Build(ctx context.Context, s *ethproof.Settlement, have finalit
 		if target == finality.LevelL1Posted {
 			return nil, nil, finality.NotApplicableState(finality.ChainSepolia, target, finality.ReasonChainIsL1)
 		}
-		return nil, nil, finality.NewState(finality.CodeEvidenceUnrecognised, "kind", "level:"+target.String(), "version", "")
+		return nil, nil, nil // included is derived, never built: not this prover's level
 	}
 	if have.Has(finality.LevelFinalized) {
 		return nil, nil, finality.NewState(finality.CodeLevelAlreadyPresent, "chain", finality.ChainSepolia, "level", finality.LevelFinalized)

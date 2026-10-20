@@ -580,11 +580,11 @@ func TestTheFinalityProverContract(t *testing.T) {
 	if w.p.Chain() != finality.ChainArbitrumSepolia || w.p.Ceiling() != finality.LevelFinalized {
 		t.Fatal("chain or ceiling")
 	}
-	_, _, err := w.p.Build(context.Background(), nil, 0, finality.LevelL1Posted)
-	if s, ok := finality.AsNamed(err); !ok || s.Code != finality.CodeEvidenceUnrecognised {
-		t.Fatalf("%s", canon(err))
+	// l1_posted is the sibling prover's level: "not mine" is (nil, nil, nil), never a refusal the upgrader would keep as the leg's status
+	if a, pd, err := w.p.Build(context.Background(), nil, 0, finality.LevelL1Posted); a != nil || pd != nil || err != nil {
+		t.Fatalf("a level this prover does not serve was answered: %v %v %v", a, pd, err)
 	}
-	_, _, err = w.p.Build(context.Background(), nil, finality.LevelSetOf(finality.LevelFinalized), finality.LevelFinalized)
+	_, _, err := w.p.Build(context.Background(), nil, finality.LevelSetOf(finality.LevelFinalized), finality.LevelFinalized)
 	if s, ok := finality.AsNamed(err); !ok || s.Code != finality.CodeLevelAlreadyPresent {
 		t.Fatalf("%s", canon(err))
 	}

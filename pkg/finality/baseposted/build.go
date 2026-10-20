@@ -139,7 +139,7 @@ func (b *Builder) load(ctx context.Context, bp *Pins) ([]capturedTx, error) {
 // Build implements finality.Prover for level 2.
 func (b *Builder) Build(ctx context.Context, s *ethproof.Settlement, have finality.LevelSet, target finality.Level) (*finality.Addendum, *finality.PendingState, error) {
 	if target != finality.LevelL1Posted {
-		return nil, nil, finality.NewState(finality.CodeVerifierFailed, "chain", uint64(Chain), "kind", KindName, "cause", "this prover builds l1_posted only")
+		return nil, nil, nil // finalized is the sibling prover's level (basefinal)
 	}
 	if have.Has(target) {
 		return nil, nil, finality.NewState(finality.CodeLevelAlreadyPresent, "chain", uint64(Chain), "level", target)
