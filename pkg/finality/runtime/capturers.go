@@ -113,6 +113,9 @@ type BasePostedLoop struct {
 	mu           sync.Mutex
 	lastState    map[uint64]*finality.StateError
 	capturedHead uint64
+	cursor       uint64
+	cursorHave   bool
+	cursorKnown  bool
 }
 
 type retryEntry struct {
@@ -188,9 +191,14 @@ func (l *BasePostedLoop) Tick(ctx context.Context, tick int) error {
 	if err != nil {
 		return fmt.Errorf("the Sepolia head is unavailable: %w", err)
 	}
-	cur, have, err := readCursor(ctx, l.Store, chain)
-	if err != nil {
-		return fmt.Errorf("reading the capture cursor: %w", err)
+	// the cursor rows are read once per process (they accumulate, one per tick) and then held in memory
+	l.mu.Lock()
+	cur, have, known := l.cursor, l.cursorHave, l.cursorKnown
+	l.mu.Unlock()
+	if !known {
+		if cur, have, err = readCursor(ctx, l.Store, chain); err != nil {
+			return fmt.Errorf("reading the capture cursor: %w", err)
+		}
 	}
 	from := head
 	switch {
@@ -238,6 +246,9 @@ func (l *BasePostedLoop) Tick(ctx context.Context, tick int) error {
 	if err := writeCursor(ctx, l.Store, chain, to); err != nil {
 		return fmt.Errorf("writing the capture cursor: %w", err)
 	}
+	l.mu.Lock()
+	l.cursor, l.cursorHave, l.cursorKnown = to, true, true
+	l.mu.Unlock()
 	l.retryFailed(ctx, tick, head, sink)
 	l.mu.Lock()
 	l.capturedHead = to

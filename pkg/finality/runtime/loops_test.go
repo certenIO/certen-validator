@@ -178,9 +178,9 @@ func TestRTBaseLoopCursorAdvancesToTheScannedBlockIsPersistedAndTheNextTickConti
 		t.Fatalf("after a restart the scan was %v, want [106 107]", l1.order)
 	}
 	// MaxPerTick bounds one round; the cursor stops at the range end and the lag is the rest
-	loop.MaxPerTick = 10
+	loop2.MaxPerTick = 10
 	l1.head, l1.order = 200, nil
-	if err := loop.Tick(ctx, 3); err != nil {
+	if err := loop2.Tick(ctx, 3); err != nil {
 		t.Fatal(err)
 	}
 	if len(l1.order) != 10 || l1.order[0] != 108 || l1.order[9] != 117 {
