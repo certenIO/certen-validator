@@ -48,6 +48,7 @@ const (
 	CodeIncludedInvalid        = "finality_included_invalid"
 	CodeAppendConflict         = "finality_append_conflict"
 	CodePanic                  = "finality_prover_panicked"
+	CodeBuildTimeout           = "finality_build_timeout"
 	CodeUpgraderDisabled       = "finality_upgrader_disabled"
 	CodeNotApplicable          = "level_not_applicable"
 	CodePending                = "finality_pending"
