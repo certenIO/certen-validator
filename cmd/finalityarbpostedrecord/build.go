@@ -368,7 +368,7 @@ func build(rawDir, out string) error {
 	add("adv_versioned_hash_altered", "a versioned hash flipped: the data hash, hence the accumulator, differs", "main", root, reencode(m), acc)
 	m = clone()
 	m.BatchSeq++
-	add("adv_batch_sequence_other", "batchSeq + 1: the proven slot is another batch's accumulator", "main", root, reencode(m), acc)
+	add("adv_batch_sequence_other", "batchSeq + 1: the carried proof holds only batch N's slot, so the slot of N+1 cannot be read", "main", root, reencode(m), canonState("l1_state_proof_invalid", "which", "slot"))
 
 	// ---- blobs
 	m = clone()
@@ -389,8 +389,8 @@ func build(rawDir, out string) error {
 	codeHash := common.HexToHash("0x3bd9637547d75e5b4539449e14c759b86b9d37a7c1f2b47a1524f857e4ff1a0c")
 	add("adv_bridge_impl_not_pinned", "the pins do not hold the Bridge implementation code hash", "no_bridge_impl_pin", root, b.base,
 		canonState("contract_identity_unproven", "role", "bridge_impl", "address", impl[:], "code_hash", codeHash[:], "judged_at", S))
-	add("adv_bridge_not_the_pinned_address", "the pinned Bridge address has no account in the proof", "bridge_other_address", root, b.base,
-		canonState("contract_identity_unproven", "role", "bridge_impl", "address", common.HexToAddress("0x0000000000000000000000000000000000000001").Bytes(), "code_hash", make([]byte, 32), "judged_at", S))
+	add("adv_bridge_not_the_pinned_address", "the pins name another Bridge address: its account cannot be resolved from the carried nodes", "bridge_other_address", root, b.base,
+		canonState("l1_state_proof_invalid", "which", "account"))
 	for _, which := range []string{"account", "slot"} {
 		want := canonState("l1_state_proof_invalid", "which", which)
 		found := false
