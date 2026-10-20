@@ -363,8 +363,8 @@ func TestCanonicalFormIsSortedWithU64AsDecimalStrings(t *testing.T) {
 	s := NewState("finality_chain_broken", "seq", uint64(18446744073709551615), "check", "own_hash", "level", LevelFinalized, "h", fill(0xab),
 		"nested", map[string]any{"z": uint64(1), "a": []byte{1, 2}}, "ok", true, "none", nil, "t", time.Unix(0, 0))
 	got := string(s.Canonical())
-	want := `{"code":"finality_chain_broken","fields":{"check":"own_hash","h":"` + strings.Repeat("ab", 32) +
-		`","level":"finalized","nested":{"a":"0102","z":"1"},"none":null,"ok":true,"seq":"18446744073709551615","t":"1970-01-01T00:00:00Z"}}`
+	want := `{"code":"finality_chain_broken","fields":{"check":"own_hash","h":"0x` + strings.Repeat("ab", 32) +
+		`","level":"finalized","nested":{"a":"0x0102","z":"1"},"none":null,"ok":true,"seq":"18446744073709551615","t":"1970-01-01T00:00:00Z"}}`
 	if got != want {
 		t.Fatalf("\n got  %s\n want %s", got, want)
 	}

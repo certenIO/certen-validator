@@ -1,0 +1,350 @@
+{
+  "format": "certen-finality-vectors/1",
+  "kind": "json",
+  "runner": "addendum: Addendum.UnmarshalJSON(input); section: ParseSection(input); proofId: ParseProofID(input); expect is ok or the canonical state",
+  "set": "finality_chain2",
+  "vectors": [
+    {
+      "name": "addendum_valid",
+      "target": "addendum",
+      "input": "{\"proofId\":\"01234567-89ab-4def-8012-3456789abcde\",\"seq\":1,\"level\":\"finalized\",\"chain\":84532,\"kind\":\"base-sepolia/finalized/v1\",\"evidence\":\"4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34030000000002d2c7d2333333333333333333333333333333333333333333333333333333333333333362\",\"prevHash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"ownHash\":\"9ec71cd19ddbe01bf47212d9927fb9c61d88ba06ff55c0100fc87ad35971e0b3\"}",
+      "expect": "ok"
+    },
+    {
+      "name": "addendum_key_case_Seq",
+      "target": "addendum",
+      "input": "{\"proofId\":\"01234567-89ab-4def-8012-3456789abcde\",\"Seq\":1,\"level\":\"finalized\",\"chain\":84532,\"kind\":\"base-sepolia/finalized/v1\",\"evidence\":\"4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34030000000002d2c7d2333333333333333333333333333333333333333333333333333333333333333362\",\"prevHash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"ownHash\":\"9ec71cd19ddbe01bf47212d9927fb9c61d88ba06ff55c0100fc87ad35971e0b3\"}",
+      "expect": "{\"code\":\"finality_addendum_malformed\",\"fields\":{\"field\":\"addendum\",\"key\":\"Seq\",\"reason\":\"unknown_key\"}}"
+    },
+    {
+      "name": "addendum_key_case_proofid",
+      "target": "addendum",
+      "input": "{\"proofid\":\"01234567-89ab-4def-8012-3456789abcde\",\"seq\":1,\"level\":\"finalized\",\"chain\":84532,\"kind\":\"base-sepolia/finalized/v1\",\"evidence\":\"4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34030000000002d2c7d2333333333333333333333333333333333333333333333333333333333333333362\",\"prevHash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"ownHash\":\"9ec71cd19ddbe01bf47212d9927fb9c61d88ba06ff55c0100fc87ad35971e0b3\"}",
+      "expect": "{\"code\":\"finality_addendum_malformed\",\"fields\":{\"field\":\"addendum\",\"key\":\"proofid\",\"reason\":\"unknown_key\"}}"
+    },
+    {
+      "name": "addendum_extra_key",
+      "target": "addendum",
+      "input": "{\"extra\":1,\"proofId\":\"01234567-89ab-4def-8012-3456789abcde\",\"seq\":1,\"level\":\"finalized\",\"chain\":84532,\"kind\":\"base-sepolia/finalized/v1\",\"evidence\":\"4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34030000000002d2c7d2333333333333333333333333333333333333333333333333333333333333333362\",\"prevHash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"ownHash\":\"9ec71cd19ddbe01bf47212d9927fb9c61d88ba06ff55c0100fc87ad35971e0b3\"}",
+      "expect": "{\"code\":\"finality_addendum_malformed\",\"fields\":{\"field\":\"addendum\",\"key\":\"extra\",\"reason\":\"unknown_key\"}}"
+    },
+    {
+      "name": "addendum_duplicate_seq",
+      "target": "addendum",
+      "input": "{\"seq\":1,\"proofId\":\"01234567-89ab-4def-8012-3456789abcde\",\"seq\":1,\"level\":\"finalized\",\"chain\":84532,\"kind\":\"base-sepolia/finalized/v1\",\"evidence\":\"4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34030000000002d2c7d2333333333333333333333333333333333333333333333333333333333333333362\",\"prevHash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"ownHash\":\"9ec71cd19ddbe01bf47212d9927fb9c61d88ba06ff55c0100fc87ad35971e0b3\"}",
+      "expect": "{\"code\":\"finality_addendum_malformed\",\"fields\":{\"field\":\"addendum\",\"key\":\"seq\",\"reason\":\"duplicate_key\"}}"
+    },
+    {
+      "name": "addendum_key_spelled_with_unicode_escape_is_the_key",
+      "target": "addendum",
+      "input": "{\"proofId\":\"01234567-89ab-4def-8012-3456789abcde\",\"seq\":1,\"level\":\"finalized\",\"chain\":84532,\"kind\":\"base-sepolia/finalized/v1\",\"evidence\":\"4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34030000000002d2c7d2333333333333333333333333333333333333333333333333333333333333333362\",\"prevHash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"ownHash\":\"9ec71cd19ddbe01bf47212d9927fb9c61d88ba06ff55c0100fc87ad35971e0b3\"}",
+      "expect": "ok"
+    },
+    {
+      "name": "addendum_unicode_escape_key_duplicates_seq",
+      "target": "addendum",
+      "input": "{\"seq\":1,\"proofId\":\"01234567-89ab-4def-8012-3456789abcde\",\"seq\":1,\"level\":\"finalized\",\"chain\":84532,\"kind\":\"base-sepolia/finalized/v1\",\"evidence\":\"4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34030000000002d2c7d2333333333333333333333333333333333333333333333333333333333333333362\",\"prevHash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"ownHash\":\"9ec71cd19ddbe01bf47212d9927fb9c61d88ba06ff55c0100fc87ad35971e0b3\"}",
+      "expect": "{\"code\":\"finality_addendum_malformed\",\"fields\":{\"field\":\"addendum\",\"key\":\"seq\",\"reason\":\"duplicate_key\"}}"
+    },
+    {
+      "name": "addendum_missing_kind",
+      "target": "addendum",
+      "input": "{\"proofId\":\"01234567-89ab-4def-8012-3456789abcde\",\"seq\":1,\"level\":\"finalized\",\"chain\":84532,\"evidence\":\"4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34030000000002d2c7d2333333333333333333333333333333333333333333333333333333333333333362\",\"prevHash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"ownHash\":\"9ec71cd19ddbe01bf47212d9927fb9c61d88ba06ff55c0100fc87ad35971e0b3\"}",
+      "expect": "{\"code\":\"finality_addendum_malformed\",\"fields\":{\"field\":\"addendum\",\"key\":\"kind\",\"reason\":\"missing_key\"}}"
+    },
+    {
+      "name": "addendum_missing_ownHash",
+      "target": "addendum",
+      "input": "{\"proofId\":\"01234567-89ab-4def-8012-3456789abcde\",\"seq\":1,\"level\":\"finalized\",\"chain\":84532,\"kind\":\"base-sepolia/finalized/v1\",\"evidence\":\"4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34030000000002d2c7d2333333333333333333333333333333333333333333333333333333333333333362\",\"prevHash\":\"0000000000000000000000000000000000000000000000000000000000000000\"}",
+      "expect": "{\"code\":\"finality_addendum_malformed\",\"fields\":{\"field\":\"addendum\",\"key\":\"ownHash\",\"reason\":\"missing_key\"}}"
+    },
+    {
+      "name": "addendum_prevHash_uppercase",
+      "target": "addendum",
+      "input": "{\"proofId\":\"01234567-89ab-4def-8012-3456789abcde\",\"seq\":1,\"level\":\"finalized\",\"chain\":84532,\"kind\":\"base-sepolia/finalized/v1\",\"evidence\":\"4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34030000000002d2c7d2333333333333333333333333333333333333333333333333333333333333333362\",\"prevHash\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"ownHash\":\"9ec71cd19ddbe01bf47212d9927fb9c61d88ba06ff55c0100fc87ad35971e0b3\"}",
+      "expect": "{\"code\":\"finality_addendum_malformed\",\"fields\":{\"field\":\"prevHash\",\"reason\":\"not_lowercase_hex\"}}"
+    },
+    {
+      "name": "addendum_ownHash_uppercase",
+      "target": "addendum",
+      "input": "{\"proofId\":\"01234567-89ab-4def-8012-3456789abcde\",\"seq\":1,\"level\":\"finalized\",\"chain\":84532,\"kind\":\"base-sepolia/finalized/v1\",\"evidence\":\"4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34030000000002d2c7d2333333333333333333333333333333333333333333333333333333333333333362\",\"prevHash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"ownHash\":\"9EC71CD19DDBE01BF47212D9927FB9C61D88BA06FF55C0100FC87AD35971E0B3\"}",
+      "expect": "{\"code\":\"finality_addendum_malformed\",\"fields\":{\"field\":\"ownHash\",\"reason\":\"not_lowercase_hex\"}}"
+    },
+    {
+      "name": "addendum_ownHash_short",
+      "target": "addendum",
+      "input": "{\"proofId\":\"01234567-89ab-4def-8012-3456789abcde\",\"seq\":1,\"level\":\"finalized\",\"chain\":84532,\"kind\":\"base-sepolia/finalized/v1\",\"evidence\":\"4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34030000000002d2c7d2333333333333333333333333333333333333333333333333333333333333333362\",\"prevHash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"ownHash\":\"9ec71cd19ddbe01bf47212d9927fb9c61d88ba06ff55c0100fc87ad35971e0\"}",
+      "expect": "{\"code\":\"finality_addendum_malformed\",\"fields\":{\"field\":\"ownHash\",\"reason\":\"not_32_bytes\"}}"
+    },
+    {
+      "name": "addendum_ownHash_odd_length",
+      "target": "addendum",
+      "input": "{\"proofId\":\"01234567-89ab-4def-8012-3456789abcde\",\"seq\":1,\"level\":\"finalized\",\"chain\":84532,\"kind\":\"base-sepolia/finalized/v1\",\"evidence\":\"4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34030000000002d2c7d2333333333333333333333333333333333333333333333333333333333333333362\",\"prevHash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"ownHash\":\"9ec71cd19ddbe01bf47212d9927fb9c61d88ba06ff55c0100fc87ad35971e0b\"}",
+      "expect": "{\"code\":\"finality_addendum_malformed\",\"fields\":{\"field\":\"ownHash\",\"reason\":\"not_lowercase_hex\"}}"
+    },
+    {
+      "name": "addendum_ownHash_0x_prefix",
+      "target": "addendum",
+      "input": "{\"proofId\":\"01234567-89ab-4def-8012-3456789abcde\",\"seq\":1,\"level\":\"finalized\",\"chain\":84532,\"kind\":\"base-sepolia/finalized/v1\",\"evidence\":\"4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34030000000002d2c7d2333333333333333333333333333333333333333333333333333333333333333362\",\"prevHash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"ownHash\":\"0x9ec71cd19ddbe01bf47212d9927fb9c61d88ba06ff55c0100fc87ad35971e0b3\"}",
+      "expect": "{\"code\":\"finality_addendum_malformed\",\"fields\":{\"field\":\"ownHash\",\"reason\":\"not_lowercase_hex\"}}"
+    },
+    {
+      "name": "addendum_evidence_not_hex",
+      "target": "addendum",
+      "input": "{\"proofId\":\"01234567-89ab-4def-8012-3456789abcde\",\"seq\":1,\"level\":\"finalized\",\"chain\":84532,\"kind\":\"base-sepolia/finalized/v1\",\"evidence\":\"zz4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34030000000002d2c7d2333333333333333333333333333333333333333333333333333333333333333362\",\"prevHash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"ownHash\":\"9ec71cd19ddbe01bf47212d9927fb9c61d88ba06ff55c0100fc87ad35971e0b3\"}",
+      "expect": "{\"code\":\"finality_addendum_malformed\",\"fields\":{\"field\":\"evidence\",\"reason\":\"not_lowercase_hex\"}}"
+    },
+    {
+      "name": "addendum_evidence_uppercase",
+      "target": "addendum",
+      "input": "{\"proofId\":\"01234567-89ab-4def-8012-3456789abcde\",\"seq\":1,\"level\":\"finalized\",\"chain\":84532,\"kind\":\"base-sepolia/finalized/v1\",\"evidence\":\"43464531AB00000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34030000000002d2c7d2333333333333333333333333333333333333333333333333333333333333333362\",\"prevHash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"ownHash\":\"9ec71cd19ddbe01bf47212d9927fb9c61d88ba06ff55c0100fc87ad35971e0b3\"}",
+      "expect": "{\"code\":\"finality_addendum_malformed\",\"fields\":{\"field\":\"evidence\",\"reason\":\"not_lowercase_hex\"}}"
+    },
+    {
+      "name": "addendum_level_included",
+      "target": "addendum",
+      "input": "{\"proofId\":\"01234567-89ab-4def-8012-3456789abcde\",\"seq\":1,\"level\":\"included\",\"chain\":84532,\"kind\":\"base-sepolia/finalized/v1\",\"evidence\":\"4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34030000000002d2c7d2333333333333333333333333333333333333333333333333333333333333333362\",\"prevHash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"ownHash\":\"9ec71cd19ddbe01bf47212d9927fb9c61d88ba06ff55c0100fc87ad35971e0b3\"}",
+      "expect": "{\"code\":\"finality_addendum_malformed\",\"fields\":{\"field\":\"level\",\"reason\":\"level_not_stored\"}}"
+    },
+    {
+      "name": "addendum_level_unknown",
+      "target": "addendum",
+      "input": "{\"proofId\":\"01234567-89ab-4def-8012-3456789abcde\",\"seq\":1,\"level\":\"L1_POSTED\",\"chain\":84532,\"kind\":\"base-sepolia/finalized/v1\",\"evidence\":\"4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34030000000002d2c7d2333333333333333333333333333333333333333333333333333333333333333362\",\"prevHash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"ownHash\":\"9ec71cd19ddbe01bf47212d9927fb9c61d88ba06ff55c0100fc87ad35971e0b3\"}",
+      "expect": "{\"code\":\"finality_addendum_malformed\",\"fields\":{\"field\":\"level\",\"reason\":\"unknown_level\"}}"
+    },
+    {
+      "name": "addendum_seq_null",
+      "target": "addendum",
+      "input": "{\"proofId\":\"01234567-89ab-4def-8012-3456789abcde\",\"seq\":null,\"level\":\"finalized\",\"chain\":84532,\"kind\":\"base-sepolia/finalized/v1\",\"evidence\":\"4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34030000000002d2c7d2333333333333333333333333333333333333333333333333333333333333333362\",\"prevHash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"ownHash\":\"9ec71cd19ddbe01bf47212d9927fb9c61d88ba06ff55c0100fc87ad35971e0b3\"}",
+      "expect": "{\"code\":\"finality_addendum_malformed\",\"fields\":{\"field\":\"seq\",\"reason\":\"bad_value\"}}"
+    },
+    {
+      "name": "addendum_seq_string",
+      "target": "addendum",
+      "input": "{\"proofId\":\"01234567-89ab-4def-8012-3456789abcde\",\"seq\":\"1\",\"level\":\"finalized\",\"chain\":84532,\"kind\":\"base-sepolia/finalized/v1\",\"evidence\":\"4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34030000000002d2c7d2333333333333333333333333333333333333333333333333333333333333333362\",\"prevHash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"ownHash\":\"9ec71cd19ddbe01bf47212d9927fb9c61d88ba06ff55c0100fc87ad35971e0b3\"}",
+      "expect": "{\"code\":\"finality_addendum_malformed\",\"fields\":{\"field\":\"seq\",\"reason\":\"bad_value\"}}"
+    },
+    {
+      "name": "addendum_seq_float",
+      "target": "addendum",
+      "input": "{\"proofId\":\"01234567-89ab-4def-8012-3456789abcde\",\"seq\":1.0,\"level\":\"finalized\",\"chain\":84532,\"kind\":\"base-sepolia/finalized/v1\",\"evidence\":\"4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34030000000002d2c7d2333333333333333333333333333333333333333333333333333333333333333362\",\"prevHash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"ownHash\":\"9ec71cd19ddbe01bf47212d9927fb9c61d88ba06ff55c0100fc87ad35971e0b3\"}",
+      "expect": "{\"code\":\"finality_addendum_malformed\",\"fields\":{\"field\":\"seq\",\"reason\":\"bad_value\"}}"
+    },
+    {
+      "name": "addendum_seq_exponent",
+      "target": "addendum",
+      "input": "{\"proofId\":\"01234567-89ab-4def-8012-3456789abcde\",\"seq\":1e0,\"level\":\"finalized\",\"chain\":84532,\"kind\":\"base-sepolia/finalized/v1\",\"evidence\":\"4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34030000000002d2c7d2333333333333333333333333333333333333333333333333333333333333333362\",\"prevHash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"ownHash\":\"9ec71cd19ddbe01bf47212d9927fb9c61d88ba06ff55c0100fc87ad35971e0b3\"}",
+      "expect": "{\"code\":\"finality_addendum_malformed\",\"fields\":{\"field\":\"seq\",\"reason\":\"bad_value\"}}"
+    },
+    {
+      "name": "addendum_seq_negative",
+      "target": "addendum",
+      "input": "{\"proofId\":\"01234567-89ab-4def-8012-3456789abcde\",\"seq\":-1,\"level\":\"finalized\",\"chain\":84532,\"kind\":\"base-sepolia/finalized/v1\",\"evidence\":\"4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34030000000002d2c7d2333333333333333333333333333333333333333333333333333333333333333362\",\"prevHash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"ownHash\":\"9ec71cd19ddbe01bf47212d9927fb9c61d88ba06ff55c0100fc87ad35971e0b3\"}",
+      "expect": "{\"code\":\"finality_addendum_malformed\",\"fields\":{\"field\":\"seq\",\"reason\":\"bad_value\"}}"
+    },
+    {
+      "name": "addendum_seq_overflow_u64",
+      "target": "addendum",
+      "input": "{\"proofId\":\"01234567-89ab-4def-8012-3456789abcde\",\"seq\":18446744073709551616,\"level\":\"finalized\",\"chain\":84532,\"kind\":\"base-sepolia/finalized/v1\",\"evidence\":\"4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34030000000002d2c7d2333333333333333333333333333333333333333333333333333333333333333362\",\"prevHash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"ownHash\":\"9ec71cd19ddbe01bf47212d9927fb9c61d88ba06ff55c0100fc87ad35971e0b3\"}",
+      "expect": "{\"code\":\"finality_addendum_malformed\",\"fields\":{\"field\":\"seq\",\"reason\":\"bad_value\"}}"
+    },
+    {
+      "name": "addendum_chain_boolean",
+      "target": "addendum",
+      "input": "{\"proofId\":\"01234567-89ab-4def-8012-3456789abcde\",\"seq\":1,\"level\":\"finalized\",\"chain\":true,\"kind\":\"base-sepolia/finalized/v1\",\"evidence\":\"4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34030000000002d2c7d2333333333333333333333333333333333333333333333333333333333333333362\",\"prevHash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"ownHash\":\"9ec71cd19ddbe01bf47212d9927fb9c61d88ba06ff55c0100fc87ad35971e0b3\"}",
+      "expect": "{\"code\":\"finality_addendum_malformed\",\"fields\":{\"field\":\"chain\",\"reason\":\"bad_value\"}}"
+    },
+    {
+      "name": "addendum_kind_number",
+      "target": "addendum",
+      "input": "{\"proofId\":\"01234567-89ab-4def-8012-3456789abcde\",\"seq\":1,\"level\":\"finalized\",\"chain\":84532,\"kind\":7,\"evidence\":\"4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34030000000002d2c7d2333333333333333333333333333333333333333333333333333333333333333362\",\"prevHash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"ownHash\":\"9ec71cd19ddbe01bf47212d9927fb9c61d88ba06ff55c0100fc87ad35971e0b3\"}",
+      "expect": "{\"code\":\"finality_addendum_malformed\",\"fields\":{\"field\":\"kind\",\"reason\":\"bad_value\"}}"
+    },
+    {
+      "name": "addendum_proofId_upper",
+      "target": "addendum",
+      "input": "{\"proofId\":\"01234567-89AB-4DEF-8012-3456789ABCDE\",\"seq\":1,\"level\":\"finalized\",\"chain\":84532,\"kind\":\"base-sepolia/finalized/v1\",\"evidence\":\"4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34030000000002d2c7d2333333333333333333333333333333333333333333333333333333333333333362\",\"prevHash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"ownHash\":\"9ec71cd19ddbe01bf47212d9927fb9c61d88ba06ff55c0100fc87ad35971e0b3\"}",
+      "expect": "{\"code\":\"finality_addendum_malformed\",\"fields\":{\"field\":\"proofId\",\"reason\":\"not_canonical_uuid\"}}"
+    },
+    {
+      "name": "addendum_proofId_no_dashes",
+      "target": "addendum",
+      "input": "{\"proofId\":\"0123456789ab4def80123456789abcde\",\"seq\":1,\"level\":\"finalized\",\"chain\":84532,\"kind\":\"base-sepolia/finalized/v1\",\"evidence\":\"4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34030000000002d2c7d2333333333333333333333333333333333333333333333333333333333333333362\",\"prevHash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"ownHash\":\"9ec71cd19ddbe01bf47212d9927fb9c61d88ba06ff55c0100fc87ad35971e0b3\"}",
+      "expect": "{\"code\":\"finality_addendum_malformed\",\"fields\":{\"field\":\"proofId\",\"reason\":\"not_canonical_uuid\"}}"
+    },
+    {
+      "name": "addendum_trailing_data",
+      "target": "addendum",
+      "input": "{\"proofId\":\"01234567-89ab-4def-8012-3456789abcde\",\"seq\":1,\"level\":\"finalized\",\"chain\":84532,\"kind\":\"base-sepolia/finalized/v1\",\"evidence\":\"4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34030000000002d2c7d2333333333333333333333333333333333333333333333333333333333333333362\",\"prevHash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"ownHash\":\"9ec71cd19ddbe01bf47212d9927fb9c61d88ba06ff55c0100fc87ad35971e0b3\"} x",
+      "expect": "{\"code\":\"finality_addendum_malformed\",\"fields\":{\"field\":\"addendum\",\"reason\":\"not_json\"}}"
+    },
+    {
+      "name": "addendum_second_document",
+      "target": "addendum",
+      "input": "{\"proofId\":\"01234567-89ab-4def-8012-3456789abcde\",\"seq\":1,\"level\":\"finalized\",\"chain\":84532,\"kind\":\"base-sepolia/finalized/v1\",\"evidence\":\"4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34030000000002d2c7d2333333333333333333333333333333333333333333333333333333333333333362\",\"prevHash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"ownHash\":\"9ec71cd19ddbe01bf47212d9927fb9c61d88ba06ff55c0100fc87ad35971e0b3\"}{\"proofId\":\"01234567-89ab-4def-8012-3456789abcde\",\"seq\":1,\"level\":\"finalized\",\"chain\":84532,\"kind\":\"base-sepolia/finalized/v1\",\"evidence\":\"4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34030000000002d2c7d2333333333333333333333333333333333333333333333333333333333333333362\",\"prevHash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"ownHash\":\"9ec71cd19ddbe01bf47212d9927fb9c61d88ba06ff55c0100fc87ad35971e0b3\"}",
+      "expect": "{\"code\":\"finality_addendum_malformed\",\"fields\":{\"field\":\"addendum\",\"reason\":\"not_json\"}}"
+    },
+    {
+      "name": "addendum_not_an_object",
+      "target": "addendum",
+      "input": "[]",
+      "expect": "{\"code\":\"finality_addendum_malformed\",\"fields\":{\"field\":\"addendum\",\"reason\":\"not_json\"}}"
+    },
+    {
+      "name": "addendum_null_document",
+      "target": "addendum",
+      "input": "null",
+      "expect": "{\"code\":\"finality_addendum_malformed\",\"fields\":{\"field\":\"addendum\",\"reason\":\"not_json\"}}"
+    },
+    {
+      "name": "addendum_syntax_error_after_an_unknown_key",
+      "target": "addendum",
+      "input": "{\"extra\":1,",
+      "expect": "{\"code\":\"finality_addendum_malformed\",\"fields\":{\"field\":\"addendum\",\"reason\":\"not_json\"}}"
+    },
+    {
+      "name": "section_valid",
+      "target": "section",
+      "input": "{\"format\":\"certen-finality-addenda/1\",\"leg\":{\"chain\":84532,\"blockNumber\":47368146,\"blockHash\":\"abababababababababababababababababababababababababababababababab\"},\"addenda\":[{\"proofId\":\"01234567-89ab-4def-8012-3456789abcde\",\"seq\":1,\"level\":\"finalized\",\"chain\":84532,\"kind\":\"base-sepolia/finalized/v1\",\"evidence\":\"4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34030000000002d2c7d2333333333333333333333333333333333333333333333333333333333333333362\",\"prevHash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"ownHash\":\"9ec71cd19ddbe01bf47212d9927fb9c61d88ba06ff55c0100fc87ad35971e0b3\"}]}",
+      "expect": "ok"
+    },
+    {
+      "name": "section_wrong_format",
+      "target": "section",
+      "input": "{\"format\":\"certen-finality-addenda/2\",\"leg\":{\"chain\":84532,\"blockNumber\":47368146,\"blockHash\":\"abababababababababababababababababababababababababababababababab\"},\"addenda\":[{\"proofId\":\"01234567-89ab-4def-8012-3456789abcde\",\"seq\":1,\"level\":\"finalized\",\"chain\":84532,\"kind\":\"base-sepolia/finalized/v1\",\"evidence\":\"4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34030000000002d2c7d2333333333333333333333333333333333333333333333333333333333333333362\",\"prevHash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"ownHash\":\"9ec71cd19ddbe01bf47212d9927fb9c61d88ba06ff55c0100fc87ad35971e0b3\"}]}",
+      "expect": "{\"code\":\"finality_addendum_malformed\",\"fields\":{\"field\":\"format\",\"reason\":\"wrong_format\"}}"
+    },
+    {
+      "name": "section_key_case_Format",
+      "target": "section",
+      "input": "{\"Format\":\"certen-finality-addenda/1\",\"leg\":{\"chain\":84532,\"blockNumber\":47368146,\"blockHash\":\"abababababababababababababababababababababababababababababababab\"},\"addenda\":[{\"proofId\":\"01234567-89ab-4def-8012-3456789abcde\",\"seq\":1,\"level\":\"finalized\",\"chain\":84532,\"kind\":\"base-sepolia/finalized/v1\",\"evidence\":\"4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34030000000002d2c7d2333333333333333333333333333333333333333333333333333333333333333362\",\"prevHash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"ownHash\":\"9ec71cd19ddbe01bf47212d9927fb9c61d88ba06ff55c0100fc87ad35971e0b3\"}]}",
+      "expect": "{\"code\":\"finality_addendum_malformed\",\"fields\":{\"field\":\"finality\",\"key\":\"Format\",\"reason\":\"unknown_key\"}}"
+    },
+    {
+      "name": "section_old_digest_member",
+      "target": "section",
+      "input": "{\"originalProofDigest\":\"00\",\"format\":\"certen-finality-addenda/1\",\"leg\":{\"chain\":84532,\"blockNumber\":47368146,\"blockHash\":\"abababababababababababababababababababababababababababababababab\"},\"addenda\":[{\"proofId\":\"01234567-89ab-4def-8012-3456789abcde\",\"seq\":1,\"level\":\"finalized\",\"chain\":84532,\"kind\":\"base-sepolia/finalized/v1\",\"evidence\":\"4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34030000000002d2c7d2333333333333333333333333333333333333333333333333333333333333333362\",\"prevHash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"ownHash\":\"9ec71cd19ddbe01bf47212d9927fb9c61d88ba06ff55c0100fc87ad35971e0b3\"}]}",
+      "expect": "{\"code\":\"finality_addendum_malformed\",\"fields\":{\"field\":\"finality\",\"key\":\"originalProofDigest\",\"reason\":\"unknown_key\"}}"
+    },
+    {
+      "name": "section_duplicate_leg",
+      "target": "section",
+      "input": "{\"leg\":{\"chain\":84532,\"blockNumber\":47368146,\"blockHash\":\"abababababababababababababababababababababababababababababababab\"},\"format\":\"certen-finality-addenda/1\",\"leg\":{\"chain\":84532,\"blockNumber\":47368146,\"blockHash\":\"abababababababababababababababababababababababababababababababab\"},\"addenda\":[{\"proofId\":\"01234567-89ab-4def-8012-3456789abcde\",\"seq\":1,\"level\":\"finalized\",\"chain\":84532,\"kind\":\"base-sepolia/finalized/v1\",\"evidence\":\"4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34030000000002d2c7d2333333333333333333333333333333333333333333333333333333333333333362\",\"prevHash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"ownHash\":\"9ec71cd19ddbe01bf47212d9927fb9c61d88ba06ff55c0100fc87ad35971e0b3\"}]}",
+      "expect": "{\"code\":\"finality_addendum_malformed\",\"fields\":{\"field\":\"finality\",\"key\":\"leg\",\"reason\":\"duplicate_key\"}}"
+    },
+    {
+      "name": "section_missing_addenda",
+      "target": "section",
+      "input": "{\"format\":\"certen-finality-addenda/1\",\"leg\":{\"chain\":84532,\"blockNumber\":47368146,\"blockHash\":\"abababababababababababababababababababababababababababababababab\"}}",
+      "expect": "{\"code\":\"finality_addendum_malformed\",\"fields\":{\"field\":\"finality\",\"key\":\"addenda\",\"reason\":\"missing_key\"}}"
+    },
+    {
+      "name": "section_leg_missing_blockHash",
+      "target": "section",
+      "input": "{\"format\":\"certen-finality-addenda/1\",\"leg\":{\"chain\":84532,\"blockNumber\":47368146},\"addenda\":[{\"proofId\":\"01234567-89ab-4def-8012-3456789abcde\",\"seq\":1,\"level\":\"finalized\",\"chain\":84532,\"kind\":\"base-sepolia/finalized/v1\",\"evidence\":\"4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34030000000002d2c7d2333333333333333333333333333333333333333333333333333333333333333362\",\"prevHash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"ownHash\":\"9ec71cd19ddbe01bf47212d9927fb9c61d88ba06ff55c0100fc87ad35971e0b3\"}]}",
+      "expect": "{\"code\":\"finality_addendum_malformed\",\"fields\":{\"field\":\"leg\",\"key\":\"blockHash\",\"reason\":\"missing_key\"}}"
+    },
+    {
+      "name": "section_leg_extra_key",
+      "target": "section",
+      "input": "{\"format\":\"certen-finality-addenda/1\",\"leg\":{\"chain\":84532,\"blockNumber\":47368146,\"blockHash\":\"abababababababababababababababababababababababababababababababab\",\"x\":1},\"addenda\":[{\"proofId\":\"01234567-89ab-4def-8012-3456789abcde\",\"seq\":1,\"level\":\"finalized\",\"chain\":84532,\"kind\":\"base-sepolia/finalized/v1\",\"evidence\":\"4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34030000000002d2c7d2333333333333333333333333333333333333333333333333333333333333333362\",\"prevHash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"ownHash\":\"9ec71cd19ddbe01bf47212d9927fb9c61d88ba06ff55c0100fc87ad35971e0b3\"}]}",
+      "expect": "{\"code\":\"finality_addendum_malformed\",\"fields\":{\"field\":\"leg\",\"key\":\"x\",\"reason\":\"unknown_key\"}}"
+    },
+    {
+      "name": "section_leg_blockHash_uppercase",
+      "target": "section",
+      "input": "{\"format\":\"certen-finality-addenda/1\",\"leg\":{\"chain\":84532,\"blockNumber\":47368146,\"blockHash\":\"ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB\"},\"addenda\":[{\"proofId\":\"01234567-89ab-4def-8012-3456789abcde\",\"seq\":1,\"level\":\"finalized\",\"chain\":84532,\"kind\":\"base-sepolia/finalized/v1\",\"evidence\":\"4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34030000000002d2c7d2333333333333333333333333333333333333333333333333333333333333333362\",\"prevHash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"ownHash\":\"9ec71cd19ddbe01bf47212d9927fb9c61d88ba06ff55c0100fc87ad35971e0b3\"}]}",
+      "expect": "{\"code\":\"finality_addendum_malformed\",\"fields\":{\"field\":\"leg.blockHash\",\"reason\":\"not_lowercase_hex\"}}"
+    },
+    {
+      "name": "section_leg_blockHash_short",
+      "target": "section",
+      "input": "{\"format\":\"certen-finality-addenda/1\",\"leg\":{\"chain\":84532,\"blockNumber\":47368146,\"blockHash\":\"ababababababababababababababababababababababababababababababab\"},\"addenda\":[{\"proofId\":\"01234567-89ab-4def-8012-3456789abcde\",\"seq\":1,\"level\":\"finalized\",\"chain\":84532,\"kind\":\"base-sepolia/finalized/v1\",\"evidence\":\"4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34030000000002d2c7d2333333333333333333333333333333333333333333333333333333333333333362\",\"prevHash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"ownHash\":\"9ec71cd19ddbe01bf47212d9927fb9c61d88ba06ff55c0100fc87ad35971e0b3\"}]}",
+      "expect": "{\"code\":\"finality_addendum_malformed\",\"fields\":{\"field\":\"leg.blockHash\",\"reason\":\"not_32_bytes\"}}"
+    },
+    {
+      "name": "section_leg_blockNumber_string",
+      "target": "section",
+      "input": "{\"format\":\"certen-finality-addenda/1\",\"leg\":{\"chain\":84532,\"blockNumber\":\"47368146\",\"blockHash\":\"abababababababababababababababababababababababababababababababab\"},\"addenda\":[{\"proofId\":\"01234567-89ab-4def-8012-3456789abcde\",\"seq\":1,\"level\":\"finalized\",\"chain\":84532,\"kind\":\"base-sepolia/finalized/v1\",\"evidence\":\"4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34030000000002d2c7d2333333333333333333333333333333333333333333333333333333333333333362\",\"prevHash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"ownHash\":\"9ec71cd19ddbe01bf47212d9927fb9c61d88ba06ff55c0100fc87ad35971e0b3\"}]}",
+      "expect": "{\"code\":\"finality_addendum_malformed\",\"fields\":{\"field\":\"leg.blockNumber\",\"reason\":\"bad_value\"}}"
+    },
+    {
+      "name": "section_addenda_null",
+      "target": "section",
+      "input": "{\"format\":\"certen-finality-addenda/1\",\"leg\":{\"chain\":84532,\"blockNumber\":47368146,\"blockHash\":\"abababababababababababababababababababababababababababababababab\"},\"addenda\":null}",
+      "expect": "{\"code\":\"finality_addendum_malformed\",\"fields\":{\"field\":\"addenda\",\"reason\":\"bad_value\"}}"
+    },
+    {
+      "name": "section_addenda_element_error_carries_index",
+      "target": "section",
+      "input": "{\"format\":\"certen-finality-addenda/1\",\"leg\":{\"chain\":84532,\"blockNumber\":47368146,\"blockHash\":\"abababababababababababababababababababababababababababababababab\"},\"addenda\":[{\"proofId\":\"01234567-89ab-4def-8012-3456789abcde\",\"seq\":null,\"level\":\"finalized\",\"chain\":84532,\"kind\":\"base-sepolia/finalized/v1\",\"evidence\":\"4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34030000000002d2c7d2333333333333333333333333333333333333333333333333333333333333333362\",\"prevHash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"ownHash\":\"9ec71cd19ddbe01bf47212d9927fb9c61d88ba06ff55c0100fc87ad35971e0b3\"}]}",
+      "expect": "{\"code\":\"finality_addendum_malformed\",\"fields\":{\"field\":\"seq\",\"index\":\"0\",\"reason\":\"bad_value\"}}"
+    },
+    {
+      "name": "section_trailing_data",
+      "target": "section",
+      "input": "{\"format\":\"certen-finality-addenda/1\",\"leg\":{\"chain\":84532,\"blockNumber\":47368146,\"blockHash\":\"abababababababababababababababababababababababababababababababab\"},\"addenda\":[{\"proofId\":\"01234567-89ab-4def-8012-3456789abcde\",\"seq\":1,\"level\":\"finalized\",\"chain\":84532,\"kind\":\"base-sepolia/finalized/v1\",\"evidence\":\"4346453100000019626173652d7365706f6c69612f66696e616c697a65642f76310000000000014a34030000000002d2c7d2333333333333333333333333333333333333333333333333333333333333333362\",\"prevHash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"ownHash\":\"9ec71cd19ddbe01bf47212d9927fb9c61d88ba06ff55c0100fc87ad35971e0b3\"}]} x",
+      "expect": "{\"code\":\"finality_addendum_malformed\",\"fields\":{\"field\":\"finality\",\"reason\":\"not_json\"}}"
+    },
+    {
+      "name": "proofId_valid",
+      "target": "proofId",
+      "input": "01234567-89ab-4def-8012-3456789abcde",
+      "expect": "ok"
+    },
+    {
+      "name": "proofId_upper",
+      "target": "proofId",
+      "input": "01234567-89AB-4DEF-8012-3456789ABCDE",
+      "expect": "{\"code\":\"finality_addendum_malformed\",\"fields\":{\"field\":\"proofId\",\"reason\":\"not_canonical_uuid\"}}"
+    },
+    {
+      "name": "proofId_no_dashes",
+      "target": "proofId",
+      "input": "0123456789ab4def80123456789abcde",
+      "expect": "{\"code\":\"finality_addendum_malformed\",\"fields\":{\"field\":\"proofId\",\"reason\":\"not_canonical_uuid\"}}"
+    },
+    {
+      "name": "proofId_braces",
+      "target": "proofId",
+      "input": "{01234567-89ab-4def-8012-3456789abcde}",
+      "expect": "{\"code\":\"finality_addendum_malformed\",\"fields\":{\"field\":\"proofId\",\"reason\":\"not_canonical_uuid\"}}"
+    },
+    {
+      "name": "proofId_urn",
+      "target": "proofId",
+      "input": "urn:uuid:01234567-89ab-4def-8012-3456789abcde",
+      "expect": "{\"code\":\"finality_addendum_malformed\",\"fields\":{\"field\":\"proofId\",\"reason\":\"not_canonical_uuid\"}}"
+    },
+    {
+      "name": "proofId_dash_misplaced",
+      "target": "proofId",
+      "input": "01234567-89a-b4def-8012-3456789abcde0",
+      "expect": "{\"code\":\"finality_addendum_malformed\",\"fields\":{\"field\":\"proofId\",\"reason\":\"not_canonical_uuid\"}}"
+    },
+    {
+      "name": "proofId_35_chars",
+      "target": "proofId",
+      "input": "1234567-89ab-4def-8012-3456789abcde",
+      "expect": "{\"code\":\"finality_addendum_malformed\",\"fields\":{\"field\":\"proofId\",\"reason\":\"not_canonical_uuid\"}}"
+    },
+    {
+      "name": "proofId_37_chars",
+      "target": "proofId",
+      "input": "01234567-89ab-4def-8012-3456789abcde0",
+      "expect": "{\"code\":\"finality_addendum_malformed\",\"fields\":{\"field\":\"proofId\",\"reason\":\"not_canonical_uuid\"}}"
+    },
+    {
+      "name": "proofId_non_hex",
+      "target": "proofId",
+      "input": "0123456g-89ab-4def-8012-3456789abcde",
+      "expect": "{\"code\":\"finality_addendum_malformed\",\"fields\":{\"field\":\"proofId\",\"reason\":\"not_canonical_uuid\"}}"
+    },
+    {
+      "name": "proofId_empty",
+      "target": "proofId",
+      "input": "",
+      "expect": "{\"code\":\"finality_addendum_malformed\",\"fields\":{\"field\":\"proofId\",\"reason\":\"not_canonical_uuid\"}}"
+    }
+  ]
+}

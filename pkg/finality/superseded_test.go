@@ -24,8 +24,26 @@ var chain1Superseded = map[string]string{
 	`{"code":"finality_evidence_malformed","fields":{"got_len":"1","part":"level","reason":"included (1) is derived and never stored; only l1_posted (2) and finalized (3) have kinds","want_len":"2"}}`: `{"code":"finality_evidence_malformed","fields":{"got_len":"1","part":"level","reason":"level_not_stored","want_len":"2"}}`,
 }
 
+// h33 is the hex of the block hash 0x33 x 32 that the chain1 base leg uses.
+var h33 = strings.Repeat("33", 32)
+
+// chain1SupersededHex are the three chain1 expectations that carry a byte value: since V2_SPEC_S7 r2 (V-C1A) every []byte and
+// fixed byte array renders as 0x-prefixed lower-case hex, so the unprefixed hex of finality_chain1 is superseded. Removing every
+// "0x" from the new text gives the old text exactly.
+var chain1SupersededHex = map[string]string{
+	// chains.json leg_binding_altered_leg_member
+	`{"code":"finality_chain_broken","fields":{"check":"leg_binding","got":{"blockHash":"` + h33 + `","blockNumber":"47368147","chain":"84532"},"seq":"0","want":{"blockHash":"` + h33 + `","blockNumber":"47368146","chain":"84532"}}}`: `{"code":"finality_chain_broken","fields":{"check":"leg_binding","got":{"blockHash":"0x` + h33 + `","blockNumber":"47368147","chain":"84532"},"seq":"0","want":{"blockHash":"0x` + h33 + `","blockNumber":"47368146","chain":"84532"}}}`,
+	// containers.json header_l3
+	`{"blockHash":"` + h33 + `","blockNumber":"47368146","body":"424f4459","chain":"84532","kind":"base-sepolia/finalized/v1","level":"3"}`: `{"blockHash":"0x` + h33 + `","blockNumber":"47368146","body":"0x424f4459","chain":"84532","kind":"base-sepolia/finalized/v1","level":"3"}`,
+	// containers.json header_l2_empty_body (the empty byte string is "0x")
+	`{"blockHash":"` + h33 + `","blockNumber":"47368146","body":"","chain":"84532","kind":"base-sepolia/l1_posted/v1","level":"2"}`: `{"blockHash":"0x` + h33 + `","blockNumber":"47368146","body":"0x","chain":"84532","kind":"base-sepolia/l1_posted/v1","level":"2"}`,
+}
+
 func supersededExpect(old string) string {
 	if n, ok := chain1Superseded[old]; ok {
+		return n
+	}
+	if n, ok := chain1SupersededHex[old]; ok {
 		return n
 	}
 	return old
@@ -76,7 +94,18 @@ func TestTheChain1SupersessionIsExactlyTheMessageTextExpectations(t *testing.T) 
 			t.Errorf("%s: the new reason %q is not in the closed set", o.Code, n.Fields["reason"])
 		}
 	}
-	if changedVectors != 10 {
-		t.Errorf("%d finality_chain1 vectors carry a superseded expectation, want 10", changedVectors)
+	for old, nw := range chain1SupersededHex {
+		enc, _ := json.Marshal(old)
+		if n := strings.Count(body, string(enc[1:len(enc)-1])); n != 1 {
+			t.Errorf("hex expectation occurs %d times in finality_chain1: %s", n, old)
+		} else {
+			changedVectors++
+		}
+		if strings.ReplaceAll(nw, "0x", "") != old {
+			t.Errorf("a hex supersession may only add 0x prefixes: %s -> %s", old, nw)
+		}
+	}
+	if changedVectors != 13 {
+		t.Errorf("%d finality_chain1 vectors carry a superseded expectation, want 13 (10 reason tokens + 3 hex prefixes)", changedVectors)
 	}
 }

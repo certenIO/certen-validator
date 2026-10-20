@@ -1,0 +1,104 @@
+{
+  "format": "certen-finality-vectors/1",
+  "kind": "canonical",
+  "runner": "NewState(code, fields...) with each typed field converted to the language's value; Canonical() is compared",
+  "set": "finality_chain2",
+  "vectors": [
+    {
+      "name": "canonical_mixed_types",
+      "note": "sorted keys, no whitespace, every integer width as a decimal string, bytes as lower hex, a Level by name",
+      "code": "finality_chain_broken",
+      "fields": [
+        {
+          "key": "seq",
+          "type": "u64",
+          "value": "18446744073709551615"
+        },
+        {
+          "key": "n_int",
+          "type": "int",
+          "value": "-5"
+        },
+        {
+          "key": "n_u8",
+          "type": "u8",
+          "value": "255"
+        },
+        {
+          "key": "n_i64",
+          "type": "i64",
+          "value": "-9223372036854775808"
+        },
+        {
+          "key": "level",
+          "type": "level",
+          "value": "finalized"
+        },
+        {
+          "key": "h",
+          "type": "bytes32",
+          "value": "abababababababababababababababababababababababababababababababab"
+        },
+        {
+          "key": "b",
+          "type": "bytes",
+          "value": "0102"
+        },
+        {
+          "key": "v4",
+          "type": "bytes4",
+          "value": "90000075"
+        },
+        {
+          "key": "e",
+          "type": "bytes",
+          "value": ""
+        },
+        {
+          "key": "ok",
+          "type": "bool",
+          "value": "true"
+        },
+        {
+          "key": "none",
+          "type": "null"
+        },
+        {
+          "key": "s",
+          "type": "string",
+          "value": "a\"b"
+        },
+        {
+          "key": "t",
+          "type": "time",
+          "value": "1970-01-01T00:00:00Z"
+        },
+        {
+          "key": "l",
+          "type": "u64list",
+          "value": [
+            "1",
+            "2"
+          ]
+        },
+        {
+          "key": "nested",
+          "type": "map",
+          "value": [
+            {
+              "key": "z",
+              "type": "u32",
+              "value": "1"
+            },
+            {
+              "key": "a",
+              "type": "bytes",
+              "value": "0102"
+            }
+          ]
+        }
+      ],
+      "expect": "{\"code\":\"finality_chain_broken\",\"fields\":{\"b\":\"0x0102\",\"e\":\"0x\",\"h\":\"0xabababababababababababababababababababababababababababababababab\",\"l\":[\"1\",\"2\"],\"level\":\"finalized\",\"n_i64\":\"-9223372036854775808\",\"n_int\":\"-5\",\"n_u8\":\"255\",\"nested\":{\"a\":\"0x0102\",\"z\":\"1\"},\"none\":null,\"ok\":true,\"s\":\"a\\\"b\",\"seq\":\"18446744073709551615\",\"t\":\"1970-01-01T00:00:00Z\",\"v4\":\"0x90000075\"}}"
+    }
+  ]
+}

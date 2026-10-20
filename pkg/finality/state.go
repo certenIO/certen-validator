@@ -21,7 +21,7 @@ import (
 // that is not in it, or a state that lacks a required field, fails the conformance test. The canonical form (Canonical) is
 // what the Go and TypeScript verifiers compare on every vector: JSON with sorted keys, no whitespace, EVERY integer field of
 // ANY width and signedness (int, int8..int64, uint, uint8..uint64, uintptr and every named integer type that is not a Level)
-// as a decimal string, byte strings as lowercase hex without a prefix, a named string type as its string.
+// as a decimal string, EVERY byte string and fixed byte array ([]byte, [4]byte, [32]byte, any [N]byte) as 0x-prefixed lower-case hex ("0x" for the empty string), a named string type as its string.
 type StateError struct {
 	Code   string
 	Fields map[string]any
@@ -266,9 +266,11 @@ func canonValue(v any) []byte {
 	case int64:
 		return canonString(strconv.FormatInt(x, 10))
 	case [32]byte:
-		return canonString(hexLower(x[:]))
+		return canonString("0x" + hexLower(x[:]))
+	case [4]byte:
+		return canonString("0x" + hexLower(x[:]))
 	case []byte:
-		return canonString(hexLower(x))
+		return canonString("0x" + hexLower(x))
 	case time.Time:
 		return canonString(x.UTC().Format(time.RFC3339))
 	case time.Duration:
@@ -314,6 +316,12 @@ func canonValue(v any) []byte {
 		return canonString(strconv.FormatUint(rv.Uint(), 10))
 	case reflect.String:
 		return canonString(rv.String())
+	case reflect.Array, reflect.Slice:
+		if rv.Type().Elem().Kind() == reflect.Uint8 { // every fixed byte array and every named byte slice
+			b := make([]byte, rv.Len())
+			reflect.Copy(reflect.ValueOf(b), rv)
+			return canonString("0x" + hexLower(b))
+		}
 	}
 	return canonString(fmt.Sprint(v))
 }

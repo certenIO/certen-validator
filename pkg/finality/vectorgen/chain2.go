@@ -48,6 +48,20 @@ var superseded2 = [][2]string{
 		`{"code":"finality_evidence_malformed","fields":{"got_len":"1","part":"level","reason":"level_not_stored","want_len":"2"}}`},
 }
 
+var h33 = strings.Repeat("33", 32)
+
+func init() {
+	// the three chain1 expectations that carry a byte value: 0x-prefixed since V2_SPEC_S7 r2 (V-C1A)
+	superseded2 = append(superseded2,
+		[2]string{`{"code":"finality_chain_broken","fields":{"check":"leg_binding","got":{"blockHash":"` + h33 + `","blockNumber":"47368147","chain":"84532"},"seq":"0","want":{"blockHash":"` + h33 + `","blockNumber":"47368146","chain":"84532"}}}`,
+			`{"code":"finality_chain_broken","fields":{"check":"leg_binding","got":{"blockHash":"0x` + h33 + `","blockNumber":"47368147","chain":"84532"},"seq":"0","want":{"blockHash":"0x` + h33 + `","blockNumber":"47368146","chain":"84532"}}}`},
+		[2]string{`{"blockHash":"` + h33 + `","blockNumber":"47368146","body":"424f4459","chain":"84532","kind":"base-sepolia/finalized/v1","level":"3"}`,
+			`{"blockHash":"0x` + h33 + `","blockNumber":"47368146","body":"0x424f4459","chain":"84532","kind":"base-sepolia/finalized/v1","level":"3"}`},
+		[2]string{`{"blockHash":"` + h33 + `","blockNumber":"47368146","body":"","chain":"84532","kind":"base-sepolia/l1_posted/v1","level":"2"}`,
+			`{"blockHash":"0x` + h33 + `","blockNumber":"47368146","body":"0x","chain":"84532","kind":"base-sepolia/l1_posted/v1","level":"2"}`},
+	)
+}
+
 func supersede(expect string) string {
 	for _, p := range superseded2 {
 		if expect == p[0] {
@@ -219,8 +233,8 @@ func generate2(dir, chain1Dir, registryPath string) (err error) {
 		replaced += n
 		writeJSON(dir, f, doc, must)
 	}
-	if replaced != len(superseded2) {
-		return fmt.Errorf("vectorgen chain2: %d expectations were replaced, the supersession list has %d", replaced, len(superseded2))
+	if replaced != 13 {
+		return fmt.Errorf("vectorgen chain2: %d chain1 vectors changed expectation, want 13 (%d distinct texts)", replaced, len(superseded2))
 	}
 
 	// ---- json.json: strict JSON of an addendum, a section and a proof id (D3) ----
@@ -353,9 +367,9 @@ func generate2(dir, chain1Dir, registryPath string) (err error) {
 		return fmt.Sprintf(`{"items":"%d","number":"258","timestamp":"1700000000","withdrawalsRoot":%s}`, items, wd)
 	}
 	wdHex := fill(0x10 + 16)
-	hadd("header_17_items", "number 0x0102, timestamp 0x6553f100, withdrawalsRoot present", hdrRLP(headerItems(17)), okHeader(17, `"`+hx(wdHex[:])+`"`))
+	hadd("header_17_items", "number 0x0102, timestamp 0x6553f100, withdrawalsRoot present", hdrRLP(headerItems(17)), okHeader(17, `"0x`+hx(wdHex[:])+`"`))
 	hadd("header_12_items_no_withdrawals", "", hdrRLP(headerItems(12)), okHeader(12, `null`))
-	hadd("header_23_items", "a future header with trailing items is read positionally", hdrRLP(headerItems(23)), okHeader(23, `"`+hx(wdHex[:])+`"`))
+	hadd("header_23_items", "a future header with trailing items is read positionally", hdrRLP(headerItems(23)), okHeader(23, `"0x`+hx(wdHex[:])+`"`))
 	withItem := func(i int, enc []byte, n int) []byte {
 		items := headerItems(n)
 		items[i] = enc
@@ -372,12 +386,12 @@ func generate2(dir, chain1Dir, registryPath string) (err error) {
 	two := headerItems(17)
 	two[3], two[8] = listEnc, listEnc
 	hadd("header_list_in_items_3_and_8_reports_the_lowest_slot", "slots are judged in ascending order", hdrRLP(two), hm("3", "header_item_is_list", 2, 32))
-	hadd("header_list_in_unread_item_13_is_accepted", "only the positional slots are read", withItem(13, listEnc, 17), okHeader(17, `"`+hx(wdHex[:])+`"`))
+	hadd("header_list_in_unread_item_13_is_accepted", "only the positional slots are read", withItem(13, listEnc, 17), okHeader(17, `"0x`+hx(wdHex[:])+`"`))
 	hadd("header_number_leading_zero", "item 8 = 00 01", withItem(8, rlpStr([]byte{0x00, 0x01}), 17), hm("8", "header_item_not_canonical_uint", 2, 8))
 	hadd("header_number_single_zero_byte", "item 8 = 00 (zero is the empty string)", withItem(8, rlpStr([]byte{0x00}), 17), hm("8", "header_item_not_canonical_uint", 1, 8))
 	hadd("header_number_nine_bytes", "", withItem(8, rlpStr([]byte{1, 0, 0, 0, 0, 0, 0, 0, 0}), 17), hm("8", "header_item_not_canonical_uint", 9, 8))
 	hadd("header_timestamp_leading_zero", "", withItem(11, rlpStr([]byte{0x00, 0x65}), 17), hm("11", "header_item_not_canonical_uint", 2, 8))
-	hadd("header_number_empty_is_zero", "the canonical zero", withItem(8, rlpStr(nil), 17), fmt.Sprintf(`{"items":"17","number":"0","timestamp":"1700000000","withdrawalsRoot":"%s"}`, hx(wdHex[:])))
+	hadd("header_number_empty_is_zero", "the canonical zero", withItem(8, rlpStr(nil), 17), fmt.Sprintf(`{"items":"17","number":"0","timestamp":"1700000000","withdrawalsRoot":"0x%s"}`, hx(wdHex[:])))
 	hadd("header_stateRoot_31_bytes", "", withItem(3, rlpStr(make([]byte, 31)), 17), hm("3", "header_item_not_32_bytes", 31, 32))
 	hadd("header_too_few_items", "", hdrRLP(headerItems(11)), hm("", "header_too_few_items", 11, 12))
 	hadd("header_not_a_list", "", []byte{0x01}, hm("", "header_not_rlp_list", 1, 0))
@@ -414,7 +428,7 @@ func generate2(dir, chain1Dir, registryPath string) (err error) {
 	gadd("judge_container_about_the_leg_but_no_kind_registered", "everything binds; only the kind is missing", mk(kBaseFin, lBase, FIN, base, nil),
 		`{"code":"finality_evidence_unrecognised","fields":{"kind":"`+kBaseFin+`","version":"v1"}}`)
 	gadd("judge_same_chain_and_number_other_block_hash", "the container is about another block of the same height", mk(kBaseFin, otherHash, FIN, base, nil),
-		`{"code":"finality_block_mismatch","fields":{"field":"blockHash","got":"`+hx(otherHash.Hash[:])+`","want":"`+hx(lBase.Hash[:])+`"}}`)
+		`{"code":"finality_block_mismatch","fields":{"field":"blockHash","got":"0x`+hx(otherHash.Hash[:])+`","want":"0x`+hx(lBase.Hash[:])+`"}}`)
 	gadd("judge_other_block_number", "", mk(kBaseFin, otherNumber, FIN, base, nil),
 		`{"code":"finality_block_mismatch","fields":{"field":"blockNumber","got":"47368147","want":"47368146"}}`)
 	gadd("judge_container_and_addendum_both_carry_another_chain", "the hash chain and the row are consistent for chain 421614, but the leg settled on 84532", mk(kArbFin, arbBlock, FIN, arb, nil),
@@ -489,6 +503,8 @@ func generate2(dir, chain1Dir, registryPath string) (err error) {
 	padd("pins_wrong_chain_id", "", pinsText(func(_, s map[string]any) { s["chain_id"] = json.Number("1") }), pc("chain_id_mismatch"))
 	padd("pins_genesis_root_uppercase", "", strings.Replace(pinsText(nil), "0xd8ea17", "0xD8ea17", 1), pc("genesis_validators_root_malformed"))
 	padd("pins_bound_max_links_zero", "bounds must be present and positive", pinsText(func(_, s map[string]any) { s["max_links"] = json.Number("0") }), pc("bound_missing", "key", `"max_links"`))
+	padd("pins_bound_max_spine_headers_zero", "", pinsText(func(_, s map[string]any) { s["max_spine_headers"] = json.Number("0") }), pc("bound_missing", "key", `"max_spine_headers"`))
+	padd("pins_bound_min_participants_zero", "", pinsText(func(_, s map[string]any) { s["min_participants"] = json.Number("0") }), pc("bound_missing", "key", `"min_participants"`))
 	padd("pins_bound_max_spine_headers_absent", "", pinsText(func(_, s map[string]any) { delete(s, "max_spine_headers") }), pc("bound_missing", "key", `"max_spine_headers"`))
 	padd("pins_bound_epochs_per_period_absent", "", pinsText(func(_, s map[string]any) { delete(s, "epochs_per_period") }), pc("bound_missing", "key", `"epochs_per_period"`))
 	padd("pins_bound_sync_committee_size_absent", "", pinsText(func(_, s map[string]any) { delete(s, "sync_committee_size") }), pc("bound_missing", "key", `"sync_committee_size"`))
@@ -540,11 +556,11 @@ func generate2(dir, chain1Dir, registryPath string) (err error) {
 		Code: "finality_chain_broken",
 		Fields: []cfield{
 			{"seq", "u64", "18446744073709551615"}, {"n_int", "int", "-5"}, {"n_u8", "u8", "255"}, {"n_i64", "i64", "-9223372036854775808"},
-			{"level", "level", "finalized"}, {"h", "bytes32", strings.Repeat("ab", 32)}, {"b", "bytes", "0102"}, {"ok", "bool", "true"}, {"none", "null", nil},
+			{"level", "level", "finalized"}, {"h", "bytes32", strings.Repeat("ab", 32)}, {"b", "bytes", "0102"}, {"v4", "bytes4", "90000075"}, {"e", "bytes", ""}, {"ok", "bool", "true"}, {"none", "null", nil},
 			{"s", "string", `a"b`}, {"t", "time", "1970-01-01T00:00:00Z"}, {"l", "u64list", []string{"1", "2"}},
 			{"nested", "map", []cfield{{"z", "u32", "1"}, {"a", "bytes", "0102"}}},
 		},
-		Expect: `{"code":"finality_chain_broken","fields":{"b":"0102","h":"` + strings.Repeat("ab", 32) + `","l":["1","2"],"level":"finalized","n_i64":"-9223372036854775808","n_int":"-5","n_u8":"255","nested":{"a":"0102","z":"1"},"none":null,"ok":true,"s":"a\"b","seq":"18446744073709551615","t":"1970-01-01T00:00:00Z"}}`,
+		Expect: `{"code":"finality_chain_broken","fields":{"b":"0x0102","e":"0x","h":"0x` + strings.Repeat("ab", 32) + `","l":["1","2"],"level":"finalized","n_i64":"-9223372036854775808","n_int":"-5","n_u8":"255","nested":{"a":"0x0102","z":"1"},"none":null,"ok":true,"s":"a\"b","seq":"18446744073709551615","t":"1970-01-01T00:00:00Z","v4":"0x90000075"}}`,
 	}
 	writeJSON(dir, "canonical.json", map[string]any{"format": "certen-finality-vectors/1", "set": set, "kind": "canonical",
 		"runner": "NewState(code, fields...) with each typed field converted to the language's value; Canonical() is compared", "vectors": []cvec{mixed}}, must)
@@ -565,7 +581,7 @@ func generate2(dir, chain1Dir, registryPath string) (err error) {
 	must(e)
 	c1s := sha256.Sum256(c1m)
 	writeJSON(dir, "MANIFEST.json", map[string]any{"format": "certen-finality-manifest/1", "set": set, "files": sums,
-		"supersedes": map[string]any{"set": "finality_chain1", "manifest_sha256": hx(c1s[:]), "goldens": "finality_chain1/goldens.json is unchanged and still the golden of G0 and G1", "replaced_expectations": len(superseded2)},
+		"supersedes": map[string]any{"set": "finality_chain1", "manifest_sha256": hx(c1s[:]), "goldens": "finality_chain1/goldens.json is unchanged and still the golden of G0 and G1", "replaced_expectations": replaced},
 		"registry":   map[string]any{"path": "testdata/finality/states.json", "sha256": hx(rs[:])}}, must)
 	mb, e := os.ReadFile(filepath.Join(dir, "MANIFEST.json"))
 	must(e)
