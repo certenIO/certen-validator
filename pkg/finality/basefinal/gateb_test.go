@@ -8,6 +8,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ethereum/go-ethereum/accounts/abi"
+	"github.com/ethereum/go-ethereum/crypto"
+
 	"github.com/certen/independant-validator/pkg/finality"
 	"github.com/certen/independant-validator/pkg/finality/ethl1"
 )
@@ -74,9 +77,7 @@ func TestKindVerifyRefusesAMislabelledContainerAGarbageBodyAndMissingPins(t *tes
 	}
 	// not a container at all
 	_, err = Kind{}.Verify(pins, ref, []byte{1, 2, 3})
-	if _, ok := finality.AsNamed(err); !ok {
-		t.Fatalf("garbage evidence must be a named state, got %v", err)
-	}
+	wantNamed(t, "garbage", err, finality.CodeEvidenceMalformed, nil)
 	_, err = Kind{}.Verify(pins, ref, reenc(func(x *finality.Container) { x.Header.Kind = "arb-sepolia/l1_posted/v1" }))
 	wantNamed(t, "kind", err, finality.CodeEvidenceUnrecognised, nil)
 	_, err = Kind{}.Verify(pins, ref, reenc(func(x *finality.Container) { x.Header.Chain = 421614 }))
@@ -92,6 +93,14 @@ func TestKindVerifyRefusesAMislabelledContainerAGarbageBodyAndMissingPins(t *tes
 	otherChain.Chain = 421614
 	_, err = Kind{}.Verify(pins, otherChain, ev)
 	wantNamed(t, "leg chain only", err, finality.CodeBlockMismatch, map[string]string{"field": "blockHash"})
+	// a spine with a hole does not reach the finalized head
+	{
+		fx := loadWireFixture(t)
+		hole := fx.body
+		hole.L1Spine = append(append([][]byte(nil), fx.body.L1Spine[:3]...), fx.body.L1Spine[4:]...)
+		_, err = Kind{}.Verify(pins, ref, reenc(func(x *finality.Container) { x.Body = EncodeBody(hole) }))
+		wantNamed(t, "spine hole", err, "finality_header_chain_broken", map[string]string{"spine": "l1"})
+	}
 	// a body that does not decode
 	_, err = Kind{}.Verify(pins, ref, reenc(func(x *finality.Container) { x.Body = x.Body[:len(x.Body)/2] }))
 	if _, ok := finality.AsNamed(err); !ok {
@@ -100,7 +109,7 @@ func TestKindVerifyRefusesAMislabelledContainerAGarbageBodyAndMissingPins(t *tes
 	// the pins carry no base_sepolia section
 	empty, _ := finality.ParsePinsOverride([]byte(`{"format":"certen-finality-pins/1","onchain_commitment":null,"published_utc":"2026-10-20T00:00:00Z"}` + "\n"))
 	_, err = Kind{}.Verify(empty, ref, ev)
-	wantNamed(t, "no base pins", err, finality.CodePinUnknown, nil)
+	wantNamed(t, "no base pins", err, finality.CodePinUnknown, map[string]string{"kind": "base_sepolia"})
 	// base_sepolia pins present, no Sepolia network section
 	var m map[string]any
 	_ = json.Unmarshal(pinsRaw, &m)
@@ -236,5 +245,138 @@ func TestEveryCutOfTheBodyNamesThePartThatRanShortInWireOrder(t *testing.T) {
 		"outputRootIndex", "l2Spine.count", "l2Spine", "nodes.count", "nodes"}
 	if fmt.Sprint(seen) != fmt.Sprint(want) {
 		t.Fatalf("parts in order\n got  %v\n want %v", seen, want)
+	}
+}
+
+// Every proof the judge reads is either in the node set or it is not: removing any one node of a world is a state-proof refusal
+// (account or slot), never an accepted verdict and never another state, whichever read the node served.
+func TestEveryNodeOfTheProofSetIsNeededAndItsAbsenceIsOnlyAStateProofRefusal(t *testing.T) {
+	p := loadPins(t)
+	proof := map[string]bool{
+		`{"code":"l1_state_proof_invalid","fields":{"which":"account"}}`: true,
+		`{"code":"l1_state_proof_invalid","fields":{"which":"slot"}}`:    true,
+	}
+	for _, spec := range []SynthSpec{{}, {K: 3, Depth: 4}} {
+		o, err := BuildSynth(p, spec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Judge(p, o.A, o.Body, o.Leg, ethl1.FinalizedHead{}); err != nil {
+			t.Fatalf("the world must verify: %v", err)
+		}
+		for i := range o.Body.Nodes {
+			b := o.Body
+			b.Nodes = append(append([][]byte(nil), o.Body.Nodes[:i]...), o.Body.Nodes[i+1:]...)
+			_, jerr := Judge(p, o.A, b, o.Leg, ethl1.FinalizedHead{})
+			if jerr == nil {
+				t.Errorf("%+v: node %d of %d is not needed by any proof of this world", spec, i, len(o.Body.Nodes))
+				continue
+			}
+			if got := canonOf(t, jerr); !proof[got] {
+				t.Errorf("%+v: removing node %d of %d gave %s", spec, i, len(o.Body.Nodes), got)
+			}
+		}
+	}
+}
+
+// finalizationPath names the delay a game's expectedResolution implies: exactly the slow delay, more than it (extended), or less
+// than it with two provers and no counter (fast); anything else, and an expectedResolution before the creation, is none.
+func TestTheFinalizationPathIsDerivedFromTheDelayBetweenCreationAndExpectedResolution(t *testing.T) {
+	const slow = 100
+	two := func(created, exp uint64, proofs uint64, countered byte) GameState {
+		g := GameState{CreatedAt: created, ExpectedResolution: exp, ProofCount: proofs}
+		g.Countered[31] = countered
+		return g
+	}
+	for _, c := range []struct {
+		name string
+		g    GameState
+		path string
+		ok   bool
+	}{
+		{"before the creation", two(10, 9, 2, 0), "", false},
+		{"equal to the creation, two provers", two(10, 10, 2, 0), "fast", true},
+		{"equal to the creation, one prover", two(10, 10, 1, 0), "", false},
+		{"exactly the slow delay", two(10, 10+slow, 1, 0), "slow", true},
+		{"one second under the slow delay, two provers", two(10, 10+slow-1, 2, 0), "fast", true},
+		{"one second under the slow delay, one prover", two(10, 10+slow-1, 1, 0), "", false},
+		{"one second under the slow delay, two provers, countered", two(10, 10+slow-1, 2, 1), "", false},
+		{"one second over the slow delay", two(10, 10+slow+1, 1, 0), "extended", true},
+		{"far over the slow delay, countered", two(10, 10+10*slow, 0, 1), "extended", true},
+	} {
+		path, ok := c.g.finalizationPath(slow)
+		if path != c.path || ok != c.ok {
+			t.Errorf("%s: (%q, %v), want (%q, %v)", c.name, path, ok, c.path, c.ok)
+		}
+	}
+}
+
+// gameUUID is DGF's keccak256(abi.encode(gameType, rootClaim, extraData)): extraData is padded to a whole word, whatever its length.
+func TestTheGameUUIDIsTheABIEncodingOfTypeRootAndPaddedExtraData(t *testing.T) {
+	u32, _ := abi.NewType("uint32", "", nil)
+	b32, _ := abi.NewType("bytes32", "", nil)
+	byt, _ := abi.NewType("bytes", "", nil)
+	args := abi.Arguments{{Type: u32}, {Type: b32}, {Type: byt}}
+	root := [32]byte(crypto.Keccak256Hash([]byte("root")))
+	for _, n := range []int{0, 1, 31, 32, 33, 36, 64, 65} {
+		extra := make([]byte, n)
+		for i := range extra {
+			extra[i] = byte(i + 1)
+		}
+		packed, err := args.Pack(uint32(621), root, extra)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := [32]byte(crypto.Keccak256Hash(packed)); gameUUID(621, root, extra) != want {
+			t.Errorf("extraData of %d bytes: %x, want %x", n, gameUUID(621, root, extra), want)
+		}
+	}
+}
+
+// A game is resolved when its resolution time is set and its status is a final one; it was resolved after the time it was due.
+func TestAGameResolvedAtTheSecondTheProofsMadeItDueIsAcceptedAndOneResolvedBeforeIsNot(t *testing.T) {
+	p := loadPins(t)
+	const resolved = 1791412824
+	// resolved exactly when due: accepted (the base world is due 288 s earlier)
+	if _, err := run(t, p, SynthSpec{ExpectedRes: u64(resolved)}, nil); err != nil {
+		t.Fatalf("resolved exactly when due: %v", err)
+	}
+	// resolved one second before it was due: the slots disagree
+	_, err := run(t, p, SynthSpec{ExpectedRes: u64(resolved + 1)}, nil)
+	if got := canonOf(t, err); got != `{"code":"l1_state_proof_invalid","fields":{"which":"slot"}}` {
+		t.Errorf("%s", got)
+	}
+	// a resolution time of 1 second is a time, not an unset one: the game is judged on it (it is not within the delay and was
+	// resolved before it was due)
+	_, err = run(t, p, SynthSpec{ResolvedAt: 1}, nil)
+	if got := canonOf(t, err); got != `{"code":"l1_state_proof_invalid","fields":{"which":"slot"}}` {
+		t.Errorf("%s", got)
+	}
+}
+
+// lcExtent only delimits the LC part: it walks the profile, anchor, the anchor body, every link and the final update by their
+// length prefixes, so a link that runs short is named as such and a well-formed LC with links reports its exact extent.
+func TestTheLCExtentWalksEveryLinkAndNamesTheOneThatRunsShort(t *testing.T) {
+	lim := finality.DefaultLimits()
+	lc := ethl1.LC{Profile: "p", AnchorKind: 1, AnchorPeriod: 7, AnchorBody: ethl1.LB{Layout: 1, SSZ: []byte{1, 2, 3}},
+		Links:       []ethl1.LB{{Layout: 1, SSZ: []byte{4, 5}}, {Layout: 2, SSZ: []byte{6}}},
+		FinalUpdate: ethl1.LB{Layout: 2, SSZ: []byte{7, 8, 9, 10}}}
+	enc := ethl1.EncodeLC(lc)
+	n, err := lcExtent(append(append([]byte(nil), enc...), 0xee, 0xee), lim, 64)
+	if err != nil || n != len(enc) {
+		t.Fatalf("extent %d, %v; want %d", n, err, len(enc))
+	}
+	// the links are counted against the pin
+	_, err = lcExtent(enc, lim, 1)
+	wantNamed(t, "links over the pin", err, finality.CodeEvidenceTooLarge, map[string]string{"part": "lc.links", "count": "2", "limit": "1"})
+	// a cut inside the second link (its layout byte, its length prefix, its bytes) names the links
+	second := len(enc) - (1 + 4 + 4) - (1 + 4 + 1) - 0 // the final update is 1+4+4 bytes, the second link 1+4+1
+	_ = second
+	for cut := len(enc) - (1 + 4 + 4) - (1 + 4 + 1); cut < len(enc)-(1+4+4); cut++ {
+		_, err = lcExtent(enc[:cut], lim, 64)
+		se, ok := finality.AsNamed(err)
+		if !ok || (fmt.Sprint(se.Fields["part"]) != "lc.links.layout" && fmt.Sprint(se.Fields["part"]) != "lc.links.len" && fmt.Sprint(se.Fields["part"]) != "lc.links") {
+			t.Fatalf("cut %d inside the second link: %v", cut, err)
+		}
 	}
 }

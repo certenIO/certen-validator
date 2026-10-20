@@ -1,0 +1,58 @@
+[
+  {
+    "file": "verify.go",
+    "function": "stateReader.account",
+    "operator": "guard_off",
+    "original": "if a, ok := r.accts[addr]; ok",
+    "mutated": "*",
+    "reason": "The guarded branch only returns the memoised result of an earlier call: trie.VerifyProof over the same state root, key and node database is deterministic, so recomputing it returns the identical account (or the identical refusal) and nothing observable changes."
+  },
+  {
+    "file": "verify.go",
+    "function": "stateReader.slot",
+    "operator": "guard_off",
+    "original": "if err != nil",
+    "mutated": "*",
+    "reason": "account() returns the zero acctRead (exists=false) together with every error it returns, and the very next statement `if !a.exists` returns the identical state l1_state_proof_invalid{which:account}; with the guard removed the same state is returned one statement later."
+  },
+  {
+    "file": "verify.go",
+    "function": "GameState.finalizationPath",
+    "operator": "cmp_boundary",
+    "original": "d > slow",
+    "mutated": "*",
+    "reason": "d == slow is taken by the preceding case `d == slow` (path slow), so the case `d > slow` is only reached with d != slow and `d >= slow` selects the same inputs."
+  },
+  {
+    "file": "wire.go",
+    "function": "DecodeBody",
+    "operator": "guard_off",
+    "original": "if out.LC, err = ep.DecodeLC(body[:n]); err != nil",
+    "mutated": "*",
+    "reason": "DecodeLC reads the same grammar as lcExtent (length-prefixed profile, fixed anchor, anchor body, links counted against the same MaxLinks bound, final update) over exactly the slice lcExtent delimited, which it can only run short of or overrun if lcExtent had; lcExtent has already refused every such body, so DecodeLC cannot fail here and the guard never fires."
+  },
+  {
+    "file": "wire.go",
+    "function": "DecodeBody",
+    "operator": "cmp_boundary",
+    "original": "spineMax > lim.MaxSpineHeaders",
+    "mutated": "*",
+    "reason": "At spineMax == lim.MaxSpineHeaders the guarded assignment sets spineMax to lim.MaxSpineHeaders, the value it already has, so `>=` and `>` give the same bound for every input."
+  },
+  {
+    "file": "wire.go",
+    "function": "DecodeBody",
+    "operator": "cmp_boundary",
+    "original": "l2Max > lim.MaxL2Headers",
+    "mutated": "*",
+    "reason": "At l2Max == lim.MaxL2Headers the guarded assignment sets l2Max to lim.MaxL2Headers, the value it already has, so `>=` and `>` give the same bound for every input."
+  },
+  {
+    "file": "verify.go",
+    "function": "gameUUID",
+    "operator": "cmp_boundary",
+    "original": "pad > 0",
+    "mutated": "*",
+    "reason": "At pad == 0 the guarded statement appends make([]byte, 0), an empty slice, which leaves b unchanged, so `pad >= 0` and `pad > 0` produce the same bytes for every input."
+  }
+]
