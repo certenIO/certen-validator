@@ -237,3 +237,50 @@ func TestL2SpineCountBoundariesAreExact(t *testing.T) {
 		}
 	}
 }
+
+// Cuts inside a link, inside an l2Spine header, and the reported minimum size of a hostile l2Spine count.
+func TestTruncationInsideLinksAndSpineHeadersAndHostileCountSize(t *testing.T) {
+	w := synthworld.Assemble(synthworld.NewParts("links"))
+	e := w.Evidence
+	e.LC.Links = []ethl1.LB{{Layout: ethl1.LayoutGloas, SSZ: bytes.Repeat([]byte{7}, 50)}, {Layout: ethl1.LayoutElectra, SSZ: bytes.Repeat([]byte{8}, 60)}}
+	b := boundsOf(t, w)
+	body := e.Encode()
+	if dec, err := arbfinal.Decode(body, b); err != nil || len(dec.LC.Links) != 2 || !bytes.Equal(dec.Encode(), body) {
+		t.Fatalf("a body with two links does not round trip: %v", err)
+	}
+	prof := 4 + len(ethl1.ProfileLC)
+	linksAt := prof + 1 + 8 + 32 + 1 + 4 + len(e.LC.AnchorBody.SSZ) // the links count
+	for _, c := range []struct {
+		at     int
+		part   string
+		reason finality.EvidenceReason
+	}{
+		{linksAt + 4 + 5, "lc.links", finality.ReasonCountExceedsRemaining},
+		{linksAt + 4 + 1 + 4 + 10, "lc.link", finality.ReasonLengthExceedsRemaining},
+		{linksAt + 4 + 1 + 4 + 50, "lc.link.layout", finality.ReasonTruncated},
+		{linksAt + 4 + 1 + 4 + 50 + 1, "lc.link.len", finality.ReasonTruncated},
+		{linksAt + 4 + 1 + 4 + 50 + 1 + 4 + 30, "lc.link", finality.ReasonLengthExceedsRemaining},
+	} {
+		_, err := arbfinal.Decode(body[:c.at], b)
+		st, ok := finality.AsNamed(err)
+		if !ok || st.Fields["part"] != c.part || st.Fields["reason"] != c.reason {
+			t.Errorf("cut at %d: got %v, want %s/%s", c.at, err, c.part, c.reason)
+		}
+	}
+	// a cut inside the first l2Spine header names the l2Spine and its length
+	plain := w.Evidence.Encode()
+	idx := bytes.Index(plain, w.Evidence.L2Spine[0])
+	_, err := arbfinal.Decode(plain[:idx+20], b)
+	st, ok := finality.AsNamed(err)
+	if !ok || st.Fields["part"] != "l2Spine" || st.Fields["reason"] != finality.ReasonLengthExceedsRemaining {
+		t.Errorf("cut inside an l2Spine header: %v", err)
+	}
+	// a hostile count reports the least size it would need (4 bytes per header) against what remains
+	hostile := append([]byte(nil), plain[:idx-8]...)
+	hostile = append(hostile, 0, 0, 0x10, 0x00, 0, 0, 0, 0)
+	_, err = arbfinal.Decode(hostile, b)
+	st, ok = finality.AsNamed(err)
+	if !ok || st.Fields["part"] != "l2Spine" || st.Fields["reason"] != finality.ReasonCountExceedsRemaining || st.Fields["want_len"] != uint64(0x1000*4) || st.Fields["got_len"] != uint64(4) {
+		t.Errorf("hostile count: %v", err)
+	}
+}

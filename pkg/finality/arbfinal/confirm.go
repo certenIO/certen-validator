@@ -98,11 +98,8 @@ func classifyConfirmation(arb *Pins, kb ethl1.L1Block, kHeader finality.HeaderFi
 		return out, ConfirmedByOwnerForce(PathForce, txHash, kb.Number)
 	}
 	input := tx.Data()
-	sel, hasSel := selectorOf(input)
+	sel, _ := selectorOf(input) // below four bytes sel is zero, which LoadPins forbids as a pinned selector, so nothing matches
 	if tx.To() != nil && *tx.To() == arb.Rollup {
-		if !hasSel {
-			return out, ConfirmationUnproven(ConfirmIndirect, txHash, kb.Number)
-		}
 		switch sel {
 		case arb.Sel.Confirm:
 			out.Route = RouteDirect

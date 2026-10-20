@@ -176,6 +176,7 @@ func TestEveryPinDomainCheckNamesItsField(t *testing.T) {
 		{"user slot short", []string{"proxy_slots", "user_logic"}, "0x1234", "proxy_slots.user_logic"},
 		{"logic pin key short", []string{"logic_pins"}, map[string]any{"0x12": "rollup_admin_logic"}, "logic_pins"},
 		{"selector short", []string{"confirm_path", "selectors", "confirm_assertion"}, "0x1234", "confirm_path.selectors.confirm_assertion"},
+		{"selector zero", []string{"confirm_path", "selectors", "wallet_execute_transaction"}, "0x00000000", "confirm_path.selectors.wallet_execute_transaction"},
 		{"selector missing", []string{"confirm_path", "selectors", "fast_confirm_assertion"}, nil, "confirm_path.selectors.fast_confirm_assertion"},
 		{"wallet selector missing", []string{"confirm_path", "selectors", "wallet_execute_transactions_with_gas_refunder"}, nil, "confirm_path.selectors.wallet_execute_transactions_with_gas_refunder"},
 		{"topic short", []string{"confirm_path", "topics", "assertion_confirmed"}, "0x12", "confirm_path.topics.assertion_confirmed"},

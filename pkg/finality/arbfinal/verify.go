@@ -159,26 +159,26 @@ func (k *Kind) Verify(p *finality.Pins, b finality.BlockRef, evidence []byte) (f
 	if kb.Number > s.Number {
 		return finality.Verdict{}, finality.BlockMismatch("confBlockAboveStateBlock", e.StateBlock, e.ConfBlock)
 	}
-	kHeader, err := headerNumbered(e.L1Spine, kb.Number)
-	if err != nil {
-		return finality.Verdict{}, err
+	kHeader, found := headerNumbered(e.L1Spine, kb.Number)
+	if !found {
+		return finality.Verdict{}, asState(ethl1.BlockNotCovered(kb.Number, covered[0].Number))
 	}
 	return k.verifyState(arb, s, kb, kHeader, b, e)
 }
 
-// headerNumbered returns the fields of the spine header with this number. The spine is already walked and covered and the number
-// was found on it, so the header exists; a caller whose spine lacks it gets finality_block_not_covered.
-func headerNumbered(spine [][]byte, number uint64) (finality.HeaderFields, error) {
+// headerNumbered returns the fields of the spine header with this number. Covers has already read and walked every header of the
+// spine and BlockAt found the number on it, so the header is there; found is false only for a caller whose spine lacks it.
+func headerNumbered(spine [][]byte, number uint64) (finality.HeaderFields, bool) {
 	for _, raw := range spine {
 		h, err := finality.ReadHeader(raw)
 		if err != nil {
-			return finality.HeaderFields{}, err
+			continue
 		}
 		if h.Number == number {
-			return h, nil
+			return h, true
 		}
 	}
-	return finality.HeaderFields{}, ethl1.BlockNotCovered(number, 0)
+	return finality.HeaderFields{}, false
 }
 
 // verifyState is the part of the judgement that runs under the state roots of the covered L1 blocks S and K; it is separate
