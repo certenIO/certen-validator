@@ -145,3 +145,24 @@ func printReport(w io.Writer, rep finality.Report, subject string) int {
 	}
 	return code
 }
+
+// reportPinsSelfcheck re-derives the whole Sepolia ledger of the pins from its root pin through the link files embedded beside
+// them (V2_SPEC_S7 4.3, SO3). It uses no network and no database: the links are configuration, re-verified here exactly as a
+// proof's links are. Exit codes follow the verifier's: 0 re-derived, 1 a step was refused (the state is printed).
+func reportPinsSelfcheck(out, errw io.Writer, pins *finality.Pins) int {
+	links, err := finality.EmbeddedLedgerLinks()
+	if err != nil {
+		fmt.Fprintln(errw, err)
+		return exitFailed
+	}
+	if err := pins.VerifyLedger(links); err != nil {
+		fmt.Fprintf(errw, "PINS SELFCHECK FAILED  %v\n", err)
+		return exitFailed
+	}
+	e, _ := pins.Sepolia()
+	hash, src := pins.Identity()
+	last := e.Anchors[len(e.Anchors)-1]
+	fmt.Fprintf(out, "PINS SELFCHECK ok  %d Sepolia ledger anchors re-derived from the root pin (period %d .. %d)  pins %s (%s)\n",
+		len(e.Anchors), e.Anchors[0].Period, last.Period, hash, src)
+	return exitVerified
+}
