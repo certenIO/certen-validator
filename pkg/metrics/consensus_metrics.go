@@ -226,6 +226,7 @@ func RegisterMetrics() {
 		registerAnchorQuorumMetrics()
 		registerEvidenceMonitorMetrics()
 		registerPersistenceMetrics()
+		registerFinalityMetrics()
 	})
 }
 
