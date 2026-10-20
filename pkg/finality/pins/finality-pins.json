@@ -1,4 +1,24 @@
 {
+  "base_sepolia": {
+    "batch_inbox": "0xff00000000000000000000000000000000084532",
+    "chain_id": 84532,
+    "channel_timeout": 300,
+    "denim_time": 1792605600,
+    "impl_pins": {
+      "0x35c04acf3bb541d90092bf3e328475377142f70760fa82f372ac0c4e4b3ff4f6": {
+        "role": "syscfg_impl"
+      }
+    },
+    "isthmus_time": 1744905600,
+    "kzg_setup_sha256": "f8e44a31ebf0a6d0734dcb301b0716e2c77f3ae18ed0cab0870fbcc2ca55616f",
+    "l1_chain_id": 11155111,
+    "l2_block_time": 2,
+    "l2_genesis_time": 1695768288,
+    "max_blobs": 32,
+    "max_rlp_bytes_per_channel": 100000000,
+    "seq_window_size": 3600,
+    "system_config": "0xf272670eb55e895584501d564afeb048bed26194"
+  },
   "eth_sepolia": {
     "anchors": [],
     "chain_id": 11155111,
