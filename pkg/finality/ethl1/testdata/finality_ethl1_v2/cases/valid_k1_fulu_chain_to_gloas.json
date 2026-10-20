@@ -1,0 +1,19 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "valid_k1_fulu_chain_to_gloas",
+ "kind": "head",
+ "description": "mixed forks under a kind-1 anchor of period 1378",
+ "pins": "pins/main.json",
+ "lc": "lc/valid_k1_fulu_chain_to_gloas.bin",
+ "expect": {
+  "finalized_head": {
+   "beacon_root": "0xe3c1fea02900fff3caadb08889cb00fdf1140ce431bec80f608935bb6dcc002d",
+   "epoch": "356068",
+   "exec_hash": "0xd10922c78306346f1c1f769558eda4c63528f7b778258781c477bee518c9bb08",
+   "participants": "511",
+   "periods_crossed": "12",
+   "slot": "11394176"
+  },
+  "result": "ok"
+ }
+}

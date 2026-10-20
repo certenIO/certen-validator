@@ -1,0 +1,19 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "adv_gloas_bytes_under_electra_layout_byte",
+ "kind": "head",
+ "description": "the Gloas bytes under the electra layout byte cannot select another parse",
+ "pins": "pins/main.json",
+ "lc": "lc/adv_gloas_bytes_under_electra_layout_byte.bin",
+ "expect": {
+  "code": "finality_evidence_malformed",
+  "fields": {
+   "got_len": "1448",
+   "index": "0",
+   "part": "final_update",
+   "reason": "length",
+   "want_len": "2056"
+  },
+  "result": "fault"
+ }
+}

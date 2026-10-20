@@ -1,0 +1,19 @@
+{
+ "captured_utc": "2026-10-20T07:45:24Z",
+ "lodestar": "https://lodestar-sepolia.chainsafe.io",
+ "lighthouse": "https://ethereum-sepolia-beacon-api.publicnode.com",
+ "exec_endpoint": "https://ethereum-sepolia-rpc.publicnode.com",
+ "fulu_bootstrap_block_root": "0x5f71d7f650f9252b48749b5f062c0c234e01afd69f364ab600e2b6051494b20d",
+ "fulu_bootstrap_bytes": 25679,
+ "fulu_bootstrap_header_slot": 11288576,
+ "update_1377_bytes": 26922,
+ "update_1378_bytes": 26906,
+ "lighthouse_fields_equal_lodestar_ssz": true,
+ "update_1378_equals_v1_capture": true,
+ "update_1378_finalized_exec_number": 11849735,
+ "update_1378_finalized_exec_hash": "0xb85e88d18f511249bfa5815dfd0b7d2dc2244b2351e1cf13cfc81664d637f5cb",
+ "legacy_leg_block": 11845679,
+ "legacy_spine_headers": 4057,
+ "legacy_spine_rlp_bytes": 2620188,
+ "legacy_spine_file_bytes": 2636420
+}

@@ -1,0 +1,16 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "adv_pins_network_mismatch",
+ "kind": "head",
+ "description": "pins of chain 1 judged as Sepolia",
+ "pins": "pins/network_mismatch.json",
+ "lc": "lc/adv_pins_network_mismatch.bin",
+ "expect": {
+  "code": "finality_network_mismatch",
+  "fields": {
+   "chain_id": "11155111",
+   "want_chain_id": "1"
+  },
+  "result": "fault"
+ }
+}

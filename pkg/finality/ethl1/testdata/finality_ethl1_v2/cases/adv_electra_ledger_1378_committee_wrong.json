@@ -1,0 +1,17 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "adv_electra_ledger_1378_committee_wrong",
+ "kind": "head",
+ "description": "the genuine Fulu bootstrap against a ledger committee_root for period 1378 that differs",
+ "pins": "pins/ledger_1378_committee_wrong.json",
+ "lc": "lc/adv_electra_ledger_1378_committee_wrong.bin",
+ "expect": {
+  "code": "finality_pin_mismatch",
+  "fields": {
+   "got_root": "0xcabeda493c59d9927d0d771f833c37015c1e1e0e1b66336601c1b04981ecbcdc",
+   "period": "1378",
+   "want_root": "0x71dfbc3122e5ecc61da281111814bf91819b7195ffa078ec05af9a56f8e98360"
+  },
+  "result": "fault"
+ }
+}

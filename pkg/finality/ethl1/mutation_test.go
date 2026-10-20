@@ -3,7 +3,7 @@
 package ethl1
 
 import (
-	"encoding/json"
+	"bytes"
 	"testing"
 )
 
@@ -37,11 +37,17 @@ type mutation struct {
 	cases []string
 }
 
-// runMutations runs every case of every mutation on the verifier with that rule switched off and requires a changed verdict;
-// the unmutated verifier must still return the recorded verdict.
+// runMutations runs every case of every mutation on the verifier with that rule switched off and requires a changed verdict (the
+// canonical bytes, code and fields); the unmutated verifier must still return the recorded verdict.
 func runMutations(t *testing.T, muts []mutation) {
 	t.Helper()
 	cs := cases(t)
+	out := func(h FinalizedHead, f *Fault) []byte {
+		if f != nil {
+			return headOutput(h, f)
+		}
+		return headOutput(h, nil)
+	}
 	for _, m := range muts {
 		for _, id := range m.cases {
 			c, ok := cs[id]
@@ -49,20 +55,15 @@ func runMutations(t *testing.T, muts []mutation) {
 				t.Errorf("mutation %q: case %s is not in the set", m.name, id)
 				continue
 			}
-			var want struct {
-				Code string `json:"code"`
+			want := canonicalExpect(t, c.Expect)
+			h0, f0 := verifyFinalizedHead(loadPins(t, c.Pins), loadLC(t, c), specRules{})
+			if got := out(h0, f0); !bytes.Equal(got, want) {
+				t.Errorf("%s: unmutated verifier returned %s, want %s", id, got, want)
 			}
-			_ = json.Unmarshal(c.Expect, &want)
-			if _, f := verifyFinalizedHead(loadPins(t, c.Pins), loadLC(t, c), specRules{}); (f == nil && want.Code != "") || (f != nil && f.Code != want.Code) {
-				t.Errorf("%s: unmutated verifier returned %v, want %q", id, f, want.Code)
-			}
-			_, f := verifyFinalizedHead(loadPins(t, c.Pins), loadLC(t, c), m.r)
-			got := "ok"
-			if f != nil {
-				got = f.Code
-			}
-			t.Logf("MUTATION %q on %s: recorded %q, mutated verifier returns %q", m.name, id, want.Code, got)
-			if (f == nil && want.Code == "") || (f != nil && f.Code == want.Code) {
+			h1, f1 := verifyFinalizedHead(loadPins(t, c.Pins), loadLC(t, c), m.r)
+			got := out(h1, f1)
+			t.Logf("MUTATION %q on %s: mutated verifier returns %.120s", m.name, id, got)
+			if bytes.Equal(got, want) {
 				t.Errorf("mutation %q: vector %s still returns its recorded verdict; the vector does not exercise the rule", m.name, id)
 			}
 		}

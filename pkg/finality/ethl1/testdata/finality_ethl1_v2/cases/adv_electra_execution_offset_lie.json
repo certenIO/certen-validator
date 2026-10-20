@@ -1,0 +1,19 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "adv_electra_execution_offset_lie",
+ "kind": "head",
+ "description": "header execution offset 245 instead of 244",
+ "pins": "pins/main.json",
+ "lc": "lc/adv_electra_execution_offset_lie.bin",
+ "expect": {
+  "code": "finality_evidence_malformed",
+  "fields": {
+   "got_len": "245",
+   "index": "0",
+   "part": "final_update",
+   "reason": "execution_offset",
+   "want_len": "244"
+  },
+  "result": "fault"
+ }
+}

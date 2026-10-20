@@ -1,0 +1,19 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "adv_anchor_kind_unknown",
+ "kind": "head",
+ "description": "anchor kind 3",
+ "pins": "pins/main.json",
+ "lc": "lc/adv_anchor_kind_unknown.bin",
+ "expect": {
+  "code": "finality_evidence_malformed",
+  "fields": {
+   "got_len": "3",
+   "index": "0",
+   "part": "anchor_kind",
+   "reason": "unknown_kind",
+   "want_len": "2"
+  },
+  "result": "fault"
+ }
+}

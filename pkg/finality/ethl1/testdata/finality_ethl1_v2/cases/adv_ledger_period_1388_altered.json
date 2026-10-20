@@ -1,0 +1,17 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "adv_ledger_period_1388_altered",
+ "kind": "head",
+ "description": "valid_k1_chain with the ledger entry of period 1388 replaced: the committee learned for it is refused",
+ "pins": "pins/ledger_period_1388_altered.json",
+ "lc": "lc/valid_k1_chain_v2.bin",
+ "expect": {
+  "code": "finality_pin_mismatch",
+  "fields": {
+   "got_root": "0xd2e3cd3b3569bd743bb520188491d1688c98f29f0f6829de4e1abf268c75b0a5",
+   "period": "1388",
+   "want_root": "0xf2312eb2e10eb1b392001d3c70f012a211dff336af22c337c7053cc30e592743"
+  },
+  "result": "fault"
+ }
+}

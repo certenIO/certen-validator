@@ -1,0 +1,18 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "adv_electra_link_participation_341",
+ "kind": "head",
+ "description": "Fulu link with 341 bits",
+ "pins": "pins/main.json",
+ "lc": "lc/adv_electra_link_participation_341.bin",
+ "expect": {
+  "code": "finality_participation_insufficient",
+  "fields": {
+   "committee": "512",
+   "index": "0",
+   "participants": "341",
+   "required": "342"
+  },
+  "result": "fault"
+ }
+}

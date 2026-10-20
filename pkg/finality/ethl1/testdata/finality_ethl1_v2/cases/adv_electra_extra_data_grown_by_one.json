@@ -1,0 +1,19 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "adv_electra_extra_data_grown_by_one",
+ "kind": "head",
+ "description": "one byte appended: extra_data one byte longer, so the finalized header root changes",
+ "pins": "pins/main.json",
+ "lc": "lc/adv_electra_extra_data_grown_by_one.bin",
+ "expect": {
+  "code": "finality_link_invalid",
+  "fields": {
+   "attested_slot": "11290176",
+   "check": "finalized_header_exec_branch",
+   "index": "0",
+   "period": "1378",
+   "signature_slot": "11290178"
+  },
+  "result": "fault"
+ }
+}

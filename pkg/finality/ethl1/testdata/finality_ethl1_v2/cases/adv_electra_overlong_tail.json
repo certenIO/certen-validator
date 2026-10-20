@@ -1,0 +1,19 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "adv_electra_overlong_tail",
+ "kind": "head",
+ "description": "40 bytes appended: the finalized header would carry more than 32 bytes of extra_data",
+ "pins": "pins/main.json",
+ "lc": "lc/adv_electra_overlong_tail.bin",
+ "expect": {
+  "code": "finality_evidence_malformed",
+  "fields": {
+   "got_len": "885",
+   "index": "0",
+   "part": "final_update",
+   "reason": "header_length",
+   "want_len": "828"
+  },
+  "result": "fault"
+ }
+}

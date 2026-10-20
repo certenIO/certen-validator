@@ -11,6 +11,8 @@ import (
 	"flag"
 	"fmt"
 	"os"
+
+	"github.com/certen/independant-validator/pkg/ethrpc"
 )
 
 func main() {
@@ -20,7 +22,8 @@ func main() {
 	}
 	fs := flag.NewFlagSet(os.Args[1], flag.ExitOnError)
 	out := fs.String("out", "", "output directory")
-	raw := fs.String("raw", "", "raw capture directory (build)")
+	raw := fs.String("raw", "", "raw capture directory (build, record2: the v1 capture)")
+	raw2 := fs.String("raw2", "", "second raw capture directory written by record2 (build2)")
 	_ = fs.Parse(os.Args[2:])
 	var err error
 	switch os.Args[1] {
@@ -28,11 +31,15 @@ func main() {
 		err = record(*out)
 	case "build":
 		err = build(*raw, *out)
+	case "record2":
+		err = record2(*raw, *out)
+	case "build2":
+		err = build2(*raw, *raw2, *out)
 	default:
 		err = fmt.Errorf("unknown command %q", os.Args[1])
 	}
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "error:", err)
+		fmt.Fprintln(os.Stderr, "error:", ethrpc.RedactError(err))
 		os.Exit(1)
 	}
 }

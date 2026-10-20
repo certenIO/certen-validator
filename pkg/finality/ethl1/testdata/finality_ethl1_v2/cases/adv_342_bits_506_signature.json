@@ -1,0 +1,18 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "adv_342_bits_506_signature",
+ "kind": "head",
+ "description": "342 bits set but the signature of the 506-key aggregate",
+ "pins": "pins/main.json",
+ "lc": "lc/adv_342_bits_506_signature.bin",
+ "expect": {
+  "code": "finality_signature_invalid",
+  "fields": {
+   "fork_version": "0x90000076",
+   "index": "0",
+   "participants": "342",
+   "signature_slot": "11394241"
+  },
+  "result": "fault"
+ }
+}

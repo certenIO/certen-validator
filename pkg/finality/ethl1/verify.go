@@ -388,6 +388,12 @@ func (w *walker) update(idx int, u *updateObj, isFinal bool) *Fault {
 	if sigPeriod != storePeriod {
 		signing = w.s.next
 	}
+	if signing == nil { // the period rules above make this unreachable; a named state, never a nil committee
+		if isFinal {
+			return PeriodGap(sigPeriod, storePeriod)
+		}
+		return li("period_skip")
+	}
 	if isFinal && !w.r.skip(chkLedgerFinalSigner) {
 		if f := w.enforce(sigPeriod, signing.root); f != nil {
 			return f

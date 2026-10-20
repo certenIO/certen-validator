@@ -1,0 +1,19 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "adv_electra_extra_data_offset_lie",
+ "kind": "head",
+ "description": "execution.extra_data offset 588 instead of 584",
+ "pins": "pins/main.json",
+ "lc": "lc/adv_electra_extra_data_offset_lie.bin",
+ "expect": {
+  "code": "finality_evidence_malformed",
+  "fields": {
+   "got_len": "588",
+   "index": "0",
+   "part": "final_update",
+   "reason": "extra_data_offset",
+   "want_len": "584"
+  },
+  "result": "fault"
+ }
+}

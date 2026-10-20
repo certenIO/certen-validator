@@ -1,0 +1,19 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "adv_synth_final_finalized_slot_zero",
+ "kind": "head",
+ "description": "synthetic: finality update whose finalized header is the empty header (slot 0): a consistent zero-leaf branch, a valid signature, and no finalized execution head",
+ "pins": "pins/synth.json",
+ "lc": "lc/adv_synth_final_finalized_slot_zero.bin",
+ "expect": {
+  "code": "finality_link_invalid",
+  "fields": {
+   "attested_slot": "86405",
+   "check": "not_finality",
+   "index": "0",
+   "period": "10",
+   "signature_slot": "86406"
+  },
+  "result": "fault"
+ }
+}

@@ -1,0 +1,18 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "adv_electra_fork_version_wrong",
+ "kind": "head",
+ "description": "pins carry the electra version for the fulu fork: the domain of the Fulu-era signature is wrong",
+ "pins": "pins/electra_version_at_fulu.json",
+ "lc": "lc/adv_electra_fork_version_wrong.bin",
+ "expect": {
+  "code": "finality_signature_invalid",
+  "fields": {
+   "fork_version": "0x90000074",
+   "index": "0",
+   "participants": "512",
+   "signature_slot": "11290178"
+  },
+  "result": "fault"
+ }
+}

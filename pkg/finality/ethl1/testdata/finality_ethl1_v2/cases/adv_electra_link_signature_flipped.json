@@ -1,0 +1,18 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "adv_electra_link_signature_flipped",
+ "kind": "head",
+ "description": "signature bit of the Fulu link flipped",
+ "pins": "pins/main.json",
+ "lc": "lc/adv_electra_link_signature_flipped.bin",
+ "expect": {
+  "code": "finality_signature_invalid",
+  "fields": {
+   "fork_version": "0x90000075",
+   "index": "0",
+   "participants": "512",
+   "signature_slot": "11290178"
+  },
+  "result": "fault"
+ }
+}
