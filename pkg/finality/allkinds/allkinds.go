@@ -13,16 +13,17 @@ import (
 
 	"github.com/certen/independant-validator/pkg/finality"
 	"github.com/certen/independant-validator/pkg/finality/adiri"
+	"github.com/certen/independant-validator/pkg/finality/arbfinal"
 	"github.com/certen/independant-validator/pkg/finality/arbposted"
 	"github.com/certen/independant-validator/pkg/finality/basefinal"
 	"github.com/certen/independant-validator/pkg/finality/baseposted"
 )
 
 // Kinds are the verifier kinds Register adds, in registration order: adiri/finalized/v1, base-sepolia/l1_posted/v1,
-// base-sepolia/finalized/v1 and arb-sepolia/l1_posted/v1. The ethl1-based Ethereum Sepolia finalized kind (RB11-C2) and the
-// Arbitrum finalized kind (RB11-E1) are added here when their branches are integrated.
+// base-sepolia/finalized/v1, arb-sepolia/l1_posted/v1 and arb-sepolia/finalized/v1. The ethl1-based Ethereum Sepolia finalized
+// kind (RB11-C2) is added here when its branch is integrated.
 func Kinds() []func(*finality.Registry) error {
-	return []func(*finality.Registry) error{adiri.Register, baseposted.Register, basefinal.Register, arbposted.Register}
+	return []func(*finality.Registry) error{adiri.Register, baseposted.Register, basefinal.Register, arbposted.Register, arbfinal.Register}
 }
 
 // Register adds every implemented verifier kind to reg. The first refusal (a kind already registered, or one that is not a row of
