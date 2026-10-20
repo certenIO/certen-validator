@@ -39,8 +39,13 @@ type stx struct {
 
 const spanChain = 84532
 
-func (x stx) rb() *big.Int { return new(big.Int).Lsh(big.NewInt(x.r), 200) }
-func (x stx) sb() *big.Int { return new(big.Int).Lsh(big.NewInt(x.s), 100) }
+// the signature words use their first (most significant) byte and their last, so a read that drops the first byte or the last is seen
+func (x stx) rb() *big.Int {
+	return new(big.Int).Or(new(big.Int).Lsh(big.NewInt(x.r), 248), big.NewInt(x.r))
+}
+func (x stx) sb() *big.Int {
+	return new(big.Int).Or(new(big.Int).Lsh(big.NewInt(x.s), 248), big.NewInt(x.s))
+}
 
 // tx is the oracle transaction.
 func (x stx) tx() *types.Transaction {
