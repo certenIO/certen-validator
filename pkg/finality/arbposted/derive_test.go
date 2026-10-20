@@ -4,6 +4,7 @@ package arbposted
 
 import (
 	"bytes"
+	"encoding/binary"
 	"math/big"
 	"math/rand"
 	"testing"
@@ -312,5 +313,87 @@ func TestDelayedMessagesDeriveWhatNitroBuilds(t *testing.T) {
 	huge.MsgKind, huge.Data = msgKindEthDeposit, make([]byte, maxL2MessageSize+1)
 	if _, ok := deriveDelayed(421614, huge); ok {
 		t.Error("an oversize message was derived")
+	}
+}
+
+// Malformed delayed messages: every refusal path of the derivation, each by a message that reaches exactly that path.
+func TestMalformedDelayedMessagesAreNotDerived(t *testing.T) {
+	sender := common.HexToAddress("0x1111111111111111111111111111111111111111")
+	to := common.HexToAddress("0x2222222222222222222222222222222222222222")
+	base := Delayed{Sender: sender, K: 5}
+	mk := func(kind uint8, data []byte) Delayed {
+		d := base
+		d.MsgKind, d.Data = kind, data
+		return d
+	}
+	over64 := word(new(big.Int).Lsh(big.NewInt(1), 70))
+	for name, d := range map[string]Delayed{
+		"ETH deposit with 51 bytes":            mk(msgKindEthDeposit, make([]byte, 51)),
+		"ETH deposit empty":                    mk(msgKindEthDeposit, nil),
+		"L2 message empty":                     mk(msgKindL2Message, nil),
+		"unsigned tx with a gas limit >= 2^64": mk(msgKindL2Message, append([]byte{l2KindUnsigned}, bytes.Join([][]byte{over64, wordU(1), wordU(1), wordA(to), wordU(1)}, nil)...)),
+		"unsigned tx with a nonce >= 2^64":     mk(msgKindL2Message, append([]byte{l2KindUnsigned}, bytes.Join([][]byte{wordU(1), wordU(1), over64, wordA(to), wordU(1)}, nil)...)),
+		"unsigned tx cut after the gas limit":  mk(msgKindL2Message, append([]byte{l2KindUnsigned}, wordU(1)...)),
+		"contract tx cut before the value":     mk(msgKindL2Message, append([]byte{l2KindContract}, bytes.Join([][]byte{wordU(1), wordU(1), wordA(to)}, nil)...)),
+		"signed tx that is not a transaction":  mk(msgKindL2Message, []byte{l2SignedTx, 0xde, 0xad}),
+		"signed tx of an Arbitrum type":        mk(msgKindL2Message, []byte{l2SignedTx, 0x64, 0xc0}),
+		"signed tx of the blob type":           mk(msgKindL2Message, []byte{l2SignedTx, 0x03, 0xc0}),
+		"funded by L1 empty":                   mk(msgKindL2FundedByL1, nil),
+		"funded by L1 cut":                     mk(msgKindL2FundedByL1, []byte{l2KindContract, 1, 2}),
+		"retryable cut before the data":        mk(msgKindSubmitRetryable, bytes.Join([][]byte{wordA(to), wordU(1), wordU(1), wordU(1), wordA(to), wordA(to), wordU(1), wordU(1), wordU(10), {1, 2}}, nil)),
+		"retryable data length >= 2^64":        mk(msgKindSubmitRetryable, bytes.Join([][]byte{wordA(to), wordU(1), wordU(1), wordU(1), wordA(to), wordA(to), wordU(1), wordU(1), over64}, nil)),
+		"retryable data length over the limit": mk(msgKindSubmitRetryable, bytes.Join([][]byte{wordA(to), wordU(1), wordU(1), wordU(1), wordA(to), wordA(to), wordU(1), wordU(1), wordU(maxL2MessageSize + 1)}, nil)),
+	} {
+		if got, ok := deriveDelayed(421614, d); ok {
+			t.Errorf("%s: derived %d transactions", name, len(got))
+		}
+	}
+	// a batch whose last length prefix is cut, or oversize, or whose nested message is cut, ends quietly with what it has
+	good := append([]byte{l2KindContract}, bytes.Join([][]byte{wordU(1), wordU(1), wordA(to), wordU(1)}, nil)...)
+	one := batchMsg(good)
+	for name, tail := range map[string][]byte{"cut length": {0, 0, 0}, "oversize length": binary.BigEndian.AppendUint64(nil, maxL2MessageSize+1), "cut nested": append(binary.BigEndian.AppendUint64(nil, 50), 1, 2)} {
+		got, ok := deriveDelayed(421614, mk(msgKindL2Message, append(append([]byte(nil), one...), tail...)))
+		if !ok || len(got) != 1 {
+			t.Errorf("%s: ok %v, %d transactions", name, ok, len(got))
+		}
+	}
+	// a nested length of exactly the limit is read (and then fails as a message because it is empty padding)
+	if _, ok := deriveDelayed(421614, mk(msgKindL2Message, append(append([]byte(nil), one...), binary.BigEndian.AppendUint64(nil, 0)...))); ok {
+		t.Error("a batch holding an empty nested message was derived")
+	}
+	// a message of exactly the size limit is accepted by the size check (it then fails to parse, not on size)
+	exact := mk(msgKindEthDeposit, make([]byte, maxL2MessageSize))
+	if _, ok := deriveDelayed(421614, exact); !ok {
+		t.Error("an ETH deposit message of exactly the size limit was refused on size")
+	}
+}
+
+func TestHeaderNonceIsReadFromTheFifteenthItemOnly(t *testing.T) {
+	raw, _ := l2Header([][]byte{{0x6a, 0xc0}}, 5, 0x0102030405060708)
+	if n, ok := headerNonce(raw); !ok || n != 0x0102030405060708 {
+		t.Fatalf("nonce %x ok %v", n, ok)
+	}
+	if _, ok := headerNonce([]byte{0x01}); ok {
+		t.Error("a non-list header gave a nonce")
+	}
+	short, _ := rlp.EncodeToBytes([]any{[]byte{1}, []byte{2}})
+	if _, ok := headerNonce(short); ok {
+		t.Error("a two-item header gave a nonce")
+	}
+	// the 15th item is a list, or not 8 bytes long
+	var items []any
+	for i := 0; i < 14; i++ {
+		items = append(items, []byte{byte(i)})
+	}
+	for name, last := range map[string]any{"a list": []any{}, "seven bytes": make([]byte, 7), "nine bytes": make([]byte, 9)} {
+		hdr, _ := rlp.EncodeToBytes(append(append([]any(nil), items...), last))
+		if _, ok := headerNonce(hdr); ok {
+			t.Errorf("item 14 as %s gave a nonce", name)
+		}
+	}
+	// a 16th item after a good nonce does not matter
+	hdr, _ := rlp.EncodeToBytes(append(append([]any(nil), items...), make([]byte, 8), []byte{9}))
+	if n, ok := headerNonce(hdr); !ok || n != 0 {
+		t.Errorf("a 16-item header: %d %v", n, ok)
 	}
 }
