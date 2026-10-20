@@ -384,3 +384,139 @@ func TestOfficialCommittedSubsetMatchesItsManifest(t *testing.T) {
 	})
 	t.Logf("%d files in the committed official subset", len(listed))
 }
+
+// ---- the execution payload leaf of the official BeaconBlockBody proofs
+
+var zeroHashes = func() [][32]byte {
+	z := make([][32]byte, 40)
+	for i := 1; i < len(z); i++ {
+		z[i] = sha2(z[i-1][:], z[i-1][:])
+	}
+	return z
+}()
+
+// merkleizeLimit is SSZ merkleize(chunks, limit): the chunks zero-padded to the next power of two of limit (virtual zero subtrees).
+func merkleizeLimit(chunks [][32]byte, limit uint64) [32]byte {
+	depth := 0
+	for uint64(1)<<uint(depth) < limit {
+		depth++
+	}
+	layer := append([][32]byte(nil), chunks...)
+	for d := 0; d < depth; d++ {
+		if len(layer)%2 == 1 {
+			layer = append(layer, zeroHashes[d])
+		}
+		next := make([][32]byte, len(layer)/2)
+		for i := range next {
+			next[i] = sha2(layer[2*i][:], layer[2*i+1][:])
+		}
+		layer = next
+	}
+	if len(layer) == 0 {
+		return zeroHashes[depth]
+	}
+	return layer[0]
+}
+
+func mixInLength(root [32]byte, n uint64) [32]byte {
+	var l [32]byte
+	binary.LittleEndian.PutUint64(l[:8], n)
+	return sha2(root[:], l[:])
+}
+
+func chunksOf(b []byte) [][32]byte {
+	var out [][32]byte
+	for i := 0; i < len(b); i += 32 {
+		var c [32]byte
+		copy(c[:], b[i:])
+		out = append(out, c)
+	}
+	return out
+}
+
+// TestOfficialExecutionPayloadLeaf closes the loop on hash_tree_root(ExecutionPayloadHeader): the execution_merkle_proof vectors of
+// the electra and fulu forks carry the official leaf = hash_tree_root(body.execution_payload). The test parses the payload out of
+// the vector's own BeaconBlockBody, builds the ExecutionPayloadHeader from it (transactions and withdrawals replaced by their list
+// roots), and requires executionHeaderRoot, the function the verifier uses for every electra-layout header, to return the leaf.
+func TestOfficialExecutionPayloadLeaf(t *testing.T) {
+	root, _ := officialRoot()
+	checked := 0
+	for _, preset := range []string{"mainnet", "minimal"} {
+		syncAgg, maxWithdrawals := 160, uint64(16)
+		if preset == "minimal" {
+			syncAgg, maxWithdrawals = 4+96, 4
+		}
+		for _, fork := range []string{"electra", "fulu"} {
+			d := filepath.Join(root, "tests", preset, fork, "light_client", "single_merkle_proof", "BeaconBlockBody", "execution_merkle_proof")
+			objRaw, err := os.ReadFile(filepath.Join(d, "object.ssz_snappy"))
+			if err != nil {
+				continue // the mainnet objects are fetched, not committed
+			}
+			body, err := snappyDecode(objRaw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var p officialProof
+			pr, _ := os.ReadFile(filepath.Join(d, "proof.yaml"))
+			if err := yaml.Unmarshal(pr, &p); err != nil {
+				t.Fatal(err)
+			}
+			at := 96 + 72 + 32 + 5*4 + syncAgg // execution_payload offset in the fixed part of the electra/fulu BeaconBlockBody
+			start, end := int(binary.LittleEndian.Uint32(body[at:])), int(binary.LittleEndian.Uint32(body[at+4:]))
+			pl := body[start:end]
+			if len(pl) < 528 {
+				t.Fatalf("%s/%s: payload of %d bytes", preset, fork, len(pl))
+			}
+			offExtra, offTx, offWd := int(binary.LittleEndian.Uint32(pl[436:])), int(binary.LittleEndian.Uint32(pl[504:])), int(binary.LittleEndian.Uint32(pl[508:]))
+			if offExtra != 528 || offTx < offExtra || offWd < offTx || offWd > len(pl) {
+				t.Fatalf("%s/%s: payload offsets %d %d %d (len %d)", preset, fork, offExtra, offTx, offWd, len(pl))
+			}
+			extra, txs, wds := pl[offExtra:offTx], pl[offTx:offWd], pl[offWd:]
+			// transactions: List[ByteList[2^30], 2^20]
+			var txRoots [][32]byte
+			if len(txs) > 0 {
+				n := int(binary.LittleEndian.Uint32(txs)) / 4
+				for i := 0; i < n; i++ {
+					a := int(binary.LittleEndian.Uint32(txs[4*i:]))
+					b := len(txs)
+					if i+1 < n {
+						b = int(binary.LittleEndian.Uint32(txs[4*(i+1):]))
+					}
+					txRoots = append(txRoots, mixInLength(merkleizeLimit(chunksOf(txs[a:b]), 1<<25), uint64(b-a)))
+				}
+			}
+			txRoot := mixInLength(merkleizeLimit(txRoots, 1<<20), uint64(len(txRoots)))
+			// withdrawals: List[Withdrawal(index u64, validator_index u64, address 20, amount u64), MAX_WITHDRAWALS_PER_PAYLOAD]
+			if len(wds)%44 != 0 {
+				t.Fatalf("%s/%s: withdrawals of %d bytes", preset, fork, len(wds))
+			}
+			var wdRoots [][32]byte
+			for i := 0; i < len(wds)/44; i++ {
+				w := wds[44*i : 44*i+44]
+				var leaves [4][32]byte
+				copy(leaves[0][:], w[0:8])
+				copy(leaves[1][:], w[8:16])
+				copy(leaves[2][:], w[16:36])
+				copy(leaves[3][:], w[36:44])
+				wdRoots = append(wdRoots, merkleizeLimit(leaves[:], 4))
+			}
+			wdRoot := mixInLength(merkleizeLimit(wdRoots, maxWithdrawals), uint64(len(wdRoots)))
+			hdr := make([]byte, electraExecFixed, electraExecFixed+len(extra))
+			copy(hdr[0:436], pl[0:436])
+			binary.LittleEndian.PutUint32(hdr[436:], electraExecFixed)
+			copy(hdr[440:504], pl[440:504]) // base_fee_per_gas, block_hash
+			copy(hdr[504:536], txRoot[:])
+			copy(hdr[536:568], wdRoot[:])
+			copy(hdr[568:584], pl[512:528]) // blob_gas_used, excess_blob_gas
+			hdr = append(hdr, extra...)
+			if got, want := executionHeaderRoot(hdr), hex32(t, p.Leaf); got != want {
+				t.Errorf("%s/%s: executionHeaderRoot = %x, the official leaf is %x (%d txs, %d withdrawals, %d bytes of extra_data)", preset, fork, got, want, len(txRoots), len(wdRoots), len(extra))
+			}
+			t.Logf("%s/%s: official leaf reproduced from the vector's payload (%d txs, %d withdrawals, %d bytes of extra_data)", preset, fork, len(txRoots), len(wdRoots), len(extra))
+			checked++
+		}
+	}
+	if checked < 2 {
+		t.Errorf("only %d execution_merkle_proof objects found (the committed minimal electra and fulu objects must be there)", checked)
+	}
+}
