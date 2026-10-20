@@ -205,22 +205,25 @@ func TestFinalityAddendaAreAppendOnly(t *testing.T) {
 			t.Fatalf("a well-formed first addendum was refused: %v", err)
 		}
 		for name, err := range map[string]error{
-			"wrong prev_hash":                            insert(pid, 2, 3, zero, one, 84532),
-			"a level the proof already holds":            insert(pid, 2, 2, one, one, 84532),
-			"level 1, which is derived and never stored": insert(pid, 2, 1, one, one, 84532),
-			"another chain":                              insert(pid, 2, 3, one, one, 421614),
-			"a gap in seq":                               insert(pid, 3, 3, one, one, 84532),
-			"no predecessor at all":                      insert(uuid.NewString(), 2, 3, one, one, 84532),
+			"wrong prev_hash":                 insert(pid, 2, 3, zero, one, 84532),
+			"a level the proof already holds": insert(pid, 2, 2, one, one, 84532),
+			"another chain":                   insert(pid, 2, 3, one, one, 421614),
+			"a gap in seq":                    insert(pid, 3, 3, one, one, 84532),
+			"no predecessor at all":           insert(uuid.NewString(), 2, 3, one, one, 84532),
 		} {
 			if pgCode(err) != "23001" {
 				t.Fatalf("%s: want SQLSTATE 23001, got %v", name, err)
 			}
 		}
+		// level 1 (included) is derived and never stored: the table's own CHECK refuses it, whatever the writer
+		if err := insert(pid, 2, 1, one, one, 84532); pgCode(err) != "23514" {
+			t.Fatalf("level 1: want SQLSTATE 23514 (check_violation), got %v", err)
+		}
 		if err := insert(pid, 2, 3, one, one, 84532); err != nil {
 			t.Fatalf("a well-formed second addendum was refused: %v", err)
 		}
-		// a duplicate (proof_id, seq) is the primary key's refusal
-		if err := insert(pid, 2, 3, one, one, 84532); pgCode(err) != "23505" {
+		// a duplicate (proof_id, seq) repeats a level the proof already holds, so the trigger refuses it before the primary key can
+		if err := insert(pid, 2, 3, one, one, 84532); pgCode(err) != "23001" {
 			t.Fatalf("duplicate seq: %v", err)
 		}
 		if rowCount() != 2 {
