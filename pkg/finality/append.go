@@ -58,7 +58,8 @@ func PlanAppend(req AppendRequest, stored []Addendum) (Addendum, BlockRef, error
 	if LevelsOf(stored).Has(req.Level) {
 		return Addendum{}, block, NewState(CodeLevelAlreadyPresent, "chain", req.Chain, "level", req.Level)
 	}
-	candidate := Addendum{ProofID: req.ProofID, Seq: uint64(len(stored) + 1), Level: req.Level, Chain: req.Chain, Kind: req.Kind, Evidence: req.Evidence}
+	// the Kind judges the evidence of (chain, level, kind) about the leg block; the link (seq, prev, own hash) is formed after it
+	candidate := Addendum{ProofID: req.ProofID, Level: req.Level, Chain: req.Chain, Kind: req.Kind, Evidence: req.Evidence}
 	if _, err := req.Registry.JudgeAddendum(block, candidate, req.Pins); err != nil {
 		return Addendum{}, block, err
 	}

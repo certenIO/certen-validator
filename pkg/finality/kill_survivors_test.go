@@ -5,7 +5,9 @@ package finality
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -236,5 +238,72 @@ func TestACapturerThatReturnsWithoutAnErrorIsRestartedAndAStoppedContextEndsTheL
 	StartCapturers(cancelled, reg2, SupervisorConfig{}).Wait()
 	if idle.runs.Load() != 0 {
 		t.Fatalf("a loop ran under a cancelled context: %d", idle.runs.Load())
+	}
+}
+
+// scriptedCapturer fails every run after advancing the shared clock by ran.
+type scriptedCapturer struct {
+	fakeCapturer
+	clock *fakeClock
+	ran   []time.Duration
+}
+
+func (c *scriptedCapturer) Run(ctx context.Context) error {
+	n := c.runs.Add(1)
+	if int(n) > len(c.ran) {
+		<-ctx.Done()
+		return nil
+	}
+	c.clock.Advance(c.ran[n-1])
+	return NewState(CodeBuildTimeout, "chain", c.chain, "after", time.Second, "cause", "head poll")
+}
+
+// The restart backoff doubles from RestartMin to RestartMax, is clamped at RestartMax, and starts again from RestartMin only
+// after a run that lasted MORE than twice RestartMax. Time is scripted: nothing here sleeps.
+func TestCapturerRestartBackoffDoublesIsClampedAndResetsAfterALongRun(t *testing.T) {
+	min, max := time.Second, 8*time.Second
+	run := func(ran ...time.Duration) []time.Duration {
+		clock := &fakeClock{t: time.Unix(1_800_000_000, 0)}
+		c := &scriptedCapturer{fakeCapturer: fakeCapturer{chain: ChainBaseSepolia, name: "base-sepolia/scripted", started: make(chan struct{}, 1)}, clock: clock, ran: ran}
+		reg := NewRegistry()
+		if err := reg.RegisterCapturer(c); err != nil {
+			t.Fatal(err)
+		}
+		var mu sync.Mutex
+		var waits []time.Duration
+		done := make(chan struct{})
+		ctx, cancel := context.WithCancel(context.Background())
+		sup := StartCapturers(ctx, reg, SupervisorConfig{RestartMin: min, RestartMax: max, Now: clock.Now,
+			After: func(d time.Duration) <-chan time.Time { ch := make(chan time.Time, 1); ch <- clock.Now(); return ch },
+			Restarted: func(_ Capturer, _ error, wait time.Duration) {
+				mu.Lock()
+				waits = append(waits, wait)
+				n := len(waits)
+				mu.Unlock()
+				if n == len(ran) {
+					close(done)
+				}
+			}})
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Fatalf("restarts did not happen: %v", waits)
+		}
+		cancel()
+		sup.Wait()
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]time.Duration(nil), waits...)
+	}
+	s := time.Second
+	if got := run(0, 0, 0, 0, 0); fmt.Sprint(got) != fmt.Sprint([]time.Duration{1 * s, 2 * s, 4 * s, 8 * s, 8 * s}) {
+		t.Fatalf("short runs: doubled from the minimum and clamped at the maximum: %v", got)
+	}
+	// a run of exactly 2*max is not 'long' (the comparison is strict); one nanosecond more is, and restarts from the minimum
+	if got := run(0, 0, 2*max, 0); fmt.Sprint(got) != fmt.Sprint([]time.Duration{1 * s, 2 * s, 4 * s, 8 * s}) {
+		t.Fatalf("a run of exactly twice the maximum does not reset: %v", got)
+	}
+	if got := run(0, 0, 2*max+1, 0); fmt.Sprint(got) != fmt.Sprint([]time.Duration{1 * s, 2 * s, 1 * s, 2 * s}) {
+		t.Fatalf("a run longer than twice the maximum restarts the backoff: %v", got)
 	}
 }

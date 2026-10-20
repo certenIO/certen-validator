@@ -421,11 +421,16 @@ func TestCapturersRunOnTheirOwnAreRestartedAfterFailuresAndSkipASwitchedOffChain
 		t.Fatal("a capturer of a chain with no profile was accepted")
 	}
 	var restarts atomic.Int64
+	var causes sync.Map // capturer name -> []string
 	var logs logSink
 	ctx, cancel := context.WithCancel(context.Background())
 	sup := StartCapturers(ctx, reg, SupervisorConfig{
 		RestartMin: MinPoll, RestartMax: MinPoll, DisabledChains: map[uint64]bool{ChainAdiri: true}, Logf: logs.Logf,
-		Restarted: func(Capturer, error, time.Duration) { restarts.Add(1) },
+		Restarted: func(c Capturer, err error, _ time.Duration) {
+			restarts.Add(1)
+			prev, _ := causes.LoadOrStore(c.Name(), []string{})
+			causes.Store(c.Name(), append(prev.([]string), codeOf(err)))
+		},
 	})
 	for _, c := range []*fakeCapturer{steady, flaky} {
 		select {
@@ -440,6 +445,9 @@ func TestCapturersRunOnTheirOwnAreRestartedAfterFailuresAndSkipASwitchedOffChain
 	if off.runs.Load() != 0 || !strings.Contains(logs.Joined(), CodeUpgraderDisabled) {
 		t.Fatalf("a switched-off chain's capturer must not run and must be named:\n%s", logs.Joined())
 	}
+	if got, _ := causes.Load("base-sepolia/inbox"); len(got.([]string)) != 2 || got.([]string)[0] != CodeBuildTimeout || got.([]string)[1] != CodePanic {
+		t.Fatalf("the supervisor reports the loop's own named failure, then the recovered panic: %v", got)
+	}
 	cancel()
 	waited := make(chan struct{})
 	go func() { sup.Wait(); close(waited) }()
@@ -447,6 +455,9 @@ func TestCapturersRunOnTheirOwnAreRestartedAfterFailuresAndSkipASwitchedOffChain
 	case <-waited:
 	case <-time.After(5 * time.Second):
 		t.Fatal("the supervisor did not stop")
+	}
+	if restarts.Load() != 2 {
+		t.Fatalf("a loop that stops because its context ended is not a failure and is not restarted: %d", restarts.Load())
 	}
 }
 

@@ -65,6 +65,9 @@ type SupervisorConfig struct {
 	Logf           func(format string, args ...any)
 	// Restarted is told of every restart (tests; the metric is always updated).
 	Restarted func(c Capturer, err error, wait time.Duration)
+	// Now and After are the clock and the timer of the restart backoff (tests; default time.Now and time.After).
+	Now   func() time.Time
+	After func(time.Duration) <-chan time.Time
 }
 
 func (c SupervisorConfig) withDefaults() SupervisorConfig {
@@ -81,6 +84,12 @@ func (c SupervisorConfig) withDefaults() SupervisorConfig {
 		c.Logf = func(string, ...any) {}
 	}
 	c.Logf = ethrpc.RedactingLogf(c.Logf) // a capture loop's failure text may carry provider text
+	if c.Now == nil {
+		c.Now = time.Now
+	}
+	if c.After == nil {
+		c.After = time.After
+	}
 	return c
 }
 
@@ -118,12 +127,12 @@ func (s *CaptureSupervisor) Wait() { s.wg.Wait() }
 func superviseCapturer(ctx context.Context, c Capturer, cfg SupervisorConfig) {
 	wait := cfg.RestartMin
 	for ctx.Err() == nil {
-		started := time.Now()
+		started := cfg.Now()
 		err := runCapturer(ctx, c)
 		if ctx.Err() != nil {
 			return
 		}
-		if time.Since(started) > cfg.RestartMax+cfg.RestartMax {
+		if cfg.Now().Sub(started) > cfg.RestartMax+cfg.RestartMax {
 			wait = cfg.RestartMin // it ran for a long time: this is a new failure, not a crash loop
 		}
 		cfg.Logf("[FINALITY] capturer %s (chain %d) stopped: %v; restarting in %s", c.Name(), c.Chain(), err, wait)
@@ -134,7 +143,7 @@ func superviseCapturer(ctx context.Context, c Capturer, cfg SupervisorConfig) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(wait):
+		case <-cfg.After(wait):
 		}
 		if wait *= 2; wait > cfg.RestartMax {
 			wait = cfg.RestartMax
