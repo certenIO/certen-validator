@@ -536,7 +536,7 @@ func (p *Prover) BuildLeg(ctx context.Context, leg finality.BlockRef) (*finality
 
 	body := Body{CFA1: cfa1}
 	// linkKind 2 only when this builder holds eth_getProof at F and the distance fits the ring; else linkKind 1.
-	if len(p.ProofEndpoints) > 0 && leg.Number < F.Number && F.Number-leg.Number <= EIP2935Window-1 {
+	if len(p.ProofEndpoints) > 0 && leg.Number < F.Number && F.Number-leg.Number <= MaxSlotDistance {
 		if b2, ok := p.slotBody(ctx, cfa1, F, leg); ok {
 			body = b2
 		}

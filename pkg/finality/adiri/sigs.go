@@ -25,12 +25,13 @@ import (
 // In both, each signature is decoded with the G1 on-curve, non-identity and subgroup checks BEFORE it is verified or enters the
 // combination; a failing decode is reported with its reason.
 
-// Mode selects the signature verification strategy.
+// Mode selects the signature verification strategy. ModeBatched is the zero value, so that a Verifier whose Mode is not set verifies
+// the way the production verifier does.
 type Mode int
 
 const (
-	ModeOneByOne Mode = iota
-	ModeBatched
+	ModeBatched Mode = iota
+	ModeOneByOne
 )
 
 // The reasons of committee_chain_broken{check:"signature_invalid"}.

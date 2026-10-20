@@ -40,6 +40,16 @@ func VerifyCommitteeChain(par *Params, c *CFA1, mode Mode, rnd io.Reader) (*Chai
 	if len(c.Records) == 0 {
 		return nil, finality.Malformed("cfa1.n_records", finality.ReasonCFA1NoRecords, 0, 1)
 	}
+	// This function is exported and judges any CFA1, not only one DecodeCFA1 returned: the table and signer rules DecodeCFA1 applies
+	// are applied again, for every record, before RecordDigests indexes the tables and before a signer list indexes a committee.
+	for i, rec := range c.Records {
+		if err := checkRecordTables(i, rec, len(c.Tables)); err != nil {
+			return nil, err
+		}
+		if err := checkRecordSigners(i, rec.Signers, len(c.Tables[rec.CommitteeIdx])); err != nil {
+			return nil, err
+		}
+	}
 	keys := newKeyCache()
 	digests := c.RecordDigests()
 	res := &ChainResult{Epoch: uint64(len(c.Records) - 1), Digests: digests}

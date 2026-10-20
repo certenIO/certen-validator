@@ -21,12 +21,13 @@ import (
 const (
 	vectorDir  = "testdata/finality_adiri3"
 	vectorDir4 = "testdata/finality_adiri4"
+	vectorDir5 = "testdata/finality_adiri5"
 )
 
 var (
 	supersededDirs = []string{"testdata/finality_adiri1", "testdata/finality_adiri2"}
-	vectorDirs     = []string{vectorDir, vectorDir4}
-	manifestDirs   = []string{"testdata/finality_adiri1", "testdata/finality_adiri2", vectorDir, vectorDir4}
+	vectorDirs     = []string{vectorDir, vectorDir4, vectorDir5}
+	manifestDirs   = []string{"testdata/finality_adiri1", "testdata/finality_adiri2", vectorDir, vectorDir4, vectorDir5}
 )
 
 type vEdit struct {
