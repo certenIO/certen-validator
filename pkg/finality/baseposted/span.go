@@ -201,7 +201,7 @@ func decodeSpanBatch(payload []byte, sp spanParams) ([]Batch, error) {
 		}
 		for k := uint64(0); k < counts[i]; k++ {
 			raw, err := rebuildTx(txs[ti].typ, txs[ti].data, nonces[ti], gases[ti], tos[ti], sigs[ti], yParity.Bit(ti), chainID,
-				func() uint { v := protected.Bit(li); return v }, txs[ti].typ == 0)
+				func() uint { v := protected.Bit(li); return v })
 			if err != nil {
 				return nil, err
 			}
@@ -217,7 +217,7 @@ func decodeSpanBatch(payload []byte, sp spanParams) ([]Batch, error) {
 }
 
 // rebuildTx reconstructs the consensus encoding of one span-batch transaction.
-func rebuildTx(typ byte, data []byte, nonce, gas uint64, to *common.Address, sig [64]byte, yPar uint, chainID *big.Int, prot func() uint, isLegacy bool) ([]byte, error) {
+func rebuildTx(typ byte, data []byte, nonce, gas uint64, to *common.Address, sig [64]byte, yPar uint, chainID *big.Int, prot func() uint) ([]byte, error) {
 	r := new(big.Int).SetBytes(sig[:32])
 	s := new(big.Int).SetBytes(sig[32:])
 	u := func(x *uint256.Int) *big.Int {

@@ -179,18 +179,7 @@ func (b *Builder) Build(ctx context.Context, s *ethproof.Settlement, have finali
 	if err != nil {
 		return nil, nil, st(CodeL1FinalityUnproven, "reason", LCRefused, "inner", faultCode(err))
 	}
-	maxBlock, minBlock := frameTxs[0].key.L1Block, frameTxs[0].key.L1Block
-	for _, f := range frameTxs {
-		if f.key.L1Block > maxBlock {
-			maxBlock = f.key.L1Block
-		}
-		if f.key.L1Block < minBlock {
-			minBlock = f.key.L1Block
-		}
-	}
-	if bt.Type == 1 && bt.EpochNum < minBlock {
-		minBlock = bt.EpochNum
-	}
+	minBlock, maxBlock := frameBlockRange(frameTxs, bt)
 	raw0, _, top, err := b.Headers.HeaderByHash(ctx, head.ExecHash)
 	if err != nil {
 		return nil, nil, st("finality_source_unavailable", "reason", "l1_header", "endpoints", "headers")
@@ -231,15 +220,7 @@ func (b *Builder) Build(ctx context.Context, s *ethproof.Settlement, have finali
 	if err != nil {
 		return nil, nil, st("l2_header_unavailable", "block", l2.Number)
 	}
-	var deposits [][]byte
-	for _, t := range l2blk.Txs {
-		if len(t) > 0 && t[0] == 0x7e {
-			deposits = append(deposits, t)
-		} else {
-			break
-		}
-	}
-	body := Body{LC: lc, L1Spine: spine, ChannelID: ch.ID, Deposits: deposits}
+	body := Body{LC: lc, L1Spine: spine, ChannelID: ch.ID, Deposits: leadingDeposits(l2blk.Txs)}
 	seenSys := map[CaptureKey]bool{}
 	for _, f := range frameTxs {
 		body.Frames = append(body.Frames, FrameTx{L1Block: f.key.L1Block, TxIndex: f.index, TxRaw: f.raw, Blobs: f.blobs})
@@ -269,12 +250,7 @@ func (b *Builder) Build(ctx context.Context, s *ethproof.Settlement, have finali
 			body.Nodes = append(body.Nodes, sn...)
 		}
 	}
-	sort.SliceStable(body.Frames, func(i, j int) bool {
-		if body.Frames[i].L1Block != body.Frames[j].L1Block {
-			return body.Frames[i].L1Block < body.Frames[j].L1Block
-		}
-		return body.Frames[i].TxIndex < body.Frames[j].TxIndex
-	})
+	sortFrames(body.Frames)
 	c := finality.Container{Header: finality.ContainerHeader{Kind: KindName, Chain: uint64(Chain), Level: finality.LevelL1Posted,
 		BlockNumber: l2.Number, BlockHash: l2.Hash}, Body: EncodeBody(body)}
 	evidence, err := c.Encode()
@@ -285,6 +261,47 @@ func (b *Builder) Build(ctx context.Context, s *ethproof.Settlement, have finali
 		return nil, nil, err
 	}
 	return &finality.Addendum{Level: finality.LevelL1Posted, Chain: uint64(Chain), Kind: KindName, Evidence: evidence}, nil, nil
+}
+
+// frameBlockRange is the lowest and the highest L1 block the evidence cites: the blocks of the frame transactions and, for a span batch,
+// its L1 origin when that is lower (the origin's deposit is part of what the verifier binds). frameTxs is not empty.
+func frameBlockRange(frameTxs []capturedTx, bt *Batch) (minBlock, maxBlock uint64) {
+	maxBlock, minBlock = frameTxs[0].key.L1Block, frameTxs[0].key.L1Block
+	for _, f := range frameTxs {
+		if f.key.L1Block > maxBlock {
+			maxBlock = f.key.L1Block
+		}
+		if f.key.L1Block < minBlock {
+			minBlock = f.key.L1Block
+		}
+	}
+	if bt.Type == 1 && bt.EpochNum < minBlock {
+		minBlock = bt.EpochNum
+	}
+	return minBlock, maxBlock
+}
+
+// leadingDeposits is the deposit transactions (type 0x7e) that open an L2 block; the first other transaction ends them.
+func leadingDeposits(txs [][]byte) [][]byte {
+	var deposits [][]byte
+	for _, t := range txs {
+		if len(t) > 0 && t[0] == 0x7e {
+			deposits = append(deposits, t)
+		} else {
+			break
+		}
+	}
+	return deposits
+}
+
+// sortFrames orders the frame transactions as the verifier requires them: by L1 block, then by index inside the block.
+func sortFrames(frames []FrameTx) {
+	sort.SliceStable(frames, func(i, j int) bool {
+		if frames[i].L1Block != frames[j].L1Block {
+			return frames[i].L1Block < frames[j].L1Block
+		}
+		return frames[i].TxIndex < frames[j].TxIndex
+	})
 }
 
 // channelRef identifies a channel found in the captured frames.

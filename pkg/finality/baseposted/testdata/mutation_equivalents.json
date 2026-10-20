@@ -72,14 +72,6 @@
     "reason": "Unreachable: len(data) <= blobMaxData is refused first and 1024 rounds consume blobMaxData bytes, so after the loop readOffset == len(data) and the guard never fires."
   },
   {
-    "file": "channel.go",
-    "function": "parseFrames",
-    "operator": "int_literal",
-    "original": "buf[:16]",
-    "mutated": "*",
-    "reason": "copy(f.ID[:], buf[:17]) copies at most len(f.ID) = 16 bytes, the same as buf[:16]."
-  },
-  {
     "file": "span.go",
     "function": "spanReader.fixed",
     "operator": "int_literal",
@@ -102,22 +94,6 @@
     "original": "if r.err != nil",
     "mutated": "*",
     "reason": "The guard inside the transaction loop (the other guards of this form are killed by the refusal tests): after the early `if r.err != nil { return }` before the allocations r.err is nil here, and nothing in the loop sets r.err (a failure returns directly), so the guard never fires."
-  },
-  {
-    "file": "span.go",
-    "function": "decodeSpanBatch",
-    "operator": "cmp_flip",
-    "original": "txs[ti].typ == 0",
-    "mutated": "*",
-    "reason": "This occurrence is the argument isLegacy of rebuildTx, a parameter rebuildTx never reads (it switches on typ); the legacy counter li++ under the same condition is killed by the round-trip test."
-  },
-  {
-    "file": "span.go",
-    "function": "decodeSpanBatch",
-    "operator": "int_literal",
-    "original": "txs[ti].typ == 0",
-    "mutated": "*",
-    "reason": "This occurrence is the argument isLegacy of rebuildTx, a parameter rebuildTx never reads (it switches on typ); the legacy counter li++ under the same condition is killed by the round-trip test."
   },
   {
     "file": "span.go",
@@ -222,5 +198,165 @@
     "original": "out[i] < out[j]",
     "mutated": "*",
     "reason": "out holds distinct values only (duplicates are dropped before sorting) and sort.Slice calls less on two different indices, where `<=` and `<` give the same answer for distinct values, so the sorted result is identical."
+  },
+  {
+    "file": "build.go",
+    "function": "Builder.load",
+    "operator": "guard_off",
+    "original": "if err != nil",
+    "mutated": "*",
+    "reason": "Both guards of this form that are listed here are unreachable or redundant: the inbox index read after Count(\"inbox\", 4096, 4) cannot fail because Count has checked that the remaining bytes hold n four-byte indexes; and when blobToData fails the loop's `continue` is replaced by appending nil data, which parseFrames(nil) refuses (its error is ignored), so the same transaction carries no frame either way."
+  },
+  {
+    "file": "build.go",
+    "function": "Builder.Build",
+    "operator": "cmp_boundary",
+    "original": "blk.Timestamp >= eth.GenesisTime",
+    "mutated": "*",
+    "reason": "At blk.Timestamp == eth.GenesisTime the slot is (0)/12 = 0, which is also the value observedSlot keeps when the branch is not taken."
+  },
+  {
+    "file": "build.go",
+    "function": "Builder.Build",
+    "operator": "bool_lit",
+    "original": "seenSys[f.key] = true",
+    "mutated": "*",
+    "reason": "Not marking the block only re-reads the same SystemConfig row and appends the same nodes again; EncodeBody sorts and de-duplicates the nodes, so the evidence is byte-identical."
+  },
+  {
+    "file": "build.go",
+    "function": "Builder.Build",
+    "operator": "guard_off",
+    "original": "if err != nil",
+    "mutated": "*",
+    "reason": "This guard follows Container.Encode, which fails only for a level that is not stored; the level here is the constant LevelL1Posted, so it never fails."
+  },
+  {
+    "file": "build.go",
+    "function": "frameBlockRange",
+    "operator": "cmp_boundary",
+    "original": "f.key.L1Block > maxBlock",
+    "mutated": "*",
+    "reason": "At equality the assignment sets maxBlock to the value it already has."
+  },
+  {
+    "file": "build.go",
+    "function": "frameBlockRange",
+    "operator": "cmp_boundary",
+    "original": "f.key.L1Block < minBlock",
+    "mutated": "*",
+    "reason": "At equality the assignment sets minBlock to the value it already has."
+  },
+  {
+    "file": "build.go",
+    "function": "frameBlockRange",
+    "operator": "cmp_boundary",
+    "original": "bt.EpochNum < minBlock",
+    "mutated": "*",
+    "reason": "At equality the assignment sets minBlock to the value it already has."
+  },
+  {
+    "file": "build.go",
+    "function": "sortFrames",
+    "operator": "cmp_boundary",
+    "original": "frames[i].L1Block < frames[j].L1Block",
+    "mutated": "*",
+    "reason": "This comparison is evaluated only when the two blocks differ (the preceding `!=` guard), where `<` and `<=` agree."
+  },
+  {
+    "file": "build.go",
+    "function": "findChannel",
+    "operator": "cmp_boundary",
+    "original": "t.key.L1Block > last",
+    "mutated": "*",
+    "reason": "At equality the assignment sets last to the value it already has."
+  },
+  {
+    "file": "build.go",
+    "function": "findChannel",
+    "operator": "cmp_boundary",
+    "original": "len(frames) > 0",
+    "mutated": "*",
+    "reason": "frames is never empty here (the channel id was collected from a transaction that carries a frame of it); an empty list would decompress to `empty channel` and be skipped as an incomplete one is."
+  },
+  {
+    "file": "build.go",
+    "function": "findChannel",
+    "operator": "guard_off",
+    "original": "if err != nil",
+    "mutated": "*",
+    "reason": "decompress and decodeBatches return a nil result with every error, so ignoring the error makes the channel decode to no batches and the loop over its batches finds none: the same as the continue."
+  },
+  {
+    "file": "build.go",
+    "function": "Builder.Channels",
+    "operator": "cmp_boundary",
+    "original": "n >= 0",
+    "mutated": "*",
+    "reason": "n counts the frames of the channel seen so far (at least 1 here) or, after the closing frame, is -(1<<30) plus the later frames; it is never 0 or -1, so `>`, `>=` and `>= -1` select the same channels."
+  },
+  {
+    "file": "build.go",
+    "function": "Builder.Channels",
+    "operator": "int_literal",
+    "original": "n >= 0",
+    "mutated": "*",
+    "reason": "n counts the frames of the channel seen so far (at least 1 here) or, after the closing frame, is -(1<<30) plus the later frames; it is never 0 or -1, so `>`, `>=` and `>= -1` select the same channels."
+  },
+  {
+    "file": "capture.go",
+    "function": "MemStore.Blocks",
+    "operator": "cmp_boundary",
+    "original": "out[i].L1Block < out[j].L1Block",
+    "mutated": "*",
+    "reason": "This comparison is evaluated only when the two blocks differ (the preceding `!=` guard), where `<` and `<=` agree."
+  },
+  {
+    "file": "capture.go",
+    "function": "MemStore.Blocks",
+    "operator": "cmp_boundary",
+    "original": "bytes.Compare(out[i].L1Hash[:], out[j].L1Hash[:]) < 0",
+    "mutated": "*",
+    "reason": "The keys are unique map keys and sort.Slice compares two different indices; two keys of one block never have equal hashes, so `< 0` and `<= 0` give the same order."
+  },
+  {
+    "file": "capture.go",
+    "function": "Capturer.CaptureBlock",
+    "operator": "guard_off",
+    "original": "if _, want := hashesSet(hashes)[vh]; !want",
+    "mutated": "*",
+    "reason": "A blob nobody asked for would only be added to byHash, which is read only for the asked versioned hashes; the stored rows are identical (the guard only saves a KZG proof)."
+  },
+  {
+    "file": "capture.go",
+    "function": "Capturer.CaptureBlock",
+    "operator": "guard_off",
+    "original": "if err != nil",
+    "mutated": "*",
+    "reason": "kz.Prove fails only for a blob the library cannot read, which kz.Commit has just accepted for the same bytes, so this guard never fires (its returns are covered by the same argument)."
+  },
+  {
+    "file": "capture.go",
+    "function": "Capturer.CaptureBlock",
+    "operator": "bool_lit",
+    "original": "return false, err",
+    "mutated": "*",
+    "reason": "The return that follows kz.Prove's error, which never occurs after a successful kz.Commit of the same blob."
+  },
+  {
+    "file": "capture.go",
+    "function": "hashesSet",
+    "operator": "bool_lit",
+    "original": "m[x] = true",
+    "mutated": "*",
+    "reason": "The map is read as `_, want := m[x]` (presence), never for its value."
+  },
+  {
+    "file": "pins.go",
+    "function": "ParsePins",
+    "operator": "logic_swap",
+    "original": "!ok || len(k) != 32",
+    "mutated": "*",
+    "reason": "unhex returns ok only when the decoded length is n, and returns a shorter or different length with ok == false, so `!ok` alone is the condition and `len(k) != 32` adds nothing: `!ok && len(k) != 32` is the same."
   }
 ]
