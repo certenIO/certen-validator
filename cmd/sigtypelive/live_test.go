@@ -60,7 +60,7 @@ func TestNoLiveDataAccountCreationHasAnAmbiguousBodyLength(t *testing.T) {
 func TestIntentIsFourBlobsAndDeclaresTheLiveAnchorCall(t *testing.T) {
 	adi := "acc://pv2-sig-1.acme"
 	for _, c := range liveCases() {
-		in, err := buildIntent(adi, c, "0x3850C52C22Eb5ac1d727784DeFdCa7C5DB050389")
+		in, err := buildIntent(adi, c, "0x3850C52C22Eb5ac1d727784DeFdCa7C5DB050389", testLeg(t, "base-sepolia"))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -76,7 +76,7 @@ func TestIntentIsFourBlobsAndDeclaresTheLiveAnchorCall(t *testing.T) {
 		if err := json.Unmarshal(in.Blobs[1], &cc); err != nil {
 			t.Fatal(err)
 		}
-		if len(cc.Legs) != 1 || cc.Legs[0].ChainID != baseSepoliaChainID || !strings.EqualFold(cc.Legs[0].AnchorContract.Address, baseSepoliaAnchor) {
+		if len(cc.Legs) != 1 || cc.Legs[0].ChainID != 84532 || !strings.EqualFold(cc.Legs[0].AnchorContract.Address, liveAnchorEnv["CERTEN_ANCHOR_V8_84532"]) {
 			t.Fatalf("%s: legs %+v", c.Name, cc.Legs)
 		}
 		if got, want := cc.Legs[0].AnchorContract.FunctionSelector, "createBatchAnchor(bytes32,bytes32,uint256,bytes32,uint256,bytes32,bytes32)"; got != want {

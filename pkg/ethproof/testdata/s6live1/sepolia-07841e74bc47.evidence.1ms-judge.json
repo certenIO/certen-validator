@@ -1,0 +1,23 @@
+{
+  "version": "certen:s6-replay:v1",
+  "state": {
+    "state": "s6_replay_unproven",
+    "reason": "state_unavailable",
+    "chainId": 11155111,
+    "txHash": "0x07841e74bc47e81d196c159033dfe25ad15df903243a136966ac187bad102bac",
+    "blockNumber": 11950125,
+    "blockHash": "0x861d49e2a2bda54652b36dde771fdf9615b116a553aafd38c95fa5bfd54ddfe9",
+    "contract": "0xb6d37a09f7069ca9715223c9b794354366d1fa2f",
+    "providers": [
+      {
+        "host": "ethereum-sepolia-rpc.publicnode.com",
+        "error": "not asked: the capture budget of 1ms ended"
+      },
+      {
+        "host": "sepolia.gateway.tenderly.co",
+        "error": "not asked: the capture budget of 1ms ended"
+      }
+    ],
+    "detail": "no provider could prove the slot 0x059157c162d6384b66ca95963b54fa646c354933fec7512d867b46a205318d44 of 0xB6D37A09f7069Ca9715223C9b794354366D1Fa2F at any of the newest 4 blocks (settlement block 11950125, newest seen 11950125) before the capture budget of 1ms ended"
+  }
+}

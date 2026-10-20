@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/certen/independant-validator/pkg/ethproof"
 	"github.com/certen/independant-validator/pkg/execution/contracts"
 )
 
@@ -179,6 +180,19 @@ func (v AccountLeafVersion) LeafDomain() (string, error) {
 		return contracts.LeafDomainV7_3, nil
 	default:
 		return "", fmt.Errorf("%w: %q", ErrUnknownAccountLeafVersion, v)
+	}
+}
+
+// AccountGeneration is the contract name of this version's account generation, as pkg/ethproof names it (RB10-F2):
+// v3 is CertenAccountV7_2, v4 is CertenAccountV7_3.
+func (v AccountLeafVersion) AccountGeneration() string {
+	switch v {
+	case AccountLeafV3:
+		return ethproof.AccountGenerationV7_2
+	case AccountLeafV4:
+		return ethproof.AccountGenerationV7_3
+	default:
+		return "an unknown account generation"
 	}
 }
 

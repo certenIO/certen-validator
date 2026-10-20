@@ -100,7 +100,7 @@ func CheckGenesis(ctx context.Context, chainID int64, host string, c headerByNum
 	}
 	got, err := genesisOf(ctx, c)
 	if err != nil {
-		return fmt.Errorf("chain %d provider %s: reading its genesis to check it against the pin %s: %w", chainID, host, pin.Hex(), err)
+		return fmt.Errorf("chain %d provider %s: reading its genesis to check it against the pin %s: %w", chainID, host, pin.Hex(), RedactError(err))
 	}
 	if got != pin {
 		return genesisMismatch(chainID, host, got, pin)
@@ -142,7 +142,7 @@ func (g *genesisGuard) ensure(ctx context.Context, c headerByNumber) error {
 	}
 	got, err := genesisOf(ctx, c)
 	if err != nil {
-		return fmt.Errorf("reading its genesis: %w", err)
+		return fmt.Errorf("reading its genesis: %w", RedactError(err))
 	}
 	if got != g.pin {
 		g.checkedAt = time.Time{}

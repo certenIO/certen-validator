@@ -408,22 +408,22 @@ func (o *BatchOrchestrator) sendHeartbeat(ctx context.Context) (string, uint64, 
 	// What the sender may pay at most: twice the base fee plus the tip (its fee cap), or the legacy price.
 	head, err := o.ecm.client.HeaderByNumber(ctx, nil)
 	if err != nil {
-		return "", 0, readErr(fmt.Errorf("reading the head to price a heartbeat: %w", err))
+		return "", 0, readErr(fmt.Errorf("reading the head to price a heartbeat: %w", ethrpc.RedactError(err)))
 	}
 	var price *big.Int
 	if head.BaseFee != nil {
 		tip, err := o.ecm.client.SuggestGasTipCap(ctx)
 		if err != nil {
-			return "", 0, readErr(fmt.Errorf("reading the tip to price a heartbeat: %w", err))
+			return "", 0, readErr(fmt.Errorf("reading the tip to price a heartbeat: %w", ethrpc.RedactError(err)))
 		}
 		price = new(big.Int).Add(tip, new(big.Int).Mul(head.BaseFee, big.NewInt(2)))
 	} else if price, err = o.ecm.client.SuggestGasPrice(ctx); err != nil {
-		return "", 0, readErr(fmt.Errorf("reading the gas price to price a heartbeat: %w", err))
+		return "", 0, readErr(fmt.Errorf("reading the gas price to price a heartbeat: %w", ethrpc.RedactError(err)))
 	}
 	need := new(big.Int).Mul(price, big.NewInt(heartbeatGas))
 	bal, err := o.ecm.client.BalanceAt(ctx, self, nil)
 	if err != nil {
-		return "", 0, readErr(fmt.Errorf("reading the relayer's balance: %w", err))
+		return "", 0, readErr(fmt.Errorf("reading the relayer's balance: %w", ethrpc.RedactError(err)))
 	}
 	if bal.Cmp(need) < 0 {
 		return "", 0, fmt.Errorf("%w: %s holds %s wei, a heartbeat may cost %s wei", ErrHeartbeatUnfunded, self.Hex(), bal, need)

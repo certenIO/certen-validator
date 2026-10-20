@@ -81,11 +81,11 @@ func probeStateProofWindow(ctx context.Context, chainID int64, reader *ethrpc.Ag
 	}()
 	head, err := reader.HeaderByNumber(ctx, big.NewInt(int64(rpc.LatestBlockNumber)))
 	if err != nil {
-		return fmt.Errorf("reading the agreed head: %w", err)
+		return fmt.Errorf("reading the agreed head: %w", ethrpc.RedactError(err))
 	}
 	fin, err := reader.HeaderByNumber(ctx, big.NewInt(int64(rpc.FinalizedBlockNumber)))
 	if err != nil {
-		return fmt.Errorf("reading the agreed finalized block: %w", err)
+		return fmt.Errorf("reading the agreed finalized block: %w", ethrpc.RedactError(err))
 	}
 	if fin.Number.Cmp(head.Number) > 0 {
 		return fmt.Errorf("the agreed finalized block %s is past the head %s", fin.Number, head.Number)
@@ -99,7 +99,7 @@ func probeStateProofWindow(ctx context.Context, chainID int64, reader *ethrpc.Ag
 	// The state root an answer is checked against is the AGREED header's, the one a real proof read is checked against.
 	probed, err := reader.HeaderByNumber(ctx, block)
 	if err != nil {
-		return fmt.Errorf("reading the agreed block %s to check a proof against: %w", block, err)
+		return fmt.Errorf("reading the agreed block %s to check a proof against: %w", block, ethrpc.RedactError(err))
 	}
 	servable := false
 	var parts []string

@@ -1,0 +1,21 @@
+{
+  "chainId": 84532,
+  "chain": "base-sepolia",
+  "txHash": "0xc636e393188e72c10866624f1c324bb1bfbff4a546bccdb2d6b385298a2df0aa",
+  "blockNumber": 48333406,
+  "blockHash": "0xa7da7d260761456f1daa7116dfe85bd6147250bdb1c07944370836890b4b2da6",
+  "settlement": "verified",
+  "state": "proven",
+  "contract": "0xe3D2865d64060cCd7dA9A2884CD3726605839C6d",
+  "slot": "0x51124b6f66e5dc2007332d91041ce1660442e5b8cb499c1f31f4259db72859f3",
+  "provenAt": 48333406,
+  "before": "proven",
+  "servedAfter": [
+    "sepolia.base.org",
+    "base-sepolia-rpc.publicnode.com"
+  ],
+  "servedBefore": [
+    "sepolia.base.org"
+  ],
+  "live": "proven at block 48333406, before proven"
+}

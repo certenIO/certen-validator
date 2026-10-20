@@ -27,12 +27,12 @@ import (
 )
 
 type g1Flags struct {
-	kind, hosts, wantCust, wantBank, wantDel, out, accounts, rpc, factory string
-	n, depth                                                              int
-	create                                                                bool
-	fund                                                                  string
-	keys                                                                  string
-	wait                                                                  time.Duration
+	kind, hosts, wantCust, wantBank, wantDel, out, accounts, rpc, factory, chain string
+	n, depth                                                                     int
+	create                                                                       bool
+	fund                                                                         string
+	keys                                                                         string
+	wait                                                                         time.Duration
 }
 
 func parseG1(cmd string, args []string) (g1Flags, g1Topo) {
@@ -47,7 +47,8 @@ func parseG1(cmd string, args []string) (g1Flags, g1Topo) {
 	fs.StringVar(&f.wantDel, "want-deleg", "", "comma-separated partitions of the -hosts, in order")
 	fs.StringVar(&f.out, "out", "captures-g1", "where the intent's capture is written")
 	fs.StringVar(&f.accounts, "accounts", filepath.Join("captures-g1", "accounts.json"), "g1account: accounts file (scenario tag -> address)")
-	fs.StringVar(&f.rpc, "rpc", "", "g1account: JSON-RPC URL of Base Sepolia")
+	fs.StringVar(&f.rpc, "rpc", "", "g1account: JSON-RPC URL of the -chain target chain")
+	fs.StringVar(&f.chain, "chain", "base-sepolia", "g1intent/g1account: target chain of the intent leg (pkg/supportedchains; anchor from CERTEN_ANCHOR_V8_<chainId>)")
 	fs.StringVar(&f.factory, "factory", factoryV11Address, "g1account: CertenAccountFactoryV11")
 	fs.BoolVar(&f.create, "create", false, "g1account: create the missing account (sender key from ETH_PRIVATE_KEY in the environment only)")
 	fs.StringVar(&f.fund, "fund", "0", "g1account: fund the account up to this many wei")
@@ -85,6 +86,13 @@ func runG1(cmd string, args []string) {
 		if f.n == 0 {
 			fatal("-n is required")
 		}
+		var leg legChain
+		if cmd == "g1intent" { // the leg is resolved before any Accumulate transaction is sent
+			var lerr error
+			if leg, lerr = legChainFromEnv(f.chain); lerr != nil {
+				fatal("%v", lerr)
+			}
+		}
 		var e *g1Env
 		if e, err = newG1Env(ctx, a.k, f.keys, fmt.Sprintf("%s-%d", t.Kind, t.N)); err != nil {
 			break
@@ -119,7 +127,7 @@ func runG1(cmd string, args []string) {
 				err = fmt.Errorf("no CertenAccount for %s in %s: run g1account first", tag, f.accounts)
 				break
 			}
-			_, err = e.submit(ctx, t, plan, from, f.wait, f.out)
+			_, err = e.submit(ctx, t, plan, from, leg, f.wait, f.out)
 		}
 	case "g1account":
 		f, _ := parseG1(cmd, args)
@@ -131,7 +139,12 @@ func runG1(cmd string, args []string) {
 			fatal("-fund %q is not a wei amount", f.fund)
 		}
 		cust := adiURL(fmt.Sprintf("pv2-cust-%d", f.n))
-		err = accountsOf(ctx, liveConfig{RPC: f.rpc}, accountsOpts{Factory: f.factory, Create: f.create, FundWei: fundWei, File: f.accounts},
+		leg, lerr := legChainFromEnv(f.chain)
+		if lerr != nil {
+			err = lerr
+			break
+		}
+		err = accountsOf(ctx, liveConfig{RPC: f.rpc, Chain: f.chain, Leg: leg}, accountsOpts{Factory: f.factory, Create: f.create, FundWei: fundWei, File: f.accounts},
 			[]acctTarget{{Name: "g1", Tag: fmt.Sprintf("g1-%d", f.n), ADI: cust, Book: cust + "/book"}})
 	default:
 		fmt.Fprintln(os.Stderr, "usage: sigtypelive g1route|g1setup|g1account|g1intent (see g1main.go)")

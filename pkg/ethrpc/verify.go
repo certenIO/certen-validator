@@ -72,12 +72,12 @@ func (v verification) wrongChainErr(chainID int64, host string) error {
 func verifyOne(ctx context.Context, chainID int64, host, rawurl string, timeout, budget time.Duration) verification {
 	c, hint, err := dialProvider(ctx, host, rawurl, timeout, budget)
 	if err != nil {
-		return verification{err: fmt.Errorf("dial: %w", err)}
+		return verification{err: fmt.Errorf("dial: %w", RedactError(err))}
 	}
 	id, err := retryTransient(ctx, host, hint, budget, timeout, c.ChainID)
 	if err != nil {
 		c.Close()
-		return verification{err: fmt.Errorf("read its chain id: %w", err)}
+		return verification{err: fmt.Errorf("read its chain id: %w", RedactError(err))}
 	}
 	if id.Int64() != chainID {
 		c.Close()

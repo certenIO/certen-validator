@@ -37,8 +37,9 @@ import (
 	"github.com/ethereum/go-ethereum/ethclient"
 )
 
-// factoryV11Address is CertenAccountFactoryV11 on Base Sepolia (memory rb5-base-finish-2026-10-04; the api-bridge's
-// EVM_BASE_SEPOLIA_ACCOUNT_FACTORY).
+// factoryV11Address is CertenAccountFactoryV11 (memory rb5-base-finish-2026-10-04; the api-bridge's
+// EVM_BASE_SEPOLIA_ACCOUNT_FACTORY). The same address holds a factory on all four supported chains, each bound to that
+// chain's own anchor (anchorContract() read 2026-10-19); accountsOf refuses a factory bound to any anchor but the leg's.
 const factoryV11Address = "0x8387D061830E10Eb42BC25C2A047631164803F25"
 
 const factoryV11ABI = `[
@@ -193,8 +194,11 @@ func accountsOf(ctx context.Context, l liveConfig, o accountsOpts, targets []acc
 	if err != nil {
 		return err
 	}
-	if chainID.Int64() != baseSepoliaChainID {
-		return fmt.Errorf("the RPC serves chain %s, the live intents target %d", chainID, baseSepoliaChainID)
+	if l.Leg.ChainID <= 0 {
+		return fmt.Errorf("accounts has no resolved leg chain (-chain)")
+	}
+	if chainID.Int64() != l.Leg.ChainID {
+		return fmt.Errorf("the RPC serves chain %s, the live intents target %s (%d)", chainID, l.Leg.Name, l.Leg.ChainID)
 	}
 	factory := common.HexToAddress(o.Factory)
 	r, err := callOut(ctx, c, factory, factoryABIv11, "anchorContract")
@@ -208,8 +212,8 @@ func accountsOf(ctx context.Context, l liveConfig, o accountsOpts, targets []acc
 	}
 	fee := r[0].(*big.Int)
 	fmt.Printf("chain %s factory %s anchor %s deploymentFee %s wei\n", chainID, factory.Hex(), pinned.Hex(), fee)
-	if !strings.EqualFold(pinned.Hex(), baseSepoliaAnchor) {
-		return fmt.Errorf("the factory binds accounts to anchor %s, but the intents declare %s: CertenAccountV7_3 refuses any other anchor", pinned.Hex(), baseSepoliaAnchor)
+	if !strings.EqualFold(pinned.Hex(), l.Leg.Anchor) {
+		return fmt.Errorf("the factory binds accounts to anchor %s, but the intents declare %s: CertenAccountV7_3 refuses any other anchor", pinned.Hex(), l.Leg.Anchor)
 	}
 
 	var pk *ecdsa.PrivateKey

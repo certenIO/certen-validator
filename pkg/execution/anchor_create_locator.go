@@ -158,7 +158,7 @@ func (c clientCreateChain) AnchorRecord(ctx context.Context, anchor common.Addre
 func (c clientCreateChain) BlockTime(ctx context.Context, block uint64) (uint64, error) {
 	h, err := c.c.HeaderByNumber(ctx, new(big.Int).SetUint64(block))
 	if err != nil {
-		return 0, fmt.Errorf("reading block %d: %w", block, err)
+		return 0, fmt.Errorf("reading block %d: %w", block, ethrpc.RedactError(err))
 	}
 	if h == nil || h.Number == nil || h.Number.Uint64() != block {
 		return 0, fmt.Errorf("the endpoint answered block %d with another header", block)
@@ -203,11 +203,11 @@ type agreedCreateChain struct{ a *ethrpc.AgreeingReader }
 func (c agreedCreateChain) AnchorRecord(ctx context.Context, anchor common.Address, bundle [32]byte) (AnchorOnChainState, error) {
 	at, err := c.a.RecentAgreedHeader(ctx)
 	if err != nil {
-		return AnchorOnChainState{}, fmt.Errorf("an agreed block to read anchors(0x%x) at: %w", bundle[:8], err)
+		return AnchorOnChainState{}, fmt.Errorf("an agreed block to read anchors(0x%x) at: %w", bundle[:8], ethrpc.RedactError(err))
 	}
 	ret, err := c.a.CallContractAtHash(ctx, ethereum.CallMsg{To: &anchor, Data: contracts.AnchorsCallData(bundle)}, at.Hash())
 	if err != nil {
-		return AnchorOnChainState{}, fmt.Errorf("reading anchors(0x%x) on %s: %w", bundle[:8], anchor.Hex(), err)
+		return AnchorOnChainState{}, fmt.Errorf("reading anchors(0x%x) on %s: %w", bundle[:8], anchor.Hex(), ethrpc.RedactError(err))
 	}
 	st, err := contracts.DecodeAnchorsReturn(ret)
 	if err != nil {
@@ -219,7 +219,7 @@ func (c agreedCreateChain) AnchorRecord(ctx context.Context, anchor common.Addre
 func (c agreedCreateChain) BlockTime(ctx context.Context, block uint64) (uint64, error) {
 	h, err := c.a.HeaderByNumber(ctx, new(big.Int).SetUint64(block))
 	if err != nil {
-		return 0, fmt.Errorf("reading block %d: %w", block, err)
+		return 0, fmt.Errorf("reading block %d: %w", block, ethrpc.RedactError(err))
 	}
 	if h == nil || h.Number == nil || h.Number.Uint64() != block {
 		return 0, fmt.Errorf("the providers answered block %d with another header", block)
@@ -249,7 +249,7 @@ func (c agreedCreateChain) CreateLogs(ctx context.Context, anchor common.Address
 	for _, loc := range c.a.Locators() {
 		logs, err := loc.FilterLogs(ctx, q)
 		if err != nil {
-			failures = append(failures, fmt.Sprintf("%s: %v", loc.Host, err))
+			failures = append(failures, fmt.Sprintf("%s: %v", loc.Host, ethrpc.RedactError(err)))
 			continue
 		}
 		answered++
@@ -285,14 +285,14 @@ func (c agreedCreateChain) CreateLogs(ctx context.Context, anchor common.Address
 func (c agreedCreateChain) establishLog(ctx context.Context, l types.Log, q ethereum.FilterQuery, from, to uint64) (types.Log, error) {
 	r, err := c.a.TransactionReceipt(ctx, l.TxHash)
 	if err != nil {
-		return types.Log{}, fmt.Errorf("the receipt of %s, which a provider says logged BatchAnchorCreated: %w", l.TxHash.Hex(), err)
+		return types.Log{}, fmt.Errorf("the receipt of %s, which a provider says logged BatchAnchorCreated: %w", l.TxHash.Hex(), ethrpc.RedactError(err))
 	}
 	if r.BlockNumber == nil || r.BlockNumber.Uint64() < from || r.BlockNumber.Uint64() > to {
 		return types.Log{}, fmt.Errorf("the agreed receipt of %s is in block %v, outside %d..%d", l.TxHash.Hex(), r.BlockNumber, from, to)
 	}
 	canonical, err := c.a.HeaderByNumber(ctx, r.BlockNumber)
 	if err != nil {
-		return types.Log{}, fmt.Errorf("the canonical block at %d: %w", r.BlockNumber.Uint64(), err)
+		return types.Log{}, fmt.Errorf("the canonical block at %d: %w", r.BlockNumber.Uint64(), ethrpc.RedactError(err))
 	}
 	if canonical.Hash() != r.BlockHash {
 		return types.Log{}, fmt.Errorf("the agreed receipt of %s names block %s, not the canonical block %d", l.TxHash.Hex(), r.BlockHash.Hex(), r.BlockNumber.Uint64())

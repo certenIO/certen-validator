@@ -96,7 +96,7 @@ func (r *ReadOnlyChains) ClientForChain(chainID int64) (*ethclient.Client, commo
 	}
 	client, err := ethrpc.DialRetrying(context.Background(), chainCfg.RPCURL)
 	if err != nil {
-		return nil, common.Address{}, fmt.Errorf("connecting to chain %d: %w", chainID, err)
+		return nil, common.Address{}, fmt.Errorf("connecting to chain %d: %w", chainID, ethrpc.RedactError(err))
 	}
 	r.clients[chainID] = client
 	return client, anchorAddr, nil

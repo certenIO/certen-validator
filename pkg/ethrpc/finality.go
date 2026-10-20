@@ -49,6 +49,7 @@ func SettledInFinalizedChain(ctx context.Context, c FinalityReader, txHash commo
 	if logf == nil {
 		logf = func(string, ...interface{}) {}
 	}
+	logf = RedactingLogf(logf) // a provider error in a log line carries no credential (RB10-B14a)
 	if poll <= 0 {
 		poll = 12 * time.Second
 	}
@@ -59,7 +60,7 @@ func SettledInFinalizedChain(ctx context.Context, c FinalityReader, txHash commo
 			if missing != nil {
 				return nil, fmt.Errorf("%w; and it was not found re-mined before the deadline (%v)", missing, err)
 			}
-			return nil, fmt.Errorf("wait for receipt: %w", err)
+			return nil, fmt.Errorf("wait for receipt: %w", RedactError(err))
 		}
 		if err := WaitForFinalizedHeight(ctx, c, receipt.BlockNumber, deadline, poll, logf); err != nil {
 			return nil, err
@@ -67,7 +68,7 @@ func SettledInFinalizedChain(ctx context.Context, c FinalityReader, txHash commo
 		header, err := c.HeaderByNumber(ctx, receipt.BlockNumber)
 		if err != nil {
 			if !unsettledView(err) {
-				return nil, fmt.Errorf("get the finalized header at %d: %w", receipt.BlockNumber.Uint64(), err)
+				return nil, fmt.Errorf("get the finalized header at %d: %w", receipt.BlockNumber.Uint64(), RedactError(err))
 			}
 			// The providers do not yet agree on the header at this height (RB5-F53): wait, then read everything again.
 			logf("⏳ [FINALITY] tx %s: %v", txHash.Hex(), err)
@@ -87,7 +88,7 @@ func SettledInFinalizedChain(ctx context.Context, c FinalityReader, txHash commo
 		receipts, err := c.BlockReceipts(ctx, rpc.BlockNumberOrHashWithHash(header.Hash(), true))
 		if err != nil {
 			if !unsettledView(err) {
-				return nil, fmt.Errorf("read the receipts of finalized block %s: %w", header.Hash().Hex(), err)
+				return nil, fmt.Errorf("read the receipts of finalized block %s: %w", header.Hash().Hex(), RedactError(err))
 			}
 			logf("⏳ [FINALITY] tx %s: %v", txHash.Hex(), err)
 			if time.Now().After(deadline) {
@@ -139,6 +140,7 @@ func sleepPoll(ctx context.Context, d time.Duration) bool {
 // WaitForFinalizedHeight waits until the chain's finalized block is at or past height.
 func WaitForFinalizedHeight(ctx context.Context, c FinalityReader, height *big.Int, deadline time.Time, poll time.Duration,
 	logf func(string, ...interface{})) error {
+	logf = RedactingLogf(logf)
 	for {
 		fin, err := c.HeaderByNumber(ctx, big.NewInt(int64(rpc.FinalizedBlockNumber)))
 		switch {

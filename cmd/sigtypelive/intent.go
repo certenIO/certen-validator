@@ -1,7 +1,7 @@
 package main
 
 // The CERTEN intent the live run writes: the same four-blob, memo "CERTEN_INTENT" writeData the scripts
-// (scripts/ml_base_only.js, scripts/sl_arb_b.js) submit, with one leg on Base Sepolia. The intent is written to the data
+// (scripts/ml_base_only.js, scripts/sl_arb_b.js) submit, with one leg on the -chain target chain. The intent is written to the data
 // account governed by the case's key book alone, and approved by that case's key - so what the validators must establish
 // about it is exactly "this signature type counts as the book's vote" (RB8, gap G-42).
 
@@ -17,12 +17,11 @@ import (
 	"golang.org/x/crypto/sha3"
 )
 
-// Target-chain constants for the leg (Base Sepolia, live set recorded in memory project_anchor_admin_eoa: AnchorV8_2).
+// The leg's payment: 1 wei of the target chain's native token to the recipient. The chain itself, its id and its anchor
+// come from -chain (legchain.go).
 const (
-	baseSepoliaChainID = 84532
-	baseSepoliaAnchor  = "0x830cfB484b6e5606687e00f64C40aeb9c7c84E3c"
-	intentRecipient    = "0xBe0043Abb10e6DB56b8c6c5cB3F639Bf7fE69251"
-	intentAmountWei    = "1"
+	intentRecipient = "0xBe0043Abb10e6DB56b8c6c5cB3F639Bf7fE69251"
+	intentAmountWei = "1"
 )
 
 // intentBlobs is the four JSON documents of an intent, in blob order.
@@ -59,24 +58,29 @@ func executionCommitment(chainID uint64, target string, valueWei uint64) (commit
 	return keccak(leftPad32(cid), addr, leftPad32(val), dataHash), dataHash, nil
 }
 
-// buildIntent returns the four blobs for one case. from is the CertenAccount of the ADI on the target chain.
-func buildIntent(adi string, c liveCase, from string) (*intentBlobs, error) {
+// buildIntent returns the four blobs for one case. from is the CertenAccount of the ADI on the leg's chain.
+func buildIntent(adi string, c liveCase, from string, leg legChain) (*intentBlobs, error) {
 	return buildIntentSpec(intentSpec{
-		ADI: adi, By: "sigtype-" + c.Tag, Desc: fmt.Sprintf("RB8-D live signature-type run: %s approves 1 wei on Base Sepolia", c.Name),
-		Book: c.book(adi), Page: c.page(adi), From: from, Tags: []string{"rb8-d", "sigtype", c.Tag},
+		ADI: adi, By: "sigtype-" + c.Tag, Desc: fmt.Sprintf("RB8-D live signature-type run: %s approves 1 wei on %s", c.Name, leg.Display),
+		Book: c.book(adi), Page: c.page(adi), From: from, Tags: []string{"rb8-d", "sigtype", c.Tag}, Leg: leg,
 	})
 }
 
 // intentSpec is what varies between the intents the live runs write: the ADI, who the intent says it was created by, the
-// description, the key book and page it declares (the certified key page), the leg's account on the target chain, and the tags.
+// description, the key book and page it declares (the certified key page), the leg's chain and its account there, and the tags.
 type intentSpec struct {
 	ADI, By, Desc, Book, Page, From string
 	Tags                            []string
+	Leg                             legChain
 }
 
-// buildIntentSpec returns the four blobs for spec. The shape is byte-for-byte what buildIntent has always produced.
+// buildIntentSpec returns the four blobs for spec. The shape is byte-for-byte what buildIntent has always produced; on
+// Base Sepolia the leg is the one it always declared.
 func buildIntentSpec(sp intentSpec) (*intentBlobs, error) {
-	adi, from := sp.ADI, sp.From
+	adi, from, leg := sp.ADI, sp.From, sp.Leg
+	if leg.ChainID <= 0 || leg.Name == "" || leg.Anchor == "" {
+		return nil, fmt.Errorf("the intent has no resolved leg chain (-chain)")
+	}
 	idb := make([]byte, 16)
 	if _, err := rand.Read(idb); err != nil {
 		return nil, err
@@ -90,7 +94,7 @@ func buildIntentSpec(sp intentSpec) (*intentBlobs, error) {
 	expires := nowS + 3600
 	by := sp.By + "-" + intentID[:8]
 
-	commit, dataHash, err := executionCommitment(baseSepoliaChainID, intentRecipient, 1)
+	commit, dataHash, err := executionCommitment(uint64(leg.ChainID), intentRecipient, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -110,14 +114,14 @@ func buildIntentSpec(sp intentSpec) (*intentBlobs, error) {
 	crossChain := map[string]any{
 		"protocol": "CERTEN", "version": "2.0", "operationGroupId": intentID,
 		"legs": []any{map[string]any{
-			"legId": fmt.Sprintf("leg-base-sepolia-%d-1", baseSepoliaChainID), "role": "payment",
-			"chain": "base-sepolia", "chainId": baseSepoliaChainID, "network": "base-sepolia",
-			"asset": map[string]any{"symbol": "ETH", "decimals": 18, "native": true, "contract_address": nil, "verified": true},
+			"legId": fmt.Sprintf("leg-%s-%d-1", leg.Name, leg.ChainID), "role": "payment",
+			"chain": leg.Name, "chainId": leg.ChainID, "network": leg.Network,
+			"asset": map[string]any{"symbol": leg.Symbol, "decimals": leg.Decimals, "native": true, "contract_address": nil, "verified": true},
 			"from":  from, "to": intentRecipient, "amountEth": "0.000000000000000001", "amountWei": intentAmountWei,
 			"execution_sequence": 1, "conditional_execution": false,
 			"rollback_conditions": map[string]any{"timeout_seconds": 3600, "failure_modes": []string{"gas_limit_exceeded", "insufficient_balance"}},
 			"anchorContract": map[string]any{
-				"type": "evm_contract", "address": baseSepoliaAnchor,
+				"type": "evm_contract", "address": leg.Anchor,
 				"functionSelector": "createBatchAnchor(bytes32,bytes32,uint256,bytes32,uint256,bytes32,bytes32)", "version": "v8.2",
 			},
 			"gasPolicy": map[string]any{
@@ -127,7 +131,7 @@ func buildIntentSpec(sp intentSpec) (*intentBlobs, error) {
 			"slippage_tolerance": "0.5%", "deadline_timestamp": expires,
 			"executionPayload": map[string]any{
 				"target": intentRecipient, "value": intentAmountWei, "dataHash": hx(dataHash),
-				"chainId": baseSepoliaChainID, "executionCommitment": hx(commit),
+				"chainId": leg.ChainID, "executionCommitment": hx(commit),
 			},
 		}},
 		"execution_mode": "sequential",
@@ -160,7 +164,7 @@ func buildIntentSpec(sp intentSpec) (*intentBlobs, error) {
 	replay := map[string]any{
 		"nonce": fmt.Sprintf("certen_%d_%s", nowMs, hex.EncodeToString(nb)), "created_at": nowS, "expires_at": expires,
 		"intent_hash":      "",
-		"chain_nonces":     map[string]any{"base-sepolia": "latest", "accumulated": "1"},
+		"chain_nonces":     map[string]any{leg.Name: "latest", "accumulated": "1"},
 		"execution_window": map[string]any{"start_time": nowS, "end_time": expires, "grace_period_minutes": 5, "max_retries": 3},
 		"security": map[string]any{
 			"double_spending_protection": true, "replay_attack_prevention": true,

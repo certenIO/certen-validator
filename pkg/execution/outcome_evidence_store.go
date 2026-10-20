@@ -64,11 +64,28 @@ func (p ProofOutcomeEvidence) AttachOutcomeEvidence(ctx context.Context, c Outco
 			return written, err
 		}
 		for _, id := range ids {
+			var merged *OutcomeEvidence
 			ok, err := p.Proofs.AttachOutcomeLayer(ctx, id, Layer6RowName, raw, func(standing []byte) (database.OutcomeLayerDecision, string, error) {
-				return decideOutcomeLayer(standing, ev)
+				d, reason, m, err := decideOutcomeLayerMerge(standing, ev)
+				merged = m
+				return d, reason, err
 			})
 			if err != nil {
 				return written, err
+			}
+			if !ok && merged != nil {
+				// The standing row and this evidence each hold a part the other lacks (the BLS aggregate, a proven replay
+				// guard): their union is attached, superseding the standing row, so neither part is lost.
+				mraw, err := json.Marshal(merged)
+				if err != nil {
+					return written, err
+				}
+				if ok, err = p.Proofs.AttachOutcomeLayer(ctx, id, Layer6RowName, mraw, func(standing []byte) (database.OutcomeLayerDecision, string, error) {
+					d, reason, _, err := decideOutcomeLayerMerge(standing, merged)
+					return d, reason, err
+				}); err != nil {
+					return written, err
+				}
 			}
 			if ok {
 				written++
@@ -87,29 +104,60 @@ func (p ProofOutcomeEvidence) AttachOutcomeEvidence(ctx context.Context, c Outco
 }
 
 // decideOutcomeLayer compares a proof's standing outcome evidence with new evidence of it. The two must state the same
-// outcome, bar the BLS aggregate only the recording validator holds: evidence with it supersedes evidence without it,
-// and anything else that differs is a contradiction.
+// outcome, bar two parts that depend on who built the evidence and when: the BLS aggregate only the recording validator
+// holds, and the S6 replay-guard evidence, whose bytes depend on which provider still served the state (RB10-F1). Evidence
+// with the aggregate supersedes evidence without it, and a better replay guard (ranked: one that does not verify, none, a
+// named state, proven) supersedes a worse one; when each holds the better of one part, their union is attached (V-R10B
+// D1), so a worse guard never ends up attached over a better one; anything else that differs is a contradiction.
 func decideOutcomeLayer(standing []byte, ev *OutcomeEvidence) (database.OutcomeLayerDecision, string, error) {
+	d, reason, _, err := decideOutcomeLayerMerge(standing, ev)
+	return d, reason, err
+}
+
+// decideOutcomeLayerMerge is decideOutcomeLayer and, when the standing evidence and ev each hold a part the other lacks
+// (one the BLS aggregate, the other a proven replay guard), the decision Keep with merged the union of the two to attach.
+func decideOutcomeLayerMerge(standing []byte, ev *OutcomeEvidence) (database.OutcomeLayerDecision, string, *OutcomeEvidence, error) {
 	var old OutcomeEvidence
 	if err := json.Unmarshal(standing, &old); err != nil {
-		return database.OutcomeLayerKeep, "", fmt.Errorf("the standing outcome evidence does not decode: %v", err)
+		return database.OutcomeLayerKeep, "", nil, fmt.Errorf("the standing outcome evidence does not decode: %v", err)
 	}
 	a, b := old, *ev
 	a.Quorum.AggregateSignature, a.Quorum.AggregatePublicKey = "", ""
 	b.Quorum.AggregateSignature, b.Quorum.AggregatePublicKey = "", ""
+	a.Member.ReplayGuard, b.Member.ReplayGuard = nil, nil
 	ja, errA := json.Marshal(a)
 	jb, errB := json.Marshal(b)
 	if errA != nil || errB != nil || !bytes.Equal(ja, jb) {
-		return database.OutcomeLayerKeep, "", fmt.Errorf("the standing evidence states another outcome or other evidence of it")
-	}
-	if old.Quorum.AggregateSignature == "" && ev.Quorum.AggregateSignature != "" {
-		return database.OutcomeLayerSupersede, "completed with the BLS aggregate the recording validator holds", nil
+		return database.OutcomeLayerKeep, "", nil, fmt.Errorf("the standing evidence states another outcome or other evidence of it")
 	}
 	if old.Quorum.AggregateSignature != "" && ev.Quorum.AggregateSignature != "" &&
 		(old.Quorum.AggregateSignature != ev.Quorum.AggregateSignature || old.Quorum.AggregatePublicKey != ev.Quorum.AggregatePublicKey) {
-		return database.OutcomeLayerKeep, "", fmt.Errorf("the standing evidence carries another BLS aggregate")
+		return database.OutcomeLayerKeep, "", nil, fmt.Errorf("the standing evidence carries another BLS aggregate")
 	}
-	return database.OutcomeLayerKeep, "", nil
+	aggUp := old.Quorum.AggregateSignature == "" && ev.Quorum.AggregateSignature != ""
+	aggDown := old.Quorum.AggregateSignature != "" && ev.Quorum.AggregateSignature == ""
+	oldRG, newRG := old.replayGuardStanding(), ev.replayGuardStanding()
+	// V-R10B D1: the guards are ranked (a guard that does not verify refuses the whole layer, so it ranks below none);
+	// whichever way the aggregate moves, the attached row keeps the better guard.
+	guardUp := newRG.order() > oldRG.order()
+	guardDown := newRG.order() < oldRG.order()
+	switch {
+	case aggUp && guardUp:
+		return database.OutcomeLayerSupersede, fmt.Sprintf("completed with the BLS aggregate the recording validator holds and a better S6 replay guard (%s over the standing row's %s)", newRG, oldRG), nil, nil
+	case aggUp && !guardDown:
+		return database.OutcomeLayerSupersede, "completed with the BLS aggregate the recording validator holds", nil, nil
+	case guardUp && !aggDown:
+		return database.OutcomeLayerSupersede, fmt.Sprintf("completed with a better S6 replay guard (%s over the standing row's %s)", newRG, oldRG), nil, nil
+	case aggUp && guardDown:
+		m := *ev
+		m.Member.ReplayGuard = old.Member.ReplayGuard
+		return database.OutcomeLayerKeep, "", &m, nil
+	case guardUp && aggDown:
+		m := *ev
+		m.Quorum.AggregateSignature, m.Quorum.AggregatePublicKey = old.Quorum.AggregateSignature, old.Quorum.AggregatePublicKey
+		return database.OutcomeLayerKeep, "", &m, nil
+	}
+	return database.OutcomeLayerKeep, "", nil, nil
 }
 
 // OutcomeEvidenceFromStorage reads a proof's outcome evidence (its layer-6 row); ErrNoOutcomeEvidence when it has none.

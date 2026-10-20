@@ -3,6 +3,7 @@ package execution
 import (
 	"context"
 	"fmt"
+	"github.com/certen/independant-validator/pkg/ethrpc"
 	"math/big"
 	"sync"
 	"time"
@@ -203,7 +204,7 @@ func (o *BatchOrchestrator) blockAtOrBefore(ctx context.Context, ts uint64) (uin
 			// One retry: against a load-balanced RPC a single lagging backend should not abort the
 			// whole search.
 			if h, err = o.ecm.client.HeaderByNumber(ctx, new(big.Int).SetUint64(n)); err != nil {
-				return 0, readErr(fmt.Errorf("reading block %d: %w", n, err))
+				return 0, readErr(fmt.Errorf("reading block %d: %w", n, ethrpc.RedactError(err)))
 			}
 		}
 		return h.Time, nil
@@ -261,7 +262,7 @@ func searchBlockAtOrBefore(head, headTime, ts uint64, timeAt func(uint64) (uint6
 func (o *BatchOrchestrator) scanForward(ctx context.Context, address common.Address, topics [][]common.Hash, from uint64) (*types.Log, error) {
 	head, err := o.ecm.client.BlockNumber(ctx)
 	if err != nil {
-		return nil, readErr(fmt.Errorf("reading the head: %w", err))
+		return nil, readErr(fmt.Errorf("reading the head: %w", ethrpc.RedactError(err)))
 	}
 	for lo := from; lo <= head; lo += proofExecutedChunk {
 		hi := lo + proofExecutedChunk - 1
@@ -273,7 +274,7 @@ func (o *BatchOrchestrator) scanForward(ctx context.Context, address common.Addr
 			Topics:    topics,
 		}, lo, hi)
 		if err != nil {
-			return nil, readErr(fmt.Errorf("%w on %s", err, address.Hex()))
+			return nil, readErr(fmt.Errorf("%w on %s", ethrpc.RedactError(err), address.Hex()))
 		}
 		if len(logs) > 0 {
 			l := logs[0]
@@ -291,7 +292,7 @@ func (o *BatchOrchestrator) logSender(ctx context.Context, l *types.Log) (common
 		From *common.Address `json:"from"`
 	}
 	if err := o.ecm.client.Client().CallContext(ctx, &raw, "eth_getTransactionByHash", l.TxHash); err != nil {
-		return common.Address{}, readErr(fmt.Errorf("reading transaction %s: %w", l.TxHash.Hex(), err))
+		return common.Address{}, readErr(fmt.Errorf("reading transaction %s: %w", l.TxHash.Hex(), ethrpc.RedactError(err)))
 	}
 	if raw.From == nil {
 		return common.Address{}, readErr(fmt.Errorf("transaction %s has no sender in the node's answer", l.TxHash.Hex()))
