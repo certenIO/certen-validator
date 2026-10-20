@@ -35,12 +35,13 @@ func TestThePinsConstantEqualsTheHashOfTheEmbeddedBytes(t *testing.T) {
 	}
 }
 
+// RB11-D2: the base_sepolia section (the l1_posted kind's pins) is the only other section; each chain package adds its own on its branch.
 func TestTheInitialPinsHoldExactlyTheSepoliaNetworkSectionOfSection42(t *testing.T) {
 	p, err := EmbeddedPins()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.Format != PinsFormat || p.OnchainCommitment != nil || len(p.Sections) != 0 {
+	if p.Format != PinsFormat || p.OnchainCommitment != nil || len(p.Sections) != 1 || len(p.Sections["base_sepolia"]) == 0 {
 		t.Fatalf("%+v", p)
 	}
 	e, err := p.Sepolia()
