@@ -191,3 +191,15 @@ func TestPinsParserRefusesWhatItCannotReadByNameAndKeepsRawSectionsExactly(t *te
 		t.Fatalf("%q %q", h, src)
 	}
 }
+
+// A genesis root whose first two characters are not "0x" is refused even when what follows them is 64 hex digits: stripping
+// "a prefix" without checking it would accept it.
+func TestPinsHexPrefixIsCheckedNotJustStripped(t *testing.T) {
+	_, err := pinsMutated(t, func(m map[string]any) { ethSection(m)["genesis_validators_root"] = "zz" + strings.Repeat("11", 32) })
+	wantNamed(t, err, CodePinsCorrupt, "reason", PinsGenesisRootMalformed)
+	_, err = pinsMutated(t, func(m map[string]any) { ethSection(m)["genesis_validators_root"] = "0X" + strings.Repeat("11", 32) })
+	wantNamed(t, err, CodePinsCorrupt, "reason", PinsGenesisRootMalformed)
+	if _, err := pinsMutated(t, func(m map[string]any) { ethSection(m)["genesis_validators_root"] = "0x" + strings.Repeat("11", 32) }); err != nil {
+		t.Fatalf("the prefixed form is valid: %v", err)
+	}
+}

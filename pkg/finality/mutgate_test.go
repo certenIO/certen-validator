@@ -617,3 +617,12 @@ func TestReadHeaderItemCountAndUintWidthBoundaries(t *testing.T) {
 		t.Fatalf("%+v %v", h0, err)
 	}
 }
+
+func TestSectionFormatMustBeAStringBeforeItIsComparedToTheFormatName(t *testing.T) {
+	doc := `{"addenda":[],"format":5,"leg":{"blockHash":"` + strings.Repeat("11", 32) + `","blockNumber":2,"chain":1}}`
+	_, err := ParseSection([]byte(doc))
+	wantNamed(t, err, CodeAddendumMalformed, "field", "format", "reason", AddendumBadValue)
+	other := strings.Replace(doc, `"format":5`, `"format":"certen-finality-addenda/2"`, 1)
+	_, err = ParseSection([]byte(other))
+	wantNamed(t, err, CodeAddendumMalformed, "field", "format", "reason", AddendumWrongFormat)
+}

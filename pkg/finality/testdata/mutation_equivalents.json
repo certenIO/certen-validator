@@ -1,0 +1,274 @@
+[
+ {
+  "file": "addendum.go",
+  "function": "Top",
+  "operator": "cmp_boundary",
+  "original": "a.Level > top",
+  "mutated": "a.Level >= top",
+  "reason": "When a.Level equals top, assigning top = a.Level leaves top unchanged, so > and >= give the same result for every chain."
+ },
+ {
+  "file": "addendum.go",
+  "function": "ParseProofID",
+  "operator": "guard_off",
+  "original": "if err != nil",
+  "mutated": "if false",
+  "reason": "The string was already checked to be 36 characters with lower-case hex digits at every non-dash position, so hex.DecodeString of the dash-stripped 32 digits cannot fail; the branch is unreachable defence."
+ },
+ {
+  "file": "addendum.go",
+  "function": "strictObject",
+  "operator": "logic_swap",
+  "original": "err != nil || !ok",
+  "mutated": "err != nil && !ok",
+  "reason": "The text passed json.Valid, so Token never errs; when the first token is not a Delim, d is the zero Delim which is != '{', so the third operand refuses it exactly as the original does."
+ },
+ {
+  "file": "addendum.go",
+  "function": "strictObject",
+  "operator": "guard_off",
+  "original": "if err != nil",
+  "mutated": "if false",
+  "reason": "The text passed json.Valid, so dec.Token inside the object cannot return an error; the branch is unreachable."
+ },
+ {
+  "file": "addendum.go",
+  "function": "strictObject",
+  "operator": "guard_off",
+  "original": "if err := dec.Decode(&v); err != nil",
+  "mutated": "if err := dec.Decode(&v); false",
+  "reason": "The text passed json.Valid, so decoding the value that follows a key cannot fail; the branch is unreachable."
+ },
+ {
+  "file": "addendum.go",
+  "function": "strictHex",
+  "operator": "guard_off",
+  "original": "if len(s)%2 != 0",
+  "mutated": "if false",
+  "reason": "An odd-length string reaches hex.DecodeString, which refuses it, and that refusal returns the identical named state (field, not_lowercase_hex), so the observable result is the same."
+ },
+ {
+  "file": "addendum.go",
+  "function": "strictHex",
+  "operator": "int_literal",
+  "original": "len(s)%2 != 0",
+  "mutated": "len(s)%1 != 0",
+  "reason": "Same as the guard: with the odd-length check weakened the odd string is refused by hex.DecodeString with the identical not_lowercase_hex state."
+ },
+ {
+  "file": "addendum.go",
+  "function": "strictHex",
+  "operator": "guard_off",
+  "original": "if err != nil",
+  "mutated": "if false",
+  "reason": "Every character was just checked to be a lower-case hex digit and the length to be even, so hex.DecodeString cannot fail; the branch is unreachable."
+ },
+ {
+  "file": "codec.go",
+  "function": "Reader.LP",
+  "operator": "int_literal",
+  "original": "max >= 0",
+  "mutated": "max >= -1",
+  "reason": "For max == -1 the comparison uint64(n) > uint64(max) is n > 2^64-1, which is never true, so treating -1 as a bound is identical to treating it as no bound."
+ },
+ {
+  "file": "codec.go",
+  "function": "Reader.Count",
+  "operator": "cmp_boundary",
+  "original": "minElem > 0",
+  "mutated": "minElem >= 0",
+  "reason": "For minElem == 0 the product n*minElem is 0, which is never greater than the remaining length, so the check is a no-op either way."
+ },
+ {
+  "file": "codec.go",
+  "function": "Reader.Nodes",
+  "operator": "cmp_boundary",
+  "original": "i > 0",
+  "mutated": "i >= 0",
+  "reason": "At i == 0 prev is the zero hash and the check h <= prev would need a keccak256 output of 32 zero bytes, which no node produces (no preimage is known)."
+ },
+ {
+  "file": "codec.go",
+  "function": "EncodeNodes",
+  "operator": "cmp_boundary",
+  "original": "string(list[j].h[:]) < string(list[j-1].h[:])",
+  "mutated": "string(list[j].h[:]) <= string(list[j-1].h[:])",
+  "reason": "The list was de-duplicated on the hash first, so two adjacent entries never have equal hashes and < and <= order identically."
+ },
+ {
+  "file": "evidence.go",
+  "function": "DeriveIncluded",
+  "operator": "guard_off",
+  "original": "if h.Hash != [32]byte(s.BlockHash)",
+  "mutated": "if false",
+  "reason": "s.Verify() has already required keccak256(s.Header) == s.BlockHash and ReadHeader computes h.Hash as keccak256 of the same bytes, so the two can never differ here."
+ },
+ {
+  "file": "pins.go",
+  "function": "EmbeddedPins",
+  "operator": "guard_off",
+  "original": "if err != nil || len(want) != 32",
+  "mutated": "if false",
+  "reason": "PinsSHA256 is a package constant pinned to 64 hex digits by TestThePinsConstantEqualsTheHashOfTheEmbeddedBytes; the branch is unreachable."
+ },
+ {
+  "file": "pins.go",
+  "function": "EmbeddedPins",
+  "operator": "logic_swap",
+  "original": "err != nil || len(want) != 32",
+  "mutated": "err != nil && len(want) != 32",
+  "reason": "PinsSHA256 is a package constant that TestThePinsConstantEqualsTheHashOfTheEmbeddedBytes pins to 64 lower-case hex digits, so decoding it cannot fail or be the wrong length; no input reaches the branch."
+ },
+ {
+  "file": "pins.go",
+  "function": "EthSepoliaPins.validate",
+  "operator": "cmp_boundary",
+  "original": "a.Period < e.Anchors[i-1].Period",
+  "mutated": "a.Period <= e.Anchors[i-1].Period",
+  "reason": "Equal periods are refused by the preceding anchor_period_duplicate check, so this comparison is only reached with unequal periods where < and <= agree."
+ },
+ {
+  "file": "pins.go",
+  "function": "walkKeys",
+  "operator": "guard_off",
+  "original": "if err != nil",
+  "mutated": "if false",
+  "reason": "parsePins calls walkKeys only after json.Valid, so dec.Token cannot return an error; the branch is unreachable."
+ },
+ {
+  "file": "pins.go",
+  "function": "walkKeys",
+  "operator": "guard_off",
+  "original": "if _, err := dec.Token(); err != nil",
+  "mutated": "if _, err := dec.Token(); false",
+  "reason": "parsePins calls walkKeys only after json.Valid, so the closing delimiter is always present; the branch is unreachable."
+ },
+ {
+  "file": "registry.go",
+  "function": "NewRegistry",
+  "operator": "guard_off",
+  "original": "if err := r.RegisterProfile(p); err != nil",
+  "mutated": "if err := r.RegisterProfile(p); false",
+  "reason": "DefaultProfiles is fixed data that passes validate and has one profile per chain (pinned by the registry tests); the panic branch is unreachable."
+ },
+ {
+  "file": "registry.go",
+  "function": "Registry.Chains",
+  "operator": "cmp_boundary",
+  "original": "out[i] < out[j]",
+  "mutated": "out[i] <= out[j]",
+  "reason": "The slice holds map keys, which are distinct, so < and <= sort identically."
+ },
+ {
+  "file": "report.go",
+  "function": "Registry.VerifyLeg",
+  "operator": "cmp_boundary",
+  "original": "l > rep.Headline",
+  "mutated": "l >= rep.Headline",
+  "reason": "The loop visits LevelL1Posted then LevelFinalized, each once, and Headline starts at LevelNone, so l never equals Headline when compared."
+ },
+ {
+  "file": "state.go",
+  "function": "maxInt",
+  "operator": "cmp_boundary",
+  "original": "a > b",
+  "mutated": "a >= b",
+  "reason": "When a == b both branches return the same value."
+ },
+ {
+  "file": "table.go",
+  "function": "LevelAvailability",
+  "operator": "guard_off",
+  "original": "if err != nil",
+  "mutated": "if false",
+  "reason": "KindFor returns the empty string on every error path, so skipping the early continue assigns the same empty string to out[l]."
+ },
+ {
+  "file": "upgrader.go",
+  "function": "UpgraderConfig.withDefaults",
+  "operator": "cmp_boundary",
+  "original": "d <= 0",
+  "mutated": "d < 0",
+  "reason": "For d == 0 the jitter branch returns 0 + Int63n(1) == 0, the same value as returning d."
+ },
+ {
+  "file": "upgrader.go",
+  "function": "UpgraderConfig.withDefaults",
+  "operator": "int_literal",
+  "original": "d <= 0",
+  "mutated": "d <= 1",
+  "reason": "For d == 1 the jitter branch returns 1 + Int63n(1) == 1, the same value as returning d."
+ },
+ {
+  "file": "upgrader.go",
+  "function": "Upgrader.upgradeLeg",
+  "operator": "guard_off",
+  "original": "if len(targets) == 0",
+  "mutated": "if false",
+  "reason": "With no missing stored level the loops below do nothing, done stays true and record(..., done) with the same current is called, so skipping the early return changes nothing observable."
+ },
+ {
+  "file": "upgrader.go",
+  "function": "Upgrader.upgradeLeg",
+  "operator": "int_literal",
+  "original": "len(targets) == 0",
+  "mutated": "len(targets) == -1",
+  "reason": "len(targets) == -1 is never true, which is the same as the guard being off (see that entry)."
+ },
+ {
+  "file": "upgrader.go",
+  "function": "Upgrader.upgradeLeg",
+  "operator": "guard_off",
+  "original": "if err != nil",
+  "mutated": "if false",
+  "reason": "NewAddendum can only fail on a non-row, a present level, an undecodable container or a header disagreeing with the addendum, and JudgeAddendum has just required each of those not to be the case for the same addendum, so after a successful judgement NewAddendum cannot fail."
+ },
+ {
+  "file": "upgrader.go",
+  "function": "Upgrader.upgradeLeg",
+  "operator": "bool_lit",
+  "original": "res.failed = true",
+  "mutated": "res.failed = false",
+  "reason": "Only on the branch where NewAddendum fails after JudgeAddendum succeeded, which cannot happen (see the guard entry)."
+ },
+ {
+  "file": "upgrader.go",
+  "function": "Upgrader.upgradeLeg",
+  "operator": "cmp_boundary",
+  "original": "a.Level > current",
+  "mutated": "a.Level >= current",
+  "reason": "When a.Level equals current the assignment current = a.Level leaves it unchanged."
+ },
+ {
+  "file": "upgrader.go",
+  "function": "Upgrader.upgradeLeg",
+  "operator": "cmp_boundary",
+  "original": "w < time.Second",
+  "mutated": "w <= time.Second",
+  "reason": "At w == time.Second the clamp assigns time.Second, the same value."
+ },
+ {
+  "file": "upgrader.go",
+  "function": "Upgrader.upgradeLeg",
+  "operator": "cmp_boundary",
+  "original": "wait < 0",
+  "mutated": "wait <= 0",
+  "reason": "wait is either -1 (unset) or at least one second, never 0, so < 0 and <= 0 agree."
+ },
+ {
+  "file": "upgrader.go",
+  "function": "Upgrader.upgradeLeg",
+  "operator": "cmp_boundary",
+  "original": "w < wait",
+  "mutated": "w <= wait",
+  "reason": "When w equals wait the assignment wait = w leaves it unchanged."
+ },
+ {
+  "file": "upgrader.go",
+  "function": "Upgrader.build",
+  "operator": "int_literal",
+  "original": "make(chan out, 1)",
+  "mutated": "make(chan out, 2)",
+  "reason": "The goroutine sends exactly once, so capacity 2 behaves like capacity 1 (capacity 0 is killed by the goroutine-leak test)."
+ }
+]
