@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/certen/independant-validator/pkg/ethproof"
 	"github.com/certen/independant-validator/pkg/ethrpc"
 	"github.com/certen/independant-validator/pkg/finality"
 	"github.com/certen/independant-validator/pkg/finality/adiri"
@@ -265,9 +266,9 @@ func wireArb(reg *finality.Registry, env Env, d Deps, clock loopClock, logf func
 		L1: &ArbL1{LC: lcPlain{cache}, Headers: hdr}, Pins: env.Pins, Now: d.Now}); err != nil {
 		return err
 	}
-	if err := reg.RegisterProver(&arbbuild.Prover{Pins: env.Pins, Store: env.Store,
+	if err := reg.RegisterProver(levelOnly{&arbbuild.Prover{Pins: env.Pins, Store: env.Store,
 		L1: &arbbuild.LiveL1{Endpoints: env.L1Block, ProofEndpoints: env.L1Proof, HTTP: env.HTTP},
-		L2: &arbbuild.LiveL2{Endpoints: cfg.ArbL2, HTTP: env.HTTP}, LC: lcPlain{cache}}); err != nil {
+		L2: &arbbuild.LiveL2{Endpoints: cfg.ArbL2, HTTP: env.HTTP}, LC: lcPlain{cache}}, finality.LevelFinalized}); err != nil {
 		return err
 	}
 	// the capture providers: the execution endpoints first (logs, blocks), then the proof providers and the archive provider
@@ -297,4 +298,25 @@ func wireSepolia(reg *finality.Registry, env Env, d Deps) error {
 	}
 	return reg.RegisterProver(&ethsepolia.Prover{Source: srcs, Exec: &ethsepolia.RPCHeaders{Endpoints: env.L1Block, Client: env.HTTP, BatchSize: cfg.MaxBatch},
 		Pins: env.Pins, Verifier: ethsepolia.New(), Now: d.Now, ExtraLinks: links})
+}
+
+// levelOnly restricts a prover to the one level it builds. The upgrader asks every prover of a chain about every level the leg
+// lacks and keeps the LAST answer as the leg's status: a prover that answers a level it does not serve with a refusal (the
+// Arbitrum finalized prover does, for l1_posted) would overwrite the real pending or unavailable state of the sibling prover that
+// serves the level, and count a failure on every pass. A target outside the level is "not mine" (nil, nil, nil), exactly as the
+// Base finalized builder answers it.
+type levelOnly struct {
+	finality.Prover
+	level finality.Level
+}
+
+// Ceiling implements finality.Ceilinged.
+func (l levelOnly) Ceiling() finality.Level { return l.level }
+
+// Build implements finality.Prover.
+func (l levelOnly) Build(ctx context.Context, s *ethproof.Settlement, have finality.LevelSet, target finality.Level) (*finality.Addendum, *finality.PendingState, error) {
+	if target != l.level {
+		return nil, nil, nil
+	}
+	return l.Prover.Build(ctx, s, have, target)
 }

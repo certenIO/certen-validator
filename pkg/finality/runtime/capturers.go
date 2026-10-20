@@ -149,13 +149,18 @@ func (l *BasePostedLoop) perTick() int {
 	return 64
 }
 
-// Run implements finality.Capturer: tick, wait Every, until ctx ends.
-func (l *BasePostedLoop) Run(ctx context.Context) error {
+// init allocates the retry bookkeeping; Tick is exported and may be called without Run.
+func (l *BasePostedLoop) init() {
 	l.mu.Lock()
+	defer l.mu.Unlock()
 	if l.retry == nil {
 		l.retry, l.lastState = map[uint64]*retryEntry{}, map[uint64]*finality.StateError{}
 	}
-	l.mu.Unlock()
+}
+
+// Run implements finality.Capturer: tick, wait Every, until ctx ends.
+func (l *BasePostedLoop) Run(ctx context.Context) error {
+	l.init()
 	every := l.Every
 	if every < finality.MinPoll {
 		every = finality.MinPoll
@@ -176,6 +181,7 @@ func (l *BasePostedLoop) Run(ctx context.Context) error {
 // Tick makes one capture round: it scans the blocks from the cursor to the head (at most MaxPerTick), then retries the blocks
 // whose capture failed. It returns an error only for a failure to follow the head at all (no head, no cursor store).
 func (l *BasePostedLoop) Tick(ctx context.Context, tick int) error {
+	l.init()
 	chain := l.Chain()
 	sink := statusSink{store: l.Status, logf: l.Logf, now: l.Clock.Now}
 	head, err := l.Cap.L1.Head(ctx)

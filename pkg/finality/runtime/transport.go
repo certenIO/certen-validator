@@ -233,7 +233,7 @@ func (t *Transport) once(req *http.Request, body []byte) (*http.Response, error)
 		}
 		resp, err := t.base().RoundTrip(r2)
 		if err != nil {
-			return nil, err
+			return nil, ethrpc.RedactError(err) // a transport error quotes the request URL: userinfo, path token and query key
 		}
 		if (resp.StatusCode != http.StatusTooManyRequests && resp.StatusCode != http.StatusServiceUnavailable) || attempt >= t.Retries {
 			return resp, nil
