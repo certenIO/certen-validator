@@ -289,13 +289,12 @@ func TestOfficialObjectsDecode(t *testing.T) {
 
 type officialStep map[string]any
 
-// TestOfficialSyncAndRankingInventory enumerates the sync and update_ranking cases of the electra, fulu and gloas forks (minimal
-// preset: the release carries them for no other), decodes each bootstrap, parses steps.yaml and counts the steps. The cases are
-// NOT driven through the walker: they are produced under the minimal preset (SYNC_COMMITTEE_SIZE 32, SLOTS_PER_EPOCH 8,
-// EPOCHS_PER_SYNC_COMMITTEE_PERIOD 8), and this verifier is fixed at the Sepolia/mainnet constants (512 seats, 32 slots, 256
-// epochs) in its container sizes, tree depths and period arithmetic; the test asserts that fact on the decoded bytes (a
-// minimal-preset bootstrap is not a size this verifier's layouts accept) instead of assuming it. The remaining work (a preset
-// parameter through ssz.go, bls.go and verify.go, and the store-state machine harness) is recorded in the check-in of RB11-C1B.
+// TestOfficialSyncAndRankingInventory enumerates the sync and update_ranking cases of the electra, fulu and gloas forks (minimal preset: the
+// release carries them for no other), decodes each bootstrap, parses steps.yaml and counts the steps. The cases are driven through the production
+// walker by TestOfficialSyncVectors (official_sync_test.go) under the minimal preset (SYNC_COMMITTEE_SIZE 32, SLOTS_PER_EPOCH 8,
+// EPOCHS_PER_SYNC_COMMITTEE_PERIOD 8); this test asserts the premise of that harness on the decoded bytes: a minimal-preset bootstrap is not a size
+// the mainnet-preset layouts of the exported verifier accept, so only the preset parameter makes these objects verifiable.
+// update_ranking does not apply: the verifier never chooses between updates.
 func TestOfficialSyncAndRankingInventory(t *testing.T) {
 	root, _ := officialRoot()
 	var sync, ranking int

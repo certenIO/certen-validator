@@ -148,40 +148,42 @@ func merkleize8(c [8][32]byte) [32]byte {
 
 // decodeElectraBootstrap strictly decodes a LightClientBootstrap of the electra layout:
 // offset(header) || current_sync_committee (24,624) || current_sync_committee_branch (6 nodes) || header.
-func decodeElectraBootstrap(b []byte) (bootstrapObj, *Fault) {
-	if len(b) < electraMinBootstrap {
-		return bootstrapObj{}, EvidenceMalformed("anchor_body", 0, "length", len(b), electraMinBootstrap)
+func decodeElectraBootstrap(b []byte, pr preset) (bootstrapObj, *Fault) {
+	fixed := pr.electraBootstrapFixedSize()
+	if len(b) < fixed+electraHeaderMin {
+		return bootstrapObj{}, EvidenceMalformed("anchor_body", 0, "length", len(b), fixed+electraHeaderMin)
 	}
-	if off := le32(b); off != electraBootstrapFixed {
-		return bootstrapObj{}, EvidenceMalformed("anchor_body", 0, "header_offset", off, electraBootstrapFixed)
+	if off := le32(b); off != fixed {
+		return bootstrapObj{}, EvidenceMalformed("anchor_body", 0, "header_offset", off, fixed)
 	}
-	h, f := decodeElectraHeader(b[electraBootstrapFixed:], "anchor_body", 0)
+	h, f := decodeElectraHeader(b[fixed:], "anchor_body", 0)
 	if f != nil {
 		return bootstrapObj{}, f
 	}
 	return bootstrapObj{
 		Shape: LayoutElectra, Header: h,
-		Committee:       b[4 : 4+SyncCommitteeBytes],
-		CommitteeBranch: decodeBranch(b[4+SyncCommitteeBytes:electraBootstrapFixed], electraCommitteeBranchLen),
+		Committee:       b[4 : 4+pr.committeeBytes()],
+		CommitteeBranch: decodeBranch(b[4+pr.committeeBytes():fixed], electraCommitteeBranchLen),
 	}, nil
 }
 
 // decodeElectraUpdate strictly decodes a LightClientUpdate of the electra layout:
 // offset(attested) || next_sync_committee || next_sync_committee_branch (6) || offset(finalized) || finality_branch (7) ||
 // sync_aggregate (160) || signature_slot (8) || attested_header || finalized_header.
-func decodeElectraUpdate(b []byte, index int) (updateObj, *Fault) {
-	if len(b) < electraMinUpdate {
-		return updateObj{}, EvidenceMalformed("link", index, "length", len(b), electraMinUpdate)
+func decodeElectraUpdate(b []byte, index int, pr preset) (updateObj, *Fault) {
+	fixed := pr.electraUpdateFixedSize()
+	if len(b) < fixed+2*electraHeaderMin {
+		return updateObj{}, EvidenceMalformed("link", index, "length", len(b), fixed+2*electraHeaderMin)
 	}
-	finOffAt := 4 + SyncCommitteeBytes + 32*electraCommitteeBranchLen
-	if off := le32(b); off != electraUpdateFixed {
-		return updateObj{}, EvidenceMalformed("link", index, "attested_offset", off, electraUpdateFixed)
+	finOffAt := 4 + pr.committeeBytes() + 32*electraCommitteeBranchLen
+	if off := le32(b); off != fixed {
+		return updateObj{}, EvidenceMalformed("link", index, "attested_offset", off, fixed)
 	}
 	fin := le32(b[finOffAt:])
-	if fin < electraUpdateFixed+electraHeaderMin || fin > electraUpdateFixed+electraHeaderMax || fin > len(b) {
+	if fin < fixed+electraHeaderMin || fin > fixed+electraHeaderMax || fin > len(b) {
 		return updateObj{}, EvidenceMalformed("link", index, "finalized_offset", fin, len(b))
 	}
-	att, f := decodeElectraHeader(b[electraUpdateFixed:fin], "link", index)
+	att, f := decodeElectraHeader(b[fixed:fin], "link", index)
 	if f != nil {
 		return updateObj{}, f
 	}
@@ -191,32 +193,33 @@ func decodeElectraUpdate(b []byte, index int) (updateObj, *Fault) {
 	}
 	o := 4
 	u := updateObj{Shape: LayoutElectra, Attested: att, Finalized: fh, hasNextContainer: true}
-	u.NextCommittee = b[o : o+SyncCommitteeBytes]
-	o += SyncCommitteeBytes
+	u.NextCommittee = b[o : o+pr.committeeBytes()]
+	o += pr.committeeBytes()
 	u.NextBranch = decodeBranch(b[o:o+32*electraCommitteeBranchLen], electraCommitteeBranchLen)
 	o += 32*electraCommitteeBranchLen + 4
 	u.FinalityBranch = decodeBranch(b[o:o+32*electraFinalityBranchLen], electraFinalityBranchLen)
 	o += 32 * electraFinalityBranchLen
-	u.Aggregate = decodeSyncAggregate(b[o : o+syncAggregateSize])
-	o += syncAggregateSize
+	u.Aggregate = decodeSyncAggregate(b[o:o+pr.aggregateBytes()], pr)
+	o += pr.aggregateBytes()
 	u.SignatureSlot = binary.LittleEndian.Uint64(b[o : o+8])
 	return u, nil
 }
 
 // decodeElectraFinalityUpdate strictly decodes a LightClientFinalityUpdate of the electra layout:
 // offset(attested) || offset(finalized) || finality_branch (7) || sync_aggregate || signature_slot || attested || finalized.
-func decodeElectraFinalityUpdate(b []byte) (updateObj, *Fault) {
-	if len(b) < electraMinFinalityUpdate {
-		return updateObj{}, EvidenceMalformed("final_update", 0, "length", len(b), electraMinFinalityUpdate)
+func decodeElectraFinalityUpdate(b []byte, pr preset) (updateObj, *Fault) {
+	fixed := pr.electraFinalityUpdateFixedSize()
+	if len(b) < fixed+2*electraHeaderMin {
+		return updateObj{}, EvidenceMalformed("final_update", 0, "length", len(b), fixed+2*electraHeaderMin)
 	}
-	if off := le32(b); off != electraFinalityUpdateFixed {
-		return updateObj{}, EvidenceMalformed("final_update", 0, "attested_offset", off, electraFinalityUpdateFixed)
+	if off := le32(b); off != fixed {
+		return updateObj{}, EvidenceMalformed("final_update", 0, "attested_offset", off, fixed)
 	}
 	fin := le32(b[4:])
-	if fin < electraFinalityUpdateFixed+electraHeaderMin || fin > electraFinalityUpdateFixed+electraHeaderMax || fin > len(b) {
+	if fin < fixed+electraHeaderMin || fin > fixed+electraHeaderMax || fin > len(b) {
 		return updateObj{}, EvidenceMalformed("final_update", 0, "finalized_offset", fin, len(b))
 	}
-	att, f := decodeElectraHeader(b[electraFinalityUpdateFixed:fin], "final_update", 0)
+	att, f := decodeElectraHeader(b[fixed:fin], "final_update", 0)
 	if f != nil {
 		return updateObj{}, f
 	}
@@ -228,8 +231,8 @@ func decodeElectraFinalityUpdate(b []byte) (updateObj, *Fault) {
 	o := 8
 	u.FinalityBranch = decodeBranch(b[o:o+32*electraFinalityBranchLen], electraFinalityBranchLen)
 	o += 32 * electraFinalityBranchLen
-	u.Aggregate = decodeSyncAggregate(b[o : o+syncAggregateSize])
-	o += syncAggregateSize
+	u.Aggregate = decodeSyncAggregate(b[o:o+pr.aggregateBytes()], pr)
+	o += pr.aggregateBytes()
 	u.SignatureSlot = binary.LittleEndian.Uint64(b[o : o+8])
 	return u, nil
 }
