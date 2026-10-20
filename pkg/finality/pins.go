@@ -18,7 +18,7 @@ const PinsFormat = "certen-finality-pins/1"
 
 // PinsSHA256 is the SHA-256 of the embedded pins file. A verifier refuses to start (finality_pins_corrupt) if the embedded
 // bytes hash otherwise; CI job finality-pins-sync compares this constant and the file across the three repositories.
-const PinsSHA256 = "507d72b3499fd094f3e14e0ed585edba90c7a7a4c6235c7ccd98d04db7329cca"
+const PinsSHA256 = "066704309f80e5a2acb81dbc032f2eac747c9b6cad2c60cc5f7622c761f406d9"
 
 //go:embed pins/finality-pins.json
 var embeddedPins []byte
@@ -52,6 +52,7 @@ type EthSepoliaPins struct {
 	ChainID               uint64      `json:"chain_id"`
 	GenesisValidatorsRoot string      `json:"genesis_validators_root"`
 	GenesisTime           uint64      `json:"genesis_time"`
+	KZGSetupSHA256        string      `json:"kzg_setup_sha256"`
 	Forks                 []ForkPin   `json:"forks"`
 	Spec                  string      `json:"spec"`
 	SyncCommitteeSize     int         `json:"sync_committee_size"`
@@ -209,6 +210,9 @@ func (e *EthSepoliaPins) validate() error {
 	}
 	if !hexN(e.GenesisValidatorsRoot, 32, true) {
 		return PinsCorrupt(PinsGenesisRootMalformed)
+	}
+	if e.KZGSetupSHA256 != "" && !hexN(e.KZGSetupSHA256, 32, false) {
+		return PinsCorrupt(PinsBadValue, "key", "kzg_setup_sha256")
 	}
 	for _, b := range []struct {
 		key string

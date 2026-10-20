@@ -114,6 +114,7 @@ const (
 	ReasonHeaderItemNot32Bytes    EvidenceReason = "header_item_not_32_bytes"
 	ReasonHeaderItemNotCanonUint  EvidenceReason = "header_item_not_canonical_uint"
 	ReasonHeaderItemIsList        EvidenceReason = "header_item_is_list"
+	ReasonBadEnumValue            EvidenceReason = "bad_enum_value"
 )
 
 // AddendumReason is the reason of finality_addendum_malformed (the JSON form of an addendum, a section and a proof id).
