@@ -42,7 +42,8 @@ const (
 	l2SignedTx = 4
 )
 
-// maxL2MessageSize is nitro's MaxL2MessageSize (256 KiB): a nested message or a brotli-compressed segment larger than this is dropped.
+// maxL2MessageSize is nitro's MaxL2MessageSize (256 KiB): a top-level message, a nested message or a brotli-compressed segment larger than
+// this is dropped.
 const maxL2MessageSize = 256 * 1024
 
 // maxL2Depth is nitro's nesting limit for batch messages inside batch messages.
@@ -136,6 +137,11 @@ type l2Message struct {
 // transaction needs a request id), 2, 6 (heartbeats are disabled), 7, unknown kinds, a short field, and ANY nested failure fails the
 // WHOLE message. A failed message has no transactions: a malformed message is not a message. ok is false for those.
 func parseL2(msg []byte, depth int) ([][]byte, bool) {
+	// ParseL2Transactions (arbos/parse_l2.go) drops a message whose L2msg is larger than MaxL2MessageSize before it reads a byte of it:
+	// the limit holds for the top-level message of a sequencer batch exactly as for a nested one.
+	if len(msg) > maxL2MessageSize {
+		return nil, false
+	}
 	txs, ok := parseL2Msg(msg, common.Address{}, nil, big.NewInt(0), depth, false)
 	if !ok {
 		return nil, false

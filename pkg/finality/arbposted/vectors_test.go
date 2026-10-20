@@ -146,6 +146,9 @@ func TestPublishedVectorsFinalityArbPosted1(t *testing.T) {
 		if w, ok := supersededInSet2[id]; ok {
 			want = w
 		}
+		if w, ok := supersededInSet4[id]; ok {
+			want = w
+		}
 		if got := verdictCanon(v, verr); got != want {
 			t.Errorf("%s:\n got  %s\n want %s", id, got, want)
 		}
@@ -159,6 +162,26 @@ func TestPublishedVectorsFinalityArbPosted1(t *testing.T) {
 var supersededInSet2 = map[string]string{
 	"adv_synth_calldata_flag_zeroheavy": `{"code":"l1_batch_header_unknown","fields":{"batch":"77","byte":"77"}}`,
 	"adv_synth_blob_payload_zeroheavy":  `{"code":"l1_batch_header_unknown","fields":{"batch":"77","byte":"77"}}`,
+}
+
+// supersededInSet4 are the seven cases of finality_arb_posted1 that hand Kind.Verify a synthetic leg (the live block's header with its
+// transactionsRoot replaced, so another hash) next to the RECORDED container, whose header carries the live block's hash. Kind.Verify
+// now binds the BlockRef to the container header (RB11-E2-FIX, review V-E2-A1), so these refuse with finality_block_mismatch{blockHash}
+// (want = the synthetic leg's hash, got = the recorded block's hash) before the match logic they were written for runs. The set is not
+// edited; testdata/finality_arb_posted1/SUPERSEDED.md records the change and finality_arb_posted4 carries each case again with the
+// container header re-bound to its leg (suffix _container_bound), under its recorded expectation.
+var supersededInSet4 = map[string]string{
+	"adv_tx_altered":                   liveHashMismatch("0x051307b3a477cf0b336b5dde6f044f3cd32be61872fe7fbb8a1f9027181eb2e3"),
+	"adv_tx_order_swapped":             liveHashMismatch("0x19a0efee390b8519ae885b8a045fc363dea85b059b25080e73a1478c1af5badc"),
+	"adv_tx_missing":                   liveHashMismatch("0x324c892e5293309b4c7550fdd526c53057c04cf43319cfd513f6481ad1a07f5b"),
+	"adv_tx_extra":                     liveHashMismatch("0xaabed1854d210a115872480a10b953870d1430d72e874fd92a0b72e25ee3796e"),
+	"adv_no_standard_transactions":     liveHashMismatch("0x55ce73fa225c341b51740cefdadfbd33856ddfd15da8a6336199e120b5670ab4"),
+	"adv_unsupported_tx_type":          liveHashMismatch("0xb45075a1c3c86368270bc66b00dba3c75a8bb7e96272ea8705689de893daeb60"),
+	"adv_delayed_origin_without_proof": liveHashMismatch("0xe9be37ad6eb86d61c053a03e9661c179f0f40453777420851267bd65520f9127"),
+}
+
+func liveHashMismatch(legHash string) string {
+	return `{"code":"finality_block_mismatch","fields":{"field":"blockHash","got":"0x83d81943ea8f2f51d14bb50594d8d0ae12cd576e8891816e26a9c17fdca0c9f4","want":"` + legHash + `"}}`
 }
 
 // The valid vector also passes the registry's whole path: container header against the addendum and the leg, then the kind.

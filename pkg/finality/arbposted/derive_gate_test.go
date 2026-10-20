@@ -4,6 +4,7 @@ package arbposted
 
 import (
 	"bytes"
+	"encoding/binary"
 	"math"
 	"math/big"
 	"testing"
@@ -86,18 +87,33 @@ func TestAKindWithNoDerivationIsUnprovenEvenForABlockOfInternalTransactionsOnly(
 	}
 }
 
-// Nested messages of a sequencer batch: exactly the size limit is read, one more ends the batch quietly, and the first byte of a
-// signed transaction is judged at the 0xc0 boundary.
+// Nested messages of a sequencer batch: the largest nested message that fits in a top-level message within the size limit is read in
+// full, one byte more makes the TOP-LEVEL message larger than the limit and Nitro drops the whole message (ParseL2Transactions), and the
+// first byte of a signed transaction is judged at the 0xc0 boundary. (A nested message of the limit itself cannot sit inside a
+// top-level message within the limit.)
 func TestNestedSizeLimitAndSignedTransactionFirstByteBoundaries(t *testing.T) {
 	t1 := legacyTx(1)
 	tx := func(n int) []byte { return append([]byte{l2SignedTx, 0xc0}, bytes.Repeat([]byte{0}, n-2)...) } // a message of n bytes
-	atLimit := batchMsg(signedTxMsg(t1), tx(maxL2MessageSize))
-	if got, ok := parseL2(atLimit, 0); !ok || len(got) != 2 {
-		t.Errorf("a nested message of exactly the limit: ok %v, %d txs", ok, len(got))
+	// the top-level message is 1 (kind) + 8 + len(first) + 8 + n bytes
+	biggest := maxL2MessageSize - 1 - 8 - len(signedTxMsg(t1)) - 8
+	fits := batchMsg(signedTxMsg(t1), tx(biggest))
+	if len(fits) != maxL2MessageSize {
+		t.Fatalf("fixture: %d bytes, want %d", len(fits), maxL2MessageSize)
 	}
-	over := batchMsg(signedTxMsg(t1), tx(maxL2MessageSize+1))
-	if got, ok := parseL2(over, 0); !ok || len(got) != 1 {
-		t.Errorf("a nested message one over the limit, data present: ok %v, %d txs", ok, len(got))
+	if got, ok := parseL2(fits, 0); !ok || len(got) != 2 {
+		t.Errorf("the largest nested message that fits the top-level limit: ok %v, %d txs", ok, len(got))
+	}
+	if got, ok := parseL2(batchMsg(signedTxMsg(t1), tx(biggest+1)), 0); ok || got != nil {
+		t.Errorf("a nested message one byte more makes the top-level message too large: ok %v, %d txs", ok, len(got))
+	}
+	for _, n := range []int{maxL2MessageSize, maxL2MessageSize + 1} {
+		if got, ok := parseL2(batchMsg(signedTxMsg(t1), tx(n)), 0); ok || got != nil {
+			t.Errorf("a nested message of %d bytes: ok %v, %d txs", n, ok, len(got))
+		}
+	}
+	// a length prefix above the limit (no data behind it) ends the batch quietly with what it has
+	if got, ok := parseL2(append(batchMsg(signedTxMsg(t1)), binary.BigEndian.AppendUint64(nil, maxL2MessageSize+1)...), 0); !ok || len(got) != 1 {
+		t.Errorf("an oversize nested length with no data: ok %v, %d txs", ok, len(got))
 	}
 	for name, c := range map[string]struct {
 		tx []byte

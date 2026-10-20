@@ -104,5 +104,12 @@ func verifyDelayed(arb *arbPins, root common.Hash, bridge *ethproof.AccountState
 	if !sameTxs(got, want) {
 		return 0, delayedUnproven(types, nonce, "k", d.K, "message_kind", d.MsgKind)
 	}
+	// The block and the message agree, but if both are empty the agreement is vacuous: the block holds nothing but the internal start-block
+	// transaction (or nothing) and the message derives nothing (an empty batch), so no transaction of the block is shown to have been
+	// posted. That is the same named state the sequencer branch raises for a block without content to match (spec 5.6 O4: the match is
+	// of the block's non-internal transactions; there are none).
+	if len(got) == 0 {
+		return 0, contentNotFound(ContentNoStandardTransactions, "batch", e.BatchSeq)
+	}
 	return d.K, nil
 }

@@ -105,6 +105,14 @@
   },
   {
     "file": "derive.go",
+    "function": "parseL2Msg",
+    "operator": "cmp_boundary",
+    "original": "n.Uint64() > maxL2MessageSize",
+    "mutated": "n.Uint64() >= maxL2MessageSize",
+    "reason": "since the top-level cap (parseL2 and deriveDelayed both refuse a message longer than maxL2MessageSize before parseL2Msg runs) a nested length of maxL2MessageSize or more is always longer than the bytes left of its outer message, so take(n) fails and the loop returns the same `out, true` as the size check: `>` and `>=` give the same result. The size check stays as the faithful port of Nitro's per-nested limit."
+  },
+  {
+    "file": "derive.go",
     "function": "deriveDelayed",
     "operator": "cmp_boundary",
     "original": "dataLenW.Big().Uint64() > maxL2MessageSize",
