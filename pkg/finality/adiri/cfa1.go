@@ -15,6 +15,22 @@
 //     pkg/crypto/bls or as one random linear combination; the verdict is the lowest failing epoch either way;
 //  5. the seal and the link (O4).
 //
+// Fields the TypeScript port must reproduce exactly (they extend the field lists of states.json; extra fields are allowed there):
+//
+//   - committee_chain_broken{epoch, check, ...}: signers_below_quorum adds got, need; signer_index_invalid adds index, signer,
+//     committee_size; committee_duplicate_key and public_key_invalid add index; committee_incompatible adds reason
+//     (larger_than_expected, set_mismatch, not_subset, below_two_thirds, below_min_committee_size), size, expected,
+//     min_committee_size; signature_invalid adds reason (encoding, identity, subgroup, pairing). The lowest failing epoch
+//     is named in both signature modes.
+//   - evidence_pin_mismatch{pin, want, got}: chain_id (numbers) or genesis_committee (set sizes).
+//   - adiri_incarnation_mismatch{expected_genesis, served_genesis, expected_number, served_number, pin}.
+//   - epoch_record_codec_unsupported{epoch:0, pinned, supported}.
+//   - finality_link_broken{from=F, to=N, at, check, ...}; finality_header_chain_broken{spine:"adiri", at_number, want_hash,
+//     got_hash, reason}; finality_block_mismatch{field: spineLastNumber | spineLastHash | spineLastHeader | blockNumber | blockHash}.
+//   - the verdict (code "finalized" in the vectors): epoch, chain_len, committee_size, signers, final_number, final_hash,
+//     distance, link_kind, consensus_root_matches (F.parentBeaconBlockRoot == record(E).final_consensus.hash, reported),
+//     committee_shrunk (a list of the canonical committee_shrunk{epoch,size,expected} texts, ascending).
+//
 // The package has no init(): Register(reg) is called by the integration package.
 package adiri
 

@@ -291,3 +291,15 @@ func recordLive(rpc, cache, out string, facts cacheFacts) (map[string][]byte, []
 }
 
 func sha(b []byte) string { s := sha256.Sum256(b); return hex.EncodeToString(s[:]) }
+
+// factsFromEvidence derives the same facts loadFacts reads from the fetched JSON, from the CFA1 of a recorded live evidence file
+// (records 0..E): it lets the adversarial set be regenerated offline from the committed base.
+func factsFromEvidence(ev []byte) cacheFacts {
+	var f cacheFacts
+	for _, r := range parse(ev).cf.Records {
+		f.finalNumber = append(f.finalNumber, r.FinalState.Number)
+		f.finalHash = append(f.finalHash, r.FinalState.Hash)
+		f.signers = append(f.signers, len(r.Signers))
+	}
+	return f
+}

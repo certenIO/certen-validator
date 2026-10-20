@@ -11,6 +11,14 @@
 // real bytes, and generates the SYNTHETIC vectors with test keys that live only in the gitignored keys/ directory next to this
 // file (the vectors contain public material only). Every expected verdict is a literal written in this package, not computed
 // by the verifier under test.
+//
+// Vector format (finality_adiri1/1): vectors.json holds {format, vectors[]}; each vector is {name, group live|adversarial|synthetic,
+// note, leg{chain,number,hash,header_hex?}, pins "embedded" | the adiri pins section, evidence (a file under evidence/) or base +
+// edits, expect}. Edits are {offset, delete, insert(hex)} against the BASE vector's evidence bytes, applied from the highest
+// offset to the lowest. expect is the canonical text {"code":...,"fields":{...}} (sorted keys, unsigned integers as decimal
+// strings, byte arrays as lowercase hex); a verdict has code "finalized". MANIFEST.json lists the sha256 of every file;
+// MANIFEST.json.sha256 is the sha256 of MANIFEST.json. A vector whose pins is an object is verified against that section
+// (the live vectors use the embedded pins section).
 package main
 
 import (
