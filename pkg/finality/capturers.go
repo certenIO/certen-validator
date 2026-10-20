@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/certen/independant-validator/pkg/ethrpc"
 	"github.com/certen/independant-validator/pkg/metrics"
 )
 
@@ -79,6 +80,7 @@ func (c SupervisorConfig) withDefaults() SupervisorConfig {
 	if c.Logf == nil {
 		c.Logf = func(string, ...any) {}
 	}
+	c.Logf = ethrpc.RedactingLogf(c.Logf) // a capture loop's failure text may carry provider text
 	return c
 }
 
@@ -121,7 +123,7 @@ func superviseCapturer(ctx context.Context, c Capturer, cfg SupervisorConfig) {
 		if ctx.Err() != nil {
 			return
 		}
-		if time.Since(started) > 2*cfg.RestartMax {
+		if time.Since(started) > cfg.RestartMax+cfg.RestartMax {
 			wait = cfg.RestartMin // it ran for a long time: this is a new failure, not a crash loop
 		}
 		cfg.Logf("[FINALITY] capturer %s (chain %d) stopped: %v; restarting in %s", c.Name(), c.Chain(), err, wait)

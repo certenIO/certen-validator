@@ -12,6 +12,7 @@ import (
 
 	"github.com/certen/independant-validator/pkg/envvar"
 	"github.com/certen/independant-validator/pkg/ethproof"
+	"github.com/certen/independant-validator/pkg/ethrpc"
 	"github.com/certen/independant-validator/pkg/metrics"
 )
 
@@ -134,6 +135,9 @@ func (c UpgraderConfig) withDefaults() UpgraderConfig {
 	if c.Logf == nil {
 		c.Logf = func(string, ...any) {}
 	}
+	// no line the worker logs carries a credential: provider and transport text reaches these lines through error values, and the
+	// formatted line is redacted as a whole (pkg/ethrpc, the one sanitiser)
+	c.Logf = ethrpc.RedactingLogf(c.Logf)
 	if c.Now == nil {
 		c.Now = time.Now
 	}

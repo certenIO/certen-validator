@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/certen/independant-validator/pkg/ethrpc"
 )
 
 // BuilderStatusFormat is the format string of a builder status document (the jsonb `state` column of proof_finality_status).
@@ -160,8 +162,26 @@ func BuilderStatusOf(proofID string, chain uint64, target, reached Level, pd *Pe
 	default:
 		s.Class = BuilderUnavailable
 	}
-	s.State = st
+	s.State = redactedState(st)
 	return s
+}
+
+// redactedState is st with every text field (a string or an error value) passed through the one
+// sanitiser of provider text, pkg/ethrpc RedactText, before it is stored in a status row: the row is read by the gateway and
+// must never carry a credential from a provider URL or response. Numbers, bytes and levels are left as they are.
+func redactedState(st *StateError) *StateError {
+	out := NewState(st.Code)
+	for k, v := range st.Fields {
+		switch x := v.(type) {
+		case string:
+			out.Fields[k] = ethrpc.RedactText(x)
+		case error:
+			out.Fields[k] = ethrpc.RedactText(x.Error())
+		default:
+			out.Fields[k] = v
+		}
+	}
+	return out
 }
 
 // VerifiedBuilderStatus is the row of a level that is stored.
