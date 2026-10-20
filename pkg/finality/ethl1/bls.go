@@ -27,8 +27,8 @@ type committee struct {
 	errs  map[int]error
 }
 
-func newCommittee(raw []byte) *committee {
-	return &committee{raw: raw, root: hashTreeRootSyncCommittee(raw), keys: make([]bls12381.G1Affine, SyncCommitteeSize), state: make([]uint8, SyncCommitteeSize)}
+func newCommittee(raw []byte, size int) *committee {
+	return &committee{raw: raw, root: hashTreeRootSyncCommitteeN(raw, size), keys: make([]bls12381.G1Affine, size), state: make([]uint8, size)}
 }
 
 // key decompresses seat i once. G1Affine.SetBytes performs the on-curve and subgroup checks; the identity is refused here
@@ -86,7 +86,7 @@ func fastAggregateVerify(c *committee, agg syncAggregate, msg [32]byte) error {
 	}
 	var sum bls12381.G1Jac
 	n := 0
-	for i := 0; i < SyncCommitteeSize; i++ {
+	for i := 0; i < len(c.state); i++ {
 		if !agg.bit(i) {
 			continue
 		}
