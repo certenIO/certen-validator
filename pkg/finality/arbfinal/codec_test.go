@@ -145,3 +145,95 @@ func TestTruncationAtEveryFieldNamesTheField(t *testing.T) {
 		t.Errorf("cut at the start of nodes: %v", err)
 	}
 }
+
+// A cut inside the LC part names the LC field it falls in, and a cut inside a length-prefixed value reports the value as too long
+// for what remains.
+func TestTruncationInsideTheLCNamesTheField(t *testing.T) {
+	w := synthworld.Assemble(synthworld.NewParts("lc-trunc"))
+	c, err := finality.DecodeContainer(w.Container, finality.DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := boundsOf(t, w)
+	prof := 4 + len(ethl1.ProfileLC)
+	bodyLen := 4 + len(w.Evidence.LC.AnchorBody.SSZ)
+	steps := []struct {
+		part string
+		size int
+	}{
+		{"lc.profile.len", prof}, {"lc.anchorKind", 1}, {"lc.anchorPeriod", 8}, {"lc.anchorRoot", 32}, {"lc.anchorBody.layout", 1},
+		{"lc.anchorBody.len", bodyLen}, {"lc.links.count", 4}, {"lc.finalUpdate.layout", 1},
+	}
+	off := 0
+	for _, s := range steps {
+		_, err := arbfinal.Decode(c.Body[:off], b)
+		st, ok := finality.AsNamed(err)
+		if !ok || st.Code != finality.CodeEvidenceMalformed || st.Fields["part"] != s.part {
+			t.Errorf("cut at %d (start of %s): got %v", off, s.part, err)
+		}
+		off += s.size
+	}
+	// a length that exceeds what remains: the profile string cut after its length word, and the committee cut in the middle
+	for _, c2 := range []struct {
+		at   int
+		part string
+	}{{4 + 2, "lc.profile"}, {prof + 1 + 8 + 32 + 1 + 4 + 100, "lc.anchorBody"}} {
+		_, err := arbfinal.Decode(c.Body[:c2.at], b)
+		st, ok := finality.AsNamed(err)
+		if !ok || st.Fields["part"] != c2.part || st.Fields["reason"] != finality.ReasonLengthExceedsRemaining {
+			t.Errorf("cut at %d: got %v", c2.at, err)
+		}
+	}
+}
+
+// The l2Spine count bound and the count-against-remaining guard are exact: a count equal to max_header_chain passes (and one above
+// is refused), and a count whose minimum size equals the bytes that remain passes the guard (the body then ends at the next field).
+func TestL2SpineCountBoundariesAreExact(t *testing.T) {
+	w := synthworld.Assemble(synthworld.NewParts("l2-bounds"))
+	c, err := finality.DecodeContainer(w.Container, finality.DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := boundsOf(t, w)
+	n := len(w.Evidence.L2Spine)
+	b.MaxHeaderChain = n
+	if _, err := arbfinal.Decode(c.Body, b); err != nil {
+		t.Fatalf("a spine of exactly max_header_chain headers: %v", err)
+	}
+	b.MaxHeaderChain = n - 1
+	if _, err := arbfinal.Decode(c.Body, b); err == nil {
+		t.Fatal("a spine of max_header_chain+1 headers was accepted")
+	}
+	// locate the l2Spine count: the body up to it is everything before the first L2 header's length word
+	idx := bytes.Index(c.Body, w.Evidence.L2Spine[0])
+	if idx < 8 {
+		t.Fatal("cannot locate the l2Spine")
+	}
+	prefix := c.Body[:idx-8]
+	b.MaxHeaderChain = 32768
+	for _, tc := range []struct {
+		count     uint32
+		zeroWords int
+		part      string
+		reason    finality.EvidenceReason
+	}{
+		{3, 3, "confTxIndex", ""},                               // 3*4 bytes remain: the guard passes, the next field is missing
+		{3, 2, "l2Spine", finality.ReasonCountExceedsRemaining}, // 3*4 > 8 remaining
+		{1, 1, "confTxIndex", ""},                               // one zero-length header, then nothing
+	} {
+		body := append([]byte(nil), prefix...)
+		body = append(body, byte(tc.count>>24), byte(tc.count>>16), byte(tc.count>>8), byte(tc.count))
+		for i := 0; i < tc.zeroWords; i++ {
+			body = append(body, 0, 0, 0, 0)
+		}
+		_, err := arbfinal.Decode(body, b)
+		st, ok := finality.AsNamed(err)
+		if !ok || st.Fields["part"] != tc.part {
+			t.Errorf("count %d with %d zero words: got %v, want part %s", tc.count, tc.zeroWords, err, tc.part)
+			continue
+		}
+		if tc.reason != "" && st.Fields["reason"] != tc.reason {
+			t.Errorf("count %d with %d zero words: reason %v", tc.count, tc.zeroWords, st.Fields["reason"])
+		}
+	}
+}

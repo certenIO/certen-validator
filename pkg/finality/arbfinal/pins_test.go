@@ -3,6 +3,7 @@
 package arbfinal_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"math/big"
 	"testing"
@@ -206,5 +207,45 @@ func TestEveryPinDomainCheckNamesItsField(t *testing.T) {
 	}
 	if !roles[arbfinal.RoleAdminLogic] || !roles[arbfinal.RoleUserLogic] {
 		t.Fatalf("logic pins %v", a.LogicPins)
+	}
+}
+
+// The accepted edge of each numeric pin domain, and the conversion of a ledger entry that carries a block root.
+func TestPinDomainEdgesAreAcceptedAndTheL1ConversionKeepsBlockRoots(t *testing.T) {
+	for _, c := range []struct {
+		path []string
+		val  any
+	}{
+		{[]string{"layout", "status_shift_bits"}, 248},
+		{[]string{"layout", "fast_confirmer_shift_bits"}, 96},
+		{[]string{"layout", "fast_confirmer_shift_bits"}, 0},
+		{[]string{"max_header_chain"}, 1},
+		{[]string{"bold_genesis_l2_block"}, 1},
+	} {
+		if _, err := arbfinal.LoadPins(editSection(t, c.path, c.val)); err != nil {
+			t.Errorf("%v = %v: %v", c.path, c.val, err)
+		}
+	}
+	embedded, err := finality.EmbeddedPins()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := *embedded
+	e := *embedded.EthSepolia
+	root := "0x" + common.Bytes2Hex(bytes.Repeat([]byte{0x42}, 32))
+	e.Anchors = []finality.AnchorPin{
+		{Period: 5, CommitteeRoot: root, BlockRoot: root, WspEpochs: 279},
+		{Period: 6, CommitteeRoot: root, WspEpochs: 279},
+	}
+	p.EthSepolia = &e
+	out, err := arbfinal.EthL1Pins(&p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Anchors) != 2 || out.Anchors[0].BlockRoot == nil || out.Anchors[1].BlockRoot != nil || *out.Anchors[0].BlockRoot != [32]byte(bytes.Repeat([]byte{0x42}, 32)) {
+		t.Fatalf("anchors %+v", out.Anchors)
+	}
+	if _, err := arbfinal.EthL1Pins(&finality.Pins{}); err == nil {
+		t.Fatal("pins without the Sepolia section converted")
 	}
 }
