@@ -51,7 +51,8 @@ func TestTheInitialPinsHoldExactlyTheSepoliaNetworkSectionOfSection42(t *testing
 	}
 	if e.ChainID != 11155111 || e.GenesisValidatorsRoot != "0xd8ea171f3c94aea21ebc42a1ed61052acf3f9209c00e4efbaaddac09ed9b8078" ||
 		e.GenesisTime != 1655733600 || e.Spec != "consensus-specs v1.7.0-beta.4 aa16bb4c" || e.SyncCommitteeSize != 512 ||
-		e.MinParticipants != 342 || e.EpochsPerPeriod != 256 || e.MaxLinks != 64 || e.MaxSpineHeaders != 16384 || len(e.Anchors) != 0 {
+		e.MinParticipants != 342 || e.EpochsPerPeriod != 256 || e.MaxLinks != 64 || e.MaxSpineHeaders != 16384 || len(e.Anchors) != 1 || e.Anchors[0].Period != 1378 ||
+		e.Anchors[0].BlockRoot != "0x5f71d7f650f9252b48749b5f062c0c234e01afd69f364ab600e2b6051494b20d" || e.Anchors[0].WspEpochs < MinWspEpochs {
 		t.Fatalf("%+v", e)
 	}
 	type row struct {
@@ -117,11 +118,13 @@ func TestLoadPinsRefusesAHashMismatchAndEveryMalformedFile(t *testing.T) {
 		"wrong format": edit(func(s string) string {
 			return strings.Replace(s, "certen-finality-pins/1", "certen-finality-pins/2", 1)
 		}),
-		"not UTF-8":         append(append([]byte(nil), good...), 0xff),
-		"unknown inner key": edit(func(s string) string { return strings.Replace(s, `"anchors": []`, `"anchors": [], "extra": 1`, 1) }),
-		"bad genesis root":  edit(func(s string) string { return strings.Replace(s, "0xd8ea17", "0xD8ea17", 1) }),
-		"layout":            edit(func(s string) string { return strings.Replace(s, `"layout": "gloas"`, `"layout": "fulu"`, 1) }),
-		"trailing data":     append(append([]byte(nil), good...), []byte("{}")...),
+		"not UTF-8": append(append([]byte(nil), good...), 0xff),
+		"unknown inner key": edit(func(s string) string {
+			return strings.Replace(s, `"epochs_per_period": 256,`, `"epochs_per_period": 256, "extra": 1,`, 1)
+		}),
+		"bad genesis root": edit(func(s string) string { return strings.Replace(s, "0xd8ea17", "0xD8ea17", 1) }),
+		"layout":           edit(func(s string) string { return strings.Replace(s, `"layout": "gloas"`, `"layout": "fulu"`, 1) }),
+		"trailing data":    append(append([]byte(nil), good...), []byte("{}")...),
 		"duplicate key": edit(func(s string) string {
 			return strings.Replace(s, `"format": "certen-finality-pins/1",`, `"format": "certen-finality-pins/1", "format": "certen-finality-pins/1",`, 1)
 		}),

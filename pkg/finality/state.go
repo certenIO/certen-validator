@@ -130,6 +130,24 @@ const (
 	ReasonLinkKindUnknown          EvidenceReason = "link_kind_unknown"
 	ReasonSpineEmpty               EvidenceReason = "spine_empty"
 	ReasonBadEnumValue             EvidenceReason = "bad_enum_value"
+
+	// The Sepolia L1-finality kind (pkg/finality/ethsepolia, RB11-C2): the framing reasons of the light-client part, as pkg/finality/ethl1
+	// names them, and the spine that does not end at the leg block.
+	ReasonAttestedOffset        EvidenceReason = "attested_offset"
+	ReasonEmpty                 EvidenceReason = "empty"
+	ReasonExecutionOffset       EvidenceReason = "execution_offset"
+	ReasonExtraDataLength       EvidenceReason = "extra_data_length"
+	ReasonExtraDataOffset       EvidenceReason = "extra_data_offset"
+	ReasonFinalizedOffset       EvidenceReason = "finalized_offset"
+	ReasonHeaderLength          EvidenceReason = "header_length"
+	ReasonHeaderOffset          EvidenceReason = "header_offset"
+	ReasonLayoutByteNotZero     EvidenceReason = "layout_byte_not_zero"
+	ReasonLayoutByteUnknown     EvidenceReason = "layout_byte_unknown"
+	ReasonLayoutByteZero        EvidenceReason = "layout_byte_zero"
+	ReasonLength                EvidenceReason = "length"
+	ReasonSpineNotEndingAtBlock EvidenceReason = "spine_not_ending_at_block"
+	ReasonUnknownKind           EvidenceReason = "unknown_kind"
+	ReasonUnsupportedProfile    EvidenceReason = "unsupported_profile"
 )
 
 // AddendumReason is the reason of finality_addendum_malformed (the JSON form of an addendum, a section and a proof id).

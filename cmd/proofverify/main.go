@@ -97,6 +97,9 @@ func main() {
 			"addenda) offline and judge it against the leg's Settlement, from which D0 is recomputed: name the Settlement with "+
 			"--outcome-file <exported outcome evidence> or with --proof-id and --db (the stored bundle); with no Settlement the "+
 			"file judges no level and says so (finality_included_unavailable)")
+		pinsSelfcheck = flag.Bool("pins-selfcheck", false, "re-derive the whole embedded Sepolia ledger of the finality pins from its root pin: every "+
+			"entry from its predecessor by the light-client link beside the file (pkg/finality/pins-links), judged by the same verifier as a proof; "+
+			"offline, no database (V2_SPEC_S7 4.3, SO3)")
 		incEvidence = flag.String("incarnation-evidence", "", "with --governance: the incarnation's genesis evidence (JSON, "+
 			"cmd/incarnation), from which a v3 intent certificate's proof v2 is verified, walking the Directory's major "+
 			"blocks stored in the database from that genesis")
@@ -118,6 +121,14 @@ func main() {
 		os.Exit(exitFailed)
 	}
 
+	if *pinsSelfcheck {
+		if *proofID != "" || *outcome || *outcomeFile != "" || *l5 || *govern || *finalityOn || *finalityFile != "" {
+			fmt.Fprintln(os.Stderr, "--pins-selfcheck checks the embedded pins on their own: no --proof-id, --finality, --finality-file, --outcome, --outcome-file, --l5 or --governance")
+			os.Exit(exitUsage)
+		}
+		cutNetwork()
+		os.Exit(reportPinsSelfcheck(os.Stdout, os.Stderr, pins))
+	}
 	if *finalityFile != "" {
 		// the Settlement source of the file: an exported outcome evidence file, or a stored proof's bundle (--proof-id with --db)
 		if *outcome || *l5 || *govern || *finalityOn || (*outcomeFile != "" && *proofID != "") {

@@ -7,58 +7,16 @@
 package l1adapt
 
 import (
-	"encoding/hex"
-	"strings"
-
 	"github.com/certen/independant-validator/pkg/finality"
 	"github.com/certen/independant-validator/pkg/finality/ethl1"
 )
 
-// unhex decodes a 0x-prefixed lower-case hex string of exactly n bytes; anything else yields (nil, false). The framework has
-// already refused a pins file with any other shape (LoadPins), so a failure here cannot arise from the embedded pins.
-func unhex(s string, n int) ([]byte, bool) {
-	if !strings.HasPrefix(s, "0x") || s != strings.ToLower(s) {
-		return nil, false
-	}
-	b, err := hex.DecodeString(s[2:])
-	return b, err == nil && len(b) == n
-}
-
-// Pins converts the framework's eth_sepolia section into the L1 head verifier's pins.
-func Pins(e *finality.EthSepoliaPins) ethl1.Pins {
-	var p ethl1.Pins
-	p.Network.ChainID = e.ChainID
-	gvr, _ := unhex(e.GenesisValidatorsRoot, 32)
-	copy(p.Network.GenesisValidatorsRoot[:], gvr)
-	for _, f := range e.Forks {
-		fk := ethl1.Fork{Name: f.Name, Epoch: f.Epoch}
-		v, _ := unhex(f.Version, 4)
-		copy(fk.Version[:], v)
-		if f.Layout != nil {
-			switch *f.Layout {
-			case "electra":
-				fk.Layout = ethl1.LayoutElectra
-			case "gloas":
-				fk.Layout = ethl1.LayoutGloas
-			}
-		}
-		p.Network.Forks = append(p.Network.Forks, fk)
-	}
-	for _, a := range e.Anchors {
-		an := ethl1.Anchor{Period: a.Period, WSPEpochs: a.WspEpochs}
-		cr, _ := unhex(a.CommitteeRoot, 32)
-		copy(an.CommitteeRoot[:], cr)
-		if a.BlockRoot != "" {
-			br, _ := unhex(a.BlockRoot, 32)
-			var b32 [32]byte
-			copy(b32[:], br)
-			an.BlockRoot = &b32
-		}
-		p.Anchors = append(p.Anchors, an)
-	}
-	p.MinParticipants, p.MaxLinks, p.MaxSpineHeaders = e.MinParticipants, e.MaxLinks, e.MaxSpineHeaders
-	return p
-}
+// Pins converts the framework's eth_sepolia section into the L1 head verifier's pins. The conversion itself is
+// finality.EthSepoliaPins.L1Pins (it lives in pkg/finality because the ledger judges steps with a custom anchor list and
+// pkg/finality cannot import this package); this is the entry point every kind uses, with the section's own anchors. The
+// framework has already refused a pins file with any malformed hex field (LoadPins), so a decoding failure cannot arise from the
+// embedded pins.
+func Pins(e *finality.EthSepoliaPins) ethl1.Pins { return e.L1Pins(e.Anchors) }
 
 // PinsOf is the L1 head verifier's view of the eth_sepolia section of a pins file. A file without the section is
 // finality_pin_unknown (from Pins.Sepolia).
