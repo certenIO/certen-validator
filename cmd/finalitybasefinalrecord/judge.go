@@ -41,7 +41,7 @@ func judgeCmd(ctx context.Context, dir, legs string) error {
 		if err := json.Unmarshal(raw, &lf); err != nil {
 			return err
 		}
-		rows, err := store.Rows(ctx, uint64(basefinal.Chain), basefinal.ItemGame(addr20(lf.Game)))
+		rows, err := basefinal.Rows(ctx, store, uint64(basefinal.Chain), basefinal.ItemGame(addr20(lf.Game)))
 		if err != nil || len(rows) == 0 {
 			fmt.Printf("%s: no capture\n", lf.Name)
 			continue

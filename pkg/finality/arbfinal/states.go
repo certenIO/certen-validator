@@ -5,6 +5,7 @@ package arbfinal
 import (
 	"github.com/certen/independant-validator/pkg/finality"
 	"github.com/certen/independant-validator/pkg/finality/ethl1"
+	"github.com/certen/independant-validator/pkg/finality/l1adapt"
 )
 
 // The codes this kind raises beyond the framework's (V2_SPEC_S7 section 7, Arbitrum R, Base R shared, L1 head R). The machine
@@ -147,14 +148,8 @@ func PreimageMismatch(part PreimagePart) *finality.StateError {
 	return finality.NewState(CodePreimageMismatch, "part", part)
 }
 
-// FaultState adapts an L1 head fault to the framework's state, same code and same field names.
-func FaultState(f *ethl1.Fault) *finality.StateError {
-	s := finality.NewState(f.Code)
-	for k, v := range f.Fields {
-		s.Fields[k] = v
-	}
-	return s
-}
+// FaultState adapts an L1 head fault to the framework's state, same code and same field names (l1adapt's conversion).
+func FaultState(f *ethl1.Fault) *finality.StateError { return l1adapt.FaultState(f) }
 
 // asState returns err as a *StateError: a StateError as is, an L1 head fault adapted, anything else a verifier failure (never
 // a silent pass).
@@ -165,8 +160,8 @@ func asState(err error) error {
 	if s, ok := finality.AsNamed(err); ok {
 		return s
 	}
-	if f, ok := err.(*ethl1.Fault); ok {
-		return FaultState(f)
+	if _, ok := err.(*ethl1.Fault); ok {
+		return l1adapt.State(err)
 	}
 	return finality.NewState(finality.CodeVerifierFailed, "cause", err.Error())
 }

@@ -12,10 +12,10 @@ package build
 
 import (
 	"context"
-	"sync"
 
 	"github.com/ethereum/go-ethereum/common"
 
+	"github.com/certen/independant-validator/pkg/finality"
 	"github.com/certen/independant-validator/pkg/finality/ethl1"
 )
 
@@ -83,57 +83,14 @@ type LCSource interface {
 	LC(ctx context.Context) (ethl1.LC, error)
 }
 
-// CaptureStore holds proofs captured near the head until the builder can attest them (spec 2.8). The table belongs to
-// RB11-B2B2; this interface is the logic's whole dependency on it. A reorg yields a second row for the same height with another
-// hash: a Get names the hash it wants.
-type CaptureStore interface {
-	Put(chain, l1Block uint64, l1Hash [32]byte, item string, data []byte) error
-	// Get returns the bytes stored under the key and whether they exist.
-	Get(chain, l1Block uint64, l1Hash [32]byte, item string) ([]byte, bool, error)
-}
-
-type capKey struct {
-	chain, block uint64
-	hash         [32]byte
-	item         string
-}
+// CaptureStore holds proofs captured near the head until the builder can attest them (spec 2.8): the framework's insert-only
+// store (pkg/database.FinalityCaptureStore in production). A reorg yields a second row for the same height with another hash: a
+// Get names the hash it wants.
+type CaptureStore = finality.CaptureStore
 
 // MemStore is the in-memory CaptureStore of tests and of the one-shot recorder. Rows are insert-only like the real table: a
 // second Put of the same key must carry the same bytes.
-type MemStore struct {
-	mu   sync.Mutex
-	rows map[capKey][]byte
-}
+type MemStore = finality.MemCaptureStore
 
 // NewMemStore returns an empty store.
-func NewMemStore() *MemStore { return &MemStore{rows: map[capKey][]byte{}} }
-
-// Put implements CaptureStore.
-func (m *MemStore) Put(chain, l1Block uint64, l1Hash [32]byte, item string, data []byte) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	k := capKey{chain, l1Block, l1Hash, item}
-	if old, ok := m.rows[k]; ok {
-		if string(old) != string(data) {
-			return errConflict
-		}
-		return nil
-	}
-	m.rows[k] = append([]byte(nil), data...)
-	return nil
-}
-
-// Get implements CaptureStore.
-func (m *MemStore) Get(chain, l1Block uint64, l1Hash [32]byte, item string) ([]byte, bool, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	v, ok := m.rows[capKey{chain, l1Block, l1Hash, item}]
-	return append([]byte(nil), v...), ok, nil
-}
-
-// Len is the number of rows (tests).
-func (m *MemStore) Len() int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return len(m.rows)
-}
+func NewMemStore() *MemStore { return finality.NewMemCaptureStore() }

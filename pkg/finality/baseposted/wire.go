@@ -5,6 +5,7 @@ package baseposted
 import (
 	"github.com/certen/independant-validator/pkg/finality"
 	"github.com/certen/independant-validator/pkg/finality/ethl1"
+	"github.com/certen/independant-validator/pkg/finality/l1adapt"
 )
 
 // BlobSize is a raw EIP-4844 blob.
@@ -111,7 +112,7 @@ func DecodeBody(body []byte, lim finality.Limits, ep ethl1.Pins, maxBlobs int) (
 		return out, err
 	}
 	if out.LC, err = ep.DecodeLC(body[:n]); err != nil {
-		return out, stateOf(err)
+		return out, l1adapt.State(err)
 	}
 	r := finality.NewReader(body[n:], lim)
 	spineMax := ep.MaxSpineHeaders

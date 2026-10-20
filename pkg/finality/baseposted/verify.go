@@ -19,6 +19,7 @@ import (
 	"github.com/certen/independant-validator/pkg/finality"
 	"github.com/certen/independant-validator/pkg/finality/baseposted/kzgsetup"
 	"github.com/certen/independant-validator/pkg/finality/ethl1"
+	"github.com/certen/independant-validator/pkg/finality/l1adapt"
 )
 
 // The Base R and unavailability codes this kind raises (V2_SPEC_S7 section 7); registered in testdata/finality/states.json.
@@ -154,7 +155,7 @@ func (Kind) Verify(p *finality.Pins, b finality.BlockRef, evidence []byte) (fina
 	if err != nil {
 		return finality.Verdict{}, err
 	}
-	ep := ethl1Pins(eth)
+	ep := l1adapt.Pins(eth)
 	lim := finality.DefaultLimits()
 	c, err := finality.DecodeContainer(evidence, lim)
 	if err != nil {
@@ -212,7 +213,7 @@ func (Kind) Verify(p *finality.Pins, b finality.BlockRef, evidence []byte) (fina
 	}
 	covered, err := head.Covers(body.L1Spine, ep.MaxSpineHeaders)
 	if err != nil {
-		return finality.Verdict{}, stateOf(err)
+		return finality.Verdict{}, l1adapt.State(err)
 	}
 	return verifyChannel(bp, body, covered, l2, head)
 }
@@ -231,7 +232,7 @@ func verifyChannel(bp *Pins, body Body, covered []ethl1.L1Block, l2 finality.Hea
 		// O1: the frame L1 block is a header of the covered spine, by number.
 		blk, err := ethl1.BlockAt(covered, f.L1Block)
 		if err != nil {
-			return finality.Verdict{}, stateOf(err)
+			return finality.Verdict{}, l1adapt.State(err)
 		}
 		raw := body.L1Spine[covered[0].Number-f.L1Block]
 		hdr, err := finality.ReadHeader(raw)

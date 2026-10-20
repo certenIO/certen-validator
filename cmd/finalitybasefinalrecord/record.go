@@ -61,7 +61,7 @@ func recordCmd(ctx context.Context, dir, raw, out string) error {
 	store := basefinal.DirStore{Dir: dir}
 	rpc := liveRPC()
 	for _, c := range recordedCases {
-		rows, err := store.Rows(ctx, uint64(basefinal.Chain), basefinal.ItemGame(addr20(c.Game)))
+		rows, err := basefinal.Rows(ctx, store, uint64(basefinal.Chain), basefinal.ItemGame(addr20(c.Game)))
 		if err != nil || len(rows) == 0 {
 			fmt.Printf("%s: no capture (%v)\n", c.Name, err)
 			continue
@@ -131,7 +131,7 @@ func recordSpine(ctx context.Context, dir, raw, out string) error {
 	store := basefinal.DirStore{Dir: dir}
 	low := uint64(1<<63 - 1)
 	for _, c := range recordedCases {
-		rows, _ := store.Rows(ctx, uint64(basefinal.Chain), basefinal.ItemGame(addr20(c.Game)))
+		rows, _ := basefinal.Rows(ctx, store, uint64(basefinal.Chain), basefinal.ItemGame(addr20(c.Game)))
 		for _, r := range rows {
 			if r.L1Block < low {
 				low = r.L1Block

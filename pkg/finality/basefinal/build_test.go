@@ -14,6 +14,7 @@ import (
 
 	"github.com/certen/independant-validator/pkg/finality"
 	"github.com/certen/independant-validator/pkg/finality/ethl1"
+	"github.com/certen/independant-validator/pkg/finality/l1adapt"
 )
 
 // liveWorld is the published live vector turned into fake providers: the L1 spine, the L2 headers, the game and the light-client
@@ -59,7 +60,7 @@ func loadLive(t *testing.T) *liveWorld {
 		t.Fatal(err)
 	}
 	es, _ := pins.Sepolia()
-	body, err := DecodeBody(cont.Body, finality.DefaultLimits(), ethl1Pins(es), bp.MaxL2Headers)
+	body, err := DecodeBody(cont.Body, finality.DefaultLimits(), l1adapt.Pins(es), bp.MaxL2Headers)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +167,7 @@ func (w *liveWorld) builder(t *testing.T, store CaptureStore) *Builder {
 func (w *liveWorld) capture(t *testing.T, store CaptureStore, block uint64, hash [32]byte) {
 	t.Helper()
 	c := GameCapture{L1Block: block, L1Hash: hash, Game: w.body.GameProxy, GameCode: w.body.GameCode, Nodes: w.body.Nodes}
-	if err := store.Put(context.Background(), uint64(Chain), block, hash, ItemGame(w.body.GameProxy), c.Encode()); err != nil {
+	if err := store.Put(context.Background(), finality.CaptureKey{Chain: uint64(Chain), L1Block: block, L1Hash: hash, Item: ItemGame(w.body.GameProxy)}, c.Encode()); err != nil {
 		t.Fatal(err)
 	}
 }

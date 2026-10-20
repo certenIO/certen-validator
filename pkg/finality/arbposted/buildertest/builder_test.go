@@ -91,7 +91,7 @@ func load(t *testing.T) *fixture {
 		L1Block: 1000, L1Hash: crypto.Keccak256Hash([]byte("event block")), VersionedHashes: e.VersionedHashes}
 	f.batch.AfterAcc = arbposted.Accumulator(e.BeforeAcc, arbposted.DataHash(e), e.DelayedAcc)
 	put := func(k capture.Key, b []byte) {
-		if err := f.store.Put(k, b); err != nil {
+		if err := f.store.Put(context.Background(), k, b); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -109,7 +109,7 @@ func load(t *testing.T) *fixture {
 func (f *fixture) putProof(t *testing.T, block uint64) {
 	t.Helper()
 	p := capture.ProofRecord{Kind: capture.ProofBatchAcc, Index: f.ev.BatchSeq, ProofBlock: block, ProofBlockHash: crypto.Keccak256Hash([]byte("proof block")), Nodes: f.ev.Nodes}
-	if err := f.store.Put(capture.Key{Chain: finality.ChainArbitrumSepolia, L1Block: block, L1Hash: p.ProofBlockHash, Item: capture.ItemProof(f.ev.BatchSeq)}, p.Encode()); err != nil {
+	if err := f.store.Put(context.Background(), capture.Key{Chain: finality.ChainArbitrumSepolia, L1Block: block, L1Hash: p.ProofBlockHash, Item: capture.ItemProof(f.ev.BatchSeq)}, p.Encode()); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -118,7 +118,7 @@ func (f *fixture) putProof(t *testing.T, block uint64) {
 func (f *fixture) without(t *testing.T, drop func(capture.Key) bool) *capture.MemStore {
 	t.Helper()
 	out := capture.NewMemStore()
-	keys, err := f.store.Keys(finality.ChainArbitrumSepolia, "")
+	keys, err := f.store.ListByRange(context.Background(), finality.ChainArbitrumSepolia, 0, finality.MaxCaptureBlock, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,11 +126,11 @@ func (f *fixture) without(t *testing.T, drop func(capture.Key) bool) *capture.Me
 		if drop(k) {
 			continue
 		}
-		b, ok, err := f.store.Get(k)
+		b, ok, err := f.store.Get(context.Background(), k)
 		if err != nil || !ok {
 			t.Fatal(err)
 		}
-		if err := out.Put(k, b); err != nil {
+		if err := out.Put(context.Background(), k, b); err != nil {
 			t.Fatal(err)
 		}
 	}

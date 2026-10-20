@@ -15,6 +15,7 @@ import (
 
 	"github.com/certen/independant-validator/pkg/finality"
 	"github.com/certen/independant-validator/pkg/finality/ethl1"
+	"github.com/certen/independant-validator/pkg/finality/l1adapt"
 )
 
 // The names this kind judges under.
@@ -222,61 +223,14 @@ func (r ImplRow) Complete(layouts map[string]GameLayout) bool {
 	return true
 }
 
-// ethl1Pins converts the framework's Sepolia section into the L1 head verifier's pins.
-func ethl1Pins(e *finality.EthSepoliaPins) ethl1.Pins {
-	var p ethl1.Pins
-	p.Network.ChainID = e.ChainID
-	gvr, _ := unhex(e.GenesisValidatorsRoot, 32)
-	copy(p.Network.GenesisValidatorsRoot[:], gvr)
-	for _, f := range e.Forks {
-		fk := ethl1.Fork{Name: f.Name, Epoch: f.Epoch}
-		v, _ := unhex(f.Version, 4)
-		copy(fk.Version[:], v)
-		if f.Layout != nil {
-			switch *f.Layout {
-			case "electra":
-				fk.Layout = ethl1.LayoutElectra
-			case "gloas":
-				fk.Layout = ethl1.LayoutGloas
-			}
-		}
-		p.Network.Forks = append(p.Network.Forks, fk)
-	}
-	for _, a := range e.Anchors {
-		an := ethl1.Anchor{Period: a.Period, WSPEpochs: a.WspEpochs}
-		cr, _ := unhex(a.CommitteeRoot, 32)
-		copy(an.CommitteeRoot[:], cr)
-		if a.BlockRoot != "" {
-			br, _ := unhex(a.BlockRoot, 32)
-			var b32 [32]byte
-			copy(b32[:], br)
-			an.BlockRoot = &b32
-		}
-		p.Anchors = append(p.Anchors, an)
-	}
-	p.MinParticipants, p.MaxLinks, p.MaxSpineHeaders = e.MinParticipants, e.MaxLinks, e.MaxSpineHeaders
-	return p
-}
-
-// EthL1Pins is the L1 head verifier's view of the framework pins (used by the builder and the vector generator).
+// EthL1Pins is the L1 head verifier's view of the framework pins (used by the builder and the vector generator); the
+// conversion is l1adapt's. Pins without a Sepolia section yield the zero value.
 func EthL1Pins(p *finality.Pins) ethl1.Pins {
-	e, err := p.Sepolia()
+	out, err := l1adapt.PinsOf(p)
 	if err != nil {
 		return ethl1.Pins{}
 	}
-	return ethl1Pins(e)
-}
-
-// stateOf adapts an L1 head fault to the framework's StateError with the same code and fields.
-func stateOf(err error) error {
-	if f, ok := err.(*ethl1.Fault); ok {
-		s := finality.NewState(f.Code)
-		for k, v := range f.Fields {
-			s.Fields[k] = v
-		}
-		return s
-	}
-	return err
+	return out
 }
 
 // sortedImplHashes is the deterministic order of the impl_pins rows (used by the pins writer and tests).

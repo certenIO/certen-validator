@@ -5,6 +5,7 @@ package basefinal
 import (
 	"github.com/certen/independant-validator/pkg/finality"
 	"github.com/certen/independant-validator/pkg/finality/ethl1"
+	"github.com/certen/independant-validator/pkg/finality/l1adapt"
 )
 
 // Body is the body of a base-sepolia/finalized/v1 container after the CFE1 header (V2_SPEC_S7 section 3.3):
@@ -89,7 +90,7 @@ func DecodeBody(body []byte, lim finality.Limits, ep ethl1.Pins, maxL2 int) (Bod
 		return out, err
 	}
 	if out.LC, err = ep.DecodeLC(body[:n]); err != nil {
-		return out, stateOf(err)
+		return out, l1adapt.State(err)
 	}
 	r := finality.NewReader(body[n:], lim)
 	spineMax := ep.MaxSpineHeaders

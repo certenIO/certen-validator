@@ -175,7 +175,7 @@ func buildCmd(ctx context.Context, dir, rawLC, legsDir, out string) error {
 	bodies := map[string]basefinal.Body{}
 	legBlocks := map[string]finality.BlockRef{}
 	for _, c := range recordedCases {
-		rows, _ := store.Rows(ctx, uint64(basefinal.Chain), basefinal.ItemGame(addr20(c.Game)))
+		rows, _ := basefinal.Rows(ctx, store, uint64(basefinal.Chain), basefinal.ItemGame(addr20(c.Game)))
 		lb, lerr := os.ReadFile(filepath.Join(legsDir, c.Name+".json"))
 		if len(rows) == 0 || lerr != nil {
 			return fmt.Errorf("%s: no capture or leg file", c.Name)

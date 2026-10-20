@@ -3,13 +3,10 @@
 package baseposted
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
-	"sync"
 
 	"github.com/ethereum/go-ethereum/common"
 
@@ -21,72 +18,22 @@ import (
 // ---- the capture store (V2_SPEC_S7 2.8) ----
 
 // CaptureKey is the key of one captured item: (chain, l1_block, l1_hash, item). Rows are insert-only; a reorg yields a second
-// row set for the same height under another hash.
-type CaptureKey struct {
-	Chain   uint64
-	L1Block uint64
-	L1Hash  [32]byte
-	Item    string
-}
+// row set for the same height under another hash. It is the framework's key (V2_SPEC_S7 2.8).
+type CaptureKey = finality.CaptureKey
 
 // ErrCaptureConflict is returned when an item already exists with different bytes: a capture row is never updated.
-var ErrCaptureConflict = errors.New("baseposted: capture row exists with different bytes")
+var ErrCaptureConflict = finality.ErrCaptureConflict
 
-// CaptureStore is what the Capturer writes and the Builder reads. Implementations are insert-only (UPDATE, DELETE and TRUNCATE
-// refused), exactly like the addendum table; the real table is RB11-B2B2's. Put of the same bytes is a no-op.
-type CaptureStore interface {
-	Put(ctx context.Context, k CaptureKey, data []byte) error
-	Get(ctx context.Context, k CaptureKey) ([]byte, bool, error)
-	// Blocks lists the captured (l1_block, l1_hash) pairs of a chain that hold the item, ascending by block then hash.
-	Blocks(ctx context.Context, chain uint64, item string) ([]CaptureKey, error)
-}
+// CaptureStore is what the Capturer writes and the Builder reads: the framework's insert-only store, implemented by
+// pkg/database.FinalityCaptureStore in production and by MemStore and DirStore here. The Builder asks which blocks hold the
+// inbox item through finality.CaptureKeysOfItem.
+type CaptureStore = finality.CaptureStore
 
 // MemStore is the in-memory CaptureStore of tests.
-type MemStore struct {
-	mu   sync.Mutex
-	rows map[CaptureKey][]byte
-}
+type MemStore = finality.MemCaptureStore
 
 // NewMemStore returns an empty store.
-func NewMemStore() *MemStore { return &MemStore{rows: map[CaptureKey][]byte{}} }
-
-func (m *MemStore) Put(_ context.Context, k CaptureKey, data []byte) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if old, ok := m.rows[k]; ok {
-		if bytes.Equal(old, data) {
-			return nil
-		}
-		return ErrCaptureConflict
-	}
-	m.rows[k] = append([]byte(nil), data...)
-	return nil
-}
-
-func (m *MemStore) Get(_ context.Context, k CaptureKey) ([]byte, bool, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	v, ok := m.rows[k]
-	return append([]byte(nil), v...), ok, nil
-}
-
-func (m *MemStore) Blocks(_ context.Context, chain uint64, item string) ([]CaptureKey, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	var out []CaptureKey
-	for k := range m.rows {
-		if k.Chain == chain && k.Item == item {
-			out = append(out, k)
-		}
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].L1Block != out[j].L1Block {
-			return out[i].L1Block < out[j].L1Block
-		}
-		return bytes.Compare(out[i].L1Hash[:], out[j].L1Hash[:]) < 0
-	})
-	return out, nil
-}
+func NewMemStore() *MemStore { return finality.NewMemCaptureStore() }
 
 // Item names of the capture rows of one L1 block that holds batch-inbox transactions.
 const (

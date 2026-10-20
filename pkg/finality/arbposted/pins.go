@@ -12,6 +12,7 @@ import (
 
 	"github.com/certen/independant-validator/pkg/finality"
 	"github.com/certen/independant-validator/pkg/finality/ethl1"
+	"github.com/certen/independant-validator/pkg/finality/l1adapt"
 )
 
 // UsedKZGSetupSHA256 is the SHA-256 of the trusted-setup file the Go KZG backend (go-ethereum crypto/kzg4844, pure-Go
@@ -112,45 +113,14 @@ func (a *arbPins) pinnedBridgeImpl(codeHash [32]byte) bool {
 	return a.LogicPins["0x"+hex.EncodeToString(codeHash[:])] == bridgeImplRole
 }
 
-// ethl1Pins converts the Sepolia section of the pins file to the L1 head verifier's pins.
+// ethl1Pins converts the Sepolia section of the pins file to the L1 head verifier's pins (l1adapt's conversion) and returns the
+// KZG setup pin the blob kinds share.
 func ethl1Pins(p *finality.Pins) (ethl1.Pins, string, error) {
-	var out ethl1.Pins
-	e, err := p.Sepolia()
+	out, err := l1adapt.PinsOf(p)
 	if err != nil {
 		return out, "", err
 	}
-	out.Network.ChainID = e.ChainID
-	gvr, _ := hex.DecodeString(strings.TrimPrefix(e.GenesisValidatorsRoot, "0x"))
-	copy(out.Network.GenesisValidatorsRoot[:], gvr)
-	for _, f := range e.Forks {
-		var fk ethl1.Fork
-		fk.Name, fk.Epoch = f.Name, f.Epoch
-		v, _ := hex.DecodeString(strings.TrimPrefix(f.Version, "0x"))
-		copy(fk.Version[:], v)
-		if f.Layout != nil {
-			switch *f.Layout {
-			case "electra":
-				fk.Layout = ethl1.LayoutElectra
-			case "gloas":
-				fk.Layout = ethl1.LayoutGloas
-			}
-		}
-		out.Network.Forks = append(out.Network.Forks, fk)
-	}
-	for _, a := range e.Anchors {
-		var an ethl1.Anchor
-		an.Period, an.WSPEpochs = a.Period, a.WspEpochs
-		r, _ := hex.DecodeString(strings.TrimPrefix(a.CommitteeRoot, "0x"))
-		copy(an.CommitteeRoot[:], r)
-		if a.BlockRoot != "" {
-			var br [32]byte
-			b, _ := hex.DecodeString(strings.TrimPrefix(a.BlockRoot, "0x"))
-			copy(br[:], b)
-			an.BlockRoot = &br
-		}
-		out.Anchors = append(out.Anchors, an)
-	}
-	out.MinParticipants, out.MaxLinks, out.MaxSpineHeaders = e.MinParticipants, e.MaxLinks, e.MaxSpineHeaders
+	e, _ := p.Sepolia()
 	kzg, _, kerr := p.KZGSetupPin("eth_sepolia."+pinKZG, e.KZGSetupSHA256)
 	if kerr != nil {
 		return out, "", kerr

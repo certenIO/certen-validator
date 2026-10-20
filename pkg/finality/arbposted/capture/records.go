@@ -4,12 +4,15 @@ package capture
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"sort"
 
 	"github.com/ethereum/go-ethereum/crypto"
+
+	"github.com/certen/independant-validator/pkg/finality"
 )
 
 // ---- THE ITEMS (every name a capture row can carry) ------------------------------------------------------------------
@@ -496,14 +499,14 @@ func isSmallWord(hi []byte) bool {
 // ---- Finding the batch ------------------------------------------------------------------------------------------------
 
 // LoadBatches returns every stored BatchRecord, ascending by N then l1Block (a reorg can give one N under two blocks).
-func LoadBatches(s CaptureStore, chain uint64) ([]BatchRecord, error) {
-	keys, err := s.Keys(chain, "batch/")
+func LoadBatches(ctx context.Context, s CaptureStore, chain uint64) ([]BatchRecord, error) {
+	keys, err := s.ListByRange(ctx, chain, 0, finality.MaxCaptureBlock, "batch/")
 	if err != nil {
 		return nil, err
 	}
 	var out []BatchRecord
 	for _, k := range keys {
-		b, ok, err := s.Get(k)
+		b, ok, err := s.Get(ctx, k)
 		if err != nil || !ok {
 			return nil, fmt.Errorf("capture: row %s unreadable: %v", k, err)
 		}
@@ -537,10 +540,10 @@ func FindBatchContaining(batches []BatchRecord, ts uint64) []BatchRecord {
 }
 
 // LoadBlobs returns the stored blob rows of batch N under the event key, in order, until the first missing index.
-func LoadBlobs(s CaptureStore, chain uint64, rec BatchRecord) ([]BlobRecord, error) {
+func LoadBlobs(ctx context.Context, s CaptureStore, chain uint64, rec BatchRecord) ([]BlobRecord, error) {
 	var out []BlobRecord
 	for j := range rec.VersionedHashes {
-		b, ok, err := s.Get(Key{Chain: chain, L1Block: rec.L1Block, L1Hash: rec.L1Hash, Item: ItemBlob(rec.N, j)})
+		b, ok, err := s.Get(ctx, Key{Chain: chain, L1Block: rec.L1Block, L1Hash: rec.L1Hash, Item: ItemBlob(rec.N, j)})
 		if err != nil {
 			return nil, err
 		}
@@ -557,8 +560,8 @@ func LoadBlobs(s CaptureStore, chain uint64, rec BatchRecord) ([]BlobRecord, err
 }
 
 // LoadProofs returns every ProofRecord stored for batch N (any proof block), ascending by proof block.
-func LoadProofs(s CaptureStore, chain uint64, n uint64) ([]ProofRecord, error) {
-	keys, err := s.Keys(chain, ItemProof(n))
+func LoadProofs(ctx context.Context, s CaptureStore, chain uint64, n uint64) ([]ProofRecord, error) {
+	keys, err := s.ListByRange(ctx, chain, 0, finality.MaxCaptureBlock, ItemProof(n))
 	if err != nil {
 		return nil, err
 	}
@@ -567,7 +570,7 @@ func LoadProofs(s CaptureStore, chain uint64, n uint64) ([]ProofRecord, error) {
 		if k.Item != ItemProof(n) {
 			continue
 		}
-		b, ok, err := s.Get(k)
+		b, ok, err := s.Get(ctx, k)
 		if err != nil || !ok {
 			return nil, fmt.Errorf("capture: row %s unreadable: %v", k, err)
 		}

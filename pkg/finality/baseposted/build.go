@@ -13,6 +13,7 @@ import (
 	"github.com/certen/independant-validator/pkg/ethproof"
 	"github.com/certen/independant-validator/pkg/finality"
 	"github.com/certen/independant-validator/pkg/finality/ethl1"
+	"github.com/certen/independant-validator/pkg/finality/l1adapt"
 )
 
 // L2BlockData is a Base Sepolia block as the builder needs it: its transactions (EIP-2718 encodings, deposits first).
@@ -62,7 +63,7 @@ type capturedTx struct {
 }
 
 func (b *Builder) load(ctx context.Context, bp *Pins) ([]capturedTx, error) {
-	blocks, err := b.Store.Blocks(ctx, uint64(Chain), ItemInbox)
+	blocks, err := finality.CaptureKeysOfItem(ctx, b.Store, uint64(Chain), ItemInbox)
 	if err != nil {
 		return nil, err
 	}
@@ -151,7 +152,7 @@ func (b *Builder) Build(ctx context.Context, s *ethproof.Settlement, have finali
 	if err != nil {
 		return nil, nil, err
 	}
-	ep := ethl1Pins(eth)
+	ep := l1adapt.Pins(eth)
 	l2, err := finality.ReadHeader(s.Header)
 	if err != nil {
 		return nil, nil, err

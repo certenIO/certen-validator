@@ -108,11 +108,11 @@ func (b *Builder) BuildFor(ctx context.Context, ref finality.BlockRef) (*finalit
 	}
 
 	// the batch and message that hold the block, from what the capture phase stored
-	batches, err := capture.LoadBatches(b.Store, b.Chain())
+	batches, err := capture.LoadBatches(ctx, b.Store, b.Chain())
 	if err != nil {
 		return nil, nil, err
 	}
-	found, err := b.locate(batches, hdr, txs, arb)
+	found, err := b.locate(ctx, batches, hdr, txs, arb)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -129,7 +129,7 @@ func (b *Builder) BuildFor(ctx context.Context, ref finality.BlockRef) (*finalit
 	rec := found.rec
 
 	// the near-head proof the capture phase stored for this batch
-	proofs, err := capture.LoadProofs(b.Store, b.Chain(), rec.N)
+	proofs, err := capture.LoadProofs(ctx, b.Store, b.Chain(), rec.N)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -176,12 +176,12 @@ func (b *Builder) BuildFor(ctx context.Context, ref finality.BlockRef) (*finalit
 		spine = append(spine, raw)
 	}
 
-	blobs, err := capture.LoadBlobs(b.Store, b.Chain(), rec)
+	blobs, err := capture.LoadBlobs(ctx, b.Store, b.Chain(), rec)
 	if err != nil {
 		return nil, nil, err
 	}
 	if rec.DataLocation == capture.LocBlob && len(blobs) != len(rec.VersionedHashes) {
-		return nil, nil, b.blobUnavailable(rec)
+		return nil, nil, b.blobUnavailable(ctx, rec)
 	}
 	ev := Evidence{LC: lc, L1Spine: spine, StateBlock: proof.ProofBlock, BlockTxs: txs, BatchSeq: rec.N, Header40: rec.Header40,
 		BeforeAcc: rec.BeforeAcc, DelayedAcc: rec.DelayedAcc, Nodes: proof.Nodes}
@@ -228,7 +228,7 @@ type located struct {
 
 // locate finds the captured batch whose decoded payload holds a message with the block's signed transactions. The time
 // bounds only narrow the candidates (hints are never evidence); the decode decides.
-func (b *Builder) locate(batches []capture.BatchRecord, hdr finality.HeaderFields, txs [][]byte, arb *arbPins) (*located, error) {
+func (b *Builder) locate(ctx context.Context, batches []capture.BatchRecord, hdr finality.HeaderFields, txs [][]byte, arb *arbPins) (*located, error) {
 	var incomplete *capture.BatchRecord
 	var std [][]byte
 	for _, tx := range txs {
@@ -243,7 +243,7 @@ func (b *Builder) locate(batches []capture.BatchRecord, hdr finality.HeaderField
 		var payload, data []byte
 		switch rec.DataLocation {
 		case capture.LocBlob:
-			bl, err := capture.LoadBlobs(b.Store, b.Chain(), rec)
+			bl, err := capture.LoadBlobs(ctx, b.Store, b.Chain(), rec)
 			if err != nil {
 				return nil, err
 			}
@@ -261,7 +261,7 @@ func (b *Builder) locate(batches []capture.BatchRecord, hdr finality.HeaderField
 				continue
 			}
 		case capture.LocTxInput, capture.LocSeparateBatchEvent:
-			row, ok, err := b.Store.Get(capture.Key{Chain: b.Chain(), L1Block: rec.L1Block, L1Hash: rec.L1Hash, Item: capture.ItemCalldata(rec.N)})
+			row, ok, err := b.Store.Get(ctx, capture.Key{Chain: b.Chain(), L1Block: rec.L1Block, L1Hash: rec.L1Hash, Item: capture.ItemCalldata(rec.N)})
 			if err != nil || !ok {
 				continue
 			}
@@ -287,16 +287,16 @@ func (b *Builder) locate(batches []capture.BatchRecord, hdr finality.HeaderField
 		}
 	}
 	if incomplete != nil {
-		return nil, b.blobUnavailable(*incomplete)
+		return nil, b.blobUnavailable(ctx, *incomplete)
 	}
 	return nil, nil
 }
 
 // blobUnavailable is l1_blob_unavailable for a captured batch whose blobs are not all stored: the capture phase's own record of
 // the beacon answer when it gave up, else the batch's L1 block and hashes with no beacon status.
-func (b *Builder) blobUnavailable(rec capture.BatchRecord) error {
+func (b *Builder) blobUnavailable(ctx context.Context, rec capture.BatchRecord) error {
 	slot, status := uint64(0), uint64(0)
-	if raw, ok, err := b.Store.Get(capture.Key{Chain: b.Chain(), L1Block: rec.L1Block, L1Hash: rec.L1Hash, Item: capture.ItemBlobUnavailable(rec.N)}); err == nil && ok {
+	if raw, ok, err := b.Store.Get(ctx, capture.Key{Chain: b.Chain(), L1Block: rec.L1Block, L1Hash: rec.L1Hash, Item: capture.ItemBlobUnavailable(rec.N)}); err == nil && ok {
 		if u, err := capture.DecodeBlobUnavailableRecord(raw); err == nil {
 			slot, status = u.BeaconSlot, uint64(u.HTTPStatus)
 		}

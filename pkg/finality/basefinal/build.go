@@ -12,6 +12,7 @@ import (
 	"github.com/certen/independant-validator/pkg/ethrpc"
 	"github.com/certen/independant-validator/pkg/finality"
 	"github.com/certen/independant-validator/pkg/finality/ethl1"
+	"github.com/certen/independant-validator/pkg/finality/l1adapt"
 )
 
 // GameInfo is one DisputeGameFactory list entry.
@@ -191,7 +192,7 @@ func (b *Builder) build(ctx context.Context, leg finality.BlockRef, have finalit
 	if err != nil {
 		return nil, nil, err
 	}
-	rows, err := b.Store.Rows(ctx, uint64(Chain), ItemGame(g.Info.Proxy))
+	rows, err := Rows(ctx, b.Store, uint64(Chain), ItemGame(g.Info.Proxy))
 	if err != nil {
 		return nil, nil, redactState(finality.CodeVerifierFailed, err, "chain", uint64(Chain), "kind", KindName)
 	}
@@ -360,7 +361,7 @@ func (b *Builder) attest(ctx context.Context, bp *Pins, leg finality.BlockRef, b
 	if err != nil {
 		return nil, nil, err
 	}
-	ep := ethl1Pins(es)
+	ep := l1adapt.Pins(es)
 	head, err := ethl1.VerifyFinalizedHead(ep, lc)
 	if err != nil {
 		return nil, nil, st(CodeL1FinalityUnproven, "reason", LCRefused, "inner", faultCode(err))

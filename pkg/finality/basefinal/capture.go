@@ -6,25 +6,14 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
-	"os"
-	"path/filepath"
-	"sort"
-	"sync"
-
-	"github.com/ethereum/go-ethereum/crypto"
 
 	"github.com/certen/independant-validator/pkg/finality"
 )
 
-// CaptureStore is the insert-only capture table of V2_SPEC_S7 2.8, keyed (chain, l1_block, l1_hash, item). The table belongs
-// to RB11-B2B2; this package supplies the logic against this interface and two implementations (MemStore, DirStore). Rows are
-// never updated or deleted, and a verifier never reads them.
-type CaptureStore interface {
-	// Put inserts a row; a second Put of the same key with different bytes is an error (insert-only).
-	Put(ctx context.Context, chain, l1Block uint64, l1Hash [32]byte, item string, data []byte) error
-	// Rows returns every row of an item for a chain, newest L1 block first.
-	Rows(ctx context.Context, chain uint64, item string) ([]CaptureRow, error)
-}
+// CaptureStore is the insert-only capture table of V2_SPEC_S7 2.8, keyed (chain, l1_block, l1_hash, item): the framework's store
+// (pkg/database.FinalityCaptureStore in production; MemStore and DirStore here). Rows are never updated or deleted, and a
+// verifier never reads them.
+type CaptureStore = finality.CaptureStore
 
 // CaptureRow is one stored capture.
 type CaptureRow struct {
@@ -35,101 +24,29 @@ type CaptureRow struct {
 	Data    []byte
 }
 
-// ItemGame is the item name of the state capture of one game proxy.
-func ItemGame(game [20]byte) string { return "basefinal/game/" + hex.EncodeToString(game[:]) }
-
-// MemStore is the in-memory CaptureStore used by the tests.
-type MemStore struct {
-	mu   sync.Mutex
-	rows []CaptureRow
-}
-
-func (m *MemStore) Put(_ context.Context, chain, l1Block uint64, l1Hash [32]byte, item string, data []byte) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for _, r := range m.rows {
-		if r.Chain == chain && r.L1Block == l1Block && r.L1Hash == l1Hash && r.Item == item {
-			if string(r.Data) != string(data) {
-				return fmt.Errorf("capture rows are insert-only: %s at %d already holds other bytes", item, l1Block)
-			}
-			return nil
-		}
-	}
-	m.rows = append(m.rows, CaptureRow{chain, l1Block, l1Hash, item, append([]byte(nil), data...)})
-	return nil
-}
-
-func (m *MemStore) Rows(_ context.Context, chain uint64, item string) ([]CaptureRow, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	var out []CaptureRow
-	for _, r := range m.rows {
-		if r.Chain == chain && r.Item == item {
-			out = append(out, r)
-		}
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].L1Block > out[j].L1Block })
-	return out, nil
-}
-
-// DirStore is a CaptureStore over a directory (the recorder's store): one file per row.
-type DirStore struct{ Dir string }
-
-func (d DirStore) path(chain, l1Block uint64, l1Hash [32]byte, item string) string {
-	name := fmt.Sprintf("%d-%012d-%s-%s.cap", chain, l1Block, hex.EncodeToString(l1Hash[:8]), hex.EncodeToString(crypto.Keccak256([]byte(item))[:6]))
-	return filepath.Join(d.Dir, name)
-}
-
-func (d DirStore) Put(_ context.Context, chain, l1Block uint64, l1Hash [32]byte, item string, data []byte) error {
-	if err := os.MkdirAll(d.Dir, 0o755); err != nil {
-		return err
-	}
-	p := d.path(chain, l1Block, l1Hash, item)
-	if old, err := os.ReadFile(p); err == nil {
-		if string(old) != string(data) {
-			return fmt.Errorf("capture rows are insert-only: %s already holds other bytes", filepath.Base(p))
-		}
-		return nil
-	}
-	var w finality.Writer
-	w.STR(item)
-	w.U64(chain)
-	w.U64(l1Block)
-	w.B32(l1Hash)
-	w.LP(data)
-	return os.WriteFile(p, w.Bytes(), 0o644)
-}
-
-func (d DirStore) Rows(_ context.Context, chain uint64, item string) ([]CaptureRow, error) {
-	files, err := filepath.Glob(filepath.Join(d.Dir, "*.cap"))
+// Rows returns every row of an item for a chain, newest L1 block first: the question the builder and the recorder commands ask
+// of the store.
+func Rows(ctx context.Context, s CaptureStore, chain uint64, item string) ([]CaptureRow, error) {
+	rs, err := finality.CaptureRowsOfItem(ctx, s, chain, item)
 	if err != nil {
 		return nil, err
 	}
-	var out []CaptureRow
-	for _, f := range files {
-		b, err := os.ReadFile(f)
-		if err != nil {
-			return nil, err
-		}
-		r := finality.NewReader(b, finality.DefaultLimits())
-		it, err := r.STR("item")
-		if err != nil {
-			return nil, err
-		}
-		ch, _ := r.U64("chain")
-		bl, _ := r.U64("block")
-		h, _ := r.B32("hash")
-		data, err := r.LP("data", -1)
-		if err != nil {
-			return nil, err
-		}
-		if ch == chain && it == item {
-			out = append(out, CaptureRow{ch, bl, h, it, data})
-		}
+	out := make([]CaptureRow, 0, len(rs))
+	for i := len(rs) - 1; i >= 0; i-- {
+		r := rs[i]
+		out = append(out, CaptureRow{Chain: r.Chain, L1Block: r.L1Block, L1Hash: r.L1Hash, Item: r.Item, Data: r.Bytes})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].L1Block > out[j].L1Block })
 	return out, nil
 }
+
+// ItemGame is the item name of the state capture of one game proxy.
+func ItemGame(game [20]byte) string { return "basefinal/game/" + hex.EncodeToString(game[:]) }
+
+// MemStore is the in-memory CaptureStore used by the tests (the zero value is an empty store).
+type MemStore = finality.MemCaptureStore
+
+// DirStore is the CaptureStore over a directory (the recorder's store): the framework's finality.DirCaptureStore.
+type DirStore = finality.DirCaptureStore
 
 // GameCapture is what is captured near the L1 head for one game: the proofs of the whole contract graph, the game proxy and
 // its slots under the state root of L1 block A, and the proxy's code. Nothing in it is trusted: the attest step verifies it
@@ -286,7 +203,7 @@ func CaptureGame(ctx context.Context, src ProofSource, store CaptureStore, p *Pi
 		}
 	}
 	c := GameCapture{L1Block: a, L1Hash: hdr.Hash, Game: game, GameCode: code, Nodes: finality.EncodeNodes(nodes)}
-	if err := store.Put(ctx, uint64(Chain), a, hdr.Hash, ItemGame(game), c.Encode()); err != nil {
+	if err := store.Put(ctx, finality.CaptureKey{Chain: uint64(Chain), L1Block: a, L1Hash: hdr.Hash, Item: ItemGame(game)}, c.Encode()); err != nil {
 		return GameCapture{}, err
 	}
 	return c, nil

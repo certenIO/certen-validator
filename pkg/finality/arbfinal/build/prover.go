@@ -6,10 +6,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"math/big"
-	"strings"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/rlp"
@@ -19,9 +17,8 @@ import (
 	"github.com/certen/independant-validator/pkg/finality"
 	"github.com/certen/independant-validator/pkg/finality/arbfinal"
 	"github.com/certen/independant-validator/pkg/finality/ethl1"
+	"github.com/certen/independant-validator/pkg/finality/l1adapt"
 )
-
-var errConflict = errors.New("capture row exists with different bytes")
 
 // The pending reasons this prover produces (the closed set of testdata/finality/states.json, spec section 7).
 const (
@@ -323,7 +320,7 @@ func (p *Prover) capture(ctx context.Context, arb *arbfinal.Pins, a *Assertion, 
 			return nil, nil, nil, 0, nil, nil, p.pending(have, PendingL1State, "block", x, "providers", p.L1.Providers()), nil
 		}
 		item := captureItemState + hex.EncodeToString(a.Hash[:])
-		if stored, ok, serr := p.Store.Get(finality.ChainSepolia, x, hf.Hash, item); serr == nil && ok {
+		if stored, ok, serr := p.Store.Get(ctx, finality.CaptureKey{Chain: finality.ChainSepolia, L1Block: x, L1Hash: hf.Hash, Item: item}); serr == nil && ok {
 			ns, derr := decodeNodes(stored)
 			if derr != nil {
 				return nil, nil, nil, 0, nil, nil, nil, derr
@@ -336,7 +333,7 @@ func (p *Prover) capture(ctx context.Context, arb *arbfinal.Pins, a *Assertion, 
 			// near-head proofs are the one thing a late attempt cannot redo: a named state, never a weaker level
 			return nil, nil, nil, 0, nil, nil, p.pending(have, PendingProofWindow, "l1_block", x, "providers", p.L1.Providers()), nil
 		}
-		if serr := p.Store.Put(finality.ChainSepolia, x, hf.Hash, item, encodeNodes(ns)); serr != nil {
+		if serr := p.Store.Put(ctx, finality.CaptureKey{Chain: finality.ChainSepolia, L1Block: x, L1Hash: hf.Hash, Item: item}, encodeNodes(ns)); serr != nil {
 			return nil, nil, nil, 0, nil, nil, nil, finality.NewState(finality.CodeVerifierFailed, "chain", finality.ChainArbitrumSepolia, "kind", arbfinal.KindName, "cause", ethrpc.RedactText(serr.Error()))
 		}
 		set = append(set, ns...)
@@ -344,7 +341,7 @@ func (p *Prover) capture(ctx context.Context, arb *arbfinal.Pins, a *Assertion, 
 	// the confirmation transaction, receipt and their trie proofs at K
 	kf, _ := finality.ReadHeader(hdrs[K])
 	item := captureItemConf + hex.EncodeToString(a.Hash[:])
-	if stored, ok, serr := p.Store.Get(finality.ChainSepolia, K, kf.Hash, item); serr == nil && ok {
+	if stored, ok, serr := p.Store.Get(ctx, finality.CaptureKey{Chain: finality.ChainSepolia, L1Block: K, L1Hash: kf.Hash, Item: item}); serr == nil && ok {
 		t, r, i, ns, derr := decodeConf(stored)
 		if derr != nil {
 			return nil, nil, nil, 0, nil, nil, nil, derr
@@ -369,7 +366,7 @@ func (p *Prover) capture(ctx context.Context, arb *arbfinal.Pins, a *Assertion, 
 	ns := append(append([][]byte(nil), tp.ProofNodes...), rp.ProofNodes...)
 	idx = uint32(conf.TxIndex)
 	tx, rcpt = blk.Txs[conf.TxIndex], blk.Receipts[conf.TxIndex]
-	if serr := p.Store.Put(finality.ChainSepolia, K, kf.Hash, item, encodeConf(tx, rcpt, idx, ns)); serr != nil {
+	if serr := p.Store.Put(ctx, finality.CaptureKey{Chain: finality.ChainSepolia, L1Block: K, L1Hash: kf.Hash, Item: item}, encodeConf(tx, rcpt, idx, ns)); serr != nil {
 		return nil, nil, nil, 0, nil, nil, nil, finality.NewState(finality.CodeVerifierFailed, "chain", finality.ChainArbitrumSepolia, "kind", arbfinal.KindName, "cause", ethrpc.RedactText(serr.Error()))
 	}
 	return finality.EncodeNodes(append(set, ns...)), tx, rcpt, idx, hdrs[K], hdrs[S], nil, nil
@@ -508,44 +505,5 @@ func decodeConf(b []byte) (tx, rcpt []byte, idx uint32, ns [][]byte, err error) 
 	return
 }
 
-// ethl1PinsOf converts the Sepolia section of the pins file to the L1 head verifier's pins (arbfinal keeps its twin unexported).
-func ethl1PinsOf(p *finality.Pins) (ethl1.Pins, error) {
-	var out ethl1.Pins
-	e, err := p.Sepolia()
-	if err != nil {
-		return out, err
-	}
-	out.Network.ChainID = e.ChainID
-	gvr, _ := hex.DecodeString(strings.TrimPrefix(e.GenesisValidatorsRoot, "0x"))
-	copy(out.Network.GenesisValidatorsRoot[:], gvr)
-	for _, f := range e.Forks {
-		var fk ethl1.Fork
-		fk.Name, fk.Epoch = f.Name, f.Epoch
-		v, _ := hex.DecodeString(strings.TrimPrefix(f.Version, "0x"))
-		copy(fk.Version[:], v)
-		if f.Layout != nil {
-			switch *f.Layout {
-			case "electra":
-				fk.Layout = ethl1.LayoutElectra
-			case "gloas":
-				fk.Layout = ethl1.LayoutGloas
-			}
-		}
-		out.Network.Forks = append(out.Network.Forks, fk)
-	}
-	for _, a := range e.Anchors {
-		var an ethl1.Anchor
-		an.Period, an.WSPEpochs = a.Period, a.WspEpochs
-		r, _ := hex.DecodeString(strings.TrimPrefix(a.CommitteeRoot, "0x"))
-		copy(an.CommitteeRoot[:], r)
-		if a.BlockRoot != "" {
-			var br [32]byte
-			bb, _ := hex.DecodeString(strings.TrimPrefix(a.BlockRoot, "0x"))
-			copy(br[:], bb)
-			an.BlockRoot = &br
-		}
-		out.Anchors = append(out.Anchors, an)
-	}
-	out.MinParticipants, out.MaxLinks, out.MaxSpineHeaders = e.MinParticipants, e.MaxLinks, e.MaxSpineHeaders
-	return out, nil
-}
+// ethl1PinsOf converts the Sepolia section of the pins file to the L1 head verifier's pins (l1adapt's conversion).
+func ethl1PinsOf(p *finality.Pins) (ethl1.Pins, error) { return l1adapt.PinsOf(p) }

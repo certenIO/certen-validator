@@ -12,6 +12,7 @@ import (
 
 	"github.com/certen/independant-validator/pkg/finality"
 	"github.com/certen/independant-validator/pkg/finality/ethl1"
+	"github.com/certen/independant-validator/pkg/finality/l1adapt"
 )
 
 // pinSection is the pins file section of this kind (V2_SPEC_S7 4.2).
@@ -167,47 +168,6 @@ func LoadPins(p *finality.Pins) (*Pins, error) {
 // roleOf returns the logic_pins role of a code hash ("" when not pinned).
 func (p *Pins) roleOf(h common.Hash) string { return p.LogicPins[h] }
 
-// ethl1Pins converts the Sepolia section of the pins file to the L1 head verifier's pins.
-func ethl1Pins(p *finality.Pins) (ethl1.Pins, error) {
-	var out ethl1.Pins
-	e, err := p.Sepolia()
-	if err != nil {
-		return out, err
-	}
-	out.Network.ChainID = e.ChainID
-	gvr, _ := hex.DecodeString(strings.TrimPrefix(e.GenesisValidatorsRoot, "0x"))
-	copy(out.Network.GenesisValidatorsRoot[:], gvr)
-	for _, f := range e.Forks {
-		var fk ethl1.Fork
-		fk.Name, fk.Epoch = f.Name, f.Epoch
-		v, _ := hex.DecodeString(strings.TrimPrefix(f.Version, "0x"))
-		copy(fk.Version[:], v)
-		if f.Layout != nil {
-			switch *f.Layout {
-			case "electra":
-				fk.Layout = ethl1.LayoutElectra
-			case "gloas":
-				fk.Layout = ethl1.LayoutGloas
-			}
-		}
-		out.Network.Forks = append(out.Network.Forks, fk)
-	}
-	for _, a := range e.Anchors {
-		var an ethl1.Anchor
-		an.Period, an.WSPEpochs = a.Period, a.WspEpochs
-		r, _ := hex.DecodeString(strings.TrimPrefix(a.CommitteeRoot, "0x"))
-		copy(an.CommitteeRoot[:], r)
-		if a.BlockRoot != "" {
-			var br [32]byte
-			bb, _ := hex.DecodeString(strings.TrimPrefix(a.BlockRoot, "0x"))
-			copy(br[:], bb)
-			an.BlockRoot = &br
-		}
-		out.Anchors = append(out.Anchors, an)
-	}
-	out.MinParticipants, out.MaxLinks, out.MaxSpineHeaders = e.MinParticipants, e.MaxLinks, e.MaxSpineHeaders
-	return out, nil
-}
-
-// EthL1Pins is the L1 head verifier's view of the Sepolia section of a pins file (used by the vector generator and the builder).
-func EthL1Pins(p *finality.Pins) (ethl1.Pins, error) { return ethl1Pins(p) }
+// EthL1Pins is the L1 head verifier's view of the Sepolia section of a pins file (used by the vector generator and the builder);
+// the conversion is l1adapt's.
+func EthL1Pins(p *finality.Pins) (ethl1.Pins, error) { return l1adapt.PinsOf(p) }

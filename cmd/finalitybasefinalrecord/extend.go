@@ -91,7 +91,7 @@ func extendCmd(ctx context.Context, dir, rawLC, legsDir, out string) error {
 	store := basefinal.DirStore{Dir: dir}
 	rpc := liveRPC()
 	for _, r := range round2Games {
-		rows, _ := store.Rows(ctx, uint64(basefinal.Chain), basefinal.ItemGame(addr20(r.game)))
+		rows, _ := basefinal.Rows(ctx, store, uint64(basefinal.Chain), basefinal.ItemGame(addr20(r.game)))
 		if len(rows) == 0 {
 			return fmt.Errorf("%s: no capture", r.id)
 		}

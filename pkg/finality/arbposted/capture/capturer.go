@@ -192,8 +192,8 @@ func (r *Report) fail(c *Capturer, format string, a ...any) {
 	c.logf("capture: %s", msg)
 }
 
-func putRow(s CaptureStore, k Key, b []byte) error {
-	if err := s.Put(k, b); err != nil {
+func putRow(ctx context.Context, s CaptureStore, k Key, b []byte) error {
+	if err := s.Put(ctx, k, b); err != nil {
 		return err
 	}
 	return nil
@@ -214,7 +214,7 @@ func (c *Capturer) Tick(ctx context.Context) (Report, error) {
 	}
 	rep.Head = head
 	if !c.started {
-		if err := c.rebuild(head); err != nil {
+		if err := c.rebuild(ctx, head); err != nil {
 			return rep, err
 		}
 		c.started = true
@@ -232,12 +232,12 @@ func (c *Capturer) Tick(ctx context.Context) (Report, error) {
 
 // rebuild reloads what a previous process left incomplete: batches within RebuildBlocks of the head without all their blobs
 // or without a proof row.
-func (c *Capturer) rebuild(head uint64) error {
-	keys, err := c.Store.Keys(c.Cfg.Chain, "batch/")
+func (c *Capturer) rebuild(ctx context.Context, head uint64) error {
+	keys, err := c.Store.ListByRange(ctx, c.Cfg.Chain, 0, finality.MaxCaptureBlock, "batch/")
 	if err != nil {
 		return err
 	}
-	pk, err := c.Store.Keys(c.Cfg.Chain, "proof/")
+	pk, err := c.Store.ListByRange(ctx, c.Cfg.Chain, 0, finality.MaxCaptureBlock, "proof/")
 	if err != nil {
 		return err
 	}
@@ -252,7 +252,7 @@ func (c *Capturer) rebuild(head uint64) error {
 		if k.L1Block+c.Cfg.RebuildBlocks < head {
 			continue
 		}
-		b, ok, err := c.Store.Get(k)
+		b, ok, err := c.Store.Get(ctx, k)
 		if err != nil || !ok {
 			return fmt.Errorf("capture: row %s unreadable", k)
 		}
@@ -264,13 +264,13 @@ func (c *Capturer) rebuild(head uint64) error {
 			c.needProof[rec.N] = &pendProof{rec: rec}
 		}
 		if rec.DataLocation == LocBlob {
-			blobs, err := LoadBlobs(c.Store, c.Cfg.Chain, rec)
+			blobs, err := LoadBlobs(ctx, c.Store, c.Cfg.Chain, rec)
 			if err != nil {
 				return err
 			}
 			if len(blobs) < len(rec.VersionedHashes) {
 				hk := Key{Chain: c.Cfg.Chain, L1Block: rec.L1Block, L1Hash: rec.L1Hash, Item: ItemHeader}
-				hb, ok, _ := c.Store.Get(hk)
+				hb, ok, _ := c.Store.Get(ctx, hk)
 				if !ok {
 					return fmt.Errorf("capture: header row of batch %d missing", rec.N)
 				}
@@ -285,8 +285,8 @@ func (c *Capturer) rebuild(head uint64) error {
 	return nil
 }
 
-func cursorBlock(s CaptureStore, chain uint64) (uint64, bool, error) {
-	keys, err := s.Keys(chain, ItemCursor)
+func cursorBlock(ctx context.Context, s CaptureStore, chain uint64) (uint64, bool, error) {
+	keys, err := s.ListByRange(ctx, chain, 0, finality.MaxCaptureBlock, ItemCursor)
 	if err != nil {
 		return 0, false, err
 	}
@@ -301,7 +301,7 @@ func cursorBlock(s CaptureStore, chain uint64) (uint64, bool, error) {
 }
 
 func (c *Capturer) scan(ctx context.Context, head uint64, rep *Report) error {
-	last, ok, err := cursorBlock(c.Store, c.Cfg.Chain)
+	last, ok, err := cursorBlock(ctx, c.Store, c.Cfg.Chain)
 	if err != nil {
 		return err
 	}
@@ -346,13 +346,13 @@ func (c *Capturer) scan(ctx context.Context, head uint64, rep *Report) error {
 	if err != nil {
 		return err
 	}
-	if err := putRow(c.Store, hdrKey(c.Cfg.Chain, h, ItemHeader), h.RLP); err != nil {
+	if err := putRow(ctx, c.Store, hdrKey(c.Cfg.Chain, h, ItemHeader), h.RLP); err != nil {
 		return err
 	}
 	cur := make([]byte, 0, 40)
 	cur = binary.BigEndian.AppendUint64(cur, to)
 	cur = append(cur, h.Hash[:]...)
-	return putRow(c.Store, hdrKey(c.Cfg.Chain, h, ItemCursor), cur)
+	return putRow(ctx, c.Store, hdrKey(c.Cfg.Chain, h, ItemCursor), cur)
 }
 
 func word(b []byte, i int) []byte { return b[i*32 : (i+1)*32] }
@@ -410,7 +410,7 @@ func (c *Capturer) captureBatch(ctx context.Context, lg Log, rep *Report) (*uint
 		return nil, err
 	}
 	bk := Key{Chain: c.Cfg.Chain, L1Block: rec.L1Block, L1Hash: rec.L1Hash, Item: ItemBatch(rec.N)}
-	if _, exists, err := c.Store.Get(bk); err != nil {
+	if _, exists, err := c.Store.Get(ctx, bk); err != nil {
 		return nil, err
 	} else if exists {
 		return nil, nil
@@ -467,7 +467,7 @@ func (c *Capturer) captureBatch(ctx context.Context, lg Log, rep *Report) (*uint
 	if !rec.ConsistentAcc(data) {
 		return nil, fmt.Errorf("batch %d: keccak256(beforeAcc || dataHash || delayedAcc) differs from the event's afterAcc (the capture cannot reproduce the accumulator)", rec.N)
 	}
-	if err := putRow(c.Store, hdrKey(c.Cfg.Chain, h, ItemHeader), h.RLP); err != nil {
+	if err := putRow(ctx, c.Store, hdrKey(c.Cfg.Chain, h, ItemHeader), h.RLP); err != nil {
 		return nil, err
 	}
 	if rec.DataLocation == LocTxInput || rec.DataLocation == LocSeparateBatchEvent {
@@ -475,11 +475,11 @@ func (c *Capturer) captureBatch(ctx context.Context, lg Log, rep *Report) (*uint
 		if rec.DataLocation == LocTxInput {
 			raw = tx.Input
 		}
-		if err := putRow(c.Store, Key{Chain: c.Cfg.Chain, L1Block: h.Number, L1Hash: h.Hash, Item: ItemCalldata(rec.N)}, raw); err != nil {
+		if err := putRow(ctx, c.Store, Key{Chain: c.Cfg.Chain, L1Block: h.Number, L1Hash: h.Hash, Item: ItemCalldata(rec.N)}, raw); err != nil {
 			return nil, err
 		}
 	}
-	if err := putRow(c.Store, bk, rec.Encode()); err != nil {
+	if err := putRow(ctx, c.Store, bk, rec.Encode()); err != nil {
 		return nil, err
 	}
 	c.needProof[rec.N] = &pendProof{rec: rec}
@@ -530,7 +530,7 @@ func (c *Capturer) fetchBlobs(ctx context.Context, rep *Report) {
 				if errors.As(err, &be) {
 					u.HTTPStatus = uint32(be.Status)
 				}
-				if perr := putRow(c.Store, Key{Chain: c.Cfg.Chain, L1Block: p.rec.L1Block, L1Hash: p.rec.L1Hash, Item: ItemBlobUnavailable(n)}, u.Encode()); perr != nil {
+				if perr := putRow(ctx, c.Store, Key{Chain: c.Cfg.Chain, L1Block: p.rec.L1Block, L1Hash: p.rec.L1Hash, Item: ItemBlobUnavailable(n)}, u.Encode()); perr != nil {
 					rep.fail(c, "record blob unavailability of batch %d: %v", n, perr)
 				}
 			}
@@ -550,7 +550,7 @@ func (c *Capturer) fetchBlobs(ctx context.Context, rep *Report) {
 				rep.fail(c, "blob %d of batch %d: commitment does not hash to the versioned hash", j, n)
 				break
 			}
-			if err := putRow(c.Store, Key{Chain: c.Cfg.Chain, L1Block: p.rec.L1Block, L1Hash: p.rec.L1Hash, Item: ItemBlob(n, j)}, br.Encode()); err != nil {
+			if err := putRow(ctx, c.Store, Key{Chain: c.Cfg.Chain, L1Block: p.rec.L1Block, L1Hash: p.rec.L1Hash, Item: ItemBlob(n, j)}, br.Encode()); err != nil {
 				ok = false
 				rep.fail(c, "store blob %d of batch %d: %v", j, n, err)
 				break
@@ -649,7 +649,7 @@ func (c *Capturer) captureProofs(ctx context.Context, head uint64, rep *Report) 
 			continue
 		}
 		u := UnavailableRecord{N: j.index, EventBlock: j.rec.rec.L1Block, Head: head, Providers: failures}
-		if err := putRow(c.Store, hdrKey(c.Cfg.Chain, hh, ItemUnavailable(j.index)), u.Encode()); err != nil {
+		if err := putRow(ctx, c.Store, hdrKey(c.Cfg.Chain, hh, ItemUnavailable(j.index)), u.Encode()); err != nil {
 			rep.fail(c, "record proof unavailability of batch %d: %v", j.index, err)
 			continue
 		}
@@ -708,7 +708,7 @@ func (c *Capturer) proveAt(ctx context.Context, h Header, stateRoot [32]byte, jo
 			continue
 		}
 		if !stored {
-			if err := putRow(c.Store, hdrKey(c.Cfg.Chain, h, ItemHeader), h.RLP); err != nil {
+			if err := putRow(ctx, c.Store, hdrKey(c.Cfg.Chain, h, ItemHeader), h.RLP); err != nil {
 				*failures = append(*failures, "store proof block header: "+err.Error())
 				return false
 			}
@@ -733,7 +733,7 @@ func (c *Capturer) proveAt(ctx context.Context, h Header, stateRoot [32]byte, jo
 			if j.kind == ProofDelayedAcc {
 				item = ItemDelayedProof(j.index)
 			}
-			if err := putRow(c.Store, hdrKey(c.Cfg.Chain, h, item), pr.Encode()); err != nil {
+			if err := putRow(ctx, c.Store, hdrKey(c.Cfg.Chain, h, item), pr.Encode()); err != nil {
 				*failures = append(*failures, fmt.Sprintf("store %s: %v", item, err))
 				allOK = false
 				continue

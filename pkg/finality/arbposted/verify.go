@@ -15,6 +15,7 @@ import (
 	"github.com/certen/independant-validator/pkg/ethproof"
 	"github.com/certen/independant-validator/pkg/finality"
 	"github.com/certen/independant-validator/pkg/finality/ethl1"
+	"github.com/certen/independant-validator/pkg/finality/l1adapt"
 )
 
 // Kind is the verifier of arb-sepolia/l1_posted/v1 (spec 5.6). It is pure: no I/O, no clock, no randomness.
@@ -314,12 +315,7 @@ func innerCode(err error) string {
 	return "unknown"
 }
 
-func asState(err error) error {
-	if f, ok := err.(*ethl1.Fault); ok {
-		return FaultState(f)
-	}
-	return err
-}
+func asState(err error) error { return l1adapt.State(err) }
 
 func sameTxs(a, b [][]byte) bool {
 	if len(a) != len(b) {

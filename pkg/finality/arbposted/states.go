@@ -5,6 +5,7 @@ package arbposted
 import (
 	"github.com/certen/independant-validator/pkg/finality"
 	"github.com/certen/independant-validator/pkg/finality/ethl1"
+	"github.com/certen/independant-validator/pkg/finality/l1adapt"
 )
 
 // The codes this kind raises beyond the framework's (V2_SPEC_S7 section 7, Arbitrum R, Base R shared, L1 head R). The machine
@@ -66,11 +67,5 @@ func l1FinalityUnproven(reason L1FinalityReason, inner string) *finality.StateEr
 	return finality.NewState(CodeL1FinalityUnproven, "reason", reason, "inner", inner)
 }
 
-// FaultState adapts an L1 head fault to the framework's state, same code and same field names.
-func FaultState(f *ethl1.Fault) *finality.StateError {
-	s := finality.NewState(f.Code)
-	for k, v := range f.Fields {
-		s.Fields[k] = v
-	}
-	return s
-}
+// FaultState adapts an L1 head fault to the framework's state, same code and same field names (l1adapt's conversion).
+func FaultState(f *ethl1.Fault) *finality.StateError { return l1adapt.FaultState(f) }

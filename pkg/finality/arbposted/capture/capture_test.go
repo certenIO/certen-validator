@@ -284,7 +284,7 @@ func allRows(t *testing.T, s CaptureStore, from, to uint64) []Row {
 	t.Helper()
 	var out []Row
 	for n := from; n <= to; n++ {
-		rows, err := s.List(ChainArbitrumSepolia, n)
+		rows, err := s.ListByBlock(context.Background(), ChainArbitrumSepolia, n)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -306,36 +306,36 @@ func stores(t *testing.T) map[string]CaptureStore {
 func TestStoresAreInsertOnlyAndAgree(t *testing.T) {
 	for name, s := range stores(t) {
 		k := Key{Chain: 1, L1Block: 5, L1Hash: [32]byte{9}, Item: "batch/3"}
-		if err := s.Put(k, []byte("a")); err != nil {
+		if err := s.Put(context.Background(), k, []byte("a")); err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
-		if err := s.Put(k, []byte("a")); err != nil {
+		if err := s.Put(context.Background(), k, []byte("a")); err != nil {
 			t.Fatalf("%s: identical bytes must be a no-op: %v", name, err)
 		}
-		if err := s.Put(k, []byte("b")); !errors.Is(err, ErrExists) {
+		if err := s.Put(context.Background(), k, []byte("b")); !errors.Is(err, ErrExists) {
 			t.Fatalf("%s: different bytes under one key: %v", name, err)
 		}
 		k2 := k
 		k2.L1Hash = [32]byte{8}
-		if err := s.Put(k2, []byte("b")); err != nil {
+		if err := s.Put(context.Background(), k2, []byte("b")); err != nil {
 			t.Fatalf("%s: a reorg row (same height, other hash) must insert: %v", name, err)
 		}
-		if err := s.Put(Key{Chain: 1, L1Block: 5, L1Hash: [32]byte{9}, Item: "Bad Item"}, nil); err == nil {
+		if err := s.Put(context.Background(), Key{Chain: 1, L1Block: 5, L1Hash: [32]byte{9}, Item: "Bad Item"}, nil); err == nil {
 			t.Fatalf("%s: a bad item name was accepted", name)
 		}
-		rows, _ := s.List(1, 5)
-		if len(rows) != 2 || rows[0].Key.L1Hash != [32]byte{8} {
+		rows, _ := s.ListByBlock(context.Background(), 1, 5)
+		if len(rows) != 2 || rows[0].L1Hash != [32]byte{8} {
 			t.Fatalf("%s: List = %+v", name, rows)
 		}
-		ks, _ := s.Keys(1, "batch/")
+		ks, _ := s.ListByRange(context.Background(), 1, 0, finality.MaxCaptureBlock, "batch/")
 		if len(ks) != 2 {
 			t.Fatalf("%s: Keys = %v", name, ks)
 		}
-		got, ok, _ := s.Get(k)
+		got, ok, _ := s.Get(context.Background(), k)
 		if !ok || string(got) != "a" {
 			t.Fatalf("%s: Get = %q %v", name, got, ok)
 		}
-		if _, ok, _ := s.Get(Key{Chain: 1, L1Block: 6, Item: "x"}); ok {
+		if _, ok, _ := s.Get(context.Background(), Key{Chain: 1, L1Block: 6, Item: "x"}); ok {
 			t.Fatalf("%s: absent row found", name)
 		}
 	}
@@ -345,15 +345,15 @@ func TestDirStoreSurvivesARestart(t *testing.T) {
 	dir := t.TempDir()
 	a, _ := NewDirStore(dir)
 	k := Key{Chain: 421614, L1Block: 12, L1Hash: [32]byte{1}, Item: "blob/3/0"}
-	if err := a.Put(k, []byte("x")); err != nil {
+	if err := a.Put(context.Background(), k, []byte("x")); err != nil {
 		t.Fatal(err)
 	}
 	b, _ := NewDirStore(dir)
-	got, ok, err := b.Get(k)
+	got, ok, err := b.Get(context.Background(), k)
 	if err != nil || !ok || string(got) != "x" {
 		t.Fatalf("after reopen: %q %v %v", got, ok, err)
 	}
-	if err := b.Put(k, []byte("y")); !errors.Is(err, ErrExists) {
+	if err := b.Put(context.Background(), k, []byte("y")); !errors.Is(err, ErrExists) {
 		t.Fatalf("a reopened store lost insert-only: %v", err)
 	}
 }
@@ -370,7 +370,7 @@ func TestCaptureOfABlobBatchStoresEverythingTheVerifierNeeds(t *testing.T) {
 			t.Fatalf("%s: report %+v", name, rep)
 		}
 		bk := Key{Chain: ChainArbitrumSepolia, L1Block: 995, L1Hash: sc.rec.L1Hash, Item: ItemBatch(77)}
-		b, ok, _ := store.Get(bk)
+		b, ok, _ := store.Get(context.Background(), bk)
 		if !ok {
 			t.Fatalf("%s: batch row missing", name)
 		}
@@ -378,16 +378,16 @@ func TestCaptureOfABlobBatchStoresEverythingTheVerifierNeeds(t *testing.T) {
 		if err != nil || rec.N != 77 || rec.Header40 != sc.rec.Header40 || rec.AfterAcc != sc.rec.AfterAcc || !rec.ConsistentAcc(nil) || len(rec.VersionedHashes) != 2 {
 			t.Fatalf("%s: batch record %+v %v", name, rec, err)
 		}
-		blobs, err := LoadBlobs(store, ChainArbitrumSepolia, rec)
+		blobs, err := LoadBlobs(context.Background(), store, ChainArbitrumSepolia, rec)
 		if err != nil || len(blobs) != 2 || VersionedHash(blobs[1].Commitment) != rec.VersionedHashes[1] {
 			t.Fatalf("%s: blobs %d %v", name, len(blobs), err)
 		}
-		pr, err := LoadProofs(store, ChainArbitrumSepolia, 77)
+		pr, err := LoadProofs(context.Background(), store, ChainArbitrumSepolia, 77)
 		if err != nil || len(pr) != 1 {
 			t.Fatalf("%s: proofs %v %v", name, pr, err)
 		}
 		// the stored nodes verify, from scratch, under the state root of the stored proof-block header
-		hb, ok, _ := store.Get(Key{Chain: ChainArbitrumSepolia, L1Block: 1000, L1Hash: pr[0].ProofBlockHash, Item: ItemHeader})
+		hb, ok, _ := store.Get(context.Background(), Key{Chain: ChainArbitrumSepolia, L1Block: 1000, L1Hash: pr[0].ProofBlockHash, Item: ItemHeader})
 		if !ok {
 			t.Fatalf("%s: proof block header row missing", name)
 		}
@@ -424,7 +424,7 @@ func TestACapturerThatRestartsFinishesWhatTheLastRunLeftOpen(t *testing.T) {
 	if _, err := c.Tick(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if rows, _ := store.Keys(ChainArbitrumSepolia, "blob/"); len(rows) != 0 {
+	if rows, _ := store.ListByRange(context.Background(), ChainArbitrumSepolia, 0, finality.MaxCaptureBlock, "blob/"); len(rows) != 0 {
 		t.Fatal("blob rows without a beacon answer")
 	}
 	sc.beacon.err, sc.l1.proofErr = nil, nil
@@ -455,11 +455,11 @@ func TestAReorgGivesASecondRowAtTheSameHeight(t *testing.T) {
 	if err != nil || len(rep.NewBatches) != 1 {
 		t.Fatalf("reorg tick: %+v %v", rep, err)
 	}
-	rows, _ := store.List(ChainArbitrumSepolia, 995)
+	rows, _ := store.ListByBlock(context.Background(), ChainArbitrumSepolia, 995)
 	hashes := map[[32]byte]bool{}
 	for _, r := range rows {
-		if r.Key.Item == ItemBatch(77) {
-			hashes[r.Key.L1Hash] = true
+		if r.Item == ItemBatch(77) {
+			hashes[r.L1Hash] = true
 		}
 	}
 	if len(hashes) != 2 {
@@ -478,14 +478,14 @@ func TestAProofWindowMissIsRecordedWithRedactedProvidersAndRetried(t *testing.T)
 	}
 	var found *UnavailableRecord
 	for _, r := range allRows(t, store, 990, 1000) {
-		if r.Key.Item == ItemUnavailable(77) {
+		if r.Item == ItemUnavailable(77) {
 			u, err := DecodeUnavailableRecord(r.Bytes)
 			if err != nil {
 				t.Fatal(err)
 			}
 			found = &u
-			if r.Key.L1Block != 1000 {
-				t.Fatalf("keyed at %d, want the head", r.Key.L1Block)
+			if r.L1Block != 1000 {
+				t.Fatalf("keyed at %d, want the head", r.L1Block)
 			}
 		}
 	}
@@ -505,7 +505,7 @@ func assertNoSecret(t *testing.T, s CaptureStore, rep Report) {
 	t.Helper()
 	for _, r := range allRows(t, s, 980, 1010) {
 		if bytes.Contains(r.Bytes, []byte("0123456789abcdef0123456789abcdef")) {
-			t.Fatalf("row %s holds the provider secret", r.Key)
+			t.Fatalf("row %s holds the provider secret", r.CaptureKey)
 		}
 	}
 	for _, e := range rep.Errors {
@@ -528,11 +528,11 @@ func TestABlobFailureNeverLeaksAndIsRecordedOnceAfterTheGiveUpCount(t *testing.T
 		}
 		assertNoSecret(t, store, last)
 	}
-	ks, _ := store.Keys(ChainArbitrumSepolia, "blobunavailable/")
+	ks, _ := store.ListByRange(context.Background(), ChainArbitrumSepolia, 0, finality.MaxCaptureBlock, "blobunavailable/")
 	if len(ks) != 1 {
 		t.Fatalf("blob unavailability rows: %d, want exactly 1", len(ks))
 	}
-	b, _, _ := store.Get(ks[0])
+	b, _, _ := store.Get(context.Background(), ks[0])
 	u, err := DecodeBlobUnavailableRecord(b)
 	if err != nil || u.N != 77 || u.HTTPStatus != 503 || u.BeaconSlot != (1700000000+995*12-BeaconGenesisTime)/12 || len(u.VersionedHashes) != 1 {
 		t.Fatalf("%+v %v", u, err)
@@ -552,7 +552,7 @@ func TestACalldataBatchStoresItsInputAndAnEventBatchItsData(t *testing.T) {
 	if err != nil || len(rep.NewBatches) != 1 || len(rep.Errors) != 0 {
 		t.Fatalf("%+v %v", rep, err)
 	}
-	b, ok, _ := store.Get(Key{Chain: ChainArbitrumSepolia, L1Block: 995, L1Hash: sc.rec.L1Hash, Item: ItemCalldata(77)})
+	b, ok, _ := store.Get(context.Background(), Key{Chain: ChainArbitrumSepolia, L1Block: 995, L1Hash: sc.rec.L1Hash, Item: ItemCalldata(77)})
 	if !ok {
 		t.Fatal("calldata row missing")
 	}
@@ -578,10 +578,10 @@ func TestAnAccumulatorTheCaptureCannotReproduceIsNotStored(t *testing.T) {
 	if err != nil || len(rep.NewBatches) != 0 || len(rep.Errors) == 0 {
 		t.Fatalf("%+v %v", rep, err)
 	}
-	if ks, _ := store.Keys(ChainArbitrumSepolia, "batch/"); len(ks) != 0 {
+	if ks, _ := store.ListByRange(context.Background(), ChainArbitrumSepolia, 0, finality.MaxCaptureBlock, "batch/"); len(ks) != 0 {
 		t.Fatal("a batch whose accumulator does not reproduce was stored")
 	}
-	if cur, ok, _ := cursorBlock(store, ChainArbitrumSepolia); ok && cur >= 995 {
+	if cur, ok, _ := cursorBlock(context.Background(), store, ChainArbitrumSepolia); ok && cur >= 995 {
 		t.Fatalf("the cursor advanced to %d past an uncaptured event", cur)
 	}
 }
@@ -599,16 +599,16 @@ func TestADelayedProofIsCapturedWhenWantedAndOnlyForKAtLeastOne(t *testing.T) {
 	if _, err := c.Tick(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	ks, _ := store.Keys(ChainArbitrumSepolia, "delayedproof/")
+	ks, _ := store.ListByRange(context.Background(), ChainArbitrumSepolia, 0, finality.MaxCaptureBlock, "delayedproof/")
 	if len(ks) != 1 || ks[0].Item != "delayedproof/5" {
 		t.Fatalf("delayed proof rows %v", ks)
 	}
-	b, _, _ := store.Get(ks[0])
+	b, _, _ := store.Get(context.Background(), ks[0])
 	pr, err := DecodeProofRecord(b)
 	if err != nil || pr.Kind != ProofDelayedAcc || pr.Index != 5 {
 		t.Fatalf("%+v %v", pr, err)
 	}
-	hb, _, _ := store.Get(Key{Chain: ChainArbitrumSepolia, L1Block: pr.ProofBlock, L1Hash: pr.ProofBlockHash, Item: ItemHeader})
+	hb, _, _ := store.Get(context.Background(), Key{Chain: ChainArbitrumSepolia, L1Block: pr.ProofBlock, L1Hash: pr.ProofBlockHash, Item: ItemHeader})
 	hf, _ := finality.ReadHeader(hb)
 	acct, err := ethproof.VerifyAccount(common.Hash(hf.StateRoot), BridgeAddr, pr.Nodes)
 	if err != nil {
@@ -634,7 +634,7 @@ func TestAProofThatDoesNotVerifyUnderTheHeaderIsRefused(t *testing.T) {
 	if err != nil || len(rep.Proofs) != 0 {
 		t.Fatalf("%+v %v", rep, err)
 	}
-	if ks, _ := store.Keys(ChainArbitrumSepolia, "proof/"); len(ks) != 0 {
+	if ks, _ := store.ListByRange(context.Background(), ChainArbitrumSepolia, 0, finality.MaxCaptureBlock, "proof/"); len(ks) != 0 {
 		t.Fatal("a proof that fails against the header's state root was stored")
 	}
 }

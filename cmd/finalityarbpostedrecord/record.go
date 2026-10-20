@@ -272,14 +272,14 @@ func record(storeDir, rawDir string, batchN uint64) error {
 	if err != nil {
 		return err
 	}
-	batches, err := capture.LoadBatches(store, chainArb)
+	batches, err := capture.LoadBatches(context.Background(), store, chainArb)
 	if err != nil {
 		return err
 	}
 	var rec *capture.BatchRecord
 	for i := range batches {
 		if batches[i].N == batchN || (batchN == 0 && rec == nil) {
-			ps, _ := capture.LoadProofs(store, chainArb, batches[i].N)
+			ps, _ := capture.LoadProofs(context.Background(), store, chainArb, batches[i].N)
 			if len(ps) > 0 && batches[i].DataLocation == capture.LocBlob {
 				rec = &batches[i]
 				if batchN != 0 {
@@ -291,7 +291,7 @@ func record(storeDir, rawDir string, batchN uint64) error {
 	if rec == nil {
 		return fmt.Errorf("no captured blob batch with a proof (want %d)", batchN)
 	}
-	blobs, err := capture.LoadBlobs(store, chainArb, *rec)
+	blobs, err := capture.LoadBlobs(context.Background(), store, chainArb, *rec)
 	if err != nil || len(blobs) != len(rec.VersionedHashes) {
 		return fmt.Errorf("blobs of batch %d: %v (%d of %d)", rec.N, err, len(blobs), len(rec.VersionedHashes))
 	}

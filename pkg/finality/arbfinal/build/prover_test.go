@@ -619,16 +619,16 @@ func TestDecodeCreatedRecomputesTheAssertionHash(t *testing.T) {
 func TestMemStoreIsInsertOnly(t *testing.T) {
 	s := NewMemStore()
 	h := [32]byte{1}
-	if err := s.Put(1, 2, h, "a", []byte{1}); err != nil {
+	if err := s.Put(context.Background(), finality.CaptureKey{Chain: 1, L1Block: 2, L1Hash: h, Item: "a"}, []byte{1}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Put(1, 2, h, "a", []byte{1}); err != nil {
+	if err := s.Put(context.Background(), finality.CaptureKey{Chain: 1, L1Block: 2, L1Hash: h, Item: "a"}, []byte{1}); err != nil {
 		t.Fatal("the same bytes may be written again")
 	}
-	if err := s.Put(1, 2, h, "a", []byte{2}); err == nil {
+	if err := s.Put(context.Background(), finality.CaptureKey{Chain: 1, L1Block: 2, L1Hash: h, Item: "a"}, []byte{2}); err == nil {
 		t.Fatal("different bytes under one key must be refused")
 	}
-	if _, ok, _ := s.Get(1, 2, [32]byte{2}, "a"); ok {
+	if _, ok, _ := s.Get(context.Background(), finality.CaptureKey{Chain: 1, L1Block: 2, L1Hash: [32]byte{2}, Item: "a"}); ok {
 		t.Fatal("a Get names the hash: another hash has no row")
 	}
 }

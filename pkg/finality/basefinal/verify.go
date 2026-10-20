@@ -16,6 +16,7 @@ import (
 
 	"github.com/certen/independant-validator/pkg/finality"
 	"github.com/certen/independant-validator/pkg/finality/ethl1"
+	"github.com/certen/independant-validator/pkg/finality/l1adapt"
 )
 
 // The Base R and L1 codes this kind raises (V2_SPEC_S7 section 7); all are registered in testdata/finality/states.json.
@@ -570,13 +571,13 @@ func judge(in judgeInput) (map[string]any, error) {
 	for _, raw := range body.L2Spine[1:] {
 		cur, err := finality.ReadHeader(raw)
 		if err != nil {
-			return nil, stateOf(ethl1.HeaderChainBroken("l2", prev.Number-1, prev.ParentHash, [32]byte(crypto.Keccak256Hash(raw)), "rlp"))
+			return nil, l1adapt.State(ethl1.HeaderChainBroken("l2", prev.Number-1, prev.ParentHash, [32]byte(crypto.Keccak256Hash(raw)), "rlp"))
 		}
 		if cur.Hash != prev.ParentHash {
-			return nil, stateOf(ethl1.HeaderChainBroken("l2", prev.Number-1, prev.ParentHash, cur.Hash, "hash"))
+			return nil, l1adapt.State(ethl1.HeaderChainBroken("l2", prev.Number-1, prev.ParentHash, cur.Hash, "hash"))
 		}
 		if prev.Number == 0 || cur.Number != prev.Number-1 {
-			return nil, stateOf(ethl1.HeaderChainBroken("l2", prev.Number-1, prev.ParentHash, cur.Hash, "number"))
+			return nil, l1adapt.State(ethl1.HeaderChainBroken("l2", prev.Number-1, prev.ParentHash, cur.Hash, "number"))
 		}
 		prev = cur
 	}
@@ -638,7 +639,7 @@ func (Kind) Verify(pins *finality.Pins, b finality.BlockRef, evidence []byte) (f
 	if err != nil {
 		return finality.Verdict{}, err
 	}
-	ep := ethl1Pins(es)
+	ep := l1adapt.Pins(es)
 	body, err := DecodeBody(c.Body, lim, ep, bp.MaxL2Headers)
 	if err != nil {
 		return finality.Verdict{}, err
@@ -653,11 +654,11 @@ func (Kind) Verify(pins *finality.Pins, b finality.BlockRef, evidence []byte) (f
 	}
 	covered, err := head.Covers(body.L1Spine, ep.MaxSpineHeaders)
 	if err != nil {
-		return finality.Verdict{}, stateOf(err)
+		return finality.Verdict{}, l1adapt.State(err)
 	}
 	a, err := ethl1.BlockAt(covered, body.StateBlock)
 	if err != nil {
-		return finality.Verdict{}, stateOf(err)
+		return finality.Verdict{}, l1adapt.State(err)
 	}
 	fields, err := judge(judgeInput{A: a, Body: body, Leg: b, Pins: bp, Head: head})
 	if err != nil {

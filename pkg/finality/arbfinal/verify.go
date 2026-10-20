@@ -13,6 +13,7 @@ import (
 	"github.com/certen/independant-validator/pkg/ethproof"
 	"github.com/certen/independant-validator/pkg/finality"
 	"github.com/certen/independant-validator/pkg/finality/ethl1"
+	"github.com/certen/independant-validator/pkg/finality/l1adapt"
 )
 
 // Kind is the verifier of arb-sepolia/finalized/v1 (spec 5.7). It is pure: no I/O, no clock, no randomness.
@@ -118,7 +119,7 @@ func (k *Kind) Verify(p *finality.Pins, b finality.BlockRef, evidence []byte) (f
 	if err != nil {
 		return finality.Verdict{}, err
 	}
-	l1p, err := ethl1Pins(p)
+	l1p, err := l1adapt.PinsOf(p)
 	if err != nil {
 		return finality.Verdict{}, err
 	}

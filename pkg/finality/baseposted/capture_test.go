@@ -200,7 +200,7 @@ func TestCapturerNamesAProofWindowMissAndStoresNothing(t *testing.T) {
 	if len(recorded) != 1 || recorded[0].Code != "batcher_state_unavailable" {
 		t.Fatalf("recorded %v", recorded)
 	}
-	if ks, _ := store.Blocks(context.Background(), 84532, ItemHeader); len(ks) != 0 {
+	if ks, _ := finality.CaptureKeysOfItem(context.Background(), store, 84532, ItemHeader); len(ks) != 0 {
 		t.Fatal("a failed capture must store nothing")
 	}
 	// a blob the beacon does not serve is l1_blob_unavailable
