@@ -1,0 +1,19 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "adv_electra_truncated",
+ "kind": "head",
+ "description": "100 bytes cut from the end",
+ "pins": "pins/main.json",
+ "lc": "lc/adv_electra_truncated.bin",
+ "expect": {
+  "code": "finality_evidence_malformed",
+  "fields": {
+   "got_len": "1990",
+   "index": "0",
+   "part": "final_update",
+   "reason": "length",
+   "want_len": "2056"
+  },
+  "result": "fault"
+ }
+}

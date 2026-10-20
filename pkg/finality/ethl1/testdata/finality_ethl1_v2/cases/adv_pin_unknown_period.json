@@ -1,0 +1,17 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "adv_pin_unknown_period",
+ "kind": "head",
+ "description": "anchor period absent although the ledger continues past it",
+ "pins": "pins/ledger_no_anchor_period.json",
+ "lc": "lc/adv_pin_unknown_period.bin",
+ "expect": {
+  "code": "finality_pin_unknown",
+  "fields": {
+   "kind": "1",
+   "period": "1390",
+   "root": "0x343e466c91eb25084bf4a64d15a00ebddb0a2e1703aec4b7f5734ae344aba5ee"
+  },
+  "result": "fault"
+ }
+}

@@ -1,0 +1,19 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "adv_electra_link_attested_offset_lie",
+ "kind": "head",
+ "description": "Fulu link: first container offset 25217 instead of 25216",
+ "pins": "pins/main.json",
+ "lc": "lc/adv_electra_link_attested_offset_lie.bin",
+ "expect": {
+  "code": "finality_evidence_malformed",
+  "fields": {
+   "got_len": "25217",
+   "index": "0",
+   "part": "link",
+   "reason": "attested_offset",
+   "want_len": "25216"
+  },
+  "result": "fault"
+ }
+}

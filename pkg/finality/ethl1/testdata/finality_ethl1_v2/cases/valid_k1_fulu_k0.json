@@ -1,0 +1,19 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "valid_k1_fulu_k0",
+ "kind": "head",
+ "description": "the same final update under a kind-1 committee anchor (committee of period 1378)",
+ "pins": "pins/main.json",
+ "lc": "lc/valid_k1_fulu_k0.bin",
+ "expect": {
+  "finalized_head": {
+   "beacon_root": "0xdc004ee3f32dd8645e894b48e80d70e421fc55e2c521c12f04947b62a6944c03",
+   "epoch": "352816",
+   "exec_hash": "0xb85e88d18f511249bfa5815dfd0b7d2dc2244b2351e1cf13cfc81664d637f5cb",
+   "participants": "512",
+   "periods_crossed": "0",
+   "slot": "11290112"
+  },
+  "result": "ok"
+ }
+}

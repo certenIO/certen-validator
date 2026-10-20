@@ -5,6 +5,7 @@ package ethl1
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"os"
@@ -56,6 +57,7 @@ type vCase struct {
 	LC          string          `json:"lc"`
 	ExecHash    string          `json:"exec_hash"`
 	Spine       []string        `json:"spine"`
+	SpineFile   string          `json:"spine_file"`
 	Max         int             `json:"max"`
 	BlockNumber string          `json:"block_number"`
 	Expect      json.RawMessage `json:"expect"`
@@ -183,6 +185,9 @@ func canonicalExpect(t *testing.T, expect json.RawMessage) []byte {
 		if e.Head == nil {
 			b, _ = json.Marshal(any["blocks"])
 		}
+		if any["block"] != nil {
+			b, _ = json.Marshal(map[string]interface{}{"block": any["block"], "headers_walked": any["headers_walked"]})
+		}
 		return b
 	}
 	t.Fatalf("bad expect %s", expect)
@@ -206,14 +211,23 @@ func coversOutput(t *testing.T, c vCase) []byte {
 	for _, s := range c.Spine {
 		spine = append(spine, mustHex(t, s))
 	}
+	if c.SpineFile != "" {
+		spine = readSpineFile(t, c.SpineFile)
+	}
 	head := FinalizedHead{ExecHash: h32of(t, c.ExecHash)}
 	bl, err := head.Covers(spine, c.Max)
+	var found L1Block
 	if err == nil && c.BlockNumber != "" {
 		n, _ := strconv.ParseUint(c.BlockNumber, 10, 64)
-		_, err = BlockAt(bl, n)
+		found, err = BlockAt(bl, n)
 	}
 	if err != nil {
 		return err.(*Fault).CanonicalJSON()
+	}
+	if c.SpineFile != "" {
+		b, _ := json.Marshal(map[string]any{"headers_walked": strconv.Itoa(len(bl)), "block": map[string]string{"hash": "0x" + hex.EncodeToString(found.Hash[:]), "number": strconv.FormatUint(found.Number, 10),
+			"state_root": "0x" + hex.EncodeToString(found.StateRoot[:]), "timestamp": strconv.FormatUint(found.Timestamp, 10)}})
+		return b
 	}
 	out := []map[string]string{}
 	for _, b := range bl {
@@ -224,7 +238,32 @@ func coversOutput(t *testing.T, c vCase) []byte {
 }
 
 // TestManifestPinsEveryFile: the published set is exactly the files the manifest hashes, and the manifest hash file is its hash.
-func TestManifestPinsEveryFile(t *testing.T) {
+func TestManifestPinsEveryFile(t *testing.T) { checkManifest(t) }
+
+// readSpineFile parses the framed spine of a set: u32be count, then per header u32be length and the raw RLP.
+func readSpineFile(t *testing.T, rel string) [][]byte {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(vectorDir, filepath.FromSlash(rel)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := int(binary.BigEndian.Uint32(b))
+	pos := 4
+	out := make([][]byte, 0, n)
+	for i := 0; i < n; i++ {
+		l := int(binary.BigEndian.Uint32(b[pos:]))
+		pos += 4
+		out = append(out, b[pos:pos+l])
+		pos += l
+	}
+	if pos != len(b) {
+		t.Fatalf("%s: %d trailing bytes", rel, len(b)-pos)
+	}
+	return out
+}
+
+func checkManifest(t *testing.T) {
+	t.Helper()
 	mraw, err := os.ReadFile(filepath.Join(vectorDir, "manifest.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -264,7 +303,8 @@ func TestManifestPinsEveryFile(t *testing.T) {
 		if err == nil && !info.IsDir() {
 			rel, _ := filepath.Rel(vectorDir, p)
 			rel = filepath.ToSlash(rel)
-			if rel != "manifest.json" && rel != "MANIFEST.sha256" {
+			// SUPERSEDED.md is the note that freezes a superseded set; it is not part of the set
+			if rel != "manifest.json" && rel != "MANIFEST.sha256" && rel != "SUPERSEDED.md" {
 				onDisk = append(onDisk, rel)
 			}
 		}

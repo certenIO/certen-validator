@@ -1,0 +1,19 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "adv_electra_finalized_offset_descending",
+ "kind": "head",
+ "description": "finalized offset not past the attested header",
+ "pins": "pins/main.json",
+ "lc": "lc/adv_electra_finalized_offset_descending.bin",
+ "expect": {
+  "code": "finality_evidence_malformed",
+  "fields": {
+   "got_len": "400",
+   "index": "0",
+   "part": "final_update",
+   "reason": "finalized_offset",
+   "want_len": "2090"
+  },
+  "result": "fault"
+ }
+}

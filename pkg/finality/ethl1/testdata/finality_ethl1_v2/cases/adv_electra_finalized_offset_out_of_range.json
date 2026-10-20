@@ -1,0 +1,19 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "adv_electra_finalized_offset_out_of_range",
+ "kind": "head",
+ "description": "finalized offset beyond the blob",
+ "pins": "pins/main.json",
+ "lc": "lc/adv_electra_finalized_offset_out_of_range.bin",
+ "expect": {
+  "code": "finality_evidence_malformed",
+  "fields": {
+   "got_len": "2100",
+   "index": "0",
+   "part": "final_update",
+   "reason": "finalized_offset",
+   "want_len": "2090"
+  },
+  "result": "fault"
+ }
+}

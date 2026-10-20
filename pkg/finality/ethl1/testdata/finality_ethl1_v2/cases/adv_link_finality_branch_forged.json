@@ -1,0 +1,19 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "adv_link_finality_branch_forged",
+ "kind": "head",
+ "description": "link 1 finality branch node flipped",
+ "pins": "pins/main.json",
+ "lc": "lc/adv_link_finality_branch_forged.bin",
+ "expect": {
+  "code": "finality_link_invalid",
+  "fields": {
+   "attested_slot": "11381395",
+   "check": "finality_branch",
+   "index": "1",
+   "period": "1389",
+   "signature_slot": "11381396"
+  },
+  "result": "fault"
+ }
+}

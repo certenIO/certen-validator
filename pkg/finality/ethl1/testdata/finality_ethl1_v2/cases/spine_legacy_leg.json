@@ -1,0 +1,20 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "spine_legacy_leg",
+ "kind": "covers",
+ "description": "legacy leg of spec 5.3: all headers from the finalized execution head of the period-1378 update (block 11849735) to block 11,845,679",
+ "exec_hash": "0xb85e88d18f511249bfa5815dfd0b7d2dc2244b2351e1cf13cfc81664d637f5cb",
+ "spine_file": "raw/spine_legacy.bin",
+ "max": 16384,
+ "block_number": "11845679",
+ "expect": {
+  "block": {
+   "hash": "0x7290e175358ac8fbc09c6056e51258b376b53f466d307ec0ba8edb8949c2e4bc",
+   "number": "11845679",
+   "state_root": "0x0d9f872bbf3d8e336eef5d37a39a233a7901b21663e79c9946c37bacdcd548e3",
+   "timestamp": "1791162648"
+  },
+  "headers_walked": "4057",
+  "result": "ok"
+ }
+}

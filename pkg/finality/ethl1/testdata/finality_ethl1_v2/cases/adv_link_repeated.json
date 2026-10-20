@@ -1,0 +1,19 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "adv_link_repeated",
+ "kind": "head",
+ "description": "the first link repeated: the second applies nothing",
+ "pins": "pins/main.json",
+ "lc": "lc/adv_link_repeated.bin",
+ "expect": {
+  "code": "finality_link_invalid",
+  "fields": {
+   "attested_slot": "11370571",
+   "check": "not_applied",
+   "index": "1",
+   "period": "1388",
+   "signature_slot": "11370572"
+  },
+  "result": "fault"
+ }
+}

@@ -49,7 +49,6 @@ const (
 	formatPins      = "certen-finality-ethl1-test-pins/1"
 	formatCase      = "certen-finality-ethl1-case/1"
 	formatManifest  = "certen-finality-ethl1-vectors/1"
-	setName         = "finality_ethl1_v1"
 	maxLinksPins    = 64
 	maxSpinePins    = 16384
 	minParticipants = 342
@@ -88,6 +87,7 @@ type caseFile struct {
 	LC          string          `json:"lc,omitempty"`
 	ExecHash    string          `json:"exec_hash,omitempty"`
 	Spine       []string        `json:"spine,omitempty"`
+	SpineFile   string          `json:"spine_file,omitempty"`
 	Max         int             `json:"max,omitempty"`
 	BlockNumber string          `json:"block_number,omitempty"`
 	Expect      json.RawMessage `json:"expect"`
@@ -113,7 +113,13 @@ func h32(s string) [32]byte {
 }
 func cp(b []byte) []byte          { return append([]byte(nil), b...) }
 func flip(b []byte, i int) []byte { c := cp(b); c[i] ^= 0x01; return c }
-func sum(label string) [32]byte   { return sha256.Sum256([]byte("finality_ethl1_v1/" + label)) }
+func sum(label string) [32]byte   { return sha256.Sum256([]byte(labelPrefix + label)) }
+
+// setName and labelPrefix name the set being generated: finality_ethl1_v1 is frozen (SUPERSEDED.md); the generator now writes v2.
+var (
+	setName     = "finality_ethl1_v1"
+	labelPrefix = "finality_ethl1_v1/"
+)
 
 func (g *gen) put(path string, b []byte) { g.files[path] = b }
 
@@ -317,7 +323,12 @@ func splice(b []byte, off int, repl []byte) []byte {
 	return c
 }
 
-func build(rawDir, out string) (err error) {
+// build refuses to rewrite the frozen v1 set: its electra-layout stand-in verdict no longer exists in the verifier.
+func build(rawDir, out string) error {
+	return fmt.Errorf("finality_ethl1_v1 is frozen and superseded by finality_ethl1_v2 (see its SUPERSEDED.md): use build2")
+}
+
+func buildSet(rawDir, raw2Dir, out string, v2 bool) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("%v", r)
@@ -377,6 +388,12 @@ func build(rawDir, out string) (err error) {
 	}
 	mainPins := pinsFile{Format: formatPins, Description: "ledger of every period 1379.." + strconv.FormatUint(P, 10) + " derived from the captured link chain; the block_root of the last period is the captured bootstrap checkpoint",
 		ChainID: "11155111", GVR: "0x" + genesisValRoot, Forks: forks, MinParticipants: minParticipants, MaxLinks: maxLinksPins, MaxSpine: maxSpinePins}
+	if v2 {
+		// the ledger of the v2 set starts at the Fulu period 1378 (kind-2 anchor of the Fulu bootstrap)
+		r := ethlRootOf(readFile(raw2Dir, "bootstrap_fulu.ssz")[4 : 4+committeeLen])
+		fb := fuluCheckpoint
+		mainPins.Anchors = append(mainPins.Anchors, anchorFile{Period: "1378", CommitteeRoot: hx(r[:]), BlockRoot: &fb, WSPEpochs: strconv.Itoa(wspEpochs)})
+	}
 	for p := uint64(1379); p <= P; p++ {
 		r := root(p)
 		a := anchorFile{Period: strconv.FormatUint(p, 10), CommitteeRoot: hx(r[:]), WSPEpochs: strconv.Itoa(wspEpochs)}
@@ -559,8 +576,8 @@ func build(rawDir, out string) (err error) {
 	g.head("adv_window_exceeded", "weak-subjectivity window of 1 epoch against a link finalizing hundreds of epochs after the anchor", "wsp_1", short(linkRange(P-2, P-1)),
 		ethl1.CodePinWindow, map[string]string{"wsp_epochs": "1"})
 
-	// ---- the real Fulu update: electra layout is recognised and refused
-	{
+	// ---- the real Fulu update: v1 recognised the electra layout and refused it by name; v2 judges it (see the electra cases)
+	if !v2 {
 		fuluAtt := get64(fulu, 25216)
 		lc := k1(P-2, []ethl1.LB{{Layout: ethl1.LayoutElectra, SSZ: fulu}}, fu)
 		g.head("electra_link_real_fulu_update", "the real period-1378 Fulu update (electra layout) as a link", "main", lc, ethl1.CodeForkUnsupported,
@@ -634,6 +651,11 @@ func build(rawDir, out string) (err error) {
 	}
 
 	g.synthetic()
+	if v2 {
+		if err := g.v2extras(v2in{raw2Dir: raw2Dir, comm: comm, upd: upd, fu: fu, boot: boot, P: P, bootRoot: bootRoot, mk: mk, gl: gl, k1: k1, k2: k2, linkRange: linkRange, okFields: okFields, nParts: nParts}); err != nil {
+			return err
+		}
+	}
 	return g.flush()
 }
 

@@ -1,0 +1,19 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "adv_electra_anchor_body_layout_byte_electra",
+ "kind": "head",
+ "description": "kind-1 committee body carrying layout byte 1",
+ "pins": "pins/main.json",
+ "lc": "lc/adv_electra_anchor_body_layout_byte_electra.bin",
+ "expect": {
+  "code": "finality_evidence_malformed",
+  "fields": {
+   "got_len": "1",
+   "index": "0",
+   "part": "anchor_body",
+   "reason": "layout_byte_not_zero",
+   "want_len": "0"
+  },
+  "result": "fault"
+ }
+}

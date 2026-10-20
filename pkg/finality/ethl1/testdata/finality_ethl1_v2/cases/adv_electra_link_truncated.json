@@ -1,0 +1,19 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "adv_electra_link_truncated",
+ "kind": "head",
+ "description": "Fulu link with 100 bytes cut: below the 26,872-byte electra minimum",
+ "pins": "pins/main.json",
+ "lc": "lc/adv_electra_link_truncated.bin",
+ "expect": {
+  "code": "finality_evidence_malformed",
+  "fields": {
+   "got_len": "26806",
+   "index": "0",
+   "part": "link",
+   "reason": "length",
+   "want_len": "26872"
+  },
+  "result": "fault"
+ }
+}
