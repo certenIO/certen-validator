@@ -80,14 +80,6 @@ type extendCase struct {
 	Expect       string            `json:"expect_canonical"`
 }
 
-func (b *builder) extendIDs() map[string]bool {
-	out := map[string]bool{}
-	for _, c := range b.extend {
-		out[c.ID] = true
-	}
-	return out
-}
-
 func lcLeg(l *rawLeg) legJSON { return legOf(l.ref) }
 
 // verifyCases builds every verification case.

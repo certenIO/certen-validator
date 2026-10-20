@@ -49,3 +49,4 @@ pkg/finality/testdata/* -text
 pkg/finality/testdata/finality/*.txt -text
 # RB11-E2E-POS: the recorded Settlements of the published vectors' leg blocks are hashed in their MANIFEST.json; a CRLF checkout must not rewrite them.
 cmd/proofverify/testdata/finality_e2e_pos1/* -text
+pkg/finality/ethsepolia/testdata/finality_eth_sepolia2/** -text

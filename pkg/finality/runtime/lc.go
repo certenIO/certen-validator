@@ -19,6 +19,7 @@ import (
 	"github.com/certen/independant-validator/pkg/finality"
 	"github.com/certen/independant-validator/pkg/finality/arbfinal/build"
 	"github.com/certen/independant-validator/pkg/finality/ethl1"
+	"github.com/certen/independant-validator/pkg/finality/ethsepolia"
 )
 
 // codeLCUnavailable is the registered named state (testdata/finality/states.json, required field `endpoints`) of a light-client
@@ -37,7 +38,11 @@ const lcBootstrapCacheMax = 8
 // verify costs only the attempt.
 //
 // The anchor is the ledger's highest-period entry that carries a block_root (a kind-2 anchor: the bootstrap of that checkpoint).
-// A ledger without such an entry is the named state finality_pin_unknown, not a weaker anchor: there is no kind-1 path here.
+// A ledger without such an entry is the named state finality_pin_unknown, not a weaker anchor: there is no kind-1 path here. The root-only
+// ledger the embedded pins hold today (period 1378, the bootstrap pin) is exactly such an anchor: every L1 head is proven by the
+// in-evidence links from 1378 to the signature period, at most max_links of them (spec 8.2); beyond that the source returns
+// *LedgerIncompleteError, whose state is finality_pending{finality_ledger_incomplete} with the exact periods and the ETA of the next
+// ledger publication, never a longer evidence the verifier would refuse.
 type LC struct {
 	URLs []string       // CERTEN_FINALITY_LC_URLS, tried in order
 	Pins *finality.Pins // pins whose eth_sepolia.anchors ledger fixes the anchor
@@ -65,6 +70,16 @@ func (e *LCUnavailableError) Error() string { return e.State.Error() }
 
 // Unwrap lets finality.AsNamed find the state.
 func (e *LCUnavailableError) Unwrap() error { return e.State }
+
+// LedgerIncompleteError is the error of a source whose final update lies more than max_links periods past the ledger anchor: the pins
+// cannot carry a proof to it. Pending is the named state (finality_pending{reason: finality_ledger_incomplete}); the endpoint is
+// not at fault and is not retried on the next one.
+type LedgerIncompleteError struct{ Pending *finality.PendingState }
+
+func (e *LedgerIncompleteError) Error() string { return e.Pending.Error() }
+
+// Unwrap lets finality.AsNamed find the state.
+func (e *LedgerIncompleteError) Unwrap() error { return e.Pending.State() }
 
 func (l *LC) now() time.Time {
 	if l.Now != nil {
@@ -230,6 +245,20 @@ func (l *LC) LC(ctx context.Context) (ethl1.LC, error) {
 		}
 		started := l.now()
 		lc, err := l.fromEndpoint(ctx, base, period, root)
+		var tooMany *build.TooManyLinksError
+		if errors.As(err, &tooMany) {
+			// not an endpoint failure: the ledger is too far behind the head for any endpoint's answer to be carried
+			e, _ := l.Pins.Sepolia()
+			var a *finality.AnchorPin
+			for i := range e.Anchors {
+				if e.Anchors[i].Period == tooMany.Anchor {
+					a = &e.Anchors[i]
+				}
+			}
+			pend := ethsepolia.LedgerIncomplete(l.Pins, e, tooMany.Signature, a, l.now())
+			l.logf("[FINALITY] light-client source: %v", pend)
+			return ethl1.LC{}, &LedgerIncompleteError{Pending: pend}
+		}
 		if err == nil {
 			if len(causes) > 0 {
 				l.logf("[FINALITY] light-client source: %s answered after %d endpoint(s) failed (%s)", lcLabel(base, i), len(causes), l.now().Sub(started))
@@ -255,8 +284,15 @@ func (l *LC) fromEndpoint(ctx context.Context, base string, period uint64, root 
 		return ethl1.LC{}, err
 	}
 	b := &build.BeaconLC{Beacon: base, HTTP: l.client(), AnchorKind: 2, AnchorPeriod: period, AnchorRoot: root, AnchorBody: body}
+	if e, perr := l.Pins.Sepolia(); perr == nil {
+		b.MaxLinks = e.MaxLinks
+	}
 	lc, err := b.LC(ctx)
 	if err != nil {
+		var tooMany *build.TooManyLinksError
+		if errors.As(err, &tooMany) {
+			return ethl1.LC{}, err
+		}
 		return ethl1.LC{}, ethrpc.RedactError(err)
 	}
 	return lc, nil

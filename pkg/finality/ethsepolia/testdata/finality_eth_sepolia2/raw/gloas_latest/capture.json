@@ -1,0 +1,11 @@
+{
+ "built_utc": "replayed from finality_eth_sepolia1 raw answers",
+ "build_ms": 1138,
+ "verify_ms": 1095,
+ "evidence_bytes": 3517627,
+ "spine_headers": 4638,
+ "links": 13,
+ "final_update_layout": "gloas",
+ "lc_source": "replay",
+ "exec_source": "replay"
+}

@@ -49,18 +49,21 @@ import (
 const e2eData = "testdata/finality_e2e_pos1"
 
 type e2eLeg struct {
-	name       string // row name and recorded Settlement file
-	kind       string
-	level      finality.Level
-	chain      uint64
-	register   func(*finality.Registry) error
-	pins       *finality.Pins
-	evidence   []byte
-	expect     string // the vector's own canonical verdict text
-	render     func(finality.Verdict) string
-	legHash    string // the vector's leg block hash
-	sibling    finality.Level
-	siblingKnd string
+	name   string // row name
+	settle string // recorded Settlement file (name when empty): a second row may judge the same block with other evidence
+	// embeddedVerifies: the evidence is anchored at the root pin the EMBEDDED pins hold, so it verifies under them as well.
+	embeddedVerifies bool
+	kind             string
+	level            finality.Level
+	chain            uint64
+	register         func(*finality.Registry) error
+	pins             *finality.Pins
+	evidence         []byte
+	expect           string // the vector's own canonical verdict text
+	render           func(finality.Verdict) string
+	legHash          string // the vector's leg block hash
+	sibling          finality.Level
+	siblingKnd       string
 }
 
 func repoPath(parts ...string) string {
@@ -241,7 +244,14 @@ func e2eLegs(t *testing.T) []e2eLeg {
 	for _, c := range []struct{ id, name string }{{"valid_gloas_latest", "eth_gloas_latest"}, {"valid_gloas_period", "eth_gloas_period"}, {"valid_legacy", "eth_legacy"}} {
 		p, ev, ex, h := rawCase(t, "ethsepolia/testdata/finality_eth_sepolia1", c.id)
 		out = append(out, e2eLeg{name: c.name, kind: ethsepolia.Name, level: finality.LevelFinalized, chain: finality.ChainSepolia, register: ethsepolia.Register,
-			pins: p, evidence: ev, expect: ex, render: verifiedRender, legHash: h})
+			pins: p, evidence: ev, expect: ex, render: verifiedRender, legHash: h, embeddedVerifies: c.name == "eth_legacy"})
+	}
+	// RB11-C2: the same three leg blocks with evidence ANCHORED AT THE ROOT PIN with in-evidence links (finality_eth_sepolia2, judged under
+	// the embedded pins): the production shape, which verifies under the embedded pins, through the database path as well.
+	for _, c := range []struct{ id, name string }{{"valid_gloas_latest", "eth_gloas_latest"}, {"valid_gloas_period", "eth_gloas_period"}, {"valid_legacy", "eth_legacy"}} {
+		p, ev, ex, h := rawCase(t, "ethsepolia/testdata/finality_eth_sepolia2", c.id)
+		out = append(out, e2eLeg{name: c.name + "_root_anchored", settle: c.name, kind: ethsepolia.Name, level: finality.LevelFinalized, chain: finality.ChainSepolia, register: ethsepolia.Register,
+			pins: p, evidence: ev, expect: ex, render: verifiedRender, legHash: h, embeddedVerifies: true})
 	}
 	return out
 }
@@ -249,12 +259,16 @@ func e2eLegs(t *testing.T) []e2eLeg {
 // settlementOf reads the recorded Settlement of a leg and binds it to the vector's leg block.
 func settlementOf(t *testing.T, l e2eLeg) finality.Settlement {
 	t.Helper()
-	raw := readFileT(t, filepath.Join(e2eData, l.name+".json"))
+	file := l.settle
+	if file == "" {
+		file = l.name
+	}
+	raw := readFileT(t, filepath.Join(e2eData, file+".json"))
 	var manifest map[string]string
 	if err := json.Unmarshal(readFileT(t, filepath.Join(e2eData, "MANIFEST.json")), &manifest); err != nil {
 		t.Fatal(err)
 	}
-	if sum := sha256.Sum256(raw); manifest[l.name+".json"] != hex.EncodeToString(sum[:]) {
+	if sum := sha256.Sum256(raw); manifest[file+".json"] != hex.EncodeToString(sum[:]) {
 		t.Fatalf("%s.json is not the recorded file (MANIFEST.json sha256 differs)", l.name)
 	}
 	var f struct {
@@ -483,11 +497,11 @@ func TestFinalityE2EPositiveEveryKindThroughTheDatabase(t *testing.T) {
 			// The same evidence under the EMBEDDED pins (what the proofverify command always uses): the embedded Sepolia ledger holds the
 			// root pin (period 1378) only, so evidence anchored beyond it is not established and is the named finality_ledger_behind,
 			// never a weaker level; evidence anchored at the root pin (eth_legacy) verifies, with the vector's own verdict.
-			if es := repE.Levels[l.level]; l.name == "eth_legacy" {
+			if es := repE.Levels[l.level]; l.embeddedVerifies {
 				if es.Status != finality.StatusVerified || es.Verdict == nil || l.render(*es.Verdict) != l.expect || repE.Headline != l.level {
-					t.Fatalf("eth_legacy under the embedded pins: headline %s %+v", repE.Headline, es)
+					t.Fatalf("%s under the embedded pins: headline %s %+v", l.name, repE.Headline, es)
 				}
-				row.embedded = "verified (anchor 1378 = the root pin), verdict equals the vector's"
+				row.embedded = "verified (anchored at the root pin 1378), verdict equals the vector's"
 			} else {
 				if es.Status != finality.StatusRefused || es.State == nil || !strings.Contains(es.State.Error(), "finality_ledger_behind") || repE.Headline != finality.LevelIncluded {
 					t.Fatalf("%s under the embedded pins: want the named finality_ledger_behind, got headline %s %+v", l.name, repE.Headline, es)
