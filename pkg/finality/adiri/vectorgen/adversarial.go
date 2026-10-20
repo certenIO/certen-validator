@@ -46,6 +46,9 @@ func nonSubgroupSignature() []byte {
 func gnarkSigReason(b []byte) string {
 	var p bls12381.G1Affine
 	if _, err := p.SetBytes(b); err == nil {
+		if p.IsInfinity() {
+			return "identity"
+		}
 		return "valid"
 	}
 	var q bls12381.G1Affine
@@ -280,7 +283,7 @@ func adversarial(base vec, baseEv []byte, facts cacheFacts) []vec {
 		v.Note = "the CFA1 declares 65537 records (limit 65536)"
 		v.Base, v.Evidence = base.Name, ""
 		mut := append([]byte(nil), baseEv...)
-		off := 80 + 4 + 2
+		off := 79 + 4 + 2 // header (75 B), cfa1 length (4), magic (4), n_tables (2)
 		for _, t := range bp.cf.Tables {
 			off += 1 + len(t)*adiri.KeyBytes
 		}
