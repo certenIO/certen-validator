@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -90,5 +91,48 @@ func TestPortableBytesAreUnchangedByTheFinalitySection(t *testing.T) {
 	}
 	if a.SetVerdict != b.SetVerdict || a.CertifiedBlock != b.CertifiedBlock || a.AnchorBlock != b.AnchorBlock || a.SetVerdict != proof.VerdictVerified {
 		t.Fatalf("finality changed the proof's verdict: %+v vs %+v", a, b)
+	}
+}
+
+// The document the proof service stores carries govRootV3Inputs; the finality section must still add only its own trailing
+// member there. The test pins the placement: Finality is the last field of Portable and is omitted when empty, so no member
+// that exists today can move, change or gain a neighbour.
+func TestFinalitySectionIsTheLastOmittedWhenEmptyMemberOfThePortableDocument(t *testing.T) {
+	typ := reflect.TypeOf(Portable{})
+	last := typ.Field(typ.NumField() - 1)
+	if last.Name != "Finality" || last.Tag.Get("json") != "finality,omitempty" {
+		t.Fatalf("the last member of Portable is %s `%s`; the finality section must be the last, omitempty member", last.Name, last.Tag)
+	}
+
+	fx := load(t)
+	ir, err := fx.inc.Verify()
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := ExportDocument(fx.ev, ir.Inputs, fx.pin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc.GovRootV3Inputs = &PortableGovRootV3Inputs{G0Hash: "g0", G1Hash: "g1", G2Hash: "g2", KeyPageURL: "acc://p", KeyBookURL: "acc://b", OperationID: "op"}
+	before, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc.Finality = []json.RawMessage{json.RawMessage(`{"seq":1}`)}
+	after, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	suffix := `,"finality":[{"seq":1}]}`
+	if !bytes.HasSuffix(after, []byte(suffix)) || !bytes.Equal(after[:len(after)-len(suffix)], before[:len(before)-1]) {
+		t.Fatal("with govRootV3Inputs present, a document with finality differs from the one without by more than the trailing member")
+	}
+	doc.Finality = []json.RawMessage{}
+	empty, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(empty, before) {
+		t.Fatal("an empty finality section changed the document's bytes")
 	}
 }
