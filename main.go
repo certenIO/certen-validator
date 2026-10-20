@@ -34,6 +34,7 @@ import (
 	"github.com/certen/independant-validator/pkg/ethrpc"
 	"github.com/certen/independant-validator/pkg/execution"
 	"github.com/certen/independant-validator/pkg/execution/contracts"
+	"github.com/certen/independant-validator/pkg/finality"
 	"github.com/certen/independant-validator/pkg/firestore"
 	"github.com/certen/independant-validator/pkg/intent"
 	"github.com/certen/independant-validator/pkg/ledger"
@@ -2296,6 +2297,22 @@ func startValidator(
 		monitor.Start(context.Background())
 		log.Printf("✅ [Phase 5] Standing evidence checks started (settled-without-canonical, " +
 			"contradicted layer 5, schema-behind-binary)")
+
+		// Staged finality (RB11, PROOF_V2 S7, certen:finality:v1). For every settled leg this worker appends the strongest
+		// finality level now buildable (included, l1_posted, finalized) to the leg's append-only, hash-linked addendum chain,
+		// beside the stored proof, and re-schedules until the chain's top level. It runs on its own goroutine under its own
+		// deadlines and shares nothing with settlement, attestation or write-back, none of which waits on it; nothing it writes
+		// is an input of any attestation message, outcome root or govRoot. CERTEN_FINALITY_UPGRADER_ENABLED (default on) turns
+		// it off, and an off switch is a named, logged state (finality_upgrader_disabled) and a metric, never a silent skip.
+		finalityOn, ferr := finality.Enabled()
+		if ferr != nil {
+			return nil, nil, fmt.Errorf("finality upgrader: %w", ferr)
+		}
+		finalityRepo := database.NewFinalityAddendaRepository(dbClient)
+		if _, ferr := finality.Launch(context.Background(), finalityOn, finalityRepo, finalityRepo, finality.Default, finality.NewPins(),
+			finality.UpgraderConfig{Logf: log.Printf}); ferr != nil {
+			return nil, nil, fmt.Errorf("finality upgrader: %w", ferr)
+		}
 	}
 
 	go intentDiscovery.StartMonitoring()
