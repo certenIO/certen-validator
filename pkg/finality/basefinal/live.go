@@ -302,6 +302,9 @@ func (s *RPC) Proof(ctx context.Context, addr [20]byte, slots [][32]byte, block 
 		}
 		var k, v [32]byte
 		kb, vb := unhexBytes(sl.Key), bigOf(sl.Value).Bytes()
+		if len(kb) > 32 || len(vb) > 32 {
+			return StateProof{}, fmt.Errorf("eth_getProof: a storage key or value is longer than 32 bytes")
+		}
 		copy(k[32-len(kb):], kb)
 		copy(v[32-len(vb):], vb)
 		sp.Values[k] = v

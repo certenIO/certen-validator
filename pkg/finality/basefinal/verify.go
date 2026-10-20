@@ -389,7 +389,10 @@ func judge(in judgeInput) (map[string]any, error) {
 		return nil, err
 	}
 	row, pinned := p.Impl[codeHashOf(gia)]
-	if !gia.exists || !pinned || row.Role != RoleGameImpl || !row.Complete(p.Layouts) || row.Impl != gimpl || row.CWIA != LayoutAggregateV1 {
+	// the pinned build of the game implementation names the AnchorStateRegistry (and, when pinned, the factory) it is built for: they must
+	// be the ones the contract graph proves (annex step 5)
+	if !gia.exists || !pinned || row.Role != RoleGameImpl || !row.Complete(p.Layouts) || row.Impl != gimpl || row.CWIA != LayoutAggregateV1 ||
+		row.ASR != asr || (row.DGF != [20]byte{} && row.DGF != dgf) {
 		return nil, identity(RoleGameImpl, gimpl, codeHashOf(gia))
 	}
 	rest := len(code) - tmplLen - 2
@@ -559,11 +562,13 @@ func judge(in judgeInput) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	var computed [32]byte
-	if h0.WithdrawalsRoot != nil {
-		computed = [32]byte(crypto.Keccak256Hash(make([]byte, 32), h0.StateRoot[:], h0.WithdrawalsRoot[:], h0.Hash[:]))
+	// The output root needs the withdrawals root of the header: a header without one has no output root, whatever the claim is (a claim
+	// of all zeros must not match a zero that stands for "absent"); and the header must be the block the game implies (spec 5.5 O5).
+	if h0.WithdrawalsRoot == nil {
+		return nil, st(CodeOutputRootMismatch, "computed", [32]byte{}, "claimed", claimed)
 	}
-	if computed != claimed {
+	computed := [32]byte(crypto.Keccak256Hash(make([]byte, 32), h0.StateRoot[:], h0.WithdrawalsRoot[:], h0.Hash[:]))
+	if computed != claimed || h0.Number != outBlock {
 		return nil, st(CodeOutputRootMismatch, "computed", computed, "claimed", claimed)
 	}
 

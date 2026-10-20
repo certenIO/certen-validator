@@ -49,6 +49,9 @@ type ImplRow struct {
 	IntervalPairs [][2]uint64 // {total blocks of the game, intermediate interval}
 	SlowDelay     uint64
 	FastDelay     uint64
+	// game_impl: the AnchorStateRegistry (and, when pinned, the DisputeGameFactory) the pinned build is made for
+	ASR [20]byte
+	DGF [20]byte
 	// asr_impl
 	FinalityDelaySeconds *uint64
 }
@@ -87,6 +90,8 @@ type rawRow struct {
 	SlowDelay     uint64      `json:"slow_finalization_delay"`
 	FastDelay     uint64      `json:"fast_finalization_delay"`
 	FinalityDelay *uint64     `json:"finality_delay_seconds"`
+	ASRAddr       string      `json:"asr"`
+	DGFAddr       string      `json:"dgf"`
 }
 
 type rawLayout struct {
@@ -163,7 +168,7 @@ func ParsePins(p *finality.Pins) (*Pins, error) {
 	}
 	for k, row := range r.ImplPins {
 		h, ok := unhex(k, 32)
-		if !ok {
+		if !ok || [32]byte(h) == ([32]byte{}) { // no deployed code hashes to zero: an absent account would look pinned
 			return nil, bad("impl_pins")
 		}
 		var rr rawRow
@@ -178,11 +183,17 @@ func ParsePins(p *finality.Pins) (*Pins, error) {
 		if a, ok := unhex(rr.ImplAddr, 20); ok {
 			copy(ir.Impl[:], a)
 		}
+		if a, ok := unhex(rr.ASRAddr, 20); ok {
+			copy(ir.ASR[:], a)
+		}
+		if a, ok := unhex(rr.DGFAddr, 20); ok {
+			copy(ir.DGF[:], a)
+		}
 		out.Impl[[32]byte(h)] = ir
 	}
 	for k, row := range r.ProxyPins {
 		h, ok := unhex(k, 32)
-		if !ok {
+		if !ok || [32]byte(h) == ([32]byte{}) {
 			return nil, bad("proxy_pins")
 		}
 		var rr rawRow
@@ -214,7 +225,7 @@ func hexBytes(s string) ([]byte, bool) {
 // Complete reports whether a game_impl row carries every decoded immutable, the CWIA layout and the interval semantics the
 // predicates of 5.5 need (V2_SPEC_S7 4.2 rule: an incomplete row is treated as absent).
 func (r ImplRow) Complete(layouts map[string]GameLayout) bool {
-	if r.Role != RoleGameImpl || r.GameType == 0 || r.Version == "" || r.Impl == [20]byte{} || r.NIntermediate <= 0 || len(r.IntervalPairs) == 0 || r.SlowDelay == 0 || r.FastDelay == 0 {
+	if r.Role != RoleGameImpl || r.GameType == 0 || r.Version == "" || r.Impl == [20]byte{} || r.ASR == [20]byte{} || r.NIntermediate <= 0 || len(r.IntervalPairs) == 0 || r.SlowDelay == 0 || r.FastDelay == 0 {
 		return false
 	}
 	l, ok := layouts[r.CWIA]
