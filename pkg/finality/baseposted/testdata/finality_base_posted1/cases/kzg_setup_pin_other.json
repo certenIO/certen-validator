@@ -1,0 +1,16 @@
+{
+  "format": "certen-base-posted-case/1",
+  "id": "kzg_setup_pin_other",
+  "description": "kzg_setup_sha256 is not the setup this verifier carries",
+  "pins": "pins/kzg_setup_other.json",
+  "leg": "legs/a.json",
+  "evidence": "evidence/valid_a.bin",
+  "expect": {
+    "result": "state",
+    "code": "finality_pins_corrupt",
+    "fields": {
+      "key": "base_sepolia.kzg_setup_sha256",
+      "reason": "bad_value"
+    }
+  }
+}

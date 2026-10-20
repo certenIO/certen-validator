@@ -1,0 +1,15 @@
+{
+  "format": "certen-base-posted-case/1",
+  "id": "post_denim_block",
+  "description": "denim_time equals the block's timestamp: the post-Denim guard refuses before anything else is judged",
+  "pins": "pins/denim_at_block_a.json",
+  "leg": "legs/a.json",
+  "evidence": "evidence/valid_a.bin",
+  "expect": {
+    "result": "state",
+    "code": "batch_format_unsupported",
+    "fields": {
+      "type": "post_denim"
+    }
+  }
+}

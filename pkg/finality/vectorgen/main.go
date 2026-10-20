@@ -101,14 +101,15 @@ func main() {
 	out := flag.String("out", "pkg/finality/testdata/finality_chain1", "output directory")
 	set := flag.String("set", "chain1", "chain1 or chain2 (chain2 reads -chain1 and -registry and never changes chain1)")
 	chain1 := flag.String("chain1", "pkg/finality/testdata/finality_chain1", "chain2: the committed chain1 set")
-	registry := flag.String("registry", "pkg/finality/testdata/finality/states.json", "chain2: the state registry whose hash the manifest records")
+	registry := flag.String("registry", "pkg/finality/testdata/finality/states.at-chain2.json", "chain2: the state registry (the snapshot as of chain2) whose hash the manifest records")
+	pinsSnap := flag.String("pins", "pkg/finality/testdata/finality/pins.at-chain2.json", "chain2: the embedded pins file as of chain2 (the generator never reads the live embedded pins)")
 	flag.Parse()
 	var err error
 	switch *set {
 	case "chain1":
 		err = generate(*out)
 	case "chain2":
-		err = generate2(*out, *chain1, *registry)
+		err = generate2(*out, *chain1, *registry, *pinsSnap)
 	default:
 		err = fmt.Errorf("unknown set %q", *set)
 	}

@@ -1,0 +1,67 @@
+{
+  "eth_sepolia": {
+    "anchors": [],
+    "chain_id": 11155111,
+    "epochs_per_period": 256,
+    "forks": [
+      {
+        "epoch": 0,
+        "layout": null,
+        "name": "genesis",
+        "version": "0x90000069"
+      },
+      {
+        "epoch": 50,
+        "layout": null,
+        "name": "altair",
+        "version": "0x90000070"
+      },
+      {
+        "epoch": 100,
+        "layout": null,
+        "name": "bellatrix",
+        "version": "0x90000071"
+      },
+      {
+        "epoch": 56832,
+        "layout": null,
+        "name": "capella",
+        "version": "0x90000072"
+      },
+      {
+        "epoch": 132608,
+        "layout": null,
+        "name": "deneb",
+        "version": "0x90000073"
+      },
+      {
+        "epoch": 222464,
+        "layout": "electra",
+        "name": "electra",
+        "version": "0x90000074"
+      },
+      {
+        "epoch": 272640,
+        "layout": "electra",
+        "name": "fulu",
+        "version": "0x90000075"
+      },
+      {
+        "epoch": 353024,
+        "layout": "gloas",
+        "name": "gloas",
+        "version": "0x90000076"
+      }
+    ],
+    "genesis_time": 1655733600,
+    "genesis_validators_root": "0xd8ea171f3c94aea21ebc42a1ed61052acf3f9209c00e4efbaaddac09ed9b8078",
+    "max_links": 64,
+    "max_spine_headers": 16384,
+    "min_participants": 342,
+    "spec": "consensus-specs v1.7.0-beta.4 aa16bb4c",
+    "sync_committee_size": 512
+  },
+  "format": "certen-finality-pins/1",
+  "onchain_commitment": null,
+  "published_utc": "2026-10-20T02:35:00Z"
+}

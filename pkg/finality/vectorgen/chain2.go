@@ -144,11 +144,19 @@ func headerItems(n int) [][]byte {
 	return items
 }
 
-// pinsMap parses the embedded pins into generic maps (numbers kept exact), lets edit change them and renders them with sorted
+// pinsAtChain2 is the embedded pins file as it was when finality_chain2 was generated (testdata/finality/pins.at-chain2.json,
+// framework commit 4377bb3): the live embedded file grows with every chain package, and a published set is reproduced from the
+// inputs it was generated from. generate2 sets it from its pins argument.
+var pinsAtChain2 []byte
+
+// pinsText parses pinsAtChain2 into generic maps (numbers kept exact), lets edit change them and renders them with sorted
 // keys and two-space indentation, LF only, as the pins file is.
 func pinsText(edit func(top, sep map[string]any)) string {
 	var top map[string]any
-	dec := json.NewDecoder(bytes.NewReader(finality.EmbeddedPinsBytes()))
+	if len(pinsAtChain2) == 0 {
+		panic("pinsText called before generate2 loaded the pins snapshot")
+	}
+	dec := json.NewDecoder(bytes.NewReader(pinsAtChain2))
 	dec.UseNumber()
 	if err := dec.Decode(&top); err != nil {
 		panic(err)
@@ -170,7 +178,7 @@ func anchorMap(period int, wsp int) map[string]any {
 	}
 }
 
-func generate2(dir, chain1Dir, registryPath string) (err error) {
+func generate2(dir, chain1Dir, registryPath, pinsPath string) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("vectorgen chain2: %v", r)
@@ -183,6 +191,9 @@ func generate2(dir, chain1Dir, registryPath string) (err error) {
 	}
 	must(os.MkdirAll(dir, 0o755))
 	const set = "finality_chain2"
+	pb, e := os.ReadFile(pinsPath)
+	must(e)
+	pinsAtChain2 = pb
 	const (
 		sep  = finality.ChainSepolia
 		base = finality.ChainBaseSepolia

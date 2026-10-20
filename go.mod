@@ -5,11 +5,13 @@ go 1.25.0
 require (
 	cloud.google.com/go/firestore v1.21.0
 	firebase.google.com/go/v4 v4.19.0
+	github.com/andybalholm/brotli v1.1.1
 	github.com/certen/independant-validator/accumulate-lite-client-2/liteclient v0.0.0-00010101000000-000000000000
 	github.com/cometbft/cometbft v0.38.21
 	github.com/cometbft/cometbft-db v0.14.1
 	github.com/consensys/gnark v0.14.0
 	github.com/consensys/gnark-crypto v0.19.2
+	github.com/crate-crypto/go-eth-kzg v1.5.0
 	github.com/ethereum/go-ethereum v1.17.7
 	github.com/google/uuid v1.6.0
 	github.com/lib/pq v1.10.9
@@ -99,7 +101,6 @@ require (
 	github.com/cockroachdb/redact v1.1.5 // indirect
 	github.com/cockroachdb/tokenbucket v0.0.0-20230807174530-cc333fc44b06 // indirect
 	github.com/cosmos/gogoproto v1.7.0 // indirect
-	github.com/crate-crypto/go-eth-kzg v1.5.0 // indirect
 	github.com/curioswitch/go-reassign v0.3.0 // indirect
 	github.com/daixiang0/gci v0.13.5 // indirect
 	github.com/deckarep/golang-set/v2 v2.6.0 // indirect

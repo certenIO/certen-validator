@@ -94,7 +94,7 @@
     "l1_batch_data_off_l1": {"group": "Arbitrum R", "optional": [], "required": [], "scope": "spec"},
     "l1_batch_header_unknown": {"group": "Arbitrum R", "optional": [], "required": [], "scope": "spec"},
     "l1_blob_unavailable": {"group": "Builder U", "optional": [], "required": ["beacon_slot", "http_status", "l1_block", "versioned_hashes"], "scope": "spec"},
-    "l1_finality_unproven": {"enums_defined_by": {"reason": "chain package RB11-C..F"}, "group": "L1 head R", "optional": ["inner"], "required": ["reason"], "scope": "spec"},
+    "l1_finality_unproven": {"enums": {"reason": ["lc_refused"]}, "group": "L1 head R", "optional": ["inner"], "required": ["reason"], "scope": "spec"},
     "l1_posted_content_not_found": {"enums_defined_by": {"reason": "chain package RB11-C..F"}, "group": "Arbitrum R", "optional": [], "required": ["reason"], "scope": "spec"},
     "l1_posted_delayed_origin_unproven": {"group": "Arbitrum R", "optional": [], "required": [], "scope": "spec"},
     "l1_state_proof_invalid": {"group": "Base R", "optional": [], "required": ["which"], "scope": "spec"},

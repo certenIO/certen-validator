@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -28,7 +29,7 @@ func readSet(t testing.TB, set, name string) []byte {
 	return raw
 }
 
-func TestChain2ManifestPinsEveryFileItselfChain1AndTheRegistry(t *testing.T) {
+func TestChain2ManifestPinsEveryFileItselfChain1AndTheRegistrySnapshot(t *testing.T) {
 	manifestRaw := readSet(t, "finality_chain2", "MANIFEST.json")
 	var m struct {
 		Files      map[string]string `json:"files"`
@@ -62,13 +63,267 @@ func TestChain2ManifestPinsEveryFileItselfChain1AndTheRegistry(t *testing.T) {
 	if m.Supersedes.Set != "finality_chain1" || m.Supersedes.ManifestSHA256 != hex.EncodeToString(c1[:]) || m.Supersedes.ReplacedExpectations != 13 {
 		t.Errorf("supersedes %+v (chain1 manifest %x)", m.Supersedes, c1)
 	}
-	reg, err := os.ReadFile(filepath.Join("testdata", "finality", "states.json"))
+	// RB11-F13: chain2 is a published set and records the registry as it was when the set was generated. The live registry only
+	// grows (every chain package registers its own codes), so its hash is pinned in no vector manifest; the registry of that
+	// moment is kept byte for byte as testdata/finality/states.at-chain2.json, and the live registry must contain all of it
+	// (TestTheLiveRegistryContainsEverythingTheChain2SnapshotDefines).
+	snap, err := os.ReadFile(filepath.Join("testdata", "finality", chain2RegistrySnapshot))
 	if err != nil {
 		t.Fatal(err)
 	}
-	rs := sha256.Sum256(reg)
-	if m.Registry.Path != "testdata/finality/states.json" || m.Registry.SHA256 != hex.EncodeToString(rs[:]) {
-		t.Errorf("the manifest records registry %s %s, the file hashes to %x", m.Registry.Path, m.Registry.SHA256, rs)
+	rs := sha256.Sum256(snap)
+	if m.Registry.Path != "testdata/finality/states.json" || m.Registry.SHA256 != hex.EncodeToString(rs[:]) || m.Registry.SHA256 != chain2RegistrySnapshotSHA256 {
+		t.Errorf("the manifest records registry %s %s, the snapshot %s hashes to %x, the pinned hash is %s",
+			m.Registry.Path, m.Registry.SHA256, chain2RegistrySnapshot, rs, chain2RegistrySnapshotSHA256)
+	}
+}
+
+// chain2RegistrySnapshot is the registry (testdata/finality/states.json) exactly as it was at framework commit 4377bb3, when
+// finality_chain2 was generated; chain2RegistrySnapshotSHA256 is the hash chain2's MANIFEST.json records for it.
+const (
+	chain2RegistrySnapshot       = "states.at-chain2.json"
+	chain2RegistrySnapshotSHA256 = "d0e2d25048ba1dfe40e910538e6870675b2fbe3a4b0b47cdb9b1e0ffb084b73a"
+)
+
+// registryContainmentViolations lists everything the snapshot defines that cur does not contain (append-only compatibility): every
+// state with its group and scope; every required field still required and every optional field still known; every enum member of
+// every enum field (a field the snapshot leaves to enums_defined_by may be given a set later); every conditional_required rule
+// (same `when`) with at least its required fields; every pending reason with at least its required fields.
+func registryContainmentViolations(snap, cur stateRegistry) []string {
+	var out []string
+	has := func(list []string, s string) bool {
+		for _, x := range list {
+			if x == s {
+				return true
+			}
+		}
+		return false
+	}
+	whenKey := func(w map[string]string) string {
+		keys := make([]string, 0, len(w))
+		for k := range w {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		var b strings.Builder
+		for _, k := range keys {
+			b.WriteString(k + "=" + w[k] + ";")
+		}
+		return b.String()
+	}
+	if snap.Format != cur.Format {
+		out = append(out, fmt.Sprintf("format %q became %q", snap.Format, cur.Format))
+	}
+	for code, s := range snap.States {
+		c, ok := cur.States[code]
+		if !ok {
+			out = append(out, "state "+code+" is missing")
+			continue
+		}
+		if c.Group != s.Group || c.Scope != s.Scope {
+			out = append(out, fmt.Sprintf("state %s: group/scope %q/%q became %q/%q", code, s.Group, s.Scope, c.Group, c.Scope))
+		}
+		for _, f := range s.Required {
+			if !has(c.Required, f) {
+				out = append(out, fmt.Sprintf("state %s: required field %q is no longer required", code, f))
+			}
+		}
+		for _, f := range s.Optional {
+			if !has(c.Optional, f) && !has(c.Required, f) {
+				out = append(out, fmt.Sprintf("state %s: optional field %q is no longer known", code, f))
+			}
+		}
+		for field, members := range s.Enums {
+			cm, ok := c.Enums[field]
+			if !ok {
+				out = append(out, fmt.Sprintf("state %s: enum %q is missing", code, field))
+				continue
+			}
+			for _, m := range members {
+				if !has(cm, m) {
+					out = append(out, fmt.Sprintf("state %s: enum %q lost the member %q", code, field, m))
+				}
+			}
+		}
+		for field := range s.EnumsDefinedBy {
+			if _, ok := c.Enums[field]; !ok {
+				if _, still := c.EnumsDefinedBy[field]; !still {
+					out = append(out, fmt.Sprintf("state %s: field %q has neither an enum nor enums_defined_by any more", code, field))
+				}
+			}
+		}
+		for _, r := range s.ConditionalRequired {
+			found := false
+			for _, cr := range c.ConditionalRequired {
+				if whenKey(cr.When) != whenKey(r.When) {
+					continue
+				}
+				found = true
+				for _, f := range r.Required {
+					if !has(cr.Required, f) {
+						out = append(out, fmt.Sprintf("state %s: conditional rule %s lost the required field %q", code, whenKey(r.When), f))
+					}
+				}
+			}
+			if !found {
+				out = append(out, fmt.Sprintf("state %s: conditional rule %s is missing", code, whenKey(r.When)))
+			}
+		}
+	}
+	for reason, r := range snap.PendingReasons {
+		c, ok := cur.PendingReasons[reason]
+		if !ok {
+			out = append(out, "pending reason "+reason+" is missing")
+			continue
+		}
+		for _, f := range r.Required {
+			if !has(c.Required, f) {
+				out = append(out, fmt.Sprintf("pending reason %s: required field %q is no longer required", reason, f))
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func loadChain2Snapshot(t testing.TB) stateRegistry {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("testdata", "finality", chain2RegistrySnapshot))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sum := sha256.Sum256(raw); hex.EncodeToString(sum[:]) != chain2RegistrySnapshotSHA256 {
+		t.Fatalf("the chain2 registry snapshot hashes to %x, the pinned hash is %s: the snapshot is specification and never edited", sum, chain2RegistrySnapshotSHA256)
+	}
+	var r stateRegistry
+	if err := json.Unmarshal(raw, &r); err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+func TestTheLiveRegistryContainsEverythingTheChain2SnapshotDefines(t *testing.T) {
+	snap := loadChain2Snapshot(t)
+	if len(snap.States) != 86 || len(snap.PendingReasons) != 19 {
+		t.Fatalf("the snapshot holds %d states and %d pending reasons", len(snap.States), len(snap.PendingReasons))
+	}
+	if v := registryContainmentViolations(snap, loadRegistry(t)); len(v) != 0 {
+		t.Fatalf("the live registry is not an append-only extension of the registry finality_chain2 was generated against:\n%s", strings.Join(v, "\n"))
+	}
+}
+
+// The containment rule detects each kind of removal; a rule that passes everything would pass the test above vacuously.
+func TestTheRegistryContainmentRuleRefusesEveryKindOfRemoval(t *testing.T) {
+	snap := loadChain2Snapshot(t)
+	clone := func() stateRegistry {
+		raw, err := json.Marshal(snap)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var r stateRegistry
+		if err := json.Unmarshal(raw, &r); err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	if v := registryContainmentViolations(snap, clone()); len(v) != 0 {
+		t.Fatalf("the snapshot is not contained in itself: %v", v)
+	}
+	// pick, deterministically, one state that has each kind of content
+	var withEnum, withCond, withRequired, withOptional string
+	codes := make([]string, 0, len(snap.States))
+	for c := range snap.States {
+		codes = append(codes, c)
+	}
+	sort.Strings(codes)
+	for _, c := range codes {
+		s := snap.States[c]
+		if withEnum == "" && len(s.Enums) > 0 {
+			withEnum = c
+		}
+		if withCond == "" && len(s.ConditionalRequired) > 0 {
+			withCond = c
+		}
+		if withRequired == "" && len(s.Required) > 0 {
+			withRequired = c
+		}
+		if withOptional == "" && len(s.Optional) > 0 {
+			withOptional = c
+		}
+	}
+	if withEnum == "" || withCond == "" || withRequired == "" || withOptional == "" {
+		t.Fatalf("the snapshot has no state with an enum (%q), a conditional rule (%q), a required (%q) and an optional (%q) field", withEnum, withCond, withRequired, withOptional)
+	}
+	mutate := map[string]func(r *stateRegistry){
+		"a code is dropped": func(r *stateRegistry) { delete(r.States, withRequired) },
+		"a required field is dropped": func(r *stateRegistry) {
+			s := r.States[withRequired]
+			s.Required = s.Required[1:]
+			r.States[withRequired] = s
+		},
+		"a required field is demoted to optional": func(r *stateRegistry) {
+			s := r.States[withRequired]
+			s.Optional = append(append([]string(nil), s.Optional...), s.Required[0])
+			s.Required = s.Required[1:]
+			r.States[withRequired] = s
+		},
+		"an optional field is dropped": func(r *stateRegistry) {
+			s := r.States[withOptional]
+			s.Optional = s.Optional[1:]
+			r.States[withOptional] = s
+		},
+		"an enum member is dropped": func(r *stateRegistry) {
+			s := r.States[withEnum]
+			e := map[string][]string{}
+			for k, v := range s.Enums {
+				e[k] = append([]string(nil), v...)
+			}
+			for k := range e {
+				e[k] = e[k][1:]
+				break
+			}
+			s.Enums = e
+			r.States[withEnum] = s
+		},
+		"an enum is dropped": func(r *stateRegistry) {
+			s := r.States[withEnum]
+			s.Enums = nil
+			r.States[withEnum] = s
+		},
+		"a conditional rule is dropped": func(r *stateRegistry) {
+			s := r.States[withCond]
+			s.ConditionalRequired = s.ConditionalRequired[1:]
+			r.States[withCond] = s
+		},
+		"a pending reason is dropped": func(r *stateRegistry) { delete(r.PendingReasons, "epoch_open") },
+		"the group changes": func(r *stateRegistry) {
+			s := r.States[withRequired]
+			s.Group += "x"
+			r.States[withRequired] = s
+		},
+	}
+	for name, f := range mutate {
+		r := clone()
+		f(&r)
+		if len(registryContainmentViolations(snap, r)) == 0 {
+			t.Errorf("%s: the containment rule accepted it", name)
+		}
+	}
+	// and additions are accepted: a new state, a new optional field, a new enum member
+	r := clone()
+	r.States["zz_new_code"] = stateSpec{Group: "X", Scope: "spec"}
+	s := r.States[withOptional]
+	s.Optional = append(append([]string(nil), s.Optional...), "zz_new_field")
+	r.States[withOptional] = s
+	e := r.States[withEnum]
+	en := map[string][]string{}
+	for k, v := range e.Enums {
+		en[k] = append(append([]string(nil), v...), "zz_new_member")
+	}
+	e.Enums = en
+	r.States[withEnum] = e
+	if v := registryContainmentViolations(snap, r); len(v) != 0 {
+		t.Errorf("an append-only extension was refused: %v", v)
 	}
 }
 
@@ -516,5 +771,18 @@ func TestChain2CanonicalFormOfAMixedTypeFieldsMap(t *testing.T) {
 				t.Fatalf("\n got  %s\n want %s", got, v.Expect)
 			}
 		})
+	}
+}
+
+// The generator reproduces finality_chain2 from the pins file as it was at publication (framework commit 4377bb3), kept byte for byte
+// as testdata/finality/pins.at-chain2.json; the live embedded file is not an input of any published set.
+func TestTheChain2PinsSnapshotIsPinnedByHash(t *testing.T) {
+	const want = "507d72b3499fd094f3e14e0ed585edba90c7a7a4c6235c7ccd98d04db7329cca"
+	raw, err := os.ReadFile(filepath.Join("testdata", "finality", "pins.at-chain2.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sum := sha256.Sum256(raw); hex.EncodeToString(sum[:]) != want {
+		t.Fatalf("the chain2 pins snapshot hashes to %x, want %s: it is specification and never edited", sum, want)
 	}
 }

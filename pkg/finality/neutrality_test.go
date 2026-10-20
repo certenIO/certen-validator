@@ -210,6 +210,13 @@ func TestMainWiresTheUpgraderAloneAndGivesItNoConsensusObject(t *testing.T) {
 	}
 }
 
+// namedNewRequirements are the only requirement lines that may appear beyond the framework base: RB11-D2 adds the Brotli
+// channel decoder (a module that had no line at all). Promotions of an already present indirect requirement to a direct one
+// add no line; they are named in allowedDirectRequirements below.
+var namedNewRequirements = map[string]string{
+	"github.com/andybalholm/brotli": "v1.1.1",
+}
+
 // RB11-F1 promotes lukechampine.com/blake3 (already an indirect requirement) to a direct one for the Adiri record digest. The
 // freeze rule is therefore: no requirement that existed at the framework base (9941b83) changes its version, every one of
 // them is still present, and the only difference in the direct/indirect marking is that promotion. The snapshot of the base
@@ -266,6 +273,59 @@ func TestGoModKeepsEveryRequirementVersionOfTheFrameworkBase(t *testing.T) {
 		if base[k] {
 			continue
 		}
-		t.Errorf("go.mod gained the requirement %s %s that the framework base did not have", k, v)
+		if want, ok := namedNewRequirements[k]; ok && want == v {
+			continue
+		}
+		t.Errorf("go.mod gained the requirement %s %s that the framework base did not have and that no work package was allowed to add", k, v)
+	}
+}
+
+// go.mod rule (RB11-D2): no existing requirement version changes; the additions are limited to the named modules of the
+// work packages that were allowed one. The direct requirements of the module are exactly this set.
+var allowedDirectRequirements = map[string]string{
+	"cloud.google.com/go/firestore": "v1.21.0", "firebase.google.com/go/v4": "v4.19.0",
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient": "v0.0.0-00010101000000-000000000000",
+	"github.com/cometbft/cometbft": "v0.38.21", "github.com/cometbft/cometbft-db": "v0.14.1",
+	"github.com/consensys/gnark": "v0.14.0", "github.com/consensys/gnark-crypto": "v0.19.2",
+	"github.com/ethereum/go-ethereum": "v1.17.7", "github.com/google/uuid": "v1.6.0", "github.com/lib/pq": "v1.10.9",
+	"github.com/mr-tron/base58": "v1.2.0", "github.com/prometheus/client_golang": "v1.21.0", "github.com/xssnick/tonutils-go": "v1.15.5",
+	"gitlab.com/accumulatenetwork/accumulate": "v1.4.7-0.20260926030013-e1d1db9ebb7c", "go.etcd.io/bbolt": "v1.4.3",
+	"golang.org/x/crypto": "v0.55.0", "google.golang.org/api": "v0.278.0", "gopkg.in/yaml.v3": "v3.0.1",
+	// RB11-D2: the Brotli channel decoder and the KZG blob-proof verifier (go-eth-kzg, the pure-Go backend of go-ethereum's
+	// crypto/kzg4844, promoted from indirect so the hash-checked ceremony setup can be loaded)
+	"github.com/andybalholm/brotli": "v1.1.1", "github.com/crate-crypto/go-eth-kzg": "v1.5.0",
+	// RB11-F1: the Adiri record digest (BLAKE3), promoted from indirect without a version change (see
+	// TestGoModKeepsEveryRequirementVersionOfTheFrameworkBase)
+	"lukechampine.com/blake3": "v1.2.1",
+}
+
+func TestGoModDirectRequirementsAreTheBaseSetPlusTheNamedAdditions(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(repoRoot(t), "go.mod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	in := false
+	for _, line := range strings.Split(strings.ReplaceAll(string(raw), "\r", ""), "\n") {
+		line = strings.TrimSpace(line)
+		switch {
+		case line == "require (":
+			in = true
+		case line == ")":
+			in = false
+		case in && line != "" && !strings.HasSuffix(line, "// indirect"):
+			f := strings.Fields(line)
+			got[f[0]] = f[1]
+		}
+	}
+	for m, v := range allowedDirectRequirements {
+		if got[m] != v {
+			t.Errorf("direct requirement %s is %q, want %q", m, got[m], v)
+		}
+	}
+	for m, v := range got {
+		if _, ok := allowedDirectRequirements[m]; !ok {
+			t.Errorf("direct requirement %s %s is not one of the named additions", m, v)
+		}
 	}
 }

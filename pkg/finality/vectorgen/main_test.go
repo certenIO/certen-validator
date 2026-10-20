@@ -39,7 +39,7 @@ func TestTheGeneratorReproducesTheCommittedSetByteForByte(t *testing.T) {
 // finality_chain2 is reproducible byte for byte from the generator, chain1 and the registry.
 func TestTheGeneratorReproducesTheCommittedChain2SetByteForByte(t *testing.T) {
 	tmp := t.TempDir()
-	if err := generate2(tmp, filepath.Join("..", "testdata", "finality_chain1"), filepath.Join("..", "testdata", "finality", "states.json")); err != nil {
+	if err := generate2(tmp, filepath.Join("..", "testdata", "finality_chain1"), filepath.Join("..", "testdata", "finality", "states.at-chain2.json"), filepath.Join("..", "testdata", "finality", "pins.at-chain2.json")); err != nil {
 		t.Fatal(err)
 	}
 	committed := filepath.Join("..", "testdata", "finality_chain2")
