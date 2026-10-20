@@ -10,7 +10,9 @@
 //  1. the container and its body decode strictly (finality_evidence_malformed / _too_large); the CFA1 decodes strictly,
 //     including strictly increasing, in-range signer indices (committee_chain_broken{signer_index_invalid});
 //  2. the pins: chain id, record codec, genesis committee as a set, record(0).final_state (O1);
-//  3. every record in ascending order: key validity, duplicates, committee compatibility, minimum size, quorum (O2);
+//  3. every record in ascending order: key validity, duplicates, committee compatibility, minimum size, quorum (O2); the exported
+//     VerifyCommitteeChain first re-applies the decoder's table-index and signer-index rules to every record, so a CFA1 that was
+//     built rather than decoded is judged like a decoded one;
 //  4. every signature (O3): decoded with the G1 subgroup and non-identity checks, then verified one by one with
 //     pkg/crypto/bls or as one random linear combination; the verdict is the lowest failing epoch either way;
 //  5. the seal and the link (O4).
@@ -192,8 +194,8 @@ func DecodeCFA1(b []byte, lim finality.Limits) (*CFA1, error) {
 		if rec.NextIdx, err = r.U8("cfa1.record.next_idx"); err != nil {
 			return nil, err
 		}
-		if int(rec.CommitteeIdx) >= nTables || int(rec.NextIdx) >= nTables {
-			return nil, finality.MalformedAt("cfa1.record", i, finality.ReasonCFA1TableIndexOutOfRange, int(max8(rec.CommitteeIdx, rec.NextIdx)), nTables)
+		if err := checkRecordTables(i, rec, nTables); err != nil {
+			return nil, err
 		}
 		if rec.FinalState.Number, err = r.U64("cfa1.record.final_state.number"); err != nil {
 			return nil, err
@@ -219,11 +221,8 @@ func DecodeCFA1(b []byte, lim finality.Limits) (*CFA1, error) {
 		if rec.Signers, err = r.Fixed("cfa1.record.signers", int(ns)); err != nil {
 			return nil, err
 		}
-		size := len(c.Tables[rec.CommitteeIdx])
-		for j, s := range rec.Signers {
-			if int(s) >= size || (j > 0 && s <= rec.Signers[j-1]) {
-				return nil, ChainBroken(uint64(i), CheckSignerIndexInvalid, "index", uint64(j), "signer", uint64(s), "committee_size", uint64(size))
-			}
+		if err := checkRecordSigners(i, rec.Signers, len(c.Tables[rec.CommitteeIdx])); err != nil {
+			return nil, err
 		}
 		c.Records = append(c.Records, rec)
 	}
@@ -231,6 +230,26 @@ func DecodeCFA1(b []byte, lim finality.Limits) (*CFA1, error) {
 		return nil, err
 	}
 	return c, nil
+}
+
+// checkRecordTables is the table-index rule of record i: both indices name a table. DecodeCFA1 applies it as it reads, and
+// VerifyCommitteeChain (which is exported and judges any CFA1) applies it again before it indexes the tables.
+func checkRecordTables(i int, rec Record, nTables int) error {
+	if int(rec.CommitteeIdx) >= nTables || int(rec.NextIdx) >= nTables {
+		return finality.MalformedAt("cfa1.record", i, finality.ReasonCFA1TableIndexOutOfRange, int(max8(rec.CommitteeIdx, rec.NextIdx)), nTables)
+	}
+	return nil
+}
+
+// checkRecordSigners is the signer rule of record i: the indices are strictly increasing and below the committee size, so that no
+// signer is counted twice and none names a key outside the committee. Same two callers as checkRecordTables.
+func checkRecordSigners(i int, signers []uint8, committeeSize int) error {
+	for j, s := range signers {
+		if int(s) >= committeeSize || (j > 0 && s <= signers[j-1]) {
+			return ChainBroken(uint64(i), CheckSignerIndexInvalid, "index", uint64(j), "signer", uint64(s), "committee_size", uint64(committeeSize))
+		}
+	}
+	return nil
 }
 
 func max8(a, b uint8) uint8 {
