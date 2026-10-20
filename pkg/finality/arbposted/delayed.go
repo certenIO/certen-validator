@@ -64,8 +64,8 @@ func headerNonce(raw []byte) (uint64, bool) {
 // verifyDelayed proves the delayed-origin transactions of a block (annex A6.5): the delayed message hashes into
 // delayedInboxAccs[k] from delayedInboxAccs[k-1] (both proven under stateRoot_S, slot 6); this batch consumed it (k lies in
 // [afterDelayedMessagesRead - delayedSegments, afterDelayedMessagesRead)); and each 0x64 deposit transaction of the block is
-// the one the message derives (request id k, sender, recipient, value). Delayed message kinds whose derivation is not
-// implemented here stay the named state l1_posted_delayed_origin_unproven, never a weaker level.
+// the one the message derives (request id k, sender, recipient, value). Delayed message kinds other than the ETH
+// deposit have no derivation here and stay the named state l1_posted_delayed_origin_unproven, never a weaker level.
 func verifyDelayed(arb *arbPins, root common.Hash, bridge *ethproof.AccountState, e Evidence, res payloadResult, types []uint64, nonce uint64) (uint64, error) {
 	d := e.Delayed
 	if d == nil {

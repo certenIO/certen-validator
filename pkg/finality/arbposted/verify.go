@@ -163,6 +163,12 @@ func (k *Kind) verifyBody(arb *arbPins, l1p ethl1.Pins, b finality.BlockRef, hdr
 	if err != nil {
 		return finality.Verdict{}, asState(err)
 	}
+	return k.verifyState(arb, s, b, hdr, e)
+}
+
+// verifyState is the part of the judgement that runs under the state root of the covered L1 block S: the Bridge identity, the
+// accumulator, the blobs, the payload decode and the match. It is separate so that tests can give it a state built in memory.
+func (k *Kind) verifyState(arb *arbPins, s ethl1.L1Block, b finality.BlockRef, hdr finality.HeaderFields, e Evidence) (finality.Verdict, error) {
 	root := common.Hash(s.StateRoot)
 
 	// 5.6 O2: the Bridge account under stateRoot_S, its EIP-1967 implementation, the pinned implementation code hash.
