@@ -108,6 +108,10 @@ func (k *Kind) Verify(p *finality.Pins, b finality.BlockRef, evidence []byte) (f
 	if c.Header.Level != finality.LevelFinalized {
 		return finality.Verdict{}, finality.Malformed("header.level", finality.ReasonLevelNotFinalized, int(c.Header.Level), 3)
 	}
+	// [r2:E1FIX L2] the leg names the chain the container is about, as Registry.JudgeAddendum judges it before dispatch.
+	if c.Header.Chain != b.Chain {
+		return finality.Verdict{}, finality.BlockMismatch("chain", b.Chain, c.Header.Chain)
+	}
 	if c.Header.BlockNumber != b.Number {
 		return finality.Verdict{}, finality.BlockMismatch("blockNumber", b.Number, c.Header.BlockNumber)
 	}
@@ -122,7 +126,8 @@ func (k *Kind) Verify(p *finality.Pins, b finality.BlockRef, evidence []byte) (f
 	if err != nil {
 		return finality.Verdict{}, err
 	}
-	e, err := Decode(c.Body, boundsFor(l1p, arb))
+	bounds := boundsFor(l1p, arb)
+	e, err := Decode(c.Body, bounds)
 	if err != nil {
 		return finality.Verdict{}, err
 	}
@@ -162,6 +167,11 @@ func (k *Kind) Verify(p *finality.Pins, b finality.BlockRef, evidence []byte) (f
 	kHeader, found := headerNumbered(e.L1Spine, kb.Number)
 	if !found {
 		return finality.Verdict{}, asState(ethl1.BlockNotCovered(kb.Number, covered[0].Number))
+	}
+	// [r2:E1FIX L3] spec 8.2: a NODES element off the transaction and receipt proof paths is a state or storage node, at most
+	// max_node_bytes; judged here, where K's roots are known, before any proof consumes a node.
+	if err := checkNodeBounds(kHeader, e, bounds.MaxNodeBytes); err != nil {
+		return finality.Verdict{}, err
 	}
 	return k.verifyState(arb, s, kb, kHeader, b, e)
 }

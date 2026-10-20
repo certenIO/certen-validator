@@ -97,9 +97,14 @@ func classifyConfirmation(arb *Pins, kb ethl1.L1Block, kHeader finality.HeaderFi
 	if forced {
 		return out, ConfirmedByOwnerForce(PathForce, txHash, kb.Number)
 	}
+	// [r2:E1FIX L1] a contract creation has no callee: its data is init code, not calldata, so no selector of it names an entry point
+	// of the Rollup or of a ValidatorWallet.
+	if tx.To() == nil {
+		return out, ConfirmationUnproven(ConfirmIndirect, txHash, kb.Number)
+	}
 	input := tx.Data()
 	sel, _ := selectorOf(input) // below four bytes sel is zero, which LoadPins forbids as a pinned selector, so nothing matches
-	if tx.To() != nil && *tx.To() == arb.Rollup {
+	if *tx.To() == arb.Rollup {
 		switch sel {
 		case arb.Sel.Confirm:
 			out.Route = RouteDirect
@@ -111,6 +116,10 @@ func classifyConfirmation(arb *Pins, kb ethl1.L1Block, kHeader finality.HeaderFi
 		}
 		return out, ConfirmationUnproven(ConfirmIndirect, txHash, kb.Number)
 	}
+	// The wallet route is chosen by the calldata of a transaction that has a callee. The pins carry no ValidatorWallet address or code
+	// hash (a wallet is a per-validator clone), so the callee's code is not proven to be a wallet: the honesty of the confirmation
+	// rests on the Rollup-side facts (the MPT-proven receipt's log set, status 1, anyTrustFastConfirmer = 0 at K), and the route
+	// "wallet" records what the calldata said (spec 5.7: indirect is the state for a caller whose code is not decoded).
 	calls, ok := decodeWalletCalls(arb, sel, input)
 	if !ok {
 		if arb.isWalletSelector(sel) {
