@@ -5,6 +5,7 @@ package basefinal
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -306,4 +307,75 @@ func (s *RPC) Proof(ctx context.Context, addr [20]byte, slots [][32]byte, block 
 		sp.Values[k] = v
 	}
 	return sp, nil
+}
+
+// LiveGames is the GameSource over an RPC: the factory address is resolved once from the pinned Portal (Portal slot 62 is the
+// AnchorStateRegistry, whose slot 1 is the DisputeGameFactory). Reads are at the latest block and are builder-side only.
+type LiveGames struct {
+	RPC    *RPC
+	Portal [20]byte
+	dgf    [20]byte
+}
+
+func (l *LiveGames) factory(ctx context.Context) ([20]byte, error) {
+	if l.dgf != ([20]byte{}) {
+		return l.dgf, nil
+	}
+	w, err := l.RPC.StorageAtLatest(ctx, l.Portal, be32(slotPortalASR))
+	if err != nil {
+		return [20]byte{}, err
+	}
+	d, err := l.RPC.StorageAtLatest(ctx, addrWord(w), be32(slotASRDGF))
+	if err != nil {
+		return [20]byte{}, err
+	}
+	l.dgf = addrWord(d)
+	return l.dgf, nil
+}
+
+func selector(sig string) []byte { return crypto.Keccak256([]byte(sig))[:4] }
+
+func (l *LiveGames) GameCount(ctx context.Context) (uint64, error) {
+	dgf, err := l.factory(ctx)
+	if err != nil {
+		return 0, err
+	}
+	b, err := l.RPC.CallLatest(ctx, dgf, selector("gameCount()"))
+	if err != nil {
+		return 0, err
+	}
+	return new(big.Int).SetBytes(b).Uint64(), nil
+}
+
+func (l *LiveGames) GameAt(ctx context.Context, i uint64) (GameInfo, error) {
+	dgf, err := l.factory(ctx)
+	if err != nil {
+		return GameInfo{}, err
+	}
+	data := append(selector("gameAtIndex(uint256)"), make([]byte, 32)...)
+	binary.BigEndian.PutUint64(data[4+24:], i)
+	r, err := l.RPC.CallLatest(ctx, dgf, data)
+	if err != nil || len(r) < 96 {
+		return GameInfo{}, fmt.Errorf("gameAtIndex(%d): no answer", i)
+	}
+	var out GameInfo
+	out.Type, out.CreatedAt = binary.BigEndian.Uint32(r[28:32]), binary.BigEndian.Uint64(r[56:64])
+	copy(out.Proxy[:], r[76:96])
+	return out, nil
+}
+
+func (l *LiveGames) Code(ctx context.Context, proxy [20]byte) ([]byte, error) {
+	r, err := l.RPC.first(ctx, l.RPC.BlockURLs, "eth_getCode", "0x"+hex.EncodeToString(proxy[:]), "latest")
+	if err != nil {
+		return nil, err
+	}
+	var h string
+	if err := json.Unmarshal(r, &h); err != nil {
+		return nil, err
+	}
+	return unhexBytes(h), nil
+}
+
+func (l *LiveGames) Slot(ctx context.Context, proxy [20]byte, slot [32]byte) ([32]byte, error) {
+	return l.RPC.StorageAtLatest(ctx, proxy, slot)
 }

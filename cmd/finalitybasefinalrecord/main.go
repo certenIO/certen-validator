@@ -54,6 +54,11 @@ func main() {
 		out := fs.String("out", "", "raw legs directory")
 		_ = fs.Parse(os.Args[2:])
 		err = recordCmd(ctx, *dir, *raw, *out)
+	case "discover":
+		fs := flag.NewFlagSet("discover", flag.ExitOnError)
+		idx := fs.String("idx", "", "comma separated factory indices")
+		_ = fs.Parse(os.Args[2:])
+		err = discoverCmd(ctx, *idx)
 	case "judge":
 		fs := flag.NewFlagSet("judge", flag.ExitOnError)
 		dir := fs.String("dir", "", "capture directory")

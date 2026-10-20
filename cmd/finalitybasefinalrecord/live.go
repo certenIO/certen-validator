@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"math/big"
 	"os"
 	"strings"
 
@@ -100,3 +101,5 @@ func crypto1967() []byte {
 }
 
 var _ = os.Stderr
+
+type bigInt = big.Int
