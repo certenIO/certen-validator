@@ -5,6 +5,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
@@ -249,6 +250,13 @@ func e2eLegs(t *testing.T) []e2eLeg {
 func settlementOf(t *testing.T, l e2eLeg) finality.Settlement {
 	t.Helper()
 	raw := readFileT(t, filepath.Join(e2eData, l.name+".json"))
+	var manifest map[string]string
+	if err := json.Unmarshal(readFileT(t, filepath.Join(e2eData, "MANIFEST.json")), &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if sum := sha256.Sum256(raw); manifest[l.name+".json"] != hex.EncodeToString(sum[:]) {
+		t.Fatalf("%s.json is not the recorded file (MANIFEST.json sha256 differs)", l.name)
+	}
 	var f struct {
 		Chain      int64                `json:"chain"`
 		Settlement *ethproof.Settlement `json:"settlement"`
