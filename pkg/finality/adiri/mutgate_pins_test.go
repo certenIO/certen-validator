@@ -98,3 +98,29 @@ func TestAdiriPinsDecodeErrorsAreNamedByKind(t *testing.T) {
 		gateNamed(t, err, finality.CodePinUnknown, "chain", 2017)
 	}
 }
+
+// An odd number of hex digits is not "padded with a zero": every pinned hash, address and key is refused unless it is exact.
+func TestAdiriPinsHexIsStrictNotPaddedOrTruncated(t *testing.T) {
+	refused := func(key string, mutate func(s map[string]any)) {
+		t.Helper()
+		_, err := gateAdiriPins(t, mutate)
+		gateNamed(t, err, finality.CodePinsCorrupt, "reason", finality.PinsBadValue, "key", key)
+	}
+	refused("adiri.genesis_hash", func(s map[string]any) { s["genesis_hash"] = "0x" + strings.Repeat("1", 63) })
+	refused("adiri.epoch0_final_state.hash", func(s map[string]any) {
+		s["epoch0_final_state"].(map[string]any)["hash"] = "0x" + strings.Repeat("1", 63)
+	})
+	refused("adiri.eip2935.runtime_codehash", func(s map[string]any) {
+		s["eip2935"].(map[string]any)["runtime_codehash"] = "0x" + strings.Repeat("1", 63)
+	})
+	refused("adiri.eip2935.address", func(s map[string]any) { s["eip2935"].(map[string]any)["address"] = "0x" + strings.Repeat("1", 39) })
+	refused("adiri.genesis_hash", func(s map[string]any) { s["genesis_hash"] = "0x" + strings.Repeat("1", 62) + "zz" })
+	_, err := gateAdiriPins(t, func(s map[string]any) {
+		s["genesis_committee"] = []any{strings.Repeat("1", adiri.KeyBytes*2-1)}
+	})
+	gateNamed(t, err, finality.CodePinsCorrupt, "reason", finality.PinsBadValue, "key", "adiri.genesis_committee", "index", 0)
+	_, err = gateAdiriPins(t, func(s map[string]any) {
+		s["genesis_committee"] = []any{strings.Repeat("1", adiri.KeyBytes*2-2) + "zz"}
+	})
+	gateNamed(t, err, finality.CodePinsCorrupt, "reason", finality.PinsBadValue, "key", "adiri.genesis_committee", "index", 0)
+}
