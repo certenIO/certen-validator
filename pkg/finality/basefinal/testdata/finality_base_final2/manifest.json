@@ -1,0 +1,17 @@
+{
+  "cases": [
+    "output_root_header_is_another_block",
+    "portal_names_another_asr_than_the_game_build",
+    "respected_type_switched_old_game_still_valid",
+    "zero_claim_header_without_withdrawals_root"
+  ],
+  "files": {
+    "judge/output_root_header_is_another_block.json": "7ce6cfd807207831b43a7540245941b0da660dedee5b20fdb6048fd4d33a4a9b",
+    "judge/portal_names_another_asr_than_the_game_build.json": "f37e09be29626d8ac1b7020989da66df7fc2b5592158ed9fb64fcbf0e2e7af63",
+    "judge/respected_type_switched_old_game_still_valid.json": "29add5b389a936237a8fddff3bb886d029fcf003168bb7cbcc932d50d4a32d50",
+    "judge/zero_claim_header_without_withdrawals_root.json": "145f1fdd72ee2cb5d6edec7cc482223df8ca74415fd25a1e265d737dced44b5d",
+    "pins/main.json": "cd7fc0c0e9c89a0a278e6cdaeaf1d03487489b5aba0d5f565f4af6a9e9ec0d4b"
+  },
+  "format": "certen-finality-vectors/1",
+  "set": "finality_base_final2"
+}

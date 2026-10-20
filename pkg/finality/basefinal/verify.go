@@ -147,9 +147,9 @@ func (r *stateReader) account(addr [20]byte) (acctRead, error) {
 // account is l1_state_proof_invalid{which:"account"}.
 func (r *stateReader) slot(addr [20]byte, slot [32]byte) ([32]byte, error) {
 	var out [32]byte
-	a, err := r.account(addr)
-	if err != nil {
-		return out, err
+	a, acctErr := r.account(addr)
+	if acctErr != nil {
+		return out, acctErr
 	}
 	if !a.exists {
 		return out, st(CodeL1StateProofInvalid, "which", "account")
@@ -362,9 +362,9 @@ func judge(in judgeInput) (map[string]any, error) {
 	}
 
 	// -- the game proxy: code, clone template, decoded args (5.5 O3) --
-	ga, err := rd.account(body.GameProxy)
-	if err != nil {
-		return nil, err
+	ga, gaErr := rd.account(body.GameProxy)
+	if gaErr != nil {
+		return nil, gaErr
 	}
 	code := body.GameCode
 	if !ga.exists || crypto.Keccak256Hash(code) != common.BytesToHash(ga.acct.CodeHash) {

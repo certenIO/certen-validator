@@ -388,9 +388,9 @@ func (b *Builder) attest(ctx context.Context, bp *Pins, leg finality.BlockRef, b
 		return nil, nil, err
 	}
 	c := finality.Container{Header: finality.ContainerHeader{Kind: KindName, Chain: uint64(Chain), Level: finality.LevelFinalized, BlockNumber: lh.Number, BlockHash: lh.Hash}, Body: EncodeBody(body)}
-	ev, err := c.Encode()
-	if err != nil {
-		return nil, nil, err
+	ev, encErr := c.Encode()
+	if encErr != nil {
+		return nil, nil, encErr
 	}
 	if _, err := (Kind{}).Verify(b.Pins, leg, ev); err != nil {
 		return nil, nil, err

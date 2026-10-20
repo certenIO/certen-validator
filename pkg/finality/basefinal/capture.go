@@ -109,9 +109,9 @@ func (d DirStore) Rows(_ context.Context, chain uint64, item string) ([]CaptureR
 	}
 	var out []CaptureRow
 	for _, f := range files {
-		b, err := os.ReadFile(f)
-		if err != nil {
-			return nil, err
+		b, readErr := os.ReadFile(f)
+		if readErr != nil {
+			return nil, readErr
 		}
 		r := finality.NewReader(b, finality.DefaultLimits())
 		it, err := r.STR("item")
