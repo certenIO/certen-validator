@@ -107,6 +107,10 @@ func (b *builder) put(path string, data []byte) { b.files[path] = data }
 
 // add runs the case through the verifier and refuses it unless the verdict equals the literal written here.
 func (b *builder) add(id, desc, pinsName string, leg legFile, ev []byte, want string) error {
+	return b.addCase(id, desc, pinsName, leg, ev, want, "raw/evidence.bin")
+}
+
+func (b *builder) addCase(id, desc, pinsName string, leg legFile, ev []byte, want string, baseName string) error {
 	pins := b.pinsObj[pinsName]
 	num, hash, hdr := uint64(0), [32]byte{}, unhexb(leg.HeaderRLP)
 	fmt.Sscan(leg.Number, &num)
@@ -129,7 +133,7 @@ func (b *builder) add(id, desc, pinsName string, leg legFile, ev []byte, want st
 		return fmt.Errorf("case %s: verdict differs from its literal\n got  %s\n want %s", id, got, want)
 	}
 	cf := caseFile{Format: formatCase, ID: id, Description: desc, Pins: "pins/" + pinsName + ".json", Leg: leg,
-		Base: "raw/evidence.bin", Patch: diff(b.base, ev), Expect: want}
+		Base: baseName, Patch: diff(b.base, ev), Expect: want}
 	if !bytes.Equal(applyPatch(b.base, cf.Patch), ev) {
 		return fmt.Errorf("case %s: patch does not reproduce the evidence", id)
 	}
@@ -143,6 +147,14 @@ func (b *builder) add(id, desc, pinsName string, leg legFile, ev []byte, want st
 }
 
 func kindOf() (*arbposted.Kind, bool) { return arbposted.New(), true }
+
+// addFull is add for evidence that shares nothing with the recorded base: the whole evidence is the patch (base "").
+func (b *builder) addFull(id, desc, pinsName string, leg legFile, ev []byte, want string) error {
+	saved := b.base
+	b.base = nil
+	defer func() { b.base = saved }()
+	return b.addCase(id, desc, pinsName, leg, ev, want, "")
+}
 
 func unhexb(s string) []byte {
 	out, err := hex.DecodeString(strings.TrimPrefix(s, "0x"))
@@ -540,6 +552,15 @@ func build(rawDir, out string) error {
 
 	for _, k := range cs {
 		if err := b.add(k.id, k.desc, k.pins, k.leg, k.ev, k.want); err != nil {
+			return err
+		}
+	}
+	sc, err := b.synthCases(txs)
+	if err != nil {
+		return err
+	}
+	for _, k := range sc {
+		if err := b.addFull(k.id, k.desc, k.pins, k.leg, k.ev, k.want); err != nil {
 			return err
 		}
 	}

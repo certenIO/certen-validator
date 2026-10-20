@@ -88,7 +88,10 @@ func loadManifest(t testing.TB) (cases []string, files map[string]string) {
 
 func evidenceOf(t testing.TB, c vecCase) []byte {
 	t.Helper()
-	base := readVec(t, c.Base)
+	var base []byte
+	if c.Base != "" {
+		base = readVec(t, c.Base)
+	}
 	ins := unhexVec(t, c.Patch.Ins)
 	out := append([]byte(nil), base[:c.Patch.At]...)
 	out = append(out, ins...)

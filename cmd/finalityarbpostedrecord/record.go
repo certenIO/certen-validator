@@ -377,7 +377,9 @@ func record(storeDir, rawDir string, batchN uint64) error {
 	}
 	b := &arbposted.Builder{Store: store, L2: &l2Block{txs: map[[32]byte][][]byte{fh.Hash: encs}}, L1: &l1Headers{lc: lc}, Pins: pins}
 	ref := finality.BlockRef{Chain: chainArb, Number: fh.Number, Hash: fh.Hash, HeaderRLP: hdr}
+	t0 := time.Now()
 	add, pend, err := b.BuildFor(context.Background(), ref)
+	fmt.Printf("BuildFor (decode candidates, fetch spine headers, assemble, verify incl. KZG): %s", time.Since(t0))
 	if err != nil {
 		return fmt.Errorf("build: %w", err)
 	}

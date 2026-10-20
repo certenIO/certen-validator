@@ -40,7 +40,7 @@ func TestTheInitialPinsHoldExactlyTheSepoliaNetworkSectionOfSection42(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.Format != PinsFormat || p.OnchainCommitment != nil || len(p.Sections) != 0 {
+	if p.Format != PinsFormat || p.OnchainCommitment != nil || len(p.Sections) != 1 || p.Sections["arb_sepolia"] == nil {
 		t.Fatalf("%+v", p)
 	}
 	e, err := p.Sepolia()
@@ -78,9 +78,14 @@ func TestTheInitialPinsHoldExactlyTheSepoliaNetworkSectionOfSection42(t *testing
 	if _, err := e.AnchorFor(1000); err == nil || stateOf(t, err).Code != CodePinUnknown {
 		t.Fatalf("an empty ledger gave an anchor: %v", err)
 	}
-	// the invented values stay out: no kzg setup hash, no other chain
-	if bytes.Contains(EmbeddedPinsBytes(), []byte("kzg")) {
-		t.Fatal("the unverified KZG candidate is not a pin yet (V2_SPEC_S7 11.9)")
+	// the KZG setup hash is a pin since it was compared with the Ethereum ceremony output at the pinned tag (V2_SPEC_S7 11.9,
+	// RB11-E2: the raw sha256 of presets/mainnet/trusted_setups/trusted_setup_4096.json at v1.7.0-beta.4 equals it); no other
+	// unverified value is in the file
+	if e.KZGSetupSHA256 != "f8e44a31ebf0a6d0734dcb301b0716e2c77f3ae18ed0cab0870fbcc2ca55616f" {
+		t.Fatalf("kzg_setup_sha256 %q", e.KZGSetupSHA256)
+	}
+	if bytes.Contains(EmbeddedPinsBytes(), []byte("base_sepolia")) || bytes.Contains(EmbeddedPinsBytes(), []byte("adiri")) {
+		t.Fatal("a chain section other than arb_sepolia is in the file before its package has verified its values")
 	}
 }
 

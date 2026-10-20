@@ -33,6 +33,8 @@ func main() {
 		err = record(*store, *out, *batch)
 	case "build":
 		err = build(*raw, *out)
+	case "measure":
+		err = measure(*raw)
 	default:
 		err = fmt.Errorf("unknown command %q", os.Args[1])
 	}
