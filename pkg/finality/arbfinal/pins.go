@@ -208,3 +208,6 @@ func ethl1Pins(p *finality.Pins) (ethl1.Pins, error) {
 	out.MinParticipants, out.MaxLinks, out.MaxSpineHeaders = e.MinParticipants, e.MaxLinks, e.MaxSpineHeaders
 	return out, nil
 }
+
+// EthL1Pins is the L1 head verifier's view of the Sepolia section of a pins file (used by the vector generator and the builder).
+func EthL1Pins(p *finality.Pins) (ethl1.Pins, error) { return ethl1Pins(p) }

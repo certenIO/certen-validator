@@ -64,9 +64,11 @@ type Log struct {
 type Parts struct {
 	Label   string
 	Leg     uint64 // the L2 leg block number
+	L2Skip  int    // when > 0: the L2 header at this index (and above) is numbered one higher than its parent allows
 	L2Above int    // L2 headers above the leg (the assertion's block is Leg+L2Above)
 
 	Parent    [32]byte
+	AfterHash *[32]byte // the assertion's blockHash when it is not the hash of the top of the L2 spine
 	SendRoot  [32]byte
 	SeqAcc    [32]byte
 	ParentCfg arbfinal.ParentConfig
@@ -175,6 +177,7 @@ func (c *collector) Delete([]byte) error { return nil }
 type acct struct {
 	addr    common.Address
 	storage map[common.Hash]common.Hash
+	absent  []common.Hash // slots proved absent
 	code    common.Hash
 }
 
@@ -189,7 +192,11 @@ func stateOf(accts []acct, absent []common.Address) (common.Hash, [][]byte) {
 				panic(err)
 			}
 		}
+		slots := append([]common.Hash(nil), a.absent...)
 		for s := range a.storage {
+			slots = append(slots, s)
+		}
+		for _, s := range slots {
 			var c collector
 			if err := sto.Prove(crypto.Keccak256(s[:]), &c); err != nil {
 				panic(err)
@@ -245,6 +252,11 @@ func (p Parts) rollupState(admin, user common.Hash, adminWord, userWord *common.
 		arbfinal.ConfigSlot(p.Parent, 117, 1):         cfg,
 		common.BigToHash(new(big.Int).SetUint64(123)): fastWord,
 	}}
+	if p.Status != 0 {
+		rollup.storage[arbfinal.NodeSlot(assertion, 117)] = node
+	} else {
+		rollup.absent = append(rollup.absent, arbfinal.NodeSlot(assertion, 117))
+	}
 	accts := []acct{
 		{addr: AdminLogic, code: admin},
 		{addr: UserLogic, code: user},
@@ -431,7 +443,11 @@ func Assemble(p Parts) *World {
 	l2 := make([][]byte, p.L2Above+1)
 	var prev common.Hash = sum(p.Label + "/l2-parent")
 	for i := range l2 {
-		l2[i] = header(prev, sum(p.Label+"/l2state"), common.Hash{}, common.Hash{}, p.Leg+uint64(i), 1_700_000_000+uint64(i), "l2")
+		num := p.Leg + uint64(i)
+		if p.L2Skip > 0 && i >= p.L2Skip {
+			num++
+		}
+		l2[i] = header(prev, sum(p.Label+"/l2state"), common.Hash{}, common.Hash{}, num, 1_700_000_000+uint64(i), "l2")
 		prev = crypto.Keccak256Hash(l2[i])
 	}
 	legHash := crypto.Keccak256Hash(l2[0])
@@ -441,6 +457,9 @@ func Assemble(p Parts) *World {
 		spine[i] = l2[len(l2)-1-i]
 	}
 	after := arbfinal.AfterState{BlockHash: crypto.Keccak256Hash(spine[0]), SendRoot: sum(p.Label + "/sendroot"), InboxPosition: 881475, MachineStatus: p.Machine, EndHistoryRoot: sum(p.Label + "/ehr")}
+	if p.AfterHash != nil {
+		after.BlockHash = *p.AfterHash
+	}
 	if p.Parent == ([32]byte{}) {
 		p.Parent = sum(p.Label + "/parent")
 	}
@@ -482,7 +501,13 @@ func Assemble(p Parts) *World {
 	case p.NoLogs:
 	case p.Logs != nil:
 		for _, l := range p.Logs {
-			logs = append(logs, &types.Log{Address: l.Address, Topics: l.Topics})
+			topics := append([]common.Hash(nil), l.Topics...)
+			for i := range topics {
+				if topics[i] == ThisAssertion {
+					topics[i] = common.Hash(assertion)
+				}
+			}
+			logs = append(logs, &types.Log{Address: l.Address, Topics: topics})
 		}
 	default:
 		logs = []*types.Log{{Address: Rollup, Topics: []common.Hash{TopicConfirm, common.Hash(assertion)}, Data: bytes.Repeat([]byte{0x22}, 64)}}
@@ -613,3 +638,6 @@ func ConfirmCall(sel [4]byte) []byte {
 }
 
 func linkSum() string { s := sum("link"); return common.Bytes2Hex(s[:]) }
+
+// ThisAssertion, as a log topic of Parts.Logs, stands for the assertion hash of the world being assembled.
+var ThisAssertion = common.HexToHash("0xa55e0000000000000000000000000000000000000000000000000000000000a5")
