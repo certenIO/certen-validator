@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -106,9 +107,15 @@ func TestUpgraderConfigDefaultsAreTheDocumentedOnesAndSmallPositiveValuesAreKept
 		d.PendingRetry != 2*time.Minute || d.FailureRetry != 5*time.Minute || d.BrokenRetry != time.Hour {
 		t.Fatalf("%+v", d)
 	}
-	k := UpgraderConfig{Concurrency: 1, PageSize: 1, Interval: 1, BuildTimeout: 1, PendingRetry: 1, FailureRetry: 1, BrokenRetry: 1}.withDefaults()
-	if k.Concurrency != 1 || k.PageSize != 1 || k.Interval != 1 || k.BuildTimeout != 1 || k.PendingRetry != 1 || k.FailureRetry != 1 || k.BrokenRetry != 1 {
-		t.Fatalf("a configured value of 1 must be kept: %+v", k)
+	// the smallest value above each floor is kept: the counts and the timeouts have none, the polling intervals are raised to MinPoll
+	just := MinPoll + 1
+	k := UpgraderConfig{Concurrency: 1, PageSize: 1, Interval: just, BuildTimeout: 1, StoreTimeout: 1, PendingRetry: just, FailureRetry: just, BrokenRetry: just}.withDefaults()
+	if k.Concurrency != 1 || k.PageSize != 1 || k.Interval != just || k.BuildTimeout != 1 || k.StoreTimeout != 1 || k.PendingRetry != just || k.FailureRetry != just || k.BrokenRetry != just {
+		t.Fatalf("a configured value above its floor must be kept: %+v", k)
+	}
+	f := UpgraderConfig{Interval: 1, PendingRetry: 1, FailureRetry: 1, BrokenRetry: 1}.withDefaults()
+	if f.Interval != MinPoll || f.PendingRetry != MinPoll || f.FailureRetry != MinPoll || f.BrokenRetry != MinPoll {
+		t.Fatalf("a polling interval below MinPoll is raised to it: %+v", f)
 	}
 	neg := UpgraderConfig{Concurrency: -3, PageSize: -3, Interval: -1}.withDefaults()
 	if neg.Concurrency != 4 || neg.PageSize != 200 || neg.Interval != 60*time.Second {
@@ -339,13 +346,14 @@ func TestRunOncePagesBySizeAndStopsOnAnEmptyOrShortPageAndReportsSourceErrors(t 
 
 func TestUpgradeLegNamesEachWayAPassCanFailAndSchedulesTheRetry(t *testing.T) {
 	ctx := context.Background()
-	// a panic anywhere in the leg is a failed leg with the panic code, scheduled at the failure retry
+	// a panic of the source while it loads the leg's settlement is the named panic state of the bounded call: the leg's L6 evidence
+	// cannot be used, so it is unusable (not failed) and is scheduled at the broken retry
 	f := newFixture(t, allLevels(t), UpgraderConfig{}, nil)
 	f.u.src = panicSource{f.src}
-	if rep := f.u.RunOnce(ctx); rep.Failed != 1 || f.rec.failures[CodePanic] != 1 {
+	if rep := f.u.RunOnce(ctx); rep.Unusable != 1 || rep.Failed != 0 || f.rec.failures[CodePanic] != 1 {
 		t.Fatalf("%+v %v", rep, f.rec.failures)
 	}
-	if got, want := f.nextAt(t), f.clock.Now().Add(5*time.Minute); !got.Equal(want) {
+	if got, want := f.nextAt(t), f.clock.Now().Add(time.Hour); !got.Equal(want) {
 		t.Fatalf("next %v want %v", got, want)
 	}
 	// a leg of a chain with a prover but no profile
@@ -474,7 +482,17 @@ func TestUpgradeLegHonoursProverCeilingsNotApplicableAndCancellation(t *testing.
 	n := newFixture(t, &finalProver{chain: ChainBaseSepolia, mode: func(context.Context, *ethproof.Settlement, LevelSet, Level) (*Addendum, *PendingState, error) {
 		return nil, nil, NotApplicableState(ChainBaseSepolia, LevelL1Posted, ReasonChainIsL1)
 	}}, UpgraderConfig{}, nil)
-	if rep := n.u.RunOnce(ctx); rep.Failed != 0 || len(n.rec.failures) != 0 {
+	// (the builder status rows it writes are counted in the same sink under the "status:" prefix)
+	notFailures := func(r *recSink) int {
+		n := 0
+		for k, v := range r.failures {
+			if !strings.HasPrefix(k, "status:") {
+				n += v
+			}
+		}
+		return n
+	}
+	if rep := n.u.RunOnce(ctx); rep.Failed != 0 || notFailures(n.rec) != 0 || n.rec.failures["status:level_not_applicable@l1_posted"] != 1 {
 		t.Fatalf("a not-applicable answer is not a failure: %+v %v", rep, n.rec.failures)
 	}
 	// a prover that cancels the pass and then errs leaves the schedule and the failure counters alone
@@ -503,7 +521,7 @@ func TestUpgradeLegAppendOutcomesAreNamedAndTheLevelReachedIsReported(t *testing
 		fail     string
 	}{
 		"conflict":        {NewState(CodeAppendConflict, "seq", 1), 1, 0, ""},
-		"named other":     {NewState("some_other_state"), 0, 1, "store_write"},
+		"named other":     {NewState("some_other_state"), 0, 1, "some_other_state"}, // a named refusal is recorded under its own code
 		"plain store err": {errors.New("disk full"), 0, 1, "store_write"},
 	} {
 		f := newFixture(t, allLevels(t), UpgraderConfig{}, nil)

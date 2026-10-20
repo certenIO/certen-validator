@@ -821,7 +821,8 @@ func Launch(ctx context.Context, enabled bool, src LegSource, store AddendumStor
 		metrics.IncFinalityUpgraderDisabled(0, EnvEnabled)
 		return nil, nil
 	}
-	if cfg.DisabledChains == nil {
+	// a missing registry is NewUpgrader's refusal below, not a nil dereference here
+	if cfg.DisabledChains == nil && reg != nil {
 		off, err := DisabledChainsFromEnv(reg.Chains())
 		if err != nil {
 			return nil, err

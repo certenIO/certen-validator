@@ -224,7 +224,7 @@ func (g slotFailGames) Slot(ctx context.Context, p [20]byte, s [32]byte) ([32]by
 
 type rowsFailStore struct{ CaptureStore }
 
-func (rowsFailStore) Rows(context.Context, uint64, string) ([]CaptureRow, error) {
+func (rowsFailStore) ListByRange(context.Context, uint64, uint64, uint64, string) ([]finality.CaptureKey, error) {
 	return nil, errors.New("store down")
 }
 

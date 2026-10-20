@@ -26,13 +26,26 @@ func baseSection(t *testing.T) map[string]any {
 	return m
 }
 
+// pinsWith is the embedded file's shared section (the KZG setup pin) with the given base_sepolia section.
 func pinsWith(t *testing.T, m map[string]any) *finality.Pins {
 	t.Helper()
 	raw, err := json.Marshal(m)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &finality.Pins{Sections: map[string]json.RawMessage{"base_sepolia": raw}}
+	return &finality.Pins{Sections: map[string]json.RawMessage{"base_sepolia": raw}, Shared: sharedPins(t)}
+}
+
+func sharedPins(t *testing.T) *finality.SharedPins {
+	t.Helper()
+	fp, err := finality.EmbeddedPins()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fp.Shared == nil {
+		t.Fatal("the embedded pins have no shared section")
+	}
+	return fp.Shared
 }
 
 func TestParsePinsReadsTheBaseSectionAndNamesTheKeyOfEveryBadValue(t *testing.T) {
@@ -45,7 +58,7 @@ func TestParsePinsReadsTheBaseSectionAndNamesTheKeyOfEveryBadValue(t *testing.T)
 	if bp.ChainID != num("chain_id") || bp.L1ChainID != num("l1_chain_id") || bp.SeqWindowSize != num("seq_window_size") || bp.ChannelTimeout != num("channel_timeout") ||
 		bp.MaxRLPBytesPerChannel != num("max_rlp_bytes_per_channel") || bp.IsthmusTime != num("isthmus_time") || bp.DenimTime != num("denim_time") ||
 		uint64(bp.MaxBlobs) != num("max_blobs") || bp.L2GenesisTime != num("l2_genesis_time") || bp.L2BlockTime != num("l2_block_time") ||
-		bp.KZGSetupSHA256 != good["kzg_setup_sha256"].(string) || len(bp.SystemConfigImplHashes) == 0 {
+		bp.KZGSetupSHA256 != sharedPins(t).KZGSetupSHA256 || len(bp.SystemConfigImplHashes) == 0 {
 		t.Fatalf("%+v", bp)
 	}
 	if "0x"+common20(bp.SystemConfig) != strings.ToLower(good["system_config"].(string)) || "0x"+common20(bp.BatchInbox) != strings.ToLower(good["batch_inbox"].(string)) {
@@ -91,7 +104,7 @@ func TestParsePinsReadsTheBaseSectionAndNamesTheKeyOfEveryBadValue(t *testing.T)
 		{"max_blobs", func(m map[string]any) { m["max_blobs"] = 0 }},
 		{"max_blobs", func(m map[string]any) { m["max_blobs"] = -1 }},
 		{"kzg_setup_sha256", func(m map[string]any) { m["kzg_setup_sha256"] = "ab" }},
-		{"kzg_setup_sha256", func(m map[string]any) { m["kzg_setup_sha256"] = strings.ToUpper(good["kzg_setup_sha256"].(string)) }},
+		{"kzg_setup_sha256", func(m map[string]any) { m["kzg_setup_sha256"] = strings.ToUpper(sharedPins(t).KZGSetupSHA256) }},
 		{"kzg_setup_sha256", func(m map[string]any) { m["kzg_setup_sha256"] = strings.Repeat("zz", 32) }},
 		{"impl_pins", func(m map[string]any) { m["impl_pins"] = map[string]any{"0x12": map[string]any{"role": "syscfg_impl"}} }},
 		{"impl_pins", func(m map[string]any) {
