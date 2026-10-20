@@ -97,44 +97,50 @@ func cutFields(e Evidence) []cutField {
 	return f
 }
 
-// wantPart is the part the decoder must name for the body cut to cut bytes, "" when the cut is the whole body.
-func wantPart(fields []cutField, cut int) string {
+// wantPart is the part and reason the decoder must name for the body cut to cut bytes, "" when the cut is the whole body.
+func wantPart(fields []cutField, cut int) (part, reason string) {
 	pos := 0
 	for _, f := range fields {
 		switch f.typ {
 		case 0:
 			if cut < pos+f.n {
-				return f.name
+				return f.name, "truncated"
 			}
 			pos += f.n
 		case 1:
 			if cut < pos+4 {
-				return f.name + ".len"
+				return f.name + ".len", "truncated"
 			}
 			if cut < pos+4+f.n {
-				return f.name
+				return f.name, "length_exceeds_remaining"
 			}
 			pos += 4 + f.n
 		case 2:
 			if cut < pos+4 {
-				return f.name + ".count"
+				return f.name + ".count", "truncated"
 			}
 			pos += 4
 			if f.n*f.min > cut-pos {
-				return f.name
+				return f.name, "count_exceeds_remaining"
 			}
 		}
 	}
-	return ""
+	return "", ""
 }
 
-func partOf(err error) string {
+func partOf(err error) (part, reason string) {
 	if s, ok := finality.AsNamed(err); ok {
-		if p, ok := s.Fields["part"].(string); ok {
-			return p
+		p, _ := s.Fields["part"].(string)
+		r := ""
+		if v, ok := s.Fields["reason"]; ok {
+			r = fmt.Sprint(v)
 		}
+		if p == "" {
+			p = "<" + s.Code + ">"
+		}
+		return p, r
 	}
-	return fmt.Sprintf("<%v>", err)
+	return fmt.Sprintf("<%v>", err), ""
 }
 
 func cutEvidence(mode string) Evidence {
@@ -192,12 +198,55 @@ func TestACutAtAnyByteIsRefusedByTheFieldItFallsIn(t *testing.T) {
 		}
 		for _, c := range cuts {
 			_, err := Decode(body[:c], b)
-			if got, want := partOf(err), wantPart(fields, c); got != want {
-				t.Fatalf("%s: a body cut to %d of %d bytes is refused in part %q, the grammar says %q", mode, c, len(body), got, want)
+			gp, gr := partOf(err)
+			wp, wr := wantPart(fields, c)
+			if gp != wp || gr != wr {
+				t.Fatalf("%s: a body cut to %d of %d bytes is refused in part %q (%s), the grammar says %q (%s)", mode, c, len(body), gp, gr, wp, wr)
 			}
 		}
 		if _, err := Decode(body, b); err != nil {
 			t.Fatalf("%s: the whole body: %v", mode, err)
+		}
+	}
+}
+
+// A blob whose length prefix is not the blob size is refused in its own part: a huge prefix by the bound, a short one as truncated.
+func TestABlobLengthPrefixThatIsNotTheBlobSizeIsRefused(t *testing.T) {
+	e := cutEvidence("blobs")
+	e.Blobs = e.Blobs[:1]
+	e.VersionedHashes = e.VersionedHashes[:1]
+	body := e.Encode()
+	pos := 0
+	for _, f := range cutFields(e) {
+		if f.name == "blobs.raw" {
+			break
+		}
+		pos += f.size()
+	}
+	for name, c := range map[string]struct {
+		size   uint32
+		code   string
+		reason string
+	}{
+		"4 GiB":     {0xffffffff, "finality_evidence_too_large", ""},
+		"one over":  {BlobBytes + 1, "finality_evidence_too_large", ""},
+		"one under": {BlobBytes - 1, "finality_evidence_malformed", "truncated"},
+		"zero":      {0, "finality_evidence_malformed", "truncated"},
+	} {
+		mut := append([]byte(nil), body...)
+		mut[pos], mut[pos+1], mut[pos+2], mut[pos+3] = byte(c.size>>24), byte(c.size>>16), byte(c.size>>8), byte(c.size)
+		_, err := Decode(mut, DefaultBounds())
+		s, ok := finality.AsNamed(err)
+		if !ok || s.Code != c.code || s.Fields["part"] != "blobs.raw" {
+			t.Errorf("%s: %v", name, err)
+			continue
+		}
+		r := ""
+		if v, ok := s.Fields["reason"]; ok {
+			r = fmt.Sprint(v)
+		}
+		if r != c.reason {
+			t.Errorf("%s: reason %q, want %q", name, r, c.reason)
 		}
 	}
 }
