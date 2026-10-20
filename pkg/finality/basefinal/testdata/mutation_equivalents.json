@@ -270,5 +270,45 @@
     "original": "l2seq < start",
     "mutated": "*",
     "reason": "At l2seq == start the total is 0, which matches no pinned pair, and the same interval_pair refusal with total 0 is returned."
+  },
+  {
+    "file": "build.go",
+    "function": "Builder.covering",
+    "operator": "guard_off",
+    "original": "if leg > newest.L2Seq",
+    "mutated": "*",
+    "reason": "With the guard removed and leg above the newest game, newest.L2Seq-leg wraps to a huge difference, so the estimate keeps idx = count-1; the scan loads the newest game, finds leg above its end and answers no_covering_game with the same leg_block and the same newest_l2_sequence_number (the newest game's end) as the guard does."
+  },
+  {
+    "file": "build.go",
+    "function": "Builder.attest",
+    "operator": "guard_off",
+    "original": "if err != nil",
+    "mutated": "*",
+    "reason": "This entry excuses only the guard after Container.Encode, which fails only for a level that is not stored; the level here is the constant LevelFinalized, so it never fails. The other `if err != nil` guards of attest are killed by named tests."
+  },
+  {
+    "file": "capture.go",
+    "function": "DirStore.Rows",
+    "operator": "guard_off",
+    "original": "if err != nil",
+    "mutated": "*",
+    "reason": "This entry excuses only the guard after os.ReadFile: an unreadable file yields no bytes, and the read of its item from no bytes fails with the same returned error. The other guards of Rows (the listing, the item, the data) are killed by named tests."
+  },
+  {
+    "file": "verify.go",
+    "function": "judge",
+    "operator": "logic_swap",
+    "original": "!gia.exists || !pinned || row.Role != RoleGameImpl",
+    "mutated": "*",
+    "reason": "A pinned row of another role is refused by the disjunct that follows (`!row.Complete(p.Layouts)` requires Role == game_impl), so `!pinned && row.Role != game_impl` selects the same inputs with the same identity state."
+  },
+  {
+    "file": "verify.go",
+    "function": "judge",
+    "operator": "int_literal",
+    "original": "prev.Number == 0",
+    "mutated": "*",
+    "reason": "The guard matters only for a header whose number is 2^64-1 and whose hash is the parent hash of a number-0 header (the chain check cur.Hash == prev.ParentHash comes first): that needs a preimage of the parent hash, which the headers of a real chain (genesis has the zero parent hash) and of the synthetic worlds do not have; the case `== 1` is killed by the spine down to block zero."
   }
 ]

@@ -62,8 +62,13 @@ func TestTheDirStoreNamesItsOwnFailuresAndRefusesAFileThatIsNotAWholeRow(t *test
 	}
 	// a file whose item cannot be read, though the bytes after it would parse as a row
 	d3 := t.TempDir()
-	weird := append([]byte{0xff, 0xff}, make([]byte, 6+8+32+4)...)
-	if err := os.WriteFile(filepath.Join(d3, "weird.cap"), weird, 0o644); err != nil {
+	var ww finality.Writer
+	ww.LP([]byte{0xff}) // an item with a byte above ASCII: read in full, then refused
+	ww.U64(1)
+	ww.U64(2)
+	ww.B32(hash)
+	ww.LP([]byte("d"))
+	if err := os.WriteFile(filepath.Join(d3, "weird.cap"), ww.Bytes(), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := (DirStore{Dir: d3}).Rows(ctx, 1, "i"); err == nil {

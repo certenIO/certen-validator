@@ -57,9 +57,13 @@ func TestTheBuilderDoesNotChooseAnIncompleteGameImplementationRow(t *testing.T) 
 			row["slow_finalization_delay"] = 0
 		}
 	}
-	b := w.builder(t, w.store(t))
+	// an empty store: a row chosen by the builder would go on to a capture (a wait), the refusal must come before
+	b := w.builder(t, &MemStore{})
 	b.Pins = pinsWith(t, m)
-	_, _, err := w.built(t, b)
+	_, p, err := w.built(t, b)
+	if p != nil {
+		t.Errorf("an incomplete row was chosen: %+v", p)
+	}
 	if se, ok := finality.AsNamed(err); !ok || se.Code != CodeContractIdentity || fmt.Sprint(se.Fields["role"]) != RoleGameImpl {
 		t.Errorf("%v", err)
 	}
