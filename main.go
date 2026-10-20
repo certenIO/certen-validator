@@ -35,6 +35,7 @@ import (
 	"github.com/certen/independant-validator/pkg/execution"
 	"github.com/certen/independant-validator/pkg/execution/contracts"
 	"github.com/certen/independant-validator/pkg/finality"
+	finruntime "github.com/certen/independant-validator/pkg/finality/runtime"
 	"github.com/certen/independant-validator/pkg/firestore"
 	"github.com/certen/independant-validator/pkg/intent"
 	"github.com/certen/independant-validator/pkg/ledger"
@@ -871,6 +872,9 @@ func main() {
 			UptimeSeconds     int64                  `json:"uptime_seconds"`
 			BatchDetails      map[string]interface{} `json:"batch_details"`
 			StatusExplanation string                 `json:"status_explanation"`
+			// Staged finality (RB11): upgrader switch and, per chain, capture lag, last captured block, pending legs by level
+			// and last append. Informational: it never changes Status.
+			Finality map[string]any `json:"finality"`
 		}{
 			Status:        healthStatus.Status,
 			Phase:         healthStatus.Phase,
@@ -882,6 +886,7 @@ func main() {
 			ProofCycle:    healthStatus.ProofCycle,
 			UptimeSeconds: int64(time.Since(healthStatus.startTime).Seconds()),
 			BatchDetails:  make(map[string]interface{}),
+			Finality:      metrics.FinalityHealth(),
 		}
 
 		// Build status explanation
@@ -2317,13 +2322,23 @@ func startValidator(
 			return nil, nil, fmt.Errorf("finality upgrader: %w", ferr)
 		}
 		finalityRepo := database.NewFinalityAddendaRepository(dbClient)
-		// The finality pins are embedded and hash-checked: a verifier whose embedded bytes do not hash to PinsSHA256 refuses to start.
-		finalityPins, ferr := finality.EmbeddedPins()
+		// The finality runtime wiring (pkg/finality/runtime) builds, from the validator's provider configuration plus the
+		// CERTEN_FINALITY_* variables, the provers and capture loops of every live chain and the light-client source. The pins
+		// are the embedded, hash-checked file unless CERTEN_FINALITY_PINS_FILE names an override, whose source it reports. A chain
+		// whose providers are missing is announced as the named state finality_upgrader_disabled, never skipped silently.
+		finalityCfg, ferr := finruntime.ConfigFromEnv()
 		if ferr != nil {
-			return nil, nil, fmt.Errorf("finality pins: %w", ferr)
+			return nil, nil, fmt.Errorf("finality configuration: %w", ferr)
 		}
-		if _, ferr := finality.Launch(context.Background(), finalityOn, finalityRepo, finalityRepo, finality.Default, finalityPins,
-			finality.UpgraderConfig{Logf: log.Printf, Status: database.NewFinalityStatusRepository(dbClient)}); ferr != nil {
+		finalityWire, ferr := finruntime.Wire(finalityCfg, finruntime.Deps{
+			Registry: finality.Default, Store: database.NewFinalityCaptureStore(dbClient),
+			Status: database.NewFinalityStatusRepository(dbClient), Logf: log.Printf,
+		})
+		if ferr != nil {
+			return nil, nil, fmt.Errorf("finality wiring: %w", ferr)
+		}
+		if _, ferr := finality.Launch(context.Background(), finalityOn, finalityRepo, finalityRepo, finalityWire.Registry, finalityWire.Pins,
+			finalityWire.Upgrader); ferr != nil {
 			return nil, nil, fmt.Errorf("finality upgrader: %w", ferr)
 		}
 	}

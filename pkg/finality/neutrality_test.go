@@ -143,6 +143,9 @@ func TestMainWiresTheUpgraderAloneAndGivesItNoConsensusObject(t *testing.T) {
 		t.Fatal(err)
 	}
 	allowed := map[string]bool{"Enabled": true, "Launch": true, "Default": true, "EmbeddedPins": true, "UpgraderConfig": true}
+	// RB11-B2B2b: the production wiring (pkg/finality/runtime, imported as finruntime) is reached through exactly these symbols:
+	// the configuration read, the wiring call and its collaborator struct. Everything else it builds stays inside that package.
+	runtimeAllowed := map[string]bool{"ConfigFromEnv": true, "Wire": true, "Deps": true}
 	var launches []*ast.CallExpr
 	var repoCtors int
 	for _, decl := range f.Decls {
@@ -166,6 +169,13 @@ func TestMainWiresTheUpgraderAloneAndGivesItNoConsensusObject(t *testing.T) {
 				}
 				if !allowed[sel.Sel.Name] {
 					t.Errorf("main.go: finality.%s is not one of the upgrader wiring symbols", sel.Sel.Name)
+				}
+			case "finruntime":
+				if fn.Name.Name != "startValidator" {
+					t.Errorf("main.go: finruntime.%s is used in %s; the finality wiring is built in startValidator only", sel.Sel.Name, fn.Name.Name)
+				}
+				if !runtimeAllowed[sel.Sel.Name] {
+					t.Errorf("main.go: finruntime.%s is not one of the finality runtime wiring symbols", sel.Sel.Name)
 				}
 			case "database":
 				if strings.Contains(sel.Sel.Name, "FinalityAddenda") {

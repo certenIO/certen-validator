@@ -103,10 +103,14 @@ type UpgraderConfig struct {
 	// DisabledChains are the chains whose per-chain switch is off: their legs are not loaded or attempted, announced once as
 	// the named state finality_upgrader_disabled. Launch fills it from CERTEN_FINALITY_CHAIN_<id>_ENABLED when it is nil.
 	DisabledChains map[uint64]bool
-	Logf           func(format string, args ...any)
-	Now            func() time.Time
-	Jitter         func(time.Duration) time.Duration // spreads retries across validators that share one database
-	Recorder       Recorder
+	// DisabledReasons names why a chain in DisabledChains is off when the cause is not its CERTEN_FINALITY_CHAIN_<id>_ENABLED
+	// switch: a missing provider setting (the runtime wiring, RB11-B2B2b) is announced with its own finality_upgrader_disabled
+	// state naming that setting. A chain without an entry is announced as its switch (ChainSwitchState).
+	DisabledReasons map[uint64]*StateError
+	Logf            func(format string, args ...any)
+	Now             func() time.Time
+	Jitter          func(time.Duration) time.Duration // spreads retries across validators that share one database
+	Recorder        Recorder
 }
 
 func (c UpgraderConfig) withDefaults() UpgraderConfig {
@@ -372,8 +376,20 @@ func (u *Upgrader) announceDisabled(chain uint64) {
 	u.disabled[chain] = true
 	u.mu.Unlock()
 	if !seen {
-		u.cfg.Logf("[FINALITY] chain %d upgrader DISABLED: %s", chain, ChainSwitchState(chain).Error())
+		AnnounceDisabled(u.cfg.Logf, chain, u.cfg.DisabledReasons[chain])
 	}
+}
+
+// AnnounceDisabled logs the named state finality_upgrader_disabled of a switched-off chain (reason when given, else the chain's
+// CERTEN_FINALITY_CHAIN_<id>_ENABLED switch), counts it and records it for the health endpoint. Callers announce once per chain.
+func AnnounceDisabled(logf func(format string, args ...any), chain uint64, reason *StateError) {
+	if reason == nil {
+		reason = ChainSwitchState(chain)
+	}
+	env, _ := reason.Fields["env"].(string)
+	logf("[FINALITY] chain %d upgrader DISABLED: %s", chain, reason.Error())
+	metrics.IncFinalityUpgraderDisabled(chain, env)
+	metrics.SetFinalityChainDisabledReason(chain, reason.Error())
 }
 
 func (u *Upgrader) isComplete(id string) bool {
@@ -802,6 +818,7 @@ func Launch(ctx context.Context, enabled bool, src LegSource, store AddendumStor
 			"effect", "no finality addenda are appended by this validator; proofs stay at the level they were stored at")
 		cfg.Logf("[FINALITY] upgrader DISABLED: %s", st.Error())
 		metrics.SetFinalityUpgraderEnabled(false)
+		metrics.IncFinalityUpgraderDisabled(0, EnvEnabled)
 		return nil, nil
 	}
 	if cfg.DisabledChains == nil {
@@ -818,9 +835,13 @@ func Launch(ctx context.Context, enabled bool, src LegSource, store AddendumStor
 	metrics.SetFinalityUpgraderEnabled(true)
 	for _, c := range reg.Chains() {
 		metrics.SetFinalityChainEnabled(c, !cfg.DisabledChains[c])
+		if cfg.DisabledChains[c] {
+			// announced at launch, once, whether or not a leg of the chain exists yet; the worker does not announce it again
+			u.announceDisabled(c)
+		}
 	}
 	cfg.Logf("[FINALITY] upgrader ENABLED (%s): concurrency=%d interval=%s chains=%v switched_off=%v", EnvEnabled, cfg.Concurrency, cfg.Interval, reg.Chains(), cfg.DisabledChains)
-	StartCapturers(ctx, reg, SupervisorConfig{DisabledChains: cfg.DisabledChains, Logf: cfg.Logf})
+	StartCapturers(ctx, reg, SupervisorConfig{DisabledChains: cfg.DisabledChains, DisabledReasons: cfg.DisabledReasons, Logf: cfg.Logf})
 	go u.Run(ctx)
 	return u, nil
 }

@@ -62,7 +62,9 @@ type SupervisorConfig struct {
 	RestartMin     time.Duration // first wait after a failed loop (default 5s)
 	RestartMax     time.Duration // longest wait (default 5m); the wait doubles from RestartMin up to this
 	DisabledChains map[uint64]bool
-	Logf           func(format string, args ...any)
+	// DisabledReasons: see UpgraderConfig.DisabledReasons; the loop's line names the same state.
+	DisabledReasons map[uint64]*StateError
+	Logf            func(format string, args ...any)
 	// Restarted is told of every restart (tests; the metric is always updated).
 	Restarted func(c Capturer, err error, wait time.Duration)
 	// Now and After are the clock and the timer of the restart backoff (tests; default time.Now and time.After).
@@ -109,7 +111,11 @@ func StartCapturers(ctx context.Context, reg *Registry, cfg SupervisorConfig) *C
 	s := &CaptureSupervisor{}
 	for _, c := range reg.Capturers() {
 		if cfg.DisabledChains[c.Chain()] {
-			cfg.Logf("[FINALITY] capturer %s (chain %d) DISABLED: %s", c.Name(), c.Chain(), ChainSwitchState(c.Chain()).Error())
+			reason := cfg.DisabledReasons[c.Chain()]
+			if reason == nil {
+				reason = ChainSwitchState(c.Chain())
+			}
+			cfg.Logf("[FINALITY] capturer %s (chain %d) DISABLED: %s", c.Name(), c.Chain(), reason.Error())
 			continue
 		}
 		s.wg.Add(1)
