@@ -121,3 +121,90 @@ func TestAssertionHashPreimages(t *testing.T) {
 		t.Fatal("config slot")
 	}
 }
+
+// editSection returns the pins with the arb_sepolia value at path replaced (nil deletes the key).
+func editSection(t *testing.T, path []string, val any) *finality.Pins {
+	t.Helper()
+	embedded, err := finality.EmbeddedPins()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(embedded.Sections["arb_sepolia"], &doc); err != nil {
+		t.Fatal(err)
+	}
+	cur := doc
+	for _, k := range path[:len(path)-1] {
+		cur = cur[k].(map[string]any)
+	}
+	if val == nil {
+		delete(cur, path[len(path)-1])
+	} else {
+		cur[path[len(path)-1]] = val
+	}
+	raw, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &finality.Pins{Format: embedded.Format, Sections: map[string]json.RawMessage{"arb_sepolia": raw}}
+}
+
+// Every domain check of the arb_sepolia section refuses with pin_mismatch naming the field.
+func TestEveryPinDomainCheckNamesItsField(t *testing.T) {
+	cases := []struct {
+		name  string
+		path  []string
+		val   any
+		field string
+	}{
+		{"chain id", []string{"chain_id"}, 421615, "chain_id"},
+		{"parent chain id", []string{"parent_chain_id"}, 1, "parent_chain_id"},
+		{"rollup not hex", []string{"rollup"}, "0x12", "rollup"},
+		{"rollup no prefix", []string{"rollup"}, "042B2E6C5E99d4c521bd49beeD5E99651D9B0Cf4aa", "rollup"},
+		{"layout name", []string{"layout", "name"}, "x", "layout"},
+		{"assertions slot zero", []string{"layout", "assertions_slot"}, 0, "layout"},
+		{"status shift zero", []string{"layout", "status_shift_bits"}, 0, "layout"},
+		{"status shift above 248", []string{"layout", "status_shift_bits"}, 249, "layout"},
+		{"config offset zero", []string{"layout", "config_slot_offset"}, 0, "layout"},
+		{"fast confirmer slot zero", []string{"layout", "fast_confirmer_slot"}, 0, "layout"},
+		{"fast confirmer shift above 96", []string{"layout", "fast_confirmer_shift_bits"}, 97, "layout"},
+		{"max header chain zero", []string{"max_header_chain"}, 0, "max_header_chain"},
+		{"max header chain negative", []string{"max_header_chain"}, -1, "max_header_chain"},
+		{"bold genesis zero", []string{"bold_genesis_l2_block"}, 0, "bold_genesis_l2_block"},
+		{"admin slot short", []string{"proxy_slots", "admin_logic"}, "0x1234", "proxy_slots.admin_logic"},
+		{"user slot short", []string{"proxy_slots", "user_logic"}, "0x1234", "proxy_slots.user_logic"},
+		{"logic pin key short", []string{"logic_pins"}, map[string]any{"0x12": "rollup_admin_logic"}, "logic_pins"},
+		{"selector short", []string{"confirm_path", "selectors", "confirm_assertion"}, "0x1234", "confirm_path.selectors.confirm_assertion"},
+		{"selector missing", []string{"confirm_path", "selectors", "fast_confirm_assertion"}, nil, "confirm_path.selectors.fast_confirm_assertion"},
+		{"wallet selector missing", []string{"confirm_path", "selectors", "wallet_execute_transactions_with_gas_refunder"}, nil, "confirm_path.selectors.wallet_execute_transactions_with_gas_refunder"},
+		{"topic short", []string{"confirm_path", "topics", "assertion_confirmed"}, "0x12", "confirm_path.topics.assertion_confirmed"},
+		{"topic missing", []string{"confirm_path", "topics", "assertion_force_confirmed"}, nil, "confirm_path.topics.assertion_force_confirmed"},
+		{"unknown key", []string{"surprise"}, 1, "section"},
+	}
+	for _, c := range cases {
+		_, err := arbfinal.LoadPins(editSection(t, c.path, c.val))
+		s, ok := finality.AsNamed(err)
+		if !ok || s.Code != arbfinal.CodePinMismatch || s.Fields["field"] != c.field {
+			t.Errorf("%s: got %v, want pin_mismatch{field:%s}", c.name, err, c.field)
+		}
+	}
+	if _, err := arbfinal.LoadPins(nil); err == nil {
+		t.Fatal("nil pins accepted")
+	}
+	if _, err := arbfinal.LoadPins(&finality.Pins{}); err == nil {
+		t.Fatal("pins without the section accepted")
+	}
+	// the embedded section itself parses, and carries the two pinned logic roles.
+	embedded, _ := finality.EmbeddedPins()
+	a, err := arbfinal.LoadPins(embedded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roles := map[string]bool{}
+	for _, r := range a.LogicPins {
+		roles[r] = true
+	}
+	if !roles[arbfinal.RoleAdminLogic] || !roles[arbfinal.RoleUserLogic] {
+		t.Fatalf("logic pins %v", a.LogicPins)
+	}
+}
