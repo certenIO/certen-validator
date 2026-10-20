@@ -417,8 +417,13 @@ func TestTheBuilderNamesWhyEvidenceCannotBeBuiltYetOrAtAll(t *testing.T) {
 		b.Headers = &mapHeaders{by: w.hdrs.by, fail: w.hdrs.fail, numbers: map[[32]byte]uint64{below: 7}}
 	}, "finality_source_unavailable", map[string]string{"reason": "l1_header"})
 	fail("a captured block that is not on the finalized chain", func(b *Builder, store *MemStore) {
+		// a snapshot first: a map changed while it is ranged over may show the new keys again
+		old := make(map[CaptureKey][]byte, len(store.rows))
 		for k, v := range store.rows {
-			delete(store.rows, k)
+			old[k] = v
+		}
+		store.rows = map[CaptureKey][]byte{}
+		for k, v := range old {
 			k.L1Hash[0] ^= 1
 			store.rows[k] = v
 		}
