@@ -58,6 +58,7 @@ type synthOpts struct {
 	omitImpl         bool   // the implementation account is absent from the state
 	rawStream        []byte // the decompressed channel used as given, instead of the batches built here
 	txData           []byte // the calldata of every frame transaction, used as given instead of the marshalled frame
+	channelLabel     string // another label gives another channel id
 	garbageTx        []byte // the frame transaction bytes put in the block trie instead of the signed transaction
 }
 
@@ -153,7 +154,11 @@ func makeSynth(t *testing.T, o synthOpts) *synth {
 	}
 	chData := compress(o.compression, stream)
 	var id [16]byte
-	copy(id[:], crypto.Keccak256([]byte("channel")))
+	label := "channel"
+	if o.channelLabel != "" {
+		label = o.channelLabel
+	}
+	copy(id[:], crypto.Keccak256([]byte(label)))
 	// frames
 	per := (len(chData) + o.nFrames - 1) / o.nFrames
 	var frameBytes [][]byte
