@@ -1,0 +1,19 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "adv_synth_electra_era_nonzero_extra_node",
+ "kind": "head",
+ "description": "synthetic: the same with a non-zero node in the zero-extended part of the finalized branch",
+ "pins": "pins/synth.json",
+ "lc": "lc/adv_synth_electra_era_nonzero_extra_node.bin",
+ "expect": {
+  "code": "finality_link_invalid",
+  "fields": {
+   "attested_slot": "82309",
+   "check": "finalized_header_exec_branch",
+   "index": "0",
+   "period": "10",
+   "signature_slot": "82310"
+  },
+  "result": "fault"
+ }
+}

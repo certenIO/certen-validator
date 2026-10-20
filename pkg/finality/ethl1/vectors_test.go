@@ -300,6 +300,8 @@ var requiredHeadCases = []string{
 	"adv_period_skip_first_link_missing", "adv_period_gap_final", "adv_links_out_of_order", "adv_bootstrap_header_not_pin", "adv_bootstrap_committee_branch_forged",
 	"adv_learned_committee_not_ledger", "adv_anchor_root_disagrees_with_committee", "adv_committee_body_not_ledger", "adv_bootstrap_committee_not_ledger",
 	"adv_window_exceeded", "adv_pin_unknown_period", "adv_ledger_behind", "adv_too_many_links", "electra_link_real_fulu_update",
+	"synth_valid_342_exact", "adv_synth_341_valid_signature", "synth_valid_fork_boundary_domain", "adv_synth_domain_from_attested_epoch",
+	"synth_valid_electra_era_finalized_header", "adv_synth_electra_era_nonzero_extra_node", "adv_synth_finalized_header_in_unsupported_fork", "adv_synth_identity_signature",
 }
 
 func TestCoversVectors(t *testing.T) {
@@ -338,7 +340,8 @@ func TestMutationChecks(t *testing.T) {
 		q     quirks
 		cases []string
 	}{
-		{"drop the 342 floor", quirks{dropFloor: true}, []string{"adv_participation_341", "adv_link_participation_341"}},
+		{"drop the 342 floor", quirks{dropFloor: true}, []string{"adv_participation_341", "adv_link_participation_341", "adv_synth_341_valid_signature"}},
+		{"take the signing-domain fork version from the attested epoch", quirks{attestedEpochDomain: true}, []string{"synth_valid_fork_boundary_domain"}},
 		{"skip the per-period ledger rule", quirks{skipLedgerLearned: true}, []string{"adv_learned_committee_not_ledger"}},
 		{"skip the window rule", quirks{skipWindow: true}, []string{"adv_window_exceeded"}},
 		{"skip the finality branch", quirks{skipFinalityBranch: true}, []string{"adv_forged_finality_branch_node", "adv_attested_state_root_altered"}},
@@ -351,13 +354,18 @@ func TestMutationChecks(t *testing.T) {
 				Code string `json:"code"`
 			}
 			_ = json.Unmarshal(cases[id].Expect, &want)
-			if f != nil && f.Code == want.Code {
-				t.Errorf("mutation %q: vector %s still returns %s; the vector does not exercise the rule", m.name, id, want.Code)
+			got := "ok"
+			if f != nil {
+				got = f.Code
+			}
+			t.Logf("MUTATION %q on %s: expected %q, mutated verifier returns %q", m.name, id, want.Code, got)
+			if (f == nil && want.Code == "") || (f != nil && f.Code == want.Code) {
+				t.Errorf("mutation %q: vector %s still returns its expected verdict; the vector does not exercise the rule", m.name, id)
 			}
 		}
 	}
 	// the unmutated verifier still returns the expected code for each of them
-	for _, id := range []string{"adv_participation_341", "adv_learned_committee_not_ledger", "adv_window_exceeded", "adv_forged_finality_branch_node"} {
+	for _, id := range []string{"adv_participation_341", "adv_learned_committee_not_ledger", "adv_window_exceeded", "adv_forged_finality_branch_node", "adv_synth_341_valid_signature"} {
 		_, f := run(id, quirks{})
 		var want struct{ Code string }
 		_ = json.Unmarshal(cases[id].Expect, &want)
@@ -448,5 +456,40 @@ func TestTimingRecorded(t *testing.T) {
 			t.Fatalf("%s: %v", id, err)
 		}
 		t.Logf("TIMING %s: %d links, %d participants, %v", id, len(lc.Links), h.Participants, d)
+	}
+}
+
+// TestHashTreeRootsAgainstLiveRoots pins the SSZ merkleization to roots the live chain committed to: the captured bootstrap's
+// BeaconBlockHeader hashes to the checkpoint block root the beacon API named, and its SyncCommittee hashes to the root the
+// chain of links derived independently.
+func TestHashTreeRootsAgainstLiveRoots(t *testing.T) {
+	var capt struct {
+		BootRoot string `json:"bootstrap_block_root"`
+	}
+	raw, err := os.ReadFile(filepath.Join(vectorDir, "raw", "capture.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &capt); err != nil {
+		t.Fatal(err)
+	}
+	boot, err := os.ReadFile(filepath.Join(vectorDir, "raw", "bootstrap.ssz"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateContainer("LightClientBootstrap", boot); err != nil {
+		t.Fatal(err)
+	}
+	got, err := HashTreeRootBeaconBlockHeader(boot[:BeaconBlockHeaderSize])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := h32of(t, capt.BootRoot); got != want {
+		t.Fatalf("hash_tree_root(BeaconBlockHeader) = %x, the beacon API named checkpoint root %x", got, want)
+	}
+	pins := loadPins(t, "pins/main.json")
+	last := pins.Anchors[len(pins.Anchors)-1]
+	if r := HashTreeRootSyncCommittee(boot[LightClientHeaderSize : LightClientHeaderSize+SyncCommitteeBytes]); r != last.CommitteeRoot {
+		t.Fatalf("hash_tree_root(SyncCommittee) of the bootstrap = %x, the link chain derived %x", r, last.CommitteeRoot)
 	}
 }

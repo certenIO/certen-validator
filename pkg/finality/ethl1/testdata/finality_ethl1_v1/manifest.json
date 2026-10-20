@@ -51,6 +51,11 @@
   "adv_spine_header_not_rlp",
   "adv_spine_number_mismatch",
   "adv_spine_too_long",
+  "adv_synth_341_valid_signature",
+  "adv_synth_domain_from_attested_epoch",
+  "adv_synth_electra_era_nonzero_extra_node",
+  "adv_synth_finalized_header_in_unsupported_fork",
+  "adv_synth_identity_signature",
   "adv_too_many_links",
   "adv_window_exceeded",
   "adv_wrong_genesis_validators_root",
@@ -62,6 +67,10 @@
   "spine_prefix_3",
   "spine_valid_20",
   "spine_valid_block_lookup",
+  "synth_valid_342_exact",
+  "synth_valid_512",
+  "synth_valid_electra_era_finalized_header",
+  "synth_valid_fork_boundary_domain",
   "valid_k1_chain",
   "valid_k1_k0",
   "valid_k1_short",
@@ -324,6 +333,31 @@
    "bytes": 27480
   },
   {
+   "path": "cases/adv_synth_341_valid_signature.json",
+   "sha256": "b08b6b5e899df7e3300236fc9de08c0b3e896113c3dd780a750815bbc6f2650c",
+   "bytes": 468
+  },
+  {
+   "path": "cases/adv_synth_domain_from_attested_epoch.json",
+   "sha256": "94b17d4c3a37b34ce0bdc3a70e9a13c41c35c6c640798e7cfbb227a12e614ebf",
+   "bytes": 500
+  },
+  {
+   "path": "cases/adv_synth_electra_era_nonzero_extra_node.json",
+   "sha256": "0e5fa801e03d1d830557afadefaf4886f0ec04fefa13e40379ef438196daba57",
+   "bytes": 539
+  },
+  {
+   "path": "cases/adv_synth_finalized_header_in_unsupported_fork.json",
+   "sha256": "48a6ca7b46fdc236b94016efbfc50ab628424f7d726eda648df4aa95ce502729",
+   "bytes": 484
+  },
+  {
+   "path": "cases/adv_synth_identity_signature.json",
+   "sha256": "557fe741fc8efa9649331814068e15f79a64eb5efeda1a1a5e81232f5a630536",
+   "bytes": 456
+  },
+  {
    "path": "cases/adv_too_many_links.json",
    "sha256": "4b66edddd5e057c35b862305e2d976c8c9cdc0259c4776e007e9ce1ab31764b1",
    "bytes": 361
@@ -377,6 +411,26 @@
    "path": "cases/spine_valid_block_lookup.json",
    "sha256": "f7306f72997e60d4c2ccf71254877be217255415bc7eb38b4eed17019b7df450",
    "bytes": 32170
+  },
+  {
+   "path": "cases/synth_valid_342_exact.json",
+   "sha256": "cd6f333ddaa773f92b5c66101ea9e322cc4df3895136be3a84b107466132d6fc",
+   "bytes": 573
+  },
+  {
+   "path": "cases/synth_valid_512.json",
+   "sha256": "4010c2002d274e98adbf642b00d8ac7014cef7f834d52129a0860d1400dfb295",
+   "bytes": 548
+  },
+  {
+   "path": "cases/synth_valid_electra_era_finalized_header.json",
+   "sha256": "b8be57ad86a61f8a6ec51a1ef3ceb5890e9c7855a1c77ac89d4df956bf9d7754",
+   "bytes": 681
+  },
+  {
+   "path": "cases/synth_valid_fork_boundary_domain.json",
+   "sha256": "8522437eabb8b1d94a0ab4562bfab8337a8f73cf5cb260cc5d3257479cff6ed8",
+   "bytes": 666
   },
   {
    "path": "cases/valid_k1_chain.json",
@@ -624,6 +678,31 @@
    "bytes": 26139
   },
   {
+   "path": "lc/adv_synth_341_valid_signature.bin",
+   "sha256": "4ef0946cf6cbdf4e1f58973fa484e24e3e29fffc28c805784b6272740c91567d",
+   "bytes": 26139
+  },
+  {
+   "path": "lc/adv_synth_domain_from_attested_epoch.bin",
+   "sha256": "ebf4bbd7d003750fa0869214601ddede25a0575983e3252e1c6a8582bd4d41d0",
+   "bytes": 26139
+  },
+  {
+   "path": "lc/adv_synth_electra_era_nonzero_extra_node.bin",
+   "sha256": "a04aae02f1cc95572f97d301f50a7ed8ef64dc78ce8b8819c33aa080a953c21b",
+   "bytes": 26139
+  },
+  {
+   "path": "lc/adv_synth_finalized_header_in_unsupported_fork.bin",
+   "sha256": "95170da3a8950a4ee85040582e2b63821c68e458a1354fbf822c220dc7f458c8",
+   "bytes": 26139
+  },
+  {
+   "path": "lc/adv_synth_identity_signature.bin",
+   "sha256": "a0a7f4117c1aa3a849a74e50bb327d0bb427ed4ef9f18a79293246ef99f94391",
+   "bytes": 26139
+  },
+  {
    "path": "lc/adv_too_many_links.bin",
    "sha256": "235d470c422406df2409720ae35fc2c367f4906e4f84115b4573361543c93254",
    "bytes": 78997
@@ -647,6 +726,26 @@
    "path": "lc/electra_link_real_fulu_update.bin",
    "sha256": "e7987b6ea502d009af5ef28912524f35739365f457098381bb442155343d9ae7",
    "bytes": 53050
+  },
+  {
+   "path": "lc/synth_valid_342_exact.bin",
+   "sha256": "5a80c0f1ae3f48118453eea0b2367c2e03a00c8eb0d59f9c991c8ae9ab11cec3",
+   "bytes": 26139
+  },
+  {
+   "path": "lc/synth_valid_512.bin",
+   "sha256": "4435f4ce50bdb7ecfced58ce2dda310ab230a75d763d9e62a6c829ec8580d965",
+   "bytes": 26139
+  },
+  {
+   "path": "lc/synth_valid_electra_era_finalized_header.bin",
+   "sha256": "8a4dca5679d2c36fef94907027a5312c0d6497aa9c1036ac46b0966b0b4520b9",
+   "bytes": 26139
+  },
+  {
+   "path": "lc/synth_valid_fork_boundary_domain.bin",
+   "sha256": "a9b2eb0ffc21e854d73b5a732de0e0f37ebf2df0d9eb79dbf989634e1a31349c",
+   "bytes": 26139
   },
   {
    "path": "lc/valid_k1_chain.bin",
@@ -707,6 +806,11 @@
    "path": "pins/max_links_1.json",
    "sha256": "3d584ccb48becb3a2220c7f8255489fb3f45cf08b0399468f8ea801c34e2f051",
    "bytes": 3126
+  },
+  {
+   "path": "pins/synth.json",
+   "sha256": "7360617df55cea30f463fcf263479bfe3b13fb10ac96ff5ab4a6ba4f285b0cbc",
+   "bytes": 989
   },
   {
    "path": "pins/wrong_gvr.json",

@@ -1,0 +1,17 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "adv_synth_finalized_header_in_unsupported_fork",
+ "kind": "head",
+ "description": "synthetic: finalized header in an epoch before Electra (no layout): refused as an unsupported fork",
+ "pins": "pins/synth.json",
+ "lc": "lc/adv_synth_finalized_header_in_unsupported_fork.bin",
+ "expect": {
+  "code": "finality_fork_unsupported",
+  "fields": {
+   "epoch": "100",
+   "layout": "gloas",
+   "slot": "3201"
+  },
+  "result": "fault"
+ }
+}

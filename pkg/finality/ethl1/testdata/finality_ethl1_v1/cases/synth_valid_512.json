@@ -1,0 +1,19 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "synth_valid_512",
+ "kind": "head",
+ "description": "synthetic: 512 of 512 seats under the Gloas version",
+ "pins": "pins/synth.json",
+ "lc": "lc/synth_valid_512.bin",
+ "expect": {
+  "finalized_head": {
+   "beacon_root": "0x6e430dc4eaebca693c94f2cea3094047bc5863e862fdef4b9b6c2792e93d7c10",
+   "epoch": "2571",
+   "exec_hash": "0x21a094a4bcbaa44532dccb431982472b6471f61a010359cc0f3cbd54deff71fc",
+   "participants": "512",
+   "periods_crossed": "0",
+   "slot": "82272"
+  },
+  "result": "ok"
+ }
+}

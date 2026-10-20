@@ -633,6 +633,7 @@ func build(rawDir, out string) (err error) {
 		g.covers("spine_head_with_unknown_trailing_items", "head header with two unknown trailing RLP items: hashed as given and read positionally", extHash, spine3, 16384, nil, "", nil)
 	}
 
+	g.synthetic()
 	return g.flush()
 }
 

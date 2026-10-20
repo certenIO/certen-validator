@@ -39,3 +39,30 @@ func ValidateContainer(kind string, b []byte) error {
 	}
 	return nil
 }
+
+// RootFromNormalizedBranch folds a leaf up a (zero-extended) branch to the generalized index gindex and returns the root
+// the branch commits to. It is the construction side of IsValidNormalizedMerkleBranch, used by the vector generator.
+func RootFromNormalizedBranch(leaf [32]byte, branch [][32]byte, gindex uint64) [32]byte {
+	depth := floorLog2(gindex)
+	index := gindex % (uint64(1) << uint(depth))
+	extra := len(branch) - depth
+	v := leaf
+	for i := 0; i < depth; i++ {
+		if (index>>uint(i))&1 == 1 {
+			v = sha2(branch[extra+i][:], v[:])
+		} else {
+			v = sha2(v[:], branch[extra+i][:])
+		}
+	}
+	return v
+}
+
+// SyncCommitteeSigningRoot is compute_signing_root(attested_header.beacon, compute_domain(DOMAIN_SYNC_COMMITTEE, version,
+// genesis_validators_root)) for a 112-byte BeaconBlockHeader: the 32-byte message a sync committee signs.
+func SyncCommitteeSigningRoot(beaconHeader []byte, version [4]byte, gvr [32]byte) ([32]byte, error) {
+	root, err := HashTreeRootBeaconBlockHeader(beaconHeader)
+	if err != nil {
+		return [32]byte{}, err
+	}
+	return signingRoot(root, computeDomain(version, gvr)), nil
+}
