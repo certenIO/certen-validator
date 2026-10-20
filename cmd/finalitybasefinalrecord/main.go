@@ -65,6 +65,14 @@ func main() {
 		legs := fs.String("legs", "", "raw legs directory")
 		_ = fs.Parse(os.Args[2:])
 		err = judgeCmd(ctx, *dir, *legs)
+	case "extend":
+		fs := flag.NewFlagSet("extend", flag.ExitOnError)
+		dir := fs.String("dir", "", "capture directory")
+		raw := fs.String("raw", "", "LC raw directory")
+		legs := fs.String("legs", "", "raw legs directory")
+		out := fs.String("out", "", "existing set directory")
+		_ = fs.Parse(os.Args[2:])
+		err = extendCmd(ctx, *dir, *raw, *legs, *out)
 	case "build":
 		fs := flag.NewFlagSet("build", flag.ExitOnError)
 		dir := fs.String("dir", "", "capture directory")

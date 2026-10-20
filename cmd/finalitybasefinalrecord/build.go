@@ -98,9 +98,10 @@ type bcase struct {
 }
 
 type gen struct {
-	out   string
-	files map[string][]byte
-	cases []string
+	out      string
+	files    map[string][]byte
+	cases    []string
+	judgeIDs []string
 }
 
 func (g *gen) put(name string, b []byte) {
@@ -240,7 +241,10 @@ func (g *gen) writeManifest() error {
 		files[n] = basefinal.FileSHA256(g.files[n])
 	}
 	sort.Strings(g.cases)
-	m := map[string]any{"format": "certen-finality-vectors-manifest/1", "set": basefinal.SetName, "cases": g.cases, "files": files}
+	sort.Strings(g.judgeIDs)
+	g.cases = uniq(g.cases)
+	g.judgeIDs = uniq(g.judgeIDs)
+	m := map[string]any{"format": "certen-finality-vectors-manifest/1", "set": basefinal.SetName, "cases": g.cases, "judge_cases": g.judgeIDs, "files": files}
 	b, err := writeJSON(filepath.Join(g.out, "manifest.json"), m)
 	if err != nil {
 		return err
@@ -250,3 +254,13 @@ func (g *gen) writeManifest() error {
 
 var _ = binary.BigEndian
 var _ = crypto.Keccak256
+
+func uniq(s []string) []string {
+	var out []string
+	for i, x := range s {
+		if i == 0 || x != s[i-1] {
+			out = append(out, x)
+		}
+	}
+	return out
+}

@@ -460,3 +460,11 @@ func BuildSynth(p *Pins, s SynthSpec) (*SynthOut, error) {
 	out.Leg = finality.BlockRef{Chain: uint64(Chain), Number: leg.Number, Hash: leg.Hash, HeaderRLP: l2[len(l2)-1]}
 	return out, nil
 }
+
+// SynthAddrs are the addresses of the synthetic world's contracts, for the generator and the tests.
+var SynthAddrs = struct {
+	ASR, DGF, SUP, Game, PortalImpl, SysCfgImpl, ASRImpl, DGFImpl, SupImpl [20]byte
+}{synthASR, synthDGF, synthSUP, synthGame, synthPImpl, synthSImpl, synthAImpl, synthDImpl, synthUImpl}
+
+// SynthBadHash is a code hash no pin holds.
+var SynthBadHash = [32]byte{0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb}

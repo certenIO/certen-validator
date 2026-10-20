@@ -1,0 +1,17 @@
+{
+  "format": "certen-finality-vectors/1",
+  "id": "other_type_0_resolved_2024",
+  "description": "live: a type-0 game created in 2024 with the older clone shape",
+  "pins": "pins/main.json",
+  "leg": "legs/leg_47604755.json",
+  "evidence": "evidence/other_type_0_resolved_2024.bin",
+  "expect": {
+    "code": "contract_identity_unproven",
+    "fields": {
+      "address": "0x8a9ba50a785c3868bef1fd4924b640a5e0ed54cf",
+      "code_hash": "0xec7ad9afe9b28a390d3baffab2ea71fbc21de1f5d9fe439f223b9b85861760ec",
+      "judged_at": "11954232",
+      "role": "game_impl"
+    }
+  }
+}

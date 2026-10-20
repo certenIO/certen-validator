@@ -218,3 +218,90 @@ func TestTheRegisteredKindJudgesTheLiveEvidenceThroughTheFramework(t *testing.T)
 		t.Fatal("no accepting case was judged")
 	}
 }
+
+// The judge cases run the part of 5.5 that follows the L1 head over SYNTHETIC worlds (see JudgeCase): every verdict is the
+// hand-written one of the generator, and every state is registered with exactly its registered fields.
+func TestEveryJudgeVectorIsTheHandWrittenVerdict(t *testing.T) {
+	raw, err := ReadFile(setDir, "manifest.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m struct {
+		Judge []string `json:"judge_cases"`
+	}
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Judge) < 60 {
+		t.Fatalf("%d judge cases", len(m.Judge))
+	}
+	reg := loadRegistry(t)
+	codes := map[string]int{}
+	for _, id := range m.Judge {
+		b, err := ReadFile(setDir, "judge/"+id+".json")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var c JudgeCase
+		if err := json.Unmarshal(b, &c); err != nil {
+			t.Fatal(err)
+		}
+		var e Expect
+		if err := json.Unmarshal(c.Expect, &e); err != nil {
+			t.Fatal(err)
+		}
+		got, err := c.Run(setDir)
+		if err != nil {
+			t.Fatalf("%s: %v", id, err)
+		}
+		if want := ExpectBytes(e); !bytes.Equal(got, want) {
+			t.Errorf("%s:\n want %s\n got  %s", id, want, got)
+		}
+		if e.Result == "ok" {
+			codes["ok"]++
+			continue
+		}
+		codes[e.Code]++
+		rs, ok := reg[e.Code]
+		if !ok {
+			t.Errorf("%s: code %s is not in the registry", id, e.Code)
+			continue
+		}
+		var fields map[string]string
+		_ = json.Unmarshal(e.Fields, &fields)
+		allowed := map[string]bool{}
+		for _, f := range append(append([]string(nil), rs.Required...), rs.Optional...) {
+			allowed[f] = true
+		}
+		for _, f := range rs.Required {
+			if _, ok := fields[f]; !ok {
+				t.Errorf("%s: %s lacks required field %s", id, e.Code, f)
+			}
+		}
+		for f, v := range fields {
+			if !allowed[f] {
+				t.Errorf("%s: %s carries unregistered field %s", id, e.Code, f)
+			}
+			if set, ok := rs.Enums[f]; ok {
+				found := false
+				for _, x := range set {
+					found = found || x == v
+				}
+				if !found {
+					t.Errorf("%s: %s.%s = %q is outside the closed set %v", id, e.Code, f, v, set)
+				}
+			}
+		}
+	}
+	// every Base refusal the verifier can raise has at least one vector
+	for _, code := range []string{CodeGameBlacklisted, CodeGameRetired, CodeL1SystemPaused, CodeGameNotRespected, CodeGameNotResolved, CodeGameWithinDelay,
+		CodeGameChallengerWins, CodeGameNotRegistered, CodeGameTypeUnsupported, CodeGameUnrecognised, CodeContractIdentity, CodeOutputRootMismatch,
+		CodeL2NotCanonical, CodeL1StateProofInvalid, "finality_header_chain_broken", "finality_evidence_too_large"} {
+		if codes[code] == 0 {
+			t.Errorf("no judge vector for %s", code)
+		}
+	}
+	if codes["ok"] < 8 {
+		t.Errorf("%d accepting judge vectors", codes["ok"])
+	}
+}

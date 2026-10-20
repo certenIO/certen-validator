@@ -289,5 +289,8 @@ func (g *gen) finish(ctx context.Context, bp *basefinal.Pins, pins *finality.Pin
 		func(b map[string]any) { impl(b)[hash020].(map[string]any)["interval_pairs"] = [][2]int{{6000, 300}} }); err != nil {
 		return err
 	}
+	if err := g.judgeCases(bp); err != nil {
+		return err
+	}
 	return g.writeManifest()
 }

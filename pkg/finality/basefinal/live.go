@@ -379,3 +379,16 @@ func (l *LiveGames) Code(ctx context.Context, proxy [20]byte) ([]byte, error) {
 func (l *LiveGames) Slot(ctx context.Context, proxy [20]byte, slot [32]byte) ([32]byte, error) {
 	return l.RPC.StorageAtLatest(ctx, proxy, slot)
 }
+
+// CodeLatest reads the runtime code of an account at the latest block (builder-side lookups only).
+func (s *RPC) CodeLatest(ctx context.Context, addr [20]byte) ([]byte, error) {
+	r, err := s.first(ctx, s.BlockURLs, "eth_getCode", "0x"+hex.EncodeToString(addr[:]), "latest")
+	if err != nil {
+		return nil, err
+	}
+	var h string
+	if err := json.Unmarshal(r, &h); err != nil {
+		return nil, err
+	}
+	return unhexBytes(h), nil
+}
