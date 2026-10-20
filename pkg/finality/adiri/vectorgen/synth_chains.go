@@ -29,6 +29,10 @@ import (
 
 const eip2935Runtime = "3373fffffffffffffffffffffffffffffffffffffffe14604657602036036042575f35600143038111604257611fff81430311604257611fff9006545f5260205ff35b5f5ffd5b5f35611fff60014303065500"
 
+// synthNumbers, when set, replaces the execution chain 1000..1003 by headers with exactly these numbers (the first is the leg, the
+// last is F): a hash-linked chain whose numbers skip.
+var synthNumbers []uint64
+
 type tb struct{}
 
 func (tb) Helper()                {}
@@ -114,7 +118,13 @@ func buildSynth(kp *keyPool, epochs []epochSpec, k2 *kind2, salt byte) synthOut 
 	build := func(root common.Hash) {
 		headers = headers[:0]
 		parent := common.Hash{}
-		for n := N; n <= F; n++ {
+		numbers := synthNumbers
+		if numbers == nil {
+			for n := N; n <= F; n++ {
+				numbers = append(numbers, n)
+			}
+		}
+		for _, n := range numbers {
 			h := &types.Header{
 				ParentHash: parent, UncleHash: types.EmptyUncleHash, Root: types.EmptyRootHash, TxHash: types.EmptyTxsHash, ReceiptHash: types.EmptyReceiptsHash,
 				Difficulty: big.NewInt(0), Number: new(big.Int).SetUint64(n), GasLimit: 30_000_000, Time: 1_790_000_000 + n, Extra: []byte("certen-synthetic-adiri"),

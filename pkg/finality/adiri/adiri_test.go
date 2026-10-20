@@ -393,3 +393,60 @@ func benchVerify(b *testing.B, mode adiri.Mode) {
 // BenchmarkVerifyLive652Records measures a full verification of the real 652-record chain (V2_SPEC_S7 8.1: Go 4.06-8.0 s).
 func BenchmarkVerifyLive652RecordsOneByOne(b *testing.B) { benchVerify(b, adiri.ModeOneByOne) }
 func BenchmarkVerifyLive652RecordsBatched(b *testing.B)  { benchVerify(b, adiri.ModeBatched) }
+
+// ParsePins refuses a missing section (finality_pin_unknown) and every malformed field of the adiri section
+// (finality_pins_corrupt) by name; nothing is defaulted.
+func TestParsePinsRefusesWhatItCannotUse(t *testing.T) {
+	emb, err := finality.EmbeddedPins()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adiri.ParsePins(&finality.Pins{}); err == nil || !strings.Contains(err.Error(), finality.CodePinUnknown) {
+		t.Fatalf("missing section: %v", err)
+	}
+	if _, err := adiri.ParsePins(nil); err == nil || !strings.Contains(err.Error(), finality.CodePinUnknown) {
+		t.Fatalf("nil pins: %v", err)
+	}
+	var sec map[string]any
+	if err := json.Unmarshal(emb.Sections["adiri"], &sec); err != nil {
+		t.Fatal(err)
+	}
+	clone := func() map[string]any {
+		raw, _ := json.Marshal(sec)
+		var m map[string]any
+		_ = json.Unmarshal(raw, &m)
+		return m
+	}
+	cases := map[string]func(m map[string]any){
+		"unknown field":      func(m map[string]any) { m["extra"] = 1 },
+		"short genesis hash": func(m map[string]any) { m["genesis_hash"] = "0x12" },
+		"no 0x on genesis hash": func(m map[string]any) {
+			m["genesis_hash"] = "3577ee7223cf0d9a1da1293fd12a47e0e45bb97afcd0427bccd4954cb704baef"
+		},
+		"bad epoch0 hash": func(m map[string]any) { m["epoch0_final_state"] = map[string]any{"hash": "0x00", "number": 290} },
+		"bad codehash": func(m map[string]any) {
+			m["eip2935"] = map[string]any{"address": "0x0000F90827F1C53a10cb7A02335B175320002935", "runtime_codehash": "0x01"}
+		},
+		"bad eip address": func(m map[string]any) {
+			m["eip2935"] = map[string]any{"address": "0x01", "runtime_codehash": "0x6e49e66782037c0555897870e29fa5e552daf4719552131a0abce779daec0a5d"}
+		},
+		"empty committee":        func(m map[string]any) { m["genesis_committee"] = []any{} },
+		"short committee key":    func(m map[string]any) { m["genesis_committee"] = []any{"abcd"} },
+		"zero min size":          func(m map[string]any) { m["min_committee_size"] = 0 },
+		"zero max headers":       func(m map[string]any) { m["max_headers"] = 0 },
+		"zero chain id":          func(m map[string]any) { m["chain_id"] = 0 },
+		"short genesis link sha": func(m map[string]any) { m["genesis_link_sha256"] = "abcd" },
+	}
+	for name, mut := range cases {
+		m := clone()
+		mut(m)
+		raw, _ := json.Marshal(m)
+		_, err := adiri.ParsePins(&finality.Pins{Sections: map[string]json.RawMessage{"adiri": raw}})
+		if err == nil || !strings.Contains(err.Error(), finality.CodePinsCorrupt) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if _, err := adiri.ParsePins(emb); err != nil {
+		t.Fatalf("the embedded pins do not parse: %v", err)
+	}
+}

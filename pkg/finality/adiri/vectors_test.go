@@ -18,6 +18,9 @@ import (
 
 const vectorDir = "testdata/finality_adiri1"
 
+// vectorDirs are the published sets: finality_adiri1 and its supplement finality_adiri2.
+var vectorDirs = []string{vectorDir, "testdata/finality_adiri2"}
+
 type vEdit struct {
 	Offset int    `json:"offset"`
 	Delete int    `json:"delete"`
@@ -44,13 +47,16 @@ type vVec struct {
 }
 
 type vFile struct {
+	dir     string
 	Format  string `json:"format"`
 	Vectors []vVec `json:"vectors"`
 }
 
-func loadVectors(t testing.TB) vFile {
+func loadVectors(t testing.TB) vFile { return loadSet(t, vectorDir) }
+
+func loadSet(t testing.TB, dir string) vFile {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join(vectorDir, "vectors.json"))
+	raw, err := os.ReadFile(filepath.Join(dir, "vectors.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,6 +64,7 @@ func loadVectors(t testing.TB) vFile {
 	if err := json.Unmarshal(raw, &f); err != nil {
 		t.Fatal(err)
 	}
+	f.dir = dir
 	return f
 }
 
@@ -65,7 +72,7 @@ func loadVectors(t testing.TB) vFile {
 func evidenceOf(t testing.TB, f vFile, v vVec) []byte {
 	t.Helper()
 	if v.Evidence != "" {
-		b, err := os.ReadFile(filepath.Join(vectorDir, "evidence", v.Evidence))
+		b, err := os.ReadFile(filepath.Join(f.dir, "evidence", v.Evidence))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -141,6 +148,13 @@ func flat(m map[string]any) []any {
 }
 
 func TestManifestHashesEveryVectorFile(t *testing.T) {
+	for _, d := range vectorDirs {
+		manifestCheck(t, d)
+	}
+}
+
+func manifestCheck(t *testing.T, vectorDir string) {
+	t.Helper()
 	raw, err := os.ReadFile(filepath.Join(vectorDir, "MANIFEST.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -176,11 +190,25 @@ func TestManifestHashesEveryVectorFile(t *testing.T) {
 
 // Every vector yields exactly its literal expected verdict, one by one AND batched, and the two modes agree on every vector.
 func TestEveryVectorVerdictBothModesIdentical(t *testing.T) {
-	f := loadVectors(t)
-	if len(f.Vectors) < 30 {
-		t.Fatalf("only %d vectors", len(f.Vectors))
-	}
 	groups := map[string]int{}
+	total := 0
+	for _, d := range vectorDirs {
+		f := loadSet(t, d)
+		total += len(f.Vectors)
+		checkSet(t, f, groups)
+	}
+	if total < 55 {
+		t.Fatalf("only %d vectors", total)
+	}
+	for _, g := range []string{"live", "adversarial", "synthetic"} {
+		if groups[g] == 0 {
+			t.Errorf("no %s vectors", g)
+		}
+	}
+}
+
+func checkSet(t *testing.T, f vFile, groups map[string]int) {
+	t.Helper()
 	for _, v := range f.Vectors {
 		groups[v.Group]++
 		ev := evidenceOf(t, f, v)
@@ -196,11 +224,6 @@ func TestEveryVectorVerdictBothModesIdentical(t *testing.T) {
 		}
 		if g1 != v.Expect {
 			t.Errorf("%s (%s):\n got:  %s\n want: %s", v.Name, v.Note, g1, v.Expect)
-		}
-	}
-	for _, g := range []string{"live", "adversarial"} {
-		if groups[g] == 0 {
-			t.Errorf("no %s vectors", g)
 		}
 	}
 }

@@ -44,6 +44,8 @@ func main() {
 		err = fetchLive(*rpc, *cache, nil)
 	case "vectors":
 		err = writeVectors(*rpc, *cache, *out)
+	case "vectors2":
+		err = writeSet2(*out)
 	default:
 		err = fmt.Errorf("unknown mode %q", *mode)
 	}
@@ -72,6 +74,11 @@ func writeVectors(rpc, cache, out string) error {
 		evidence[k] = v
 	}
 	all = append(all, svs...)
+	return writeSet(out, "finality_adiri1/1", "finality_adiri1/manifest/1", evidence, all)
+}
+
+// writeSet writes a vector set: evidence files, vectors.json, MANIFEST.json and MANIFEST.json.sha256.
+func writeSet(out, format, manifestFormat string, evidence map[string][]byte, all []vec) error {
 	if err := os.MkdirAll(filepath.Join(out, "evidence"), 0o755); err != nil {
 		return err
 	}
@@ -88,7 +95,7 @@ func writeVectors(rpc, cache, out string) error {
 		}
 		files[filepath.ToSlash(p)] = sha(evidence[k])
 	}
-	vj, err := json.MarshalIndent(map[string]any{"format": "finality_adiri1/1", "vectors": all}, "", " ")
+	vj, err := json.MarshalIndent(map[string]any{"format": format, "vectors": all}, "", " ")
 	if err != nil {
 		return err
 	}
@@ -97,7 +104,7 @@ func writeVectors(rpc, cache, out string) error {
 		return err
 	}
 	files["vectors.json"] = sha(vj)
-	mj, _ := json.MarshalIndent(map[string]any{"format": "finality_adiri1/manifest/1", "files": files}, "", " ")
+	mj, _ := json.MarshalIndent(map[string]any{"format": manifestFormat, "files": files}, "", " ")
 	mj = append(mj, '\n')
 	if err := os.WriteFile(filepath.Join(out, "MANIFEST.json"), mj, 0o644); err != nil {
 		return err
