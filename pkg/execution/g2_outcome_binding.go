@@ -542,7 +542,7 @@ func (s *G2OutcomeBindingService) verifyStateChangeEffect(
 	slotHash := *expected.ExpectedSlot
 	storageValue, err := s.ethClient.StorageAt(ctx, contractAddr, slotHash, nil)
 	if err != nil {
-		details["error"] = fmt.Sprintf("eth_getStorageAt failed: %v", err)
+		details["error"] = fmt.Sprintf("eth_getStorageAt failed: %v", ethrpc.RedactError(err))
 		details["verified"] = false
 		return false, details
 	}

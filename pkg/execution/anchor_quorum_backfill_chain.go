@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/certen/independant-validator/pkg/ethrpc"
 	"math/big"
 	"strings"
 	"time"
@@ -53,7 +54,7 @@ func (r *ChainBackfillReader) VerifyTransaction(
 
 	tx, pending, err := client.TransactionByHash(ctx, hash)
 	if err != nil {
-		return nil, 0, false, fmt.Errorf("fetching %s: %w", txHash, err)
+		return nil, 0, false, fmt.Errorf("fetching %s: %w", txHash, ethrpc.RedactError(err))
 	}
 	if pending {
 		// A pending transaction has proven nothing yet.
@@ -74,9 +75,9 @@ func (r *ChainBackfillReader) VerifyTransaction(
 			return nil, 0, false, fmt.Errorf(
 				"%s: this endpoint returned the transaction but not its receipt, which means it is pruning "+
 					"history rather than that the transaction is missing — point this chain at an archive "+
-					"endpoint and re-run: %w", txHash, err)
+					"endpoint and re-run: %w", txHash, ethrpc.RedactError(err))
 		}
-		return nil, 0, false, fmt.Errorf("fetching receipt for %s: %w", txHash, err)
+		return nil, 0, false, fmt.Errorf("fetching receipt for %s: %w", txHash, ethrpc.RedactError(err))
 	}
 	return tx.Data(), receipt.BlockNumber.Uint64(), receipt.Status == 1, nil
 }
@@ -122,7 +123,7 @@ func (r *ChainBackfillReader) AnchorState(
 	}
 	count, err := anchor.BatchLeafCount(&bind.CallOpts{Context: ctx}, bundleID)
 	if err != nil {
-		return AnchorOnChainState{}, fmt.Errorf("reading batchLeafCount(0x%x): %w", bundleID[:8], err)
+		return AnchorOnChainState{}, fmt.Errorf("reading batchLeafCount(0x%x): %w", bundleID[:8], ethrpc.RedactError(err))
 	}
 	if count == nil || !count.IsUint64() || count.Sign() <= 0 {
 		return AnchorOnChainState{}, fmt.Errorf("anchor 0x%x records no leaves", bundleID[:8])
@@ -177,7 +178,7 @@ func (r *ChainBackfillReader) LatestBlock(ctx context.Context, chainID int64) (u
 	}
 	head, err := client.BlockNumber(ctx)
 	if err != nil {
-		return 0, fmt.Errorf("chain %d: reading head: %w", chainID, err)
+		return 0, fmt.Errorf("chain %d: reading head: %w", chainID, ethrpc.RedactError(err))
 	}
 	return head, nil
 }
@@ -237,7 +238,7 @@ func (r *ChainBackfillReader) BlockTime(ctx context.Context, chainID int64, bloc
 	}
 	header, err := client.HeaderByNumber(ctx, new(big.Int).SetUint64(blockNumber))
 	if err != nil {
-		return time.Time{}, fmt.Errorf("reading block %d: %w", blockNumber, err)
+		return time.Time{}, fmt.Errorf("reading block %d: %w", blockNumber, ethrpc.RedactError(err))
 	}
 	return time.Unix(int64(header.Time), 0).UTC(), nil
 }

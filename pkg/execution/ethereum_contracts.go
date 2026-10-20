@@ -568,7 +568,7 @@ func (ecm *EthereumContractManager) refreshGasPrice(ctx context.Context) error {
 		// Nothing is sent on a price nobody checked. This used to keep the previous gas price and
 		// send, past both ceilings, whenever the RPC failed (RB3-F101).
 		return fmt.Errorf("chain %d: read the network gas price: %w; the ceilings cannot be checked, so nothing is sent",
-			ecm.config.ChainID, err)
+			ecm.config.ChainID, ethrpc.RedactError(err))
 	}
 
 	enforce, err := gasCeilingEnforced()
@@ -712,7 +712,7 @@ func evaluateGasPrice(suggested *big.Int, maxGwei int64, chainID int64, enforce 
 func (ecm *EthereumContractManager) acquireNonce(ctx context.Context) (*big.Int, error) {
 	nonce, err := ecm.client.PendingNonceAt(ctx, ecm.auth.From)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get pending nonce: %w", err)
+		return nil, fmt.Errorf("failed to get pending nonce: %w", ethrpc.RedactError(err))
 	}
 	ecm.auth.Nonce = new(big.Int).SetUint64(nonce)
 	fmt.Printf("🔢 [NONCE] Acquired nonce %d for %s\n", nonce, ecm.auth.From.Hex())
@@ -784,7 +784,7 @@ func (ecm *EthereumContractManager) CreateAnchorOnChain(
 	// Wait for confirmation
 	receipt, err := bind.WaitMined(ctx, ecm.client, tx)
 	if err != nil {
-		fmt.Printf("⚠️ [ETH-CREATE] Failed to get receipt: %v\n", err)
+		fmt.Printf("⚠️ [ETH-CREATE] Failed to get receipt: %v\n", ethrpc.RedactError(err))
 	} else {
 		fmt.Printf("   Block: %d\n", receipt.BlockNumber.Uint64())
 		fmt.Printf("   Gas Used: %d\n", receipt.GasUsed)
@@ -834,7 +834,7 @@ func (ecm *EthereumContractManager) SubmitCertenProofToAnchor(
 	// Estimate gas for the transaction
 	estimatedGas, err := ecm.estimateContractGas(ctx, contractAddress, "executeComprehensiveProof")
 	if err != nil {
-		fmt.Printf("⚠️ Gas estimation failed: %v, using default\n", err)
+		fmt.Printf("⚠️ Gas estimation failed: %v, using default\n", ethrpc.RedactError(err))
 		estimatedGas = ecm.config.GasLimit
 	}
 
@@ -856,7 +856,7 @@ func (ecm *EthereumContractManager) SubmitCertenProofToAnchor(
 	tx, err := ecm.anchor.ExecuteComprehensiveProofSimple(ecm.auth, anchorID, proofV3)
 	if err != nil {
 		// If on-chain execution fails, try merkle proof verification as diagnostic
-		fmt.Printf("⚠️ [ETH-VERIFY] On-chain execution failed: %v, attempting merkle verification...\n", err)
+		fmt.Printf("⚠️ [ETH-VERIFY] On-chain execution failed: %v, attempting merkle verification...\n", ethrpc.RedactError(err))
 
 		// V4 uses simpler verification - check merkle proof
 		merkleValid, verifyErr := ecm.anchor.VerifyMerkleProof(
@@ -866,10 +866,10 @@ func (ecm *EthereumContractManager) SubmitCertenProofToAnchor(
 			proofV3.LeafHash,
 		)
 		if verifyErr != nil {
-			return "", fmt.Errorf("on-chain execution failed and merkle verification error: on-chain=%v, verify=%v", err, verifyErr)
+			return "", fmt.Errorf("on-chain execution failed and merkle verification error: on-chain=%v, verify=%v", ethrpc.RedactError(err), verifyErr)
 		}
 		if !merkleValid {
-			return "", fmt.Errorf("on-chain execution failed (%v) and merkle proof invalid", err)
+			return "", fmt.Errorf("on-chain execution failed (%v) and merkle proof invalid", ethrpc.RedactError(err))
 		}
 
 		// Merkle is valid, check BLS signature
@@ -879,7 +879,7 @@ func (ecm *EthereumContractManager) SubmitCertenProofToAnchor(
 			proofV3.BlsProof.MessageHash,
 		)
 		if blsErr != nil {
-			return "", fmt.Errorf("on-chain execution failed and BLS verification error: on-chain=%v, bls=%v", err, blsErr)
+			return "", fmt.Errorf("on-chain execution failed and BLS verification error: on-chain=%v, bls=%v", ethrpc.RedactError(err), ethrpc.RedactError(blsErr))
 		}
 		if !blsValid {
 			return "", fmt.Errorf("on-chain execution failed (%v) and BLS signature invalid", err)
@@ -897,7 +897,7 @@ func (ecm *EthereumContractManager) SubmitCertenProofToAnchor(
 	// Wait for confirmation and check on-chain status
 	receipt, err := bind.WaitMined(ctx, ecm.client, tx)
 	if err != nil {
-		fmt.Printf("⚠️ [ETH-VERIFY] Failed to get receipt, tx may still be pending: %v\n", err)
+		fmt.Printf("⚠️ [ETH-VERIFY] Failed to get receipt, tx may still be pending: %v\n", ethrpc.RedactError(err))
 	} else {
 		fmt.Printf("   Block: %d\n", receipt.BlockNumber.Uint64())
 		fmt.Printf("   Gas Used: %d\n", receipt.GasUsed)
@@ -935,7 +935,7 @@ func (ecm *EthereumContractManager) ExecuteGovernanceWithAnchor(
 	// Estimate gas for executeWithGovernance
 	estimatedGas, err := ecm.estimateContractGas(ctx, common.HexToAddress(ecm.config.VerificationContract), "executeWithGovernance")
 	if err != nil {
-		fmt.Printf("⚠️ Gas estimation failed: %v, using default\n", err)
+		fmt.Printf("⚠️ Gas estimation failed: %v, using default\n", ethrpc.RedactError(err))
 		estimatedGas = 300000 // Default for governance execution
 	}
 
@@ -945,7 +945,7 @@ func (ecm *EthereumContractManager) ExecuteGovernanceWithAnchor(
 	// Call CertenAnchorV3.executeWithGovernance
 	tx, err := ecm.anchor.ExecuteWithGovernanceSimple(ecm.auth, bundleID, target, value, callData)
 	if err != nil {
-		return "", fmt.Errorf("executeWithGovernance failed: %w", err)
+		return "", fmt.Errorf("executeWithGovernance failed: %w", ethrpc.RedactError(err))
 	}
 
 	txHash := tx.Hash().Hex()
@@ -955,7 +955,7 @@ func (ecm *EthereumContractManager) ExecuteGovernanceWithAnchor(
 	// Wait for confirmation
 	receipt, err := bind.WaitMined(ctx, ecm.client, tx)
 	if err != nil {
-		fmt.Printf("⚠️ [ETH-GOV-ANCHOR] Failed to get receipt: %v\n", err)
+		fmt.Printf("⚠️ [ETH-GOV-ANCHOR] Failed to get receipt: %v\n", ethrpc.RedactError(err))
 	} else {
 		fmt.Printf("   Block: %d\n", receipt.BlockNumber.Uint64())
 		fmt.Printf("   Gas Used: %d\n", receipt.GasUsed)
@@ -1013,7 +1013,7 @@ func (ecm *EthereumContractManager) ExecuteViaUserAccount(
 	for attempts := 0; attempts < 30; attempts++ {
 		anchorData, err := ecm.anchor.CertenAnchorV4Caller.GetAnchor(nil, bundleID)
 		if err != nil {
-			return "", fmt.Errorf("failed to fetch anchor for commitments: %w", err)
+			return "", fmt.Errorf("failed to fetch anchor for commitments: %w", ethrpc.RedactError(err))
 		}
 		opCommitment = anchorData.OperationCommitment
 		ccCommitment = anchorData.CrossChainCommitment
@@ -1051,7 +1051,7 @@ func (ecm *EthereumContractManager) ExecuteViaUserAccount(
 	// Call user's Abstract Account executeGovernanceProofDirect (direct call, not through EntryPoint)
 	tx, err := userAccount.ExecuteGovernanceProofDirect(ecm.auth, target, value, callData, accountProof)
 	if err != nil {
-		return "", fmt.Errorf("user account executeWithGovernanceProof failed: %w", err)
+		return "", fmt.Errorf("user account executeWithGovernanceProof failed: %w", ethrpc.RedactError(err))
 	}
 
 	txHash := tx.Hash().Hex()
@@ -1061,7 +1061,7 @@ func (ecm *EthereumContractManager) ExecuteViaUserAccount(
 	// Wait for confirmation
 	receipt, err := bind.WaitMined(ctx, ecm.client, tx)
 	if err != nil {
-		fmt.Printf("⚠️ [USER-ACCOUNT] Failed to get receipt: %v\n", err)
+		fmt.Printf("⚠️ [USER-ACCOUNT] Failed to get receipt: %v\n", ethrpc.RedactError(err))
 	} else {
 		fmt.Printf("   Block: %d\n", receipt.BlockNumber.Uint64())
 		fmt.Printf("   Gas Used: %d\n", receipt.GasUsed)
@@ -3017,7 +3017,7 @@ func (ecm *EthereumContractManager) beginLocked(ctx context.Context) error {
 
 	n, err := ecm.client.PendingNonceAt(ctx, ecm.auth.From)
 	if err != nil {
-		return fmt.Errorf("pinning nonce for %s: %w", ecm.auth.From.Hex(), err)
+		return fmt.Errorf("pinning nonce for %s: %w", ecm.auth.From.Hex(), ethrpc.RedactError(err))
 	}
 	// Anything in flight between the mined nonce and the pending one must be this sender's. A
 	// transaction it did not send - left by an earlier binary, or by the legacy per-intent path
@@ -3025,7 +3025,7 @@ func (ecm *EthereumContractManager) beginLocked(ctx context.Context) error {
 	// replace it: it may be a real payment. The key is reported busy, loudly, until it resolves.
 	mined, err := ecm.client.NonceAt(ctx, ecm.auth.From, nil)
 	if err != nil {
-		return fmt.Errorf("reading the mined nonce for %s: %w", ecm.auth.From.Hex(), err)
+		return fmt.Errorf("reading the mined nonce for %s: %w", ecm.auth.From.Hex(), ethrpc.RedactError(err))
 	}
 	var foreign []uint64
 	for k := mined; k < n; k++ {

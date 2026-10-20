@@ -3,6 +3,7 @@ package execution
 import (
 	"context"
 	"fmt"
+	"github.com/certen/independant-validator/pkg/ethrpc"
 	"math/big"
 	"sort"
 	"strings"
@@ -241,7 +242,7 @@ func (ecm *EthereumContractManager) ExecuteBatchViaUserAccount(
 	keyless, err := account.IsKeylessOwner(&bind.CallOpts{Context: ctx})
 	if err != nil {
 		return "", fmt.Errorf("account %s does not expose isKeylessOwner — not a CertenAccountV6: %w",
-			userAccountAddress.Hex(), err)
+			userAccountAddress.Hex(), ethrpc.RedactError(err))
 	}
 	if !keyless {
 		return "", fmt.Errorf("account %s reports a non-keyless owner; refusing to submit batch",
@@ -254,7 +255,7 @@ func (ecm *EthereumContractManager) ExecuteBatchViaUserAccount(
 	// "already done".
 	consumed, err := account.IsAnchorConsumed(&bind.CallOpts{Context: ctx}, bundleID)
 	if err != nil {
-		return "", fmt.Errorf("failed to read anchor-consumed state: %w", err)
+		return "", fmt.Errorf("failed to read anchor-consumed state: %w", ethrpc.RedactError(err))
 	}
 	if consumed {
 		return "", fmt.Errorf("anchor 0x%x already consumed by account %s — batch already executed",
@@ -265,7 +266,7 @@ func (ecm *EthereumContractManager) ExecuteBatchViaUserAccount(
 	// atomic, so one underfunded leg reverts all of them.
 	balance, err := ecm.client.BalanceAt(ctx, userAccountAddress, nil)
 	if err != nil {
-		return "", fmt.Errorf("failed to read account balance: %w", err)
+		return "", fmt.Errorf("failed to read account balance: %w", ethrpc.RedactError(err))
 	}
 	if total := group.TotalValue(); balance.Cmp(total) < 0 {
 		return "", fmt.Errorf("account %s holds %s wei but batch requires %s wei",
@@ -278,7 +279,7 @@ func (ecm *EthereumContractManager) ExecuteBatchViaUserAccount(
 	// anchor. Pinned in tests by TestBatchExecutionCommitment_MatchesSolidity.
 	onChainCommitment, err := account.ComputeBatchCommitment(&bind.CallOpts{Context: ctx}, targets, values, datas)
 	if err != nil {
-		return "", fmt.Errorf("failed to read on-chain batch commitment: %w", err)
+		return "", fmt.Errorf("failed to read on-chain batch commitment: %w", ethrpc.RedactError(err))
 	}
 	localCommitment := computeBatchExecutionCommitment(group.Key.ChainID, group.ToBatchCalls())
 	if onChainCommitment != localCommitment {
@@ -310,7 +311,7 @@ func (ecm *EthereumContractManager) ExecuteBatchViaUserAccount(
 
 	tx, err := account.BatchExecuteGovernanceProofDirect(ecm.auth, targets, values, datas, accountProof)
 	if err != nil {
-		return "", fmt.Errorf("batchExecuteGovernanceProofDirect failed: %w", err)
+		return "", fmt.Errorf("batchExecuteGovernanceProofDirect failed: %w", ethrpc.RedactError(err))
 	}
 
 	txHash := tx.Hash().Hex()
@@ -318,7 +319,7 @@ func (ecm *EthereumContractManager) ExecuteBatchViaUserAccount(
 
 	receipt, err := bind.WaitMined(ctx, ecm.client, tx)
 	if err != nil {
-		return "", fmt.Errorf("failed to get batch receipt (tx %s): %w", txHash, err)
+		return "", fmt.Errorf("failed to get batch receipt (tx %s): %w", txHash, ethrpc.RedactError(err))
 	}
 	fmt.Printf("   Block: %d  Gas Used: %d  Status: %d\n",
 		receipt.BlockNumber.Uint64(), receipt.GasUsed, receipt.Status)
@@ -347,7 +348,7 @@ func (ecm *EthereumContractManager) waitForAnchorCommitments(
 
 		anchorData, callErr := ecm.anchor.CertenAnchorV4Caller.GetAnchor(nil, bundleID)
 		if callErr != nil {
-			return zeroHash, zeroHash, zeroHash, fmt.Errorf("failed to fetch anchor for commitments: %w", callErr)
+			return zeroHash, zeroHash, zeroHash, fmt.Errorf("failed to fetch anchor for commitments: %w", ethrpc.RedactError(callErr))
 		}
 		opCommitment = anchorData.OperationCommitment
 		ccCommitment = anchorData.CrossChainCommitment

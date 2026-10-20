@@ -227,7 +227,7 @@ func (o *BatchOrchestrator) agreedReader(ctx context.Context, chainID int64) (*e
 	}
 	r, err := ethrpc.NewAgreeingReader(ctx, chainID, ethrpc.EndpointsForChainID(chainID, primary), ethrpc.DefaultReadTimeout)
 	if err != nil {
-		return nil, fmt.Errorf("the agreeing providers of chain %d: %w", chainID, err)
+		return nil, fmt.Errorf("the agreeing providers of chain %d: %w", chainID, ethrpc.RedactError(err))
 	}
 	o.agreed = r
 	return r, nil
@@ -756,7 +756,7 @@ func (o *BatchOrchestrator) verifyLeavesAgainstAccounts(
 		keyless, err := acct.IsKeylessOwner(&bind.CallOpts{Context: ctx})
 		if err != nil {
 			return fmt.Errorf("account %s is not a %s (%s): %w",
-				p.Account.Hex(), version.AccountContract(), p.IntentID, err)
+				p.Account.Hex(), version.AccountContract(), p.IntentID, ethrpc.RedactError(err))
 		}
 		if !keyless {
 			return fmt.Errorf("account %s reports a non-keyless owner; refusing to anchor %s",
@@ -765,7 +765,7 @@ func (o *BatchOrchestrator) verifyLeavesAgainstAccounts(
 
 		onChainADIHash, err := acct.ADIURLHash(&bind.CallOpts{Context: ctx})
 		if err != nil {
-			return fmt.Errorf("reading adiURLHash for %s: %w", p.IntentID, err)
+			return fmt.Errorf("reading adiURLHash for %s: %w", p.IntentID, ethrpc.RedactError(err))
 		}
 		if onChainADIHash != tree.Inputs[i].ADIURLHash() {
 			return fmt.Errorf(
@@ -780,7 +780,7 @@ func (o *BatchOrchestrator) verifyLeavesAgainstAccounts(
 		}
 		onChainLeaf, err := acct.MemberLeaf(&bind.CallOpts{Context: ctx}, tree.Inputs[i])
 		if err != nil {
-			return fmt.Errorf("computeLeaf on %s: %w", p.Account.Hex(), err)
+			return fmt.Errorf("computeLeaf on %s: %w", p.Account.Hex(), ethrpc.RedactError(err))
 		}
 		if onChainLeaf != tree.Leaves[i] {
 			return fmt.Errorf(
@@ -862,7 +862,7 @@ func (o *BatchOrchestrator) verifyLeavesAgainstAnchor(ctx context.Context, tree 
 	// quorum's message covers and a verifier reads back (RB5).
 	stored, serr := anchor.Anchors(opts, tree.BundleID)
 	if serr != nil {
-		return fmt.Errorf("reading anchor 0x%x: %w", tree.BundleID[:8], serr)
+		return fmt.Errorf("reading anchor 0x%x: %w", tree.BundleID[:8], ethrpc.RedactError(serr))
 	}
 	if stored.AccumulateValidatorSetRoot != tree.AccumulateSetRoot || stored.AccumulateIncarnation != tree.Incarnation {
 		return fmt.Errorf("anchor 0x%x committed Accumulate set %x under incarnation %x; the tree carries %x under %x",
@@ -877,7 +877,7 @@ func (o *BatchOrchestrator) verifyLeavesAgainstAnchor(ctx context.Context, tree 
 		}
 		ok, verr := anchor.VerifyProof(opts, tree.BundleID, branch, tree.Leaves[i])
 		if verr != nil {
-			return fmt.Errorf("verifyProof for member %d: %w", i, verr)
+			return fmt.Errorf("verifyProof for member %d: %w", i, ethrpc.RedactError(verr))
 		}
 		if !ok {
 			return fmt.Errorf("deployed anchor rejects member %d's branch", i)
@@ -901,7 +901,7 @@ func (o *BatchOrchestrator) createBatchAnchor(ctx context.Context, tree *BatchTr
 	if eerr != nil {
 		// Unknown is not "absent": sending on an unreadable answer created a second anchor attempt
 		// that reverts, and the revert was then read as the member failing.
-		return anchorCreation{}, readErr(fmt.Errorf("reading anchorExists for 0x%x: %w", tree.BundleID[:8], eerr))
+		return anchorCreation{}, readErr(fmt.Errorf("reading anchorExists for 0x%x: %w", tree.BundleID[:8], ethrpc.RedactError(eerr)))
 	}
 	if exists {
 		created, err := o.existingAnchorCreation(ctx, tree, 0)
@@ -982,7 +982,7 @@ func (o *BatchOrchestrator) existingAnchorCreation(ctx context.Context, tree *Ba
 	}
 	head, err := agreed.HeaderByNumber(ctx, big.NewInt(int64(rpc.LatestBlockNumber)))
 	if err != nil {
-		return anchorCreation{}, readErr(fmt.Errorf("reading the head to locate anchor 0x%x's creation: %w", tree.BundleID[:8], err))
+		return anchorCreation{}, readErr(fmt.Errorf("reading the head to locate anchor 0x%x's creation: %w", tree.BundleID[:8], ethrpc.RedactError(err)))
 	}
 	loc, err := LocateAnchorCreate(ctx, agreedCreateChain{agreed}, o.anchorV7, tree.BundleID, tree.Root, head.Number.Uint64())
 	if err != nil {
@@ -1039,7 +1039,7 @@ func (o *BatchOrchestrator) settleMember(
 	// beats paying gas to hit "leaf already consumed" on-chain.
 	consumed, err := acct.IsLeafConsumed(&bind.CallOpts{Context: ctx}, leaf)
 	if err != nil {
-		return "", readErr(fmt.Errorf("reading isLeafConsumed: %w", err))
+		return "", readErr(fmt.Errorf("reading isLeafConsumed: %w", ethrpc.RedactError(err)))
 	}
 	if consumed {
 		return "", fmt.Errorf("leaf 0x%x already consumed — member %s has already settled: %w",
@@ -1542,7 +1542,7 @@ func (o *BatchOrchestrator) memberAccountUsable(ctx context.Context, p *PendingB
 	}
 	code, err := o.ecm.client.CodeAt(ctx, p.Account, nil)
 	if err != nil {
-		return readErr(fmt.Errorf("reading code at %s: %w", p.Account.Hex(), err))
+		return readErr(fmt.Errorf("reading code at %s: %w", p.Account.Hex(), ethrpc.RedactError(err)))
 	}
 	if len(code) == 0 {
 		return fmt.Errorf("account %s has no code", p.Account.Hex())
@@ -1563,9 +1563,9 @@ func (o *BatchOrchestrator) memberAccountUsable(ctx context.Context, p *PendingB
 	domain, err := acct.LeafDomain(&bind.CallOpts{Context: ctx})
 	if err != nil {
 		if !isCallVerdict(err) {
-			return readErr(fmt.Errorf("reading LEAF_DOMAIN on %s: %w", p.Account.Hex(), err))
+			return readErr(fmt.Errorf("reading LEAF_DOMAIN on %s: %w", p.Account.Hex(), ethrpc.RedactError(err)))
 		}
-		return fmt.Errorf("account %s is not a CertenAccount: %w", p.Account.Hex(), err)
+		return fmt.Errorf("account %s is not a CertenAccount: %w", p.Account.Hex(), ethrpc.RedactError(err))
 	}
 	if domain != wantDomain {
 		return fmt.Errorf("account %s verifies %q leaves, not %q: it is not a %s, the account generation chain %d is on "+
@@ -1574,9 +1574,9 @@ func (o *BatchOrchestrator) memberAccountUsable(ctx context.Context, p *PendingB
 	keyless, err := acct.IsKeylessOwner(&bind.CallOpts{Context: ctx})
 	if err != nil {
 		if !isCallVerdict(err) {
-			return readErr(fmt.Errorf("reading isKeylessOwner on %s: %w", p.Account.Hex(), err))
+			return readErr(fmt.Errorf("reading isKeylessOwner on %s: %w", p.Account.Hex(), ethrpc.RedactError(err)))
 		}
-		return fmt.Errorf("account %s is not a %s: %w", p.Account.Hex(), version.AccountContract(), err)
+		return fmt.Errorf("account %s is not a %s: %w", p.Account.Hex(), version.AccountContract(), ethrpc.RedactError(err))
 	}
 	if !keyless {
 		return fmt.Errorf("account %s reports a non-keyless owner", p.Account.Hex())
@@ -1584,9 +1584,9 @@ func (o *BatchOrchestrator) memberAccountUsable(ctx context.Context, p *PendingB
 	onChainADIHash, err := acct.ADIURLHash(&bind.CallOpts{Context: ctx})
 	if err != nil {
 		if !isCallVerdict(err) {
-			return readErr(fmt.Errorf("reading adiURLHash on %s: %w", p.Account.Hex(), err))
+			return readErr(fmt.Errorf("reading adiURLHash on %s: %w", p.Account.Hex(), ethrpc.RedactError(err)))
 		}
-		return fmt.Errorf("reading adiURLHash on %s: %w", p.Account.Hex(), err)
+		return fmt.Errorf("reading adiURLHash on %s: %w", p.Account.Hex(), ethrpc.RedactError(err))
 	}
 	if onChainADIHash != (BatchLeafInput{ADIURL: p.ADIURL}).ADIURLHash() {
 		return fmt.Errorf("account %s is bound to a different ADI than %q", p.Account.Hex(), p.ADIURL)
@@ -1597,9 +1597,9 @@ func (o *BatchOrchestrator) memberAccountUsable(ctx context.Context, p *PendingB
 	level, err := acct.AuthorityLevelOfPage(&bind.CallOpts{Context: ctx}, book, page)
 	if err != nil {
 		if !isCallVerdict(err) {
-			return readErr(fmt.Errorf("reading authorityLevelOfPage on %s: %w", p.Account.Hex(), err))
+			return readErr(fmt.Errorf("reading authorityLevelOfPage on %s: %w", p.Account.Hex(), ethrpc.RedactError(err)))
 		}
-		return fmt.Errorf("reading authorityLevelOfPage on %s: %w", p.Account.Hex(), err)
+		return fmt.Errorf("reading authorityLevelOfPage on %s: %w", p.Account.Hex(), ethrpc.RedactError(err))
 	}
 	if level == 0 {
 		return fmt.Errorf("account %s gives key page %s (of book %s) no authority: it is not a page of the account's "+

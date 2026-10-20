@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/certen/independant-validator/pkg/ethrpc"
 	"math/big"
 	"reflect"
 	"strings"
@@ -259,7 +260,7 @@ func anchorAttestedBefore(ctx context.Context, chain attemptChain, anchor common
 			Topics:    [][]common.Hash{{proofExecutedTopic}, {common.Hash(anchorID)}},
 		}, lo, hi)
 		if err != nil {
-			return false, readErr(fmt.Errorf("ProofExecuted %w", err))
+			return false, readErr(fmt.Errorf("ProofExecuted %w", ethrpc.RedactError(err)))
 		}
 		for _, l := range logs {
 			if l.BlockNumber < to || (l.BlockNumber == to && l.TxIndex < receipt.TransactionIndex) {
@@ -279,7 +280,7 @@ func firstBlockAtOrAfter(ctx context.Context, chain attemptChain, t, to uint64) 
 	timeOf := func(n uint64) (uint64, error) {
 		h, err := chain.HeaderByNumber(ctx, new(big.Int).SetUint64(n))
 		if err != nil {
-			return 0, readErr(fmt.Errorf("header %d: %w", n, err))
+			return 0, readErr(fmt.Errorf("header %d: %w", n, ethrpc.RedactError(err)))
 		}
 		if h == nil {
 			return 0, readErr(fmt.Errorf("header %d: none", n))
@@ -454,7 +455,7 @@ func checkAuthorizedAttempt(
 	call := func(c *bind.BoundContract, method string, args ...interface{}) (interface{}, error) {
 		var out []interface{}
 		if err := c.Call(&bind.CallOpts{Context: ctx}, &out, method, args...); err != nil {
-			return nil, readErr(fmt.Errorf("%s: %w", method, err))
+			return nil, readErr(fmt.Errorf("%s: %w", method, ethrpc.RedactError(err)))
 		}
 		if len(out) == 0 {
 			return nil, fmt.Errorf("%s returned nothing", method)
@@ -499,7 +500,7 @@ func checkAuthorizedAttempt(
 
 	header, err := chain.HeaderByNumber(ctx, receipt.BlockNumber)
 	if err != nil {
-		return readErr(fmt.Errorf("header %v: %w", receipt.BlockNumber, err))
+		return readErr(fmt.Errorf("header %v: %w", receipt.BlockNumber, ethrpc.RedactError(err)))
 	}
 	ts := new(big.Int).SetUint64(header.Time)
 	if exec.Timestamp == nil || exec.ExpiresAt == nil || ts.Cmp(exec.Timestamp) < 0 || ts.Cmp(exec.ExpiresAt) > 0 {
@@ -559,7 +560,7 @@ func accountLeafAndAnchor(ctx context.Context, chain bind.ContractCaller, accoun
 	call := func(method string, args ...interface{}) (interface{}, error) {
 		var out []interface{}
 		if err := acct.Call(&bind.CallOpts{Context: ctx}, &out, method, args...); err != nil {
-			return nil, readErr(fmt.Errorf("%s: %w", method, err))
+			return nil, readErr(fmt.Errorf("%s: %w", method, ethrpc.RedactError(err)))
 		}
 		if len(out) == 0 {
 			return nil, fmt.Errorf("%s returned nothing", method)
@@ -656,7 +657,7 @@ func (o *ExternalChainObserver) VerifyRevertedCall(
 	}
 	receipt, err := o.finality.TransactionReceipt(ctx, txHash)
 	if err != nil {
-		return nil, fmt.Errorf("receipt of %s: %w", txHash.Hex(), err)
+		return nil, fmt.Errorf("receipt of %s: %w", txHash.Hex(), ethrpc.RedactError(err))
 	}
 	if receipt.BlockHash != result.BlockHash {
 		return nil, fmt.Errorf("receipt of %s names block %s, the observation %s", txHash.Hex(), receipt.BlockHash.Hex(), result.BlockHash.Hex())

@@ -117,7 +117,7 @@ func (c *ChainClock) source(ctx context.Context) (chainClockSource, error) {
 	}
 	r, err := ethrpc.NewAgreeingReader(ctx, c.chainID, ethrpc.EndpointsForChainID(c.chainID, c.primary), ethrpc.DefaultReadTimeout)
 	if err != nil {
-		return nil, fmt.Errorf("the clock of chain %d: %w", c.chainID, err)
+		return nil, fmt.Errorf("the clock of chain %d: %w", c.chainID, ethrpc.RedactError(err))
 	}
 	c.src = r
 	return r, nil

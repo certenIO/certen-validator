@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"github.com/certen/independant-validator/pkg/ethrpc"
 	"math/big"
 	"strings"
 
@@ -91,7 +92,7 @@ func ReadValidatorRegistryWith(
 		var out []interface{}
 		if err := bound.Call(opts, &out, "validators", a); err != nil {
 			return nil, fmt.Errorf("reading validators(%s) from anchor %s: %w",
-				a.Hex(), anchorAddr.Hex(), err)
+				a.Hex(), anchorAddr.Hex(), ethrpc.RedactError(err))
 		}
 		if len(out) < 4 {
 			return nil, fmt.Errorf("validators() returned %d fields, expected 4 — the "+

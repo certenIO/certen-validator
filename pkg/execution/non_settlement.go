@@ -10,6 +10,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"github.com/certen/independant-validator/pkg/ethrpc"
 	"math/big"
 	"strings"
 	"time"
@@ -186,7 +187,7 @@ type leafChain interface {
 func leafConsumedAt(ctx context.Context, c leafChain, account common.Address, leaf [32]byte, number uint64) (bool, error) {
 	head, err := c.HeaderByNumber(ctx, nil)
 	if err != nil {
-		return false, fmt.Errorf("reading the chain head: %w", err)
+		return false, fmt.Errorf("reading the chain head: %w", ethrpc.RedactError(err))
 	}
 	latest := head.Number.Uint64()
 	if number > latest {
@@ -209,7 +210,7 @@ func leafConsumedAt(ctx context.Context, c leafChain, account common.Address, le
 	}
 	after, err := filterLogsSplitting(ctx, c, q, number+1, latest)
 	if err != nil {
-		return false, fmt.Errorf("reading LeafConsumed for leaf %x after block %d: %w", leaf[:8], number, err)
+		return false, fmt.Errorf("reading LeafConsumed for leaf %x after block %d: %w", leaf[:8], number, ethrpc.RedactError(err))
 	}
 	return len(after) == 0, nil
 }

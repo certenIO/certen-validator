@@ -173,7 +173,7 @@ func (c *AgreedOutcomeChain) LeafConsumption(ctx context.Context, account common
 		return nil, at.Number.Uint64(), nil // an account with no code has consumed nothing (RB3-F63)
 	}
 	if err != nil {
-		return nil, 0, fmt.Errorf("isLeafConsumed(0x%x) on %s: %w", leaf[:8], account.Hex(), err)
+		return nil, 0, fmt.Errorf("isLeafConsumed(0x%x) on %s: %w", leaf[:8], account.Hex(), ethrpc.RedactError(err))
 	}
 	if consumed, ok := out[0].(bool); !ok {
 		return nil, 0, fmt.Errorf("isLeafConsumed returned %T", out[0])
@@ -233,7 +233,7 @@ func (c *AgreedOutcomeChain) locateLeafConsumed(ctx context.Context, account com
 	for _, loc := range c.reader.Locators() {
 		head, err := loc.HeaderByNumber(ctx, new(big.Int).SetUint64(to))
 		if err != nil {
-			failures = append(failures, fmt.Sprintf("%s: %v", loc.Host, err))
+			failures = append(failures, fmt.Sprintf("%s: %v", loc.Host, ethrpc.RedactError(err)))
 			continue
 		}
 		from, err := searchBlockAtOrBefore(to, head.Time, uint64(searchFrom.Unix()), func(n uint64) (uint64, error) {
@@ -254,7 +254,7 @@ func (c *AgreedOutcomeChain) locateLeafConsumed(ctx context.Context, account com
 			}
 			logs, err := filterLogsSplitting(ctx, loc, q, lo, hi)
 			if err != nil {
-				failures = append(failures, fmt.Sprintf("%s: %v", loc.Host, err))
+				failures = append(failures, fmt.Sprintf("%s: %v", loc.Host, ethrpc.RedactError(err)))
 				break
 			}
 			if len(logs) > 0 {
@@ -347,7 +347,7 @@ func (c *AgreedOutcomeChain) AnchorView(ctx context.Context, bundleID [32]byte) 
 	v := &OutcomeAnchorView{At: at}
 	ret, err := c.reader.CallContractAtHash(ctx, ethereum.CallMsg{To: &c.anchor, Data: contracts.AnchorsCallData(bundleID)}, at.Hash())
 	if err != nil {
-		return nil, fmt.Errorf("anchors(0x%x) on %s: %w", bundleID[:8], c.anchor.Hex(), err)
+		return nil, fmt.Errorf("anchors(0x%x) on %s: %w", bundleID[:8], c.anchor.Hex(), ethrpc.RedactError(err))
 	}
 	if v.Anchor, err = contracts.DecodeAnchorsReturn(ret); err != nil {
 		return nil, err
@@ -389,7 +389,7 @@ func (c *AgreedOutcomeChain) AnchorView(ctx context.Context, bundleID [32]byte) 
 	for _, w := range words {
 		out, err := c.call(ctx, w.parsed, w.to, at.Hash(), w.method, w.args...)
 		if err != nil {
-			return nil, fmt.Errorf("%s on %s: %w", w.method, w.to.Hex(), err)
+			return nil, fmt.Errorf("%s on %s: %w", w.method, w.to.Hex(), ethrpc.RedactError(err))
 		}
 		if err := w.set(out[0]); err != nil {
 			return nil, err
@@ -409,7 +409,7 @@ func okOr(ok bool, what string, x interface{}) error {
 func (c *AgreedOutcomeChain) OutcomeMessage(ctx context.Context, bundleID, root [32]byte, at *types.Header) ([32]byte, error) {
 	out, err := c.call(ctx, outcomeRegistryABI, c.registry, at.Hash(), "outcomeMessage", bundleID, root)
 	if err != nil {
-		return [32]byte{}, fmt.Errorf("outcomeMessage on %s: %w", c.registry.Hex(), err)
+		return [32]byte{}, fmt.Errorf("outcomeMessage on %s: %w", c.registry.Hex(), ethrpc.RedactError(err))
 	}
 	m, ok := out[0].([32]byte)
 	return m, okOr(ok, "outcomeMessage", out[0])
@@ -452,7 +452,7 @@ func (c *AgreedOutcomeChain) RecordedOutcome(ctx context.Context, bundleID [32]b
 	for _, loc := range c.reader.Locators() {
 		logs, err := filterLogsSplitting(ctx, loc, q, from, to)
 		if err != nil {
-			failures = append(failures, fmt.Sprintf("%s: %v", loc.Host, err))
+			failures = append(failures, fmt.Sprintf("%s: %v", loc.Host, ethrpc.RedactError(err)))
 			continue
 		}
 		for _, l := range logs {

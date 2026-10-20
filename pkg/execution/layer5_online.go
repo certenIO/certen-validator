@@ -46,11 +46,11 @@ func VerifyLayer5Online(ctx context.Context, rpcURL string, l5 *Layer5) (*Layer5
 	h := common.HexToHash(l5.AnchorTx)
 	tx, _, err := client.TransactionByHash(ctx, h)
 	if err != nil {
-		return nil, fmt.Errorf("read anchor transaction %s: %w", l5.AnchorTx, err)
+		return nil, fmt.Errorf("read anchor transaction %s: %w", l5.AnchorTx, ethrpc.RedactError(err))
 	}
 	receipt, err := client.TransactionReceipt(ctx, h)
 	if err != nil {
-		return nil, fmt.Errorf("read anchor transaction %s's receipt: %w", l5.AnchorTx, err)
+		return nil, fmt.Errorf("read anchor transaction %s's receipt: %w", l5.AnchorTx, ethrpc.RedactError(err))
 	}
 	if receipt.Status != 1 {
 		return nil, fmt.Errorf("anchor transaction %s reverted", l5.AnchorTx)
@@ -68,7 +68,7 @@ func VerifyLayer5Online(ctx context.Context, rpcURL string, l5 *Layer5) (*Layer5
 	}
 	call, err := contracts.DecodeCreateBatchAnchor(tx.ChainId().Int64(), tx.Data())
 	if err != nil {
-		return out, fmt.Errorf("anchor transaction %s: %w", l5.AnchorTx, err)
+		return out, fmt.Errorf("anchor transaction %s: %w", l5.AnchorTx, ethrpc.RedactError(err))
 	}
 	out.BundleID, out.BatchRoot, out.BatchOperationID = hexPrefixed(call.BundleID[:]), hexPrefixed(call.Root[:]),
 		hexPrefixed(call.BatchOperationID[:])
@@ -102,7 +102,7 @@ func VerifyLayer5Online(ctx context.Context, rpcURL string, l5 *Layer5) (*Layer5
 		}
 		st, err := ReadAnchorState(ctx, client, *tx.To(), call.BundleID, nil)
 		if err != nil {
-			return out, fmt.Errorf("anchor %s: %w", out.BundleID, err)
+			return out, fmt.Errorf("anchor %s: %w", out.BundleID, ethrpc.RedactError(err))
 		}
 		if string(st.Version) != c.Version || st.MerkleRoot != call.Root || st.AccumulateSetRoot != call.AccumulateSetRoot ||
 			st.Incarnation != call.Incarnation || !st.Valid {

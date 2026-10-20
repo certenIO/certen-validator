@@ -63,7 +63,7 @@ func verifyOutcomeEvidenceOnline(ctx context.Context, client outcomeOnlineClient
 	}
 	id, err := client.ChainID(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("chain id: %w", err)
+		return nil, fmt.Errorf("chain id: %w", ethrpc.RedactError(err))
 	}
 	if id.Int64() != e.ChainID {
 		return fail("the endpoint serves chain %s, the evidence is of chain %d", id, e.ChainID)
@@ -77,7 +77,7 @@ func verifyOutcomeEvidenceOnline(ctx context.Context, client outcomeOnlineClient
 		}
 		ret, err := client.CallContract(ctx, ethereum.CallMsg{To: &to, Data: data}, nil)
 		if err != nil {
-			return nil, fmt.Errorf("%s on %s: %w", method, to.Hex(), err)
+			return nil, fmt.Errorf("%s on %s: %w", method, to.Hex(), ethrpc.RedactError(err))
 		}
 		return parsed.Unpack(method, ret)
 	}
@@ -109,7 +109,7 @@ func verifyOutcomeEvidenceOnline(ctx context.Context, client outcomeOnlineClient
 		// On Arbitrum the registry's block.number was the L1 block number, which the record block's header carries.
 		h, err := client.HeaderByNumber(ctx, new(big.Int).SetUint64(e.Record.BlockNumber))
 		if err != nil {
-			return nil, fmt.Errorf("the record's block %d: %w", e.Record.BlockNumber, err)
+			return nil, fmt.Errorf("the record's block %d: %w", e.Record.BlockNumber, ethrpc.RedactError(err))
 		}
 		if arbitrumL1Block(h) != recordedIn.Uint64() {
 			return fail("the registry recorded the outcome at L1 block %d, the evidence's block %d carries L1 block %d", recordedIn,
@@ -121,7 +121,7 @@ func verifyOutcomeEvidenceOnline(ctx context.Context, client outcomeOnlineClient
 	canonical := func(number uint64, hash, what string) error {
 		h, err := client.HeaderByNumber(ctx, new(big.Int).SetUint64(number))
 		if err != nil {
-			return fmt.Errorf("%s block %d: %w", what, number, err)
+			return fmt.Errorf("%s block %d: %w", what, number, ethrpc.RedactError(err))
 		}
 		if !strings.EqualFold(h.Hash().Hex(), hash) {
 			return fmt.Errorf("%w: online: %s block %d is %s on chain, the evidence names %s", ErrOutcomeEvidence, what, number,
@@ -134,7 +134,7 @@ func verifyOutcomeEvidenceOnline(ctx context.Context, client outcomeOnlineClient
 	}
 	rcpt, err := client.TransactionReceipt(ctx, common.HexToHash(e.Record.Tx))
 	if err != nil {
-		return nil, fmt.Errorf("the record transaction %s: %w", e.Record.Tx, err)
+		return nil, fmt.Errorf("the record transaction %s: %w", e.Record.Tx, ethrpc.RedactError(err))
 	}
 	if !strings.EqualFold(rcpt.BlockHash.Hex(), e.Record.BlockHash) {
 		return fail("the record transaction %s is in block %s, the evidence names %s", e.Record.Tx, rcpt.BlockHash.Hex(), e.Record.BlockHash)
@@ -145,7 +145,7 @@ func verifyOutcomeEvidenceOnline(ctx context.Context, client outcomeOnlineClient
 	// The anchor's own record is the commitment the evidence states.
 	ret, err := client.CallContract(ctx, ethereum.CallMsg{To: &anchor, Data: contracts.AnchorsCallData(bundle)}, nil)
 	if err != nil {
-		return nil, fmt.Errorf("anchors(%s): %w", bundle.Hex(), err)
+		return nil, fmt.Errorf("anchors(%s): %w", bundle.Hex(), ethrpc.RedactError(err))
 	}
 	st, err := contracts.DecodeAnchorsReturn(ret)
 	if err != nil {
@@ -180,7 +180,7 @@ func verifyOutcomeEvidenceOnline(ctx context.Context, client outcomeOnlineClient
 		return call(outcomeQuorumABI, anchor, method, args...)
 	})
 	if err != nil {
-		return nil, fmt.Errorf("the anchor's validator registry: %w", err)
+		return nil, fmt.Errorf("the anchor's validator registry: %w", ethrpc.RedactError(err))
 	}
 	current := map[string]string{}
 	for _, v := range reg.Validators {

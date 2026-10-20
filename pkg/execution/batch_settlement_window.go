@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/certen/independant-validator/pkg/ethrpc"
 	"math/big"
 	"sort"
 	"strings"
@@ -353,7 +354,7 @@ func (o *BatchOrchestrator) anchorAttestation(ctx context.Context, bundleID [32]
 	}
 	h, err := o.ecm.client.HeaderByNumber(ctx, new(big.Int).SetUint64(l.BlockNumber))
 	if err != nil {
-		return anchorAttestation{}, false, readErr(fmt.Errorf("reading block %d: %w", l.BlockNumber, err))
+		return anchorAttestation{}, false, readErr(fmt.Errorf("reading block %d: %w", l.BlockNumber, ethrpc.RedactError(err)))
 	}
 	return anchorAttestation{Tx: l.TxHash.Hex(), From: from, Block: l.BlockNumber, Time: time.Unix(int64(h.Time), 0)}, true, nil
 }
@@ -405,7 +406,7 @@ func (o *BatchOrchestrator) settlementRoster(ctx context.Context) ([]common.Addr
 	bound := bind.NewBoundContract(o.anchorV7, parsed, o.ecm.client, o.ecm.client, o.ecm.client)
 	var res []interface{}
 	if err := bound.Call(&bind.CallOpts{Context: ctx}, &res, "currentValidatorSetRoot"); err != nil {
-		return nil, readErr(fmt.Errorf("reading currentValidatorSetRoot: %w", err))
+		return nil, readErr(fmt.Errorf("reading currentValidatorSetRoot: %w", ethrpc.RedactError(err)))
 	}
 	if len(res) != 1 {
 		return nil, fmt.Errorf("currentValidatorSetRoot returned %d values", len(res))
@@ -501,15 +502,15 @@ func (o *BatchOrchestrator) settlementRevertCause(ctx context.Context, txHash st
 	h := common.HexToHash(txHash)
 	tx, _, err := o.ecm.client.TransactionByHash(ctx, h)
 	if err != nil {
-		return false, "", readErr(fmt.Errorf("reading transaction %s: %w", txHash, err))
+		return false, "", readErr(fmt.Errorf("reading transaction %s: %w", txHash, ethrpc.RedactError(err)))
 	}
 	rcpt, err := o.ecm.client.TransactionReceipt(ctx, h)
 	if err != nil {
-		return false, "", readErr(fmt.Errorf("reading receipt %s: %w", txHash, err))
+		return false, "", readErr(fmt.Errorf("reading receipt %s: %w", txHash, ethrpc.RedactError(err)))
 	}
 	hdr, err := o.ecm.client.HeaderByNumber(ctx, rcpt.BlockNumber)
 	if err != nil {
-		return false, "", readErr(fmt.Errorf("reading block %s: %w", rcpt.BlockNumber, err))
+		return false, "", readErr(fmt.Errorf("reading block %s: %w", rcpt.BlockNumber, ethrpc.RedactError(err)))
 	}
 	p, ok := settlementProofOf(tx.Data())
 	if !ok {
@@ -626,7 +627,7 @@ func (o *BatchOrchestrator) scanEarlierWindows(
 			})
 		}
 		if err := fetchBatch(ctx, rpcClient, batch); err != nil {
-			return priorAttempt{}, false, readErr(fmt.Errorf("reading blocks %d-%d: %w", from, to, err))
+			return priorAttempt{}, false, readErr(fmt.Errorf("reading blocks %d-%d: %w", from, to, ethrpc.RedactError(err)))
 		}
 		for i := range batch {
 			// A node that does not have the block answers null, which decodes as an empty block with no
@@ -700,7 +701,7 @@ func (o *BatchOrchestrator) checkPriorAttempt(ctx context.Context, member *Pendi
 		return priorAttempt{}, false, nil
 	}
 	if err != nil {
-		return priorAttempt{}, false, readErr(fmt.Errorf("reading transaction %s: %w", c.Hash.Hex(), err))
+		return priorAttempt{}, false, readErr(fmt.Errorf("reading transaction %s: %w", c.Hash.Hex(), ethrpc.RedactError(err)))
 	}
 	p, ok := settlementProofOf(tx.Data())
 	if !ok || p.AnchorId != tree.BundleID || p.OperationID != member.OperationID {
@@ -723,14 +724,14 @@ func (o *BatchOrchestrator) checkPriorAttempt(ctx context.Context, member *Pendi
 	}
 	rcpt, err := o.ecm.client.TransactionReceipt(ctx, c.Hash)
 	if err != nil {
-		return priorAttempt{}, false, readErr(fmt.Errorf("reading receipt %s: %w", c.Hash.Hex(), err))
+		return priorAttempt{}, false, readErr(fmt.Errorf("reading receipt %s: %w", c.Hash.Hex(), ethrpc.RedactError(err)))
 	}
 	if rcpt.Status == types.ReceiptStatusSuccessful {
 		return priorAttempt{Tx: c.Hash.Hex(), From: c.From}, true, nil
 	}
 	hdr, err := o.ecm.client.HeaderByNumber(ctx, rcpt.BlockNumber)
 	if err != nil {
-		return priorAttempt{}, false, readErr(fmt.Errorf("reading block %s: %w", rcpt.BlockNumber, err))
+		return priorAttempt{}, false, readErr(fmt.Errorf("reading block %s: %w", rcpt.BlockNumber, ethrpc.RedactError(err)))
 	}
 	if timing, _ := timingRevert(p, hdr.Time); timing {
 		// Mined outside its own validity window: it never tried the member, and its sender does not

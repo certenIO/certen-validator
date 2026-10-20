@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/certen/independant-validator/pkg/ethrpc"
 	"log"
 	"math/big"
 	"strings"
@@ -755,7 +756,7 @@ func (s ResolverOutcomeSubmitter) Submit(ctx context.Context, chainID int64, reg
 	}
 	if _, err := ecm.client.CallContract(ctx, ethereum.CallMsg{From: ecm.auth.From, To: &registry, Data: data, Gas: outcomeRecordGas}, nil); err != nil {
 		sub.RevertName = reg.OutcomeRegistryError(err)
-		return sub, fmt.Errorf("simulating recordBatchOutcome: %w", err)
+		return sub, fmt.Errorf("simulating recordBatchOutcome: %w", ethrpc.RedactError(err))
 	}
 	if err := ecm.beginNonceSequence(ctx); err != nil {
 		return nil, err

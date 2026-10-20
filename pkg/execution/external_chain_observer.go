@@ -355,7 +355,7 @@ func (o *ExternalChainObserver) fetchStateProofs(ctx context.Context, blockNumbe
 		for _, p := range src.Locators() {
 			raw, err := p.GetProof(ctx, account, keys, blockArg)
 			if err != nil {
-				o.log("⚠️ [OBSERVER] eth_getProof for %s at %s: provider %s has no proof: %v", account.Hex(), blockArg, p.Host, err)
+				o.log("⚠️ [OBSERVER] eth_getProof for %s at %s: provider %s has no proof: %v", account.Hex(), blockArg, p.Host, ethrpc.RedactError(err))
 				continue
 			}
 			var res EthGetProofResult

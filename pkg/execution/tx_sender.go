@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/certen/independant-validator/pkg/ethrpc"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -354,7 +355,7 @@ var errReplacementAboveCeiling = errors.New("a replacement fee high enough to be
 func (s *txSender) priceAndSign(ctx context.Context, req SendRequest, prev *types.Transaction) (*types.Transaction, *big.Int, error) {
 	head, err := s.client.HeaderByNumber(ctx, nil)
 	if err != nil {
-		return nil, nil, fmt.Errorf("reading the head for pricing: %w", err)
+		return nil, nil, fmt.Errorf("reading the head for pricing: %w", ethrpc.RedactError(err))
 	}
 	value := req.Value
 	if value == nil {
@@ -366,7 +367,7 @@ func (s *txSender) priceAndSign(ctx context.Context, req SendRequest, prev *type
 		// A chain without EIP-1559: a legacy price.
 		suggested, err := s.client.SuggestGasPrice(ctx)
 		if err != nil {
-			return nil, nil, fmt.Errorf("reading the gas price: %w", err)
+			return nil, nil, fmt.Errorf("reading the gas price: %w", ethrpc.RedactError(err))
 		}
 		price, err := s.ceiling(suggested, suggested, req.Gas)
 		if err != nil {
@@ -389,7 +390,7 @@ func (s *txSender) priceAndSign(ctx context.Context, req SendRequest, prev *type
 
 	tip, err := s.client.SuggestGasTipCap(ctx)
 	if err != nil {
-		return nil, nil, fmt.Errorf("reading the tip: %w", err)
+		return nil, nil, fmt.Errorf("reading the tip: %w", ethrpc.RedactError(err))
 	}
 	// What the network charges now, and a cap that survives the base fee doubling before inclusion.
 	network := new(big.Int).Add(head.BaseFee, tip)
@@ -463,7 +464,7 @@ func (s *txSender) broadcast(ctx context.Context, entry *outboxEntry, tx *types.
 	}
 	if first && isDefinitiveRejection(msg) {
 		s.outbox.delete(entry.Nonce)
-		return fmt.Errorf("broadcasting %s: %w", entry.Label, serr), nil
+		return fmt.Errorf("broadcasting %s: %w", entry.Label, ethrpc.RedactError(serr)), nil
 	}
 	s.logf("[TX-SENDER] %s nonce=%d broadcast of %s returned %v - kept in flight until its result is known",
 		entry.Label, entry.Nonce, h, serr)
@@ -825,10 +826,10 @@ func (s *txSender) gasLimitFor(ctx context.Context, req SendRequest) (uint64, er
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "revert") {
 			s.logf("[TX-SENDER] %s nonce=%d: the gas estimate REVERTED (%v); sending at %d gas so the chain decides", req.Label,
-				req.Nonce, err, req.Gas)
+				req.Nonce, ethrpc.RedactError(err), req.Gas)
 			return req.Gas, nil
 		}
-		return 0, readErr(fmt.Errorf("%s: estimating gas: %w", req.Label, err))
+		return 0, readErr(fmt.Errorf("%s: estimating gas: %w", req.Label, ethrpc.RedactError(err)))
 	}
 	if cost > req.GasCeiling {
 		return 0, &GasEstimateExceedsCeilingError{Label: req.Label, Estimate: cost, Limit: req.GasCeiling}
