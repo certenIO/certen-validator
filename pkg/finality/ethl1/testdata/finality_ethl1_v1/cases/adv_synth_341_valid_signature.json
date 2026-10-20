@@ -1,0 +1,18 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "adv_synth_341_valid_signature",
+ "kind": "head",
+ "description": "synthetic: 341 seats with a VALID signature are refused by the 342 floor alone",
+ "pins": "pins/synth.json",
+ "lc": "lc/adv_synth_341_valid_signature.bin",
+ "expect": {
+  "code": "finality_participation_insufficient",
+  "fields": {
+   "committee": "512",
+   "index": "0",
+   "participants": "341",
+   "required": "342"
+  },
+  "result": "fault"
+ }
+}

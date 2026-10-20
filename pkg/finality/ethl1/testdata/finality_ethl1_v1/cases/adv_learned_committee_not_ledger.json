@@ -1,0 +1,17 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "adv_learned_committee_not_ledger",
+ "kind": "head",
+ "description": "link 0 learns the committee of period P-1 but the ledger holds another root for it",
+ "pins": "pins/ledger_learned_wrong.json",
+ "lc": "lc/adv_learned_committee_not_ledger.bin",
+ "expect": {
+  "code": "finality_pin_mismatch",
+  "fields": {
+   "got_root": "0x24b49c0a2a62ce55324997b8aea8149060e9e57459a6c3c4c4bba78573643986",
+   "period": "1389",
+   "want_root": "0x0335a533730276e147fc9d38bfa9e512603c169a32f086cb37ffd753f9480b21"
+  },
+  "result": "fault"
+ }
+}

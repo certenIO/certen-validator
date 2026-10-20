@@ -1,0 +1,19 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "adv_links_out_of_order",
+ "kind": "head",
+ "description": "links in descending period order",
+ "pins": "pins/main.json",
+ "lc": "lc/adv_links_out_of_order.bin",
+ "expect": {
+  "code": "finality_link_invalid",
+  "fields": {
+   "attested_slot": "11381395",
+   "check": "period_skip",
+   "index": "0",
+   "period": "1389",
+   "signature_slot": "11381396"
+  },
+  "result": "fault"
+ }
+}

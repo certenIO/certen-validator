@@ -1,0 +1,18 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "adv_synth_identity_signature",
+ "kind": "head",
+ "description": "synthetic: the point at infinity as the aggregate signature",
+ "pins": "pins/synth.json",
+ "lc": "lc/adv_synth_identity_signature.bin",
+ "expect": {
+  "code": "finality_signature_invalid",
+  "fields": {
+   "fork_version": "0x900000a1",
+   "index": "0",
+   "participants": "512",
+   "signature_slot": "82310"
+  },
+  "result": "fault"
+ }
+}

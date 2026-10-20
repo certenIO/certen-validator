@@ -1,0 +1,17 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "adv_bootstrap_ledger_has_no_block_root",
+ "kind": "head",
+ "description": "kind-2 anchor against a ledger entry without a block_root",
+ "pins": "pins/ledger_no_block_root.json",
+ "lc": "lc/adv_bootstrap_ledger_has_no_block_root.bin",
+ "expect": {
+  "code": "finality_pin_unknown",
+  "fields": {
+   "kind": "2",
+   "period": "1390",
+   "root": "0xb19e2dccb8c6c7b1482f0c8446972e996bf6276d1bf5a1e5fc2fdbef4279fee0"
+  },
+  "result": "fault"
+ }
+}

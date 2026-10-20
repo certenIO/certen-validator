@@ -1,0 +1,19 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "adv_link_next_committee_forged",
+ "kind": "head",
+ "description": "one public-key bit of link 0's next_sync_committee flipped",
+ "pins": "pins/main.json",
+ "lc": "lc/adv_link_next_committee_forged.bin",
+ "expect": {
+  "code": "finality_link_invalid",
+  "fields": {
+   "attested_slot": "11370571",
+   "check": "next_committee_branch",
+   "index": "0",
+   "period": "1388",
+   "signature_slot": "11370572"
+  },
+  "result": "fault"
+ }
+}

@@ -1,0 +1,19 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "adv_anchor_body_short",
+ "kind": "head",
+ "description": "kind-1 committee one byte short",
+ "pins": "pins/main.json",
+ "lc": "lc/adv_anchor_body_short.bin",
+ "expect": {
+  "code": "finality_evidence_malformed",
+  "fields": {
+   "got_len": "24623",
+   "index": "0",
+   "part": "anchor_body",
+   "reason": "length",
+   "want_len": "24624"
+  },
+  "result": "fault"
+ }
+}
