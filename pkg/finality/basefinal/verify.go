@@ -558,7 +558,7 @@ func judge(in judgeInput) (map[string]any, error) {
 		return nil, err
 	}
 	var computed [32]byte
-	if h0.WithdrawalsRoot != nil && h0.Number == outBlock {
+	if h0.WithdrawalsRoot != nil {
 		computed = [32]byte(crypto.Keccak256Hash(make([]byte, 32), h0.StateRoot[:], h0.WithdrawalsRoot[:], h0.Hash[:]))
 	}
 	if computed != claimed {
