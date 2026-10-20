@@ -52,10 +52,14 @@ type synthOpts struct {
 	batcher          *ecdsa.PrivateKey // signs the frame txs
 	chainBatch       *ecdsa.PrivateKey // the batcher recorded in the SystemConfig (default: the signing key)
 	toInbox          bool
-	dirtyBatcherHash bool // the recorded batcherHash has a non-zero byte above its 20-byte address
-	dirtyIndex       int  // which of the 12 upper bytes
-	dirtyValue       byte // and its value
-	omitImpl         bool // the implementation account is absent from the state
+	dirtyBatcherHash bool   // the recorded batcherHash has a non-zero byte above its 20-byte address
+	dirtyIndex       int    // which of the 12 upper bytes
+	dirtyValue       byte   // and its value
+	omitImpl         bool   // the implementation account is absent from the state
+	rawStream        []byte // the decompressed channel used as given, instead of the batches built here
+	txData           []byte // the calldata of every frame transaction, used as given instead of the marshalled frame
+	channelLabel     string // another label gives another channel id
+	garbageTx        []byte // the frame transaction bytes put in the block trie instead of the signed transaction
 }
 
 type synth struct {
@@ -145,9 +149,16 @@ func makeSynth(t *testing.T, o synthOpts) *synth {
 		b, _ := rlp.EncodeToBytes(append([]byte{0}, enc...))
 		stream = append(stream, b...)
 	}
+	if o.rawStream != nil {
+		stream = o.rawStream
+	}
 	chData := compress(o.compression, stream)
 	var id [16]byte
-	copy(id[:], crypto.Keccak256([]byte("channel")))
+	label := "channel"
+	if o.channelLabel != "" {
+		label = o.channelLabel
+	}
+	copy(id[:], crypto.Keccak256([]byte(label)))
 	// frames
 	per := (len(chData) + o.nFrames - 1) / o.nFrames
 	var frameBytes [][]byte
@@ -161,6 +172,9 @@ func makeSynth(t *testing.T, o synthOpts) *synth {
 		}
 		f := Frame{ID: id, Number: uint16(i), Data: chData[lo:hi], IsLast: i == o.nFrames-1}
 		frameBytes = append(frameBytes, append([]byte{0}, MarshalFrame(f)...))
+		if o.txData != nil {
+			frameBytes[i] = o.txData
+		}
 	}
 	blocks := o.frameBlocks
 	if len(blocks) == 0 {
@@ -202,6 +216,9 @@ func makeSynth(t *testing.T, o synthOpts) *synth {
 				t.Fatal(err)
 			}
 			b, _ := stx.MarshalBinary()
+			if o.garbageTx != nil {
+				b = o.garbageTx
+			}
 			raws = append(raws, b)
 		}
 		txRoot := ethproof.TrieRoot(raws)

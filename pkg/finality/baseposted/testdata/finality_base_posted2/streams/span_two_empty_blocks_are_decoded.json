@@ -1,0 +1,44 @@
+{
+  "decode": {
+    "batches": [
+      {
+        "epoch_len": "0",
+        "epoch_num": "9",
+        "parent_len": "20",
+        "span_blocks": "2",
+        "span_index": "0",
+        "timestamp": "1695768288",
+        "txs": [],
+        "type": "1"
+      },
+      {
+        "epoch_len": "20",
+        "epoch_num": "9",
+        "parent_len": "0",
+        "span_blocks": "2",
+        "span_index": "1",
+        "timestamp": "1695768290",
+        "txs": [],
+        "type": "1"
+      }
+    ],
+    "result": "ok"
+  },
+  "description": "block tx counts [0, 0]: a well-formed span batch of two blocks without transactions is decoded (positive control). Judged against an L2 block at timestamp 1790000000 the verifier names batch_not_found with n_batches 2.",
+  "format": "certen-base-posted-stream/1",
+  "id": "span_two_empty_blocks_are_decoded",
+  "params": {
+    "chain_id": "84532",
+    "l2_block_time": "2",
+    "l2_genesis_time": "1695768288"
+  },
+  "stream": "0xaf0100091111111111111111111111111111111111111111222222222222222222222222222222222222222202000000",
+  "verifier": {
+    "code": "batch_not_found",
+    "fields": {
+      "n_batches": "2",
+      "timestamp": "1790000000"
+    },
+    "result": "state"
+  }
+}

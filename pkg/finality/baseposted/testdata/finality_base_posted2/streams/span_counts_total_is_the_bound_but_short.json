@@ -1,0 +1,19 @@
+{
+  "decode": {
+    "result": "stream_error"
+  },
+  "description": "block tx counts [2^20]: the total is exactly the bound, so within it, but the payload carries none of the 2^20 transactions it declares.",
+  "format": "certen-base-posted-stream/1",
+  "id": "span_counts_total_is_the_bound_but_short",
+  "params": {
+    "chain_id": "84532",
+    "l2_block_time": "2",
+    "l2_genesis_time": "1695768288"
+  },
+  "stream": "0xb0010009111111111111111111111111111111111111111122222222222222222222222222222222222222220100808040",
+  "verifier": {
+    "code": "channel_malformed",
+    "fields": {},
+    "result": "state"
+  }
+}

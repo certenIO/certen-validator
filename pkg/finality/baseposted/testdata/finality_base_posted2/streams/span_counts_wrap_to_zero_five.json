@@ -1,0 +1,19 @@
+{
+  "decode": {
+    "result": "stream_error"
+  },
+  "description": "block tx counts [5, 2^64-5]: the same wrap to 0 with a larger first count.",
+  "format": "certen-base-posted-stream/1",
+  "id": "span_counts_wrap_to_zero_five",
+  "params": {
+    "chain_id": "84532",
+    "l2_block_time": "2",
+    "l2_genesis_time": "1695768288"
+  },
+  "stream": "0xb83801000911111111111111111111111111111111111111112222222222222222222222222222222222222222020005fbffffffffffffffff01",
+  "verifier": {
+    "code": "channel_malformed",
+    "fields": {},
+    "result": "state"
+  }
+}

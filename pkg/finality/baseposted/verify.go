@@ -323,7 +323,7 @@ func verifyChannel(bp *Pins, body Body, covered []ethl1.L1Block, l2 finality.Hea
 		stream = append(stream, fr.Data...)
 	}
 	for _, l := range frameL1 {
-		if l > frameL1[0]+bp.ChannelTimeout {
+		if l-frameL1[0] > bp.ChannelTimeout { // frameL1 is non-decreasing (the frames are in order), so this cannot wrap
 			return finality.Verdict{}, st(CodeChannelTimedOut)
 		}
 	}
@@ -366,7 +366,7 @@ func verifyChannel(bp *Pins, body Body, covered []ethl1.L1Block, l2 finality.Hea
 		return finality.Verdict{}, st(CodeBatchBindingMismatch, "field", "epoch_hash")
 	}
 	for _, l := range frameL1 {
-		if l < bt.EpochNum || l > bt.EpochNum+bp.SeqWindowSize {
+		if l < bt.EpochNum || l-bt.EpochNum > bp.SeqWindowSize {
 			return finality.Verdict{}, st(CodeBatchOutsideWindow)
 		}
 	}

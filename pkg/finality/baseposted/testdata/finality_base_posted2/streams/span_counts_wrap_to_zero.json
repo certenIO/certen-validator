@@ -1,0 +1,19 @@
+{
+  "decode": {
+    "result": "stream_error"
+  },
+  "description": "block tx counts [1, 2^64-1]: the uint64 sum wraps to 0 and slips under the 2^20 bound; the first block then reads a transaction that was never declared. The verifier refuses the stream and does not panic.",
+  "format": "certen-base-posted-stream/1",
+  "id": "span_counts_wrap_to_zero",
+  "params": {
+    "chain_id": "84532",
+    "l2_block_time": "2",
+    "l2_genesis_time": "1695768288"
+  },
+  "stream": "0xb83801000911111111111111111111111111111111111111112222222222222222222222222222222222222222020001ffffffffffffffffff01",
+  "verifier": {
+    "code": "channel_malformed",
+    "fields": {},
+    "result": "state"
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "decode": {
+    "batches": [
+      {
+        "epoch_len": "20",
+        "epoch_num": "9",
+        "parent_len": "20",
+        "span_blocks": "1",
+        "span_index": "0",
+        "timestamp": "1695768288",
+        "txs": [
+          "0x02e583014a340101028252089409090909090909090909090909090909090909090180c0800101"
+        ],
+        "type": "1"
+      }
+    ],
+    "result": "ok"
+  },
+  "description": "block tx counts [1] with one well-formed type-2 transaction (positive control): the rebuilt consensus encoding is the hand-assembled one.",
+  "format": "certen-base-posted-stream/1",
+  "id": "span_one_block_with_one_transaction_is_decoded",
+  "params": {
+    "chain_id": "84532",
+    "l2_block_time": "2",
+    "l2_genesis_time": "1695768288"
+  },
+  "stream": "0xb88f01000911111111111111111111111111111111111111112222222222222222222222222222222222222222010001000000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000001090909090909090909090909090909090909090902c501010280c00188a401",
+  "verifier": {
+    "code": "batch_not_found",
+    "fields": {
+      "n_batches": "1",
+      "timestamp": "1790000000"
+    },
+    "result": "state"
+  }
+}
