@@ -23,13 +23,20 @@ const (
 // by the framework (Pins.Sections) and parsed here; keys other chain kinds add (portal, game impl rows, max_l2_headers...) are
 // ignored. The batcher is never a pin: it is proven from SystemConfig.batcherHash at each frame block.
 type Pins struct {
-	ChainID                uint64
-	L1ChainID              uint64
-	SystemConfig           [20]byte
-	BatchInbox             [20]byte
-	SeqWindowSize          uint64
-	ChannelTimeout         uint64
-	MaxRLPBytesPerChannel  uint64
+	ChainID               uint64
+	L1ChainID             uint64
+	SystemConfig          [20]byte
+	BatchInbox            [20]byte
+	SeqWindowSize         uint64
+	ChannelTimeout        uint64 // Bedrock value, in L1 blocks; in force for an L1 block whose time is before GraniteTime
+	GraniteTime           uint64 // activation time of Granite (L1 block time, seconds): from it the channel timeout is ChannelTimeoutGranite
+	ChannelTimeoutGranite uint64 // the post-Granite channel timeout, in L1 blocks (op-node params.ChannelTimeoutGranite = 50)
+	MaxRLPBytesPerChannel uint64
+	// IsthmusTime is INFORMATIONAL for l1_posted: nothing in this kind's judgement depends on it, because the only Isthmus changes
+	// that touch a Base block are the header's withdrawalsRoot/requestsHash (not read here) and the operator-fee tail appended to
+	// the L1-info deposit's calldata after the fields this kind reads (number at [28:36], hash at [100:132] are the Ecotone
+	// layout in every later fork). It is required and non-zero because the base_sepolia section is shared with the finalized kind,
+	// which refuses a pre-Isthmus header (the header-only output root, spec 5.5 O5).
 	IsthmusTime            uint64
 	DenimTime              uint64
 	MaxBlobs               int
@@ -46,6 +53,8 @@ type rawBasePins struct {
 	BatchInbox            string                     `json:"batch_inbox"`
 	SeqWindowSize         uint64                     `json:"seq_window_size"`
 	ChannelTimeout        uint64                     `json:"channel_timeout"`
+	GraniteTime           uint64                     `json:"granite_time"`
+	ChannelTimeoutGranite uint64                     `json:"channel_timeout_granite"`
 	MaxRLPBytesPerChannel uint64                     `json:"max_rlp_bytes_per_channel"`
 	IsthmusTime           uint64                     `json:"isthmus_time"`
 	DenimTime             uint64                     `json:"denim_time"`
@@ -64,6 +73,15 @@ func unhex(s string, n int) ([]byte, bool) {
 	return b, err == nil && len(b) == n
 }
 
+// ChannelTimeoutAt is op-node's ChainSpec.ChannelTimeout(t) (op-node/rollup/chain_spec.go): the Granite value when t >= GraniteTime,
+// the Bedrock value before. t is the timestamp of the L1 block the frame is included in (op-node's origin.Time at IngestFrame).
+func (p *Pins) ChannelTimeoutAt(l1Time uint64) uint64 {
+	if l1Time >= p.GraniteTime {
+		return p.ChannelTimeoutGranite
+	}
+	return p.ChannelTimeout
+}
+
 // ParsePins reads the base_sepolia section of the framework pins. An absent section is finality_pin_unknown; a malformed one
 // is finality_pins_corrupt{bad_value, key}.
 func ParsePins(p *finality.Pins) (*Pins, error) {
@@ -80,7 +98,7 @@ func ParsePins(p *finality.Pins) (*Pins, error) {
 	}
 	bad := func(key string) error { return finality.PinsCorrupt(finality.PinsBadValue, "key", "base_sepolia."+key) }
 	out := &Pins{ChainID: r.ChainID, L1ChainID: r.L1ChainID, SeqWindowSize: r.SeqWindowSize, ChannelTimeout: r.ChannelTimeout,
-		MaxRLPBytesPerChannel: r.MaxRLPBytesPerChannel, IsthmusTime: r.IsthmusTime, DenimTime: r.DenimTime, MaxBlobs: r.MaxBlobs, L2GenesisTime: r.L2GenesisTime, L2BlockTime: r.L2BlockTime,
+		GraniteTime: r.GraniteTime, ChannelTimeoutGranite: r.ChannelTimeoutGranite, MaxRLPBytesPerChannel: r.MaxRLPBytesPerChannel, IsthmusTime: r.IsthmusTime, DenimTime: r.DenimTime, MaxBlobs: r.MaxBlobs, L2GenesisTime: r.L2GenesisTime, L2BlockTime: r.L2BlockTime,
 		KZGSetupSHA256: r.KZGSetupSHA256, SystemConfigImplHashes: map[[32]byte]bool{}}
 	if r.ChainID != uint64(Chain) {
 		return nil, bad("chain_id")
@@ -99,7 +117,7 @@ func ParsePins(p *finality.Pins) (*Pins, error) {
 	}
 	copy(out.BatchInbox[:], bi)
 	for k, v := range map[string]uint64{"seq_window_size": r.SeqWindowSize, "channel_timeout": r.ChannelTimeout,
-		"max_rlp_bytes_per_channel": r.MaxRLPBytesPerChannel, "l2_genesis_time": r.L2GenesisTime, "l2_block_time": r.L2BlockTime, "isthmus_time": r.IsthmusTime, "denim_time": r.DenimTime} {
+		"granite_time": r.GraniteTime, "channel_timeout_granite": r.ChannelTimeoutGranite, "max_rlp_bytes_per_channel": r.MaxRLPBytesPerChannel, "l2_genesis_time": r.L2GenesisTime, "l2_block_time": r.L2BlockTime, "isthmus_time": r.IsthmusTime, "denim_time": r.DenimTime} {
 		if v == 0 {
 			return nil, bad(k)
 		}

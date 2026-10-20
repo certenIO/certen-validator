@@ -102,7 +102,7 @@ func TestNodeDBReadsAccountsAndSlotsAsPresentAbsentOrMalformed(t *testing.T) {
 
 func TestKindVerifyNamesAGarbageContainerAsMalformedNotUnrecognised(t *testing.T) {
 	set := filepath.Join("testdata", SetName)
-	pinsRaw, _ := ReadFile(set, "pins/main.json")
+	pinsRaw, _ := readPublishedPins(set, "pins/main.json")
 	pins, err := finality.ParsePinsOverride(pinsRaw)
 	if err != nil {
 		t.Fatal(err)
@@ -115,7 +115,7 @@ func TestKindVerifyNamesAGarbageContainerAsMalformedNotUnrecognised(t *testing.T
 // and its KZG proof are a perfectly valid triple (here: the first blob of another channel).
 func TestAValidBlobTripleThatTheTransactionDoesNotCommitToIsABlobMismatch(t *testing.T) {
 	set := filepath.Join("testdata", SetName)
-	pinsRaw, _ := ReadFile(set, "pins/main.json")
+	pinsRaw, _ := readPublishedPins(set, "pins/main.json")
 	pins, err := finality.ParsePinsOverride(pinsRaw)
 	if err != nil {
 		t.Fatal(err)

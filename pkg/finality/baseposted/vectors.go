@@ -124,11 +124,60 @@ func ReadFile(dir, name string) ([]byte, error) {
 	return os.ReadFile(filepath.Join(dir, filepath.FromSlash(name)))
 }
 
-// Run executes a case against a set directory and returns the canonical outcome.
-func (c Case) Run(dir string) ([]byte, error) {
+// PublishedSetPinSupply is what the harness adds to the pins files of the published sets finality_base_posted1 (and the pins of
+// the synthetic world of finality_base_posted2), which predate two base_sepolia pins: the Granite activation time and the
+// post-Granite channel timeout (V2_SPEC_S7 5.4 O4, [r2:D2FIX]). Those sets are never edited, and the verifier has no default for a
+// missing pin (it refuses the pins file, finality_pins_corrupt{key:base_sepolia.granite_time}); so the harness supplies the
+// published values explicitly. Base Sepolia's real values: granite_time 1723478400 (superchain-registry sepolia/superchain.toml) and
+// op-node params.ChannelTimeoutGranite 50. Every live frame of set 1 lies within 50 L1 blocks of its channel's first frame, so the
+// set's expected bytes are unchanged. A TypeScript consumer of sets 1 and 2 supplies the same two numbers the same way.
+var PublishedSetPinSupply = map[string]uint64{"granite_time": 1723478400, "channel_timeout_granite": 50}
+
+// SupplyBaseSepoliaPins returns the pins file with the given base_sepolia keys added where the file lacks them (a key the file
+// has is never overwritten), in the canonical form ParsePinsOverride reads. A file without a base_sepolia section is returned as is.
+func SupplyBaseSepoliaPins(pinsRaw []byte, supply map[string]uint64) ([]byte, error) {
+	dec := json.NewDecoder(bytes.NewReader(pinsRaw))
+	dec.UseNumber()
+	var m map[string]any
+	if err := dec.Decode(&m); err != nil {
+		return nil, err
+	}
+	sec, ok := m["base_sepolia"].(map[string]any)
+	if !ok {
+		return pinsRaw, nil
+	}
+	for k, v := range supply {
+		if _, has := sec[k]; !has {
+			sec[k] = json.Number(strconv.FormatUint(v, 10))
+		}
+	}
+	var out bytes.Buffer
+	enc := json.NewEncoder(&out)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(m); err != nil {
+		return nil, err
+	}
+	return out.Bytes(), nil
+}
+
+// Run executes a case against a set directory and returns the canonical outcome; the pins file is read exactly as the set gives it.
+func (c Case) Run(dir string) ([]byte, error) { return c.run(dir, nil) }
+
+// RunSupplied is Run for a published set that predates some base_sepolia pins: the harness supplies them (PublishedSetPinSupply).
+func (c Case) RunSupplied(dir string, supply map[string]uint64) ([]byte, error) {
+	return c.run(dir, supply)
+}
+
+func (c Case) run(dir string, supply map[string]uint64) ([]byte, error) {
 	pinsRaw, err := ReadFile(dir, c.Pins)
 	if err != nil {
 		return nil, err
+	}
+	if supply != nil {
+		if pinsRaw, err = SupplyBaseSepoliaPins(pinsRaw, supply); err != nil {
+			return nil, err
+		}
 	}
 	pins, err := finality.ParsePinsOverride(pinsRaw)
 	if err != nil {

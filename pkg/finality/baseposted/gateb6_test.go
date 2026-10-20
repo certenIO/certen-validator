@@ -129,7 +129,7 @@ func common20(a [20]byte) string {
 }
 
 func TestTheFrameworkSepoliaPinsBecomeTheL1HeadVerifiersPinsFieldForField(t *testing.T) {
-	pinsRaw, err := ReadFile(setDir, "pins/main.json") // the Sepolia ledger of the published set has anchors
+	pinsRaw, err := readPublishedPins(setDir, "pins/main.json") // the Sepolia ledger of the published set has anchors
 	if err != nil {
 		t.Fatal(err)
 	}

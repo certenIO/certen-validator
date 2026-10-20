@@ -18,7 +18,7 @@ const PinsFormat = "certen-finality-pins/1"
 
 // PinsSHA256 is the SHA-256 of the embedded pins file. A verifier refuses to start (finality_pins_corrupt) if the embedded
 // bytes hash otherwise; CI job finality-pins-sync compares this constant and the file across the three repositories.
-const PinsSHA256 = "ba507694e3f2d346050d7dfce11ea70f850bbb29598795134519eef6a6f963eb"
+const PinsSHA256 = "072050c38604aea4de7251e87d85c147c7ffbd28bfd496a78d12216b302e0881"
 
 //go:embed pins/finality-pins.json
 var embeddedPins []byte

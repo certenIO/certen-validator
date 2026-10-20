@@ -15,6 +15,7 @@ func TestPinsNearTheUint64LimitNeitherWrapTheChannelTimeoutNorTheSequencingWindo
 	// frame blocks 1000 and 1001 with a timeout of 2^64-1: 1000 + (2^64-1) wraps to 999 and the second frame would be timed out
 	timeout := makeSynth(t, synthOpts{compression: "zlib", calldata: true, nFrames: 2, frameBlocks: []uint64{1000, 1001}})
 	timeout.bp.ChannelTimeout = math.MaxUint64
+	timeout.bp.ChannelTimeoutGranite = math.MaxUint64
 	mustOK(t, timeout)
 	// epoch 990 with a sequencing window of 2^64-1: 990 + (2^64-1) wraps to 989 and the frame block 1000 would be outside it
 	window := makeSynth(t, synthOpts{compression: "zlib", calldata: true, epochNum: 990, frameBlocks: []uint64{1000}})
