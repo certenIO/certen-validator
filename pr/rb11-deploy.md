@@ -114,7 +114,7 @@ provider set, the retry horizon extends to 20000 blocks. RB13's definition of do
 prerequisite of RB13, not of this deploy.
 
 ### 3.3 The Sepolia pins ledger and the light-client anchor
-- The embedded pins file (hash-checked against `finality.PinsSHA256` = `12217758b3a8074a07873cd3d26cc46edab7782d31f393d7f540c3e3077062d5`)
+- The embedded pins file (hash-checked against `finality.PinsSHA256` = `13ee2d852eef500c2fc28aeaf2c29e8cb35a32004228b8b2732948722281df05`)
   carries the `eth_sepolia` **root pin** (period 1378 with its `block_root`). The light-client source (`pkg/finality/runtime/lc.go`)
   anchors there: it fetches the bootstrap by that block root, then the links and the final update from `CERTEN_FINALITY_LC_URLS`, and
   the verifier judges every byte. Base and Arbitrum `l1_posted` / `finalized` and Sepolia `finalized` are therefore expected to be

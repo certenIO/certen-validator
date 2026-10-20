@@ -92,11 +92,19 @@ func DecodeLC(b []byte, maxLinks int) (LC, error) {
 	if n > maxLinks {
 		return LC{}, EvidenceTooLarge("links", n, maxLinks)
 	}
-	lc.Links = make([]LB, n)
-	for i := range lc.Links {
-		if lc.Links[i], f = lb("link"); f != nil {
+	// each link is at least 5 bytes (layout byte and length), so the bytes left bound how many links can follow; the slice is never
+	// sized by the declared count alone (a failing link is still refused at its own position, as before)
+	room := (len(b) - pos) / 5
+	if n < room {
+		room = n
+	}
+	lc.Links = make([]LB, 0, room)
+	for i := 0; i < n; i++ {
+		l, f := lb("link")
+		if f != nil {
 			return LC{}, f
 		}
+		lc.Links = append(lc.Links, l)
 	}
 	if lc.FinalUpdate, f = lb("final_update"); f != nil {
 		return LC{}, f

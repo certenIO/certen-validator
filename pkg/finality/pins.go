@@ -11,6 +11,8 @@ import (
 	"reflect"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/certen/independant-validator/pkg/finality/ethl1"
 )
 
 // PinsFormat is the format string of the pins file (V2_SPEC_S7 section 4.1).
@@ -238,6 +240,16 @@ func hexN(s string, n int, prefixed bool) bool {
 	return err == nil && len(b) == n && s == strings.ToLower(s)
 }
 
+// SepoliaSpecPin is the consensus specification the light-client objects and the fork layouts of the L1 head verifier follow, and
+// SepoliaGenesisTime the genesis time of the Sepolia beacon chain (V2_SPEC_S7 4.2): the eth_sepolia section must carry exactly these.
+const (
+	SepoliaSpecPin     = "consensus-specs v1.7.0-beta.4 aa16bb4c"
+	SepoliaGenesisTime = 1655733600
+	// MaxLinksBound is the V2_SPEC_S7 8.2 bound on max_links (64 links, about 72 days of ledger staleness): a pin above it is refused,
+	// so the link count of an evidence container cannot be made to size anything beyond what the specification allows.
+	MaxLinksBound = 64
+)
+
 // MinWspEpochs is the smallest valid wsp_epochs of a ledger anchor: V2_SPEC_S7 5.2 step 3 (r2:F10) makes the window rule vacuous
 // for wsp_epochs >= 256 (one period), and "a ledger entry with wsp_epochs < 256 is invalid".
 const MinWspEpochs = 256
@@ -266,6 +278,19 @@ func (e *EthSepoliaPins) validate() error {
 	} {
 		if !b.ok {
 			return PinsCorrupt(PinsBoundMissing, "key", b.key)
+		}
+	}
+	// What the L1 head verifier runs on is not configurable: a pin that says otherwise would describe a network and a spec the
+	// verifier does not judge under, so it is refused by name instead of being parsed and ignored.
+	for _, v := range []struct {
+		key string
+		ok  bool
+	}{
+		{"sync_committee_size", e.SyncCommitteeSize == ethl1.SyncCommitteeSize}, {"epochs_per_period", e.EpochsPerPeriod == ethl1.EpochsPerPeriod},
+		{"spec", e.Spec == SepoliaSpecPin}, {"genesis_time", e.GenesisTime == SepoliaGenesisTime}, {"max_links", e.MaxLinks <= MaxLinksBound},
+	} {
+		if !v.ok {
+			return PinsCorrupt(PinsBadValue, "key", v.key)
 		}
 	}
 	if e.MinParticipants*3 < e.SyncCommitteeSize*2 || e.MinParticipants > e.SyncCommitteeSize {
