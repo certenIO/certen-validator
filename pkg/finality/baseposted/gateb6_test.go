@@ -75,6 +75,11 @@ func TestParsePinsReadsTheBaseSectionAndNamesTheKeyOfEveryBadValue(t *testing.T)
 		{"system_config", func(m map[string]any) { m["system_config"] = "f272670eb55e895584501d564afeb048bed26194" }},
 		{"system_config", func(m map[string]any) { m["system_config"] = "0xzz72670eb55e895584501d564afeb048bed26194" }},
 		{"batch_inbox", func(m map[string]any) { m["batch_inbox"] = "0x12" }},
+		{"system_config", func(m map[string]any) { m["system_config"] = "00" + good["system_config"].(string)[2:] }},
+		{"impl_pins", func(m map[string]any) {
+			rows := m["impl_pins"].(map[string]any)
+			rows["0x"+strings.Repeat("ee", 32)] = 7 // a valid syscfg row is there; the extra row is not an object
+		}},
 		{"seq_window_size", func(m map[string]any) { m["seq_window_size"] = 0 }},
 		{"channel_timeout", func(m map[string]any) { m["channel_timeout"] = 0 }},
 		{"max_rlp_bytes_per_channel", func(m map[string]any) { m["max_rlp_bytes_per_channel"] = 0 }},

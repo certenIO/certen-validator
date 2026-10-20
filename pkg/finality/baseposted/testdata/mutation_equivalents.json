@@ -1,0 +1,226 @@
+[
+  {
+    "file": "channel.go",
+    "function": "blobToData",
+    "operator": "int_literal",
+    "original": "out[0:27]",
+    "mutated": "*",
+    "reason": "copy(out[0:27], b[5:]) copies the 27 payload bytes of the first field element; copying 28 also puts b[32], the high-bit byte of the next element, into out[27], but out[27] is rewritten by the first reassemble() (out[opos-96] = x with opos = 123) before anything reads it, so out is identical."
+  },
+  {
+    "file": "channel.go",
+    "function": "blobToData",
+    "operator": "cmp_boundary",
+    "original": "i < 1024",
+    "mutated": "*",
+    "reason": "The loop is also bounded by opos < outLen: after round r opos is 123+127r, so after 1023 rounds opos = 130044 = blobMaxData, which is at least outLen (outLen <= blobMaxData is refused first); i = 1024 is never reached with opos < outLen."
+  },
+  {
+    "file": "channel.go",
+    "function": "encodeBlob",
+    "operator": "guard_off",
+    "original": "if readOffset >= len(data)",
+    "mutated": "*",
+    "reason": "This is the guard of read31: without it copy(buf31[:], data[readOffset:]) copies from the tail of data; readOffset never exceeds len(data) (it only advances by the number of bytes copied), so the slice is valid and at readOffset == len(data) it copies 0 bytes, exactly what the guard returns."
+  },
+  {
+    "file": "channel.go",
+    "function": "encodeBlob",
+    "operator": "cmp_boundary",
+    "original": "readOffset >= len(data)",
+    "mutated": "*",
+    "reason": "At readOffset == len(data) the unguarded copy(buf31[:], data[len(data):]) copies 0 bytes, which is what the return of the guard does; readOffset > len(data) cannot occur."
+  },
+  {
+    "file": "channel.go",
+    "function": "encodeBlob",
+    "operator": "cmp_boundary",
+    "original": "round < 1024",
+    "mutated": "*",
+    "reason": "The loop is also bounded by readOffset < len(data): 1024 rounds consume 123+127*1023 = blobMaxData bytes and len(data) <= blobMaxData is refused first, so round 1024 is never entered with data left."
+  },
+  {
+    "file": "channel.go",
+    "function": "encodeBlob",
+    "operator": "logic_swap",
+    "original": "round < 1024 && readOffset < len(data)",
+    "mutated": "*",
+    "reason": "A round entered with no data left reads zeros and writes zeros into the zero-initialised blob, and the loop still stops at round 1024 where the blob is full, so the output is identical."
+  },
+  {
+    "file": "channel.go",
+    "function": "encodeBlob",
+    "operator": "cmp_boundary",
+    "original": "readOffset < len(data)",
+    "mutated": "*",
+    "reason": "An extra round at readOffset == len(data) reads and writes only zeros into the zero-initialised blob, and the loop is bounded by round < 1024, so the output is identical."
+  },
+  {
+    "file": "channel.go",
+    "function": "encodeBlob",
+    "operator": "int_literal",
+    "original": "buf31[0]",
+    "mutated": "*",
+    "reason": "buf31 is zeroed on the line before; the tuple assignment with the first index changed to 1 assigns buf31[1] = 0 and then buf31[1] = byte(ilen>>16) (left to right) and leaves buf31[0] at its zero value: the same array."
+  },
+  {
+    "file": "channel.go",
+    "function": "encodeBlob",
+    "operator": "guard_off",
+    "original": "if readOffset < len(data)",
+    "mutated": "*",
+    "reason": "Unreachable: len(data) <= blobMaxData is refused first and 1024 rounds consume blobMaxData bytes, so after the loop readOffset == len(data) and the guard never fires."
+  },
+  {
+    "file": "channel.go",
+    "function": "parseFrames",
+    "operator": "int_literal",
+    "original": "buf[:16]",
+    "mutated": "*",
+    "reason": "copy(f.ID[:], buf[:17]) copies at most len(f.ID) = 16 bytes, the same as buf[:16]."
+  },
+  {
+    "file": "span.go",
+    "function": "spanReader.fixed",
+    "operator": "int_literal",
+    "original": "n < 0",
+    "mutated": "*",
+    "reason": "No caller passes a negative n (the constants 20 and 64, and int(l) with l at most 2^17), so n == -1 never occurs and n < -1 and n < 0 agree."
+  },
+  {
+    "file": "span.go",
+    "function": "spanReader.bits",
+    "operator": "guard_off",
+    "original": "if r.err != nil",
+    "mutated": "*",
+    "reason": "With r.err set, fixed() returns nil, so v is the zero integer and BitLen() = 0 <= n; the function then returns v, a zero big.Int, exactly as the guarded early return does (both guards of the function)."
+  },
+  {
+    "file": "span.go",
+    "function": "decodeSpanBatch",
+    "operator": "guard_off",
+    "original": "if r.err != nil",
+    "mutated": "*",
+    "reason": "The guard inside the transaction loop (the other guards of this form are killed by the refusal tests): after the early `if r.err != nil { return }` before the allocations r.err is nil here, and nothing in the loop sets r.err (a failure returns directly), so the guard never fires."
+  },
+  {
+    "file": "span.go",
+    "function": "decodeSpanBatch",
+    "operator": "cmp_flip",
+    "original": "txs[ti].typ == 0",
+    "mutated": "*",
+    "reason": "This occurrence is the argument isLegacy of rebuildTx, a parameter rebuildTx never reads (it switches on typ); the legacy counter li++ under the same condition is killed by the round-trip test."
+  },
+  {
+    "file": "span.go",
+    "function": "decodeSpanBatch",
+    "operator": "int_literal",
+    "original": "txs[ti].typ == 0",
+    "mutated": "*",
+    "reason": "This occurrence is the argument isLegacy of rebuildTx, a parameter rebuildTx never reads (it switches on typ); the legacy counter li++ under the same condition is killed by the round-trip test."
+  },
+  {
+    "file": "span.go",
+    "function": "rebuildTx",
+    "operator": "guard_off",
+    "original": "if x == nil",
+    "mutated": "*",
+    "reason": "u() is applied to *uint256.Int fields of structs filled by rlp.DecodeBytes; package rlp never leaves a pointer-typed struct field nil without a nil tag (it allocates the zero value) and a list too short for the struct is an error, so x is never nil."
+  },
+  {
+    "file": "wire.go",
+    "function": "DecodeBody",
+    "operator": "guard_off",
+    "original": "if out.LC, err = ep.DecodeLC(body[:n]); err != nil",
+    "mutated": "*",
+    "reason": "DecodeLC reads the same grammar as lcExtent (length-prefixed profile, fixed anchor, anchor body, links against the same MaxLinks bound, final update) over exactly the slice lcExtent delimited, which lcExtent has already refused if it could not be read; DecodeLC cannot fail here."
+  },
+  {
+    "file": "wire.go",
+    "function": "DecodeBody",
+    "operator": "cmp_boundary",
+    "original": "spineMax > lim.MaxSpineHeaders",
+    "mutated": "*",
+    "reason": "At spineMax == lim.MaxSpineHeaders the guarded assignment sets spineMax to lim.MaxSpineHeaders, the value it already has, so >= and > give the same bound for every input."
+  },
+  {
+    "file": "verify.go",
+    "function": "nodeDB.account",
+    "operator": "guard_off",
+    "original": "if !ok || len(v) == 0",
+    "mutated": "*",
+    "reason": "The guard is a fast path for what the next statement refuses anyway: an unproven or absent account has an empty value, rlp.DecodeBytes of an empty value into a StateAccount is an error and returns the identical l1_state_proof_invalid{which:account}."
+  },
+  {
+    "file": "verify.go",
+    "function": "nodeDB.account",
+    "operator": "logic_swap",
+    "original": "!ok || len(v) == 0",
+    "mutated": "*",
+    "reason": "Whichever conjunct is missing, the case falls through to rlp.DecodeBytes of an empty value into a StateAccount, which fails with the identical l1_state_proof_invalid{which:account}."
+  },
+  {
+    "file": "verify.go",
+    "function": "nodeDB.account",
+    "operator": "int_literal",
+    "original": "len(v) == 0",
+    "mutated": "*",
+    "reason": "A one-byte value (len(v) == 1) is no RLP list, so it cannot decode into a StateAccount and returns the identical l1_state_proof_invalid{which:account}; and with len(v) == -1 the empty case falls to the same failing decode."
+  },
+  {
+    "file": "verify.go",
+    "function": "Kind.Verify",
+    "operator": "cmp_boundary",
+    "original": "maxBlobs > lim.MaxBlobsBase",
+    "mutated": "*",
+    "reason": "At maxBlobs == lim.MaxBlobsBase the guarded assignment sets maxBlobs to lim.MaxBlobsBase, the value it already has, so >= and > give the same bound."
+  },
+  {
+    "file": "verify.go",
+    "function": "Kind.Verify",
+    "operator": "guard_off",
+    "original": "if !bytes.Equal(EncodeBody(body), c.Body)",
+    "mutated": "*",
+    "reason": "DecodeBody is the strict inverse of EncodeBody: every field has exactly one encoding (fixed widths, length-prefixed lists, counts, nodes strictly ascending by hash and unique, End() refuses trailing bytes), so EncodeBody(DecodeBody(x)) == x for every x DecodeBody accepts and the guard never fires."
+  },
+  {
+    "file": "verify.go",
+    "function": "verifyChannel",
+    "operator": "guard_off",
+    "original": "if err != nil",
+    "mutated": "*",
+    "reason": "This is the guard after blobToData: without it d is nil, parseFrames(nil) fails with `derivation version` and the verifier returns the identical channel_malformed (a blob that does not decode and a blob that carries no frame data are the same refusal)."
+  },
+  {
+    "file": "verify.go",
+    "function": "l1Info",
+    "operator": "guard_off",
+    "original": "if err != nil",
+    "mutated": "*",
+    "reason": "An rlp.Split error sets content to nil, which ends the loop; the item counter is then not 8, or the failing item is the eighth and its kind is not String, so l1Info returns false exactly as the guard does."
+  },
+  {
+    "file": "verify.go",
+    "function": "l1Info",
+    "operator": "int_literal",
+    "original": "last[100:132]",
+    "mutated": "*",
+    "reason": "copy(hash[:], last[100:133]) copies at most len(hash) = 32 bytes, the same as last[100:132]."
+  },
+  {
+    "file": "verify.go",
+    "function": "l1Info",
+    "operator": "int_literal",
+    "original": "last[28:36]",
+    "mutated": "*",
+    "reason": "binary.BigEndian.Uint64 reads only the first 8 bytes of its argument, so last[28:37] gives the same number as last[28:36]."
+  },
+  {
+    "file": "verify.go",
+    "function": "distinctSorted",
+    "operator": "cmp_boundary",
+    "original": "out[i] < out[j]",
+    "mutated": "*",
+    "reason": "out holds distinct values only (duplicates are dropped before sorting) and sort.Slice calls less on two different indices, where `<=` and `<` give the same answer for distinct values, so the sorted result is identical."
+  }
+]
