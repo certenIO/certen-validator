@@ -11,8 +11,9 @@ import (
 	"io"
 	"math"
 
-	"github.com/andybalholm/brotli"
 	"github.com/ethereum/go-ethereum/rlp"
+
+	"github.com/certen/independant-validator/pkg/finality/strictbrotli"
 )
 
 // maxFrameData is OP's MaxFrameLen: a frame's data is at most one million bytes.
@@ -223,7 +224,20 @@ func decompress(ch []byte, max uint64) ([]byte, error) {
 		defer zr.Close()
 		r = zr
 	case ch[0] == 1:
-		r = brotli.NewReader(bytes.NewReader(ch[1:]))
+		// strictbrotli refuses a stream that ends early, an empty one and one followed by extra bytes (the library alone answers a
+		// clean EOF mid-stream and would return a prefix); the cap is the largest int when max does not fit one
+		capInt := math.MaxInt
+		if max < uint64(math.MaxInt) {
+			capInt = int(max)
+		}
+		out, exceeded, err := strictbrotli.Decompress(ch[1:], capInt)
+		if err != nil {
+			return nil, err
+		}
+		if exceeded {
+			return nil, errors.New("channel exceeds max_rlp_bytes_per_channel")
+		}
+		return out, nil
 	default:
 		return nil, errors.New("compression type")
 	}
