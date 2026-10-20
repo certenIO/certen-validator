@@ -7,18 +7,15 @@ import (
 
 	"github.com/ethereum/go-ethereum/crypto"
 
-	"os"
-	"path/filepath"
-
 	"github.com/certen/independant-validator/pkg/finality"
 	"github.com/certen/independant-validator/pkg/finality/adiri"
 )
 
-// writeSet2 records finality_adiri2: the supplement of finality_adiri1 (which is published and never edited) for the boundaries
+// set2Vectors builds the supplement of finality_adiri1 (published, never edited; now superseded with finality_adiri2 by finality_adiri3) for the boundaries
 // and guards that the mutation loop showed set 1 does not pin: the exact 2/3 boundary, a hash-linked spine whose numbers skip,
 // a leg that is not on the sealed chain, an empty spine, an unknown linkKind and a trailing byte. All synthetic (test keys in
 // the gitignored keys/ directory), self-contained.
-func writeSet2(out string) error {
+func set2Vectors() (map[string][]byte, []vec) {
 	kp := loadKeys("pkg/finality/adiri/vectorgen/keys", 8)
 	ev := map[string][]byte{}
 	var vs []vec
@@ -75,16 +72,16 @@ func writeSet2(out string) error {
 			canon("finality_block_mismatch", "field", "spineLastHash", "want", hash32(other), "got", realHash))
 	}
 	addEdit("syn2-empty-spine", "linkKind 1 with no header at all", baseVec, base.evidence, func(q *parsed) { q.body.Spine = nil }, base.leg,
-		canon("finality_evidence_malformed", "part", "spine", "reason", "a spine holds at least the seal header", "got_len", uint64(0), "want_len", uint64(1)))
+		canon("finality_evidence_malformed", "part", "spine", "reason", "spine_empty", "got_len", uint64(0), "want_len", uint64(1)))
 	addEdit("syn2-link-kind-3", "linkKind 3 does not exist", baseVec, base.evidence, func(q *parsed) { q.body.LinkKind = 3; q.body.Spine = nil }, base.leg,
-		canon("finality_evidence_malformed", "part", "linkKind", "reason", "linkKind is 1 (spine) or 2 (history slot)", "got_len", uint64(3), "want_len", uint64(1)))
+		canon("finality_evidence_malformed", "part", "linkKind", "reason", "link_kind_unknown", "got_len", uint64(3), "want_len", uint64(1)))
 	addEdit("syn2-body-trailing-byte", "one byte after the last spine header", baseVec, base.evidence, func(q *parsed) { q.c.Body = nil }, base.leg, "")
 	// the trailing byte is a raw container edit: append 0x00 to the evidence
 	{
 		raw := append(append([]byte(nil), base.evidence...), 0)
 		last := &vs[len(vs)-1]
 		last.Edits = diffEdits(base.evidence, raw)
-		last.Expect = canon("finality_evidence_malformed", "part", "body", "reason", "trailing bytes", "got_len", uint64(1), "want_len", uint64(0))
+		last.Expect = canon("finality_evidence_malformed", "part", "body", "reason", "trailing_bytes", "got_len", uint64(1), "want_len", uint64(0))
 	}
 
 	addEdit("syn2-duplicate-signer", "signers [0,0,1,2,3]: an index may not repeat (it would count one key twice)", baseVec, base.evidence,
@@ -106,10 +103,7 @@ func writeSet2(out string) error {
 		}, k2.leg, "")
 	vs[len(vs)-1].Expect = canon("finality_link_broken", "from", uint64(1003), "to", uint64(1000), "at", uint64(1003), "check", "tip_not_final_state", "want_hash", fHashOf(k2), "got_hash", otherHeaderHash)
 
-	if err := os.MkdirAll(filepath.Join(out, "evidence"), 0o755); err != nil {
-		return err
-	}
-	return writeSet(out, "finality_adiri2/1", "finality_adiri2/manifest/1", ev, vs)
+	return ev, vs
 }
 
 func repeat(b byte, n int) []byte {

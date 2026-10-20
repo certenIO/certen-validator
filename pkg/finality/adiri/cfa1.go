@@ -92,19 +92,19 @@ func (c *CFA1) Next(i int) [][]byte {
 // B32 final_consensus.hash, B48 signature, u8 n_signers, u8[] signers).
 func (c *CFA1) Encode() ([]byte, error) {
 	if len(c.Tables) > 0xffff || len(c.Records) > 0xffffffff {
-		return nil, finality.Malformed("cfa1", "too many tables or records to encode", len(c.Tables), 0xffff)
+		return nil, finality.Malformed("cfa1", finality.ReasonCFA1TooLargeToEncode, len(c.Tables), 0xffff)
 	}
 	var w finality.Writer
 	w.Fixed([]byte(CFA1Magic))
 	w.Fixed([]byte{byte(len(c.Tables) >> 8), byte(len(c.Tables))})
 	for i, t := range c.Tables {
 		if len(t) == 0 || len(t) > 255 {
-			return nil, finality.MalformedAt("cfa1.table", i, "a table holds 1..255 keys", len(t), 255)
+			return nil, finality.MalformedAt("cfa1.table", i, finality.ReasonCFA1TableSize, len(t), 255)
 		}
 		w.U8(uint8(len(t)))
 		for _, k := range t {
 			if len(k) != KeyBytes {
-				return nil, finality.MalformedAt("cfa1.table.key", i, "a key is 96 bytes", len(k), KeyBytes)
+				return nil, finality.MalformedAt("cfa1.table.key", i, finality.ReasonCFA1KeyLength, len(k), KeyBytes)
 			}
 			w.Fixed(k)
 		}
@@ -112,7 +112,7 @@ func (c *CFA1) Encode() ([]byte, error) {
 	w.U32(uint32(len(c.Records)))
 	for i, r := range c.Records {
 		if len(r.Signers) > 255 {
-			return nil, finality.MalformedAt("cfa1.record.signers", i, "at most 255 signers", len(r.Signers), 255)
+			return nil, finality.MalformedAt("cfa1.record.signers", i, finality.ReasonCFA1SignersTooMany, len(r.Signers), 255)
 		}
 		w.U8(r.CommitteeIdx)
 		w.U8(r.NextIdx)
@@ -140,7 +140,7 @@ func DecodeCFA1(b []byte, lim finality.Limits) (*CFA1, error) {
 		return nil, err
 	}
 	if string(magic) != CFA1Magic {
-		return nil, finality.Malformed("cfa1.magic", "not CFA1", 4, 4)
+		return nil, finality.Malformed("cfa1.magic", finality.ReasonCFA1BadMagic, 4, 4)
 	}
 	nt, err := r.Fixed("cfa1.n_tables", 2)
 	if err != nil {
@@ -151,7 +151,7 @@ func DecodeCFA1(b []byte, lim finality.Limits) (*CFA1, error) {
 		return nil, finality.EvidenceTooLarge("cfa1.tables", uint64(nTables), uint64(lim.MaxCFA1Tables))
 	}
 	if nTables == 0 {
-		return nil, finality.Malformed("cfa1.n_tables", "at least one committee table is required", 0, 1)
+		return nil, finality.Malformed("cfa1.n_tables", finality.ReasonCFA1NoTables, 0, 1)
 	}
 	c := &CFA1{Tables: make([][][]byte, 0, nTables)}
 	for i := 0; i < nTables; i++ {
@@ -160,7 +160,7 @@ func DecodeCFA1(b []byte, lim finality.Limits) (*CFA1, error) {
 			return nil, err
 		}
 		if n == 0 {
-			return nil, finality.MalformedAt("cfa1.table", i, "a committee table is empty", 0, 1)
+			return nil, finality.MalformedAt("cfa1.table", i, finality.ReasonCFA1TableEmpty, 0, 1)
 		}
 		keys := make([][]byte, int(n))
 		for j := range keys {
@@ -178,10 +178,10 @@ func DecodeCFA1(b []byte, lim finality.Limits) (*CFA1, error) {
 		return nil, finality.EvidenceTooLarge("cfa1.records", uint64(nRec), uint64(lim.MaxCFA1Records))
 	}
 	if nRec == 0 {
-		return nil, finality.Malformed("cfa1.n_records", "at least record 0 is required", 0, 1)
+		return nil, finality.Malformed("cfa1.n_records", finality.ReasonCFA1NoRecords, 0, 1)
 	}
 	if uint64(nRec)*minRecordBytes > uint64(r.Left()) {
-		return nil, finality.Malformed("cfa1.records", "count exceeds the remaining bytes", r.Left(), int(nRec)*minRecordBytes)
+		return nil, finality.Malformed("cfa1.records", finality.ReasonCountExceedsRemaining, r.Left(), int(nRec)*minRecordBytes)
 	}
 	c.Records = make([]Record, 0, int(nRec))
 	for i := 0; i < int(nRec); i++ {
@@ -193,7 +193,7 @@ func DecodeCFA1(b []byte, lim finality.Limits) (*CFA1, error) {
 			return nil, err
 		}
 		if int(rec.CommitteeIdx) >= nTables || int(rec.NextIdx) >= nTables {
-			return nil, finality.MalformedAt("cfa1.record", i, "a table index is out of range", int(max8(rec.CommitteeIdx, rec.NextIdx)), nTables)
+			return nil, finality.MalformedAt("cfa1.record", i, finality.ReasonCFA1TableIndexOutOfRange, int(max8(rec.CommitteeIdx, rec.NextIdx)), nTables)
 		}
 		if rec.FinalState.Number, err = r.U64("cfa1.record.final_state.number"); err != nil {
 			return nil, err

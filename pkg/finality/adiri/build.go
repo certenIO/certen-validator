@@ -157,7 +157,7 @@ func endpointNote(url string, err error) string {
 // call sends the batch to each of urls in turn and returns the first answer in which no request failed with a transport or
 // HTTP error. Per-request JSON-RPC errors are returned in the answers (the caller decides which are acceptable). A failure of
 // every endpoint is finality_source_unavailable{reason, endpoints} with redacted notes.
-func (p *Prover) call(ctx context.Context, urls []string, reason string, reqs []rpcReq) ([]rpcResp, error) {
+func (p *Prover) call(ctx context.Context, urls []string, reason SourceReason, reqs []rpcReq) ([]rpcResp, error) {
 	var notes []string
 	for _, u := range urls {
 		out, err := p.post(ctx, u, reqs)
@@ -175,7 +175,7 @@ func (p *Prover) call(ctx context.Context, urls []string, reason string, reqs []
 	return nil, SourceUnavailable(reason, notes)
 }
 
-func (p *Prover) one(ctx context.Context, urls []string, reason, method string, params ...any) (rpcResp, error) {
+func (p *Prover) one(ctx context.Context, urls []string, reason SourceReason, method string, params ...any) (rpcResp, error) {
 	out, err := p.call(ctx, urls, reason, []rpcReq{{JSONRPC: "2.0", ID: 1, Method: method, Params: params}})
 	if err != nil {
 		return rpcResp{}, err
@@ -631,7 +631,7 @@ func (p *Prover) slotBody(ctx context.Context, cfa1 []byte, F NumHash, leg final
 		return Body{}, false
 	}
 	slot := common.BigToHash(new(big.Int).SetUint64(leg.Number % EIP2935Window))
-	out, err := p.call(ctx, p.ProofEndpoints, PendingHistoryProof, []rpcReq{
+	out, err := p.call(ctx, p.ProofEndpoints, SourceHistoryProof, []rpcReq{
 		{JSONRPC: "2.0", ID: 1, Method: "eth_getBlockByNumber", Params: []any{hexU(F.Number), false}},
 		{JSONRPC: "2.0", ID: 2, Method: "eth_getProof", Params: []any{par.EIP2935Address.Hex(), []string{slot.Hex()}, hexU(F.Number)}},
 	})

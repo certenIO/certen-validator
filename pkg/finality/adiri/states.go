@@ -32,22 +32,17 @@ const (
 
 // The checks of finality_link_broken.
 const (
-	LinkTipNotFinalState   = "tip_not_final_state"
-	LinkBlockAfterSeal     = "block_after_seal"
-	LinkSlotValueMismatch  = "slot_value_mismatch"
-	LinkCodeHashMismatch   = "account_codehash_mismatch"
-	LinkProofInvalid       = "proof_invalid"
-	LinkHeaderDecode       = "header_decode"
-	SpineName              = "adiri"
-	ReasonParentHash       = "parent_hash_mismatch"
-	ReasonNumberGap        = "number_gap"
-	PendingEpochOpen       = "epoch_open"
-	PendingCertPending     = "epoch_certificate_pending"
-	PendingEpochOverdue    = "epoch_overdue"
-	PendingHistoryProof    = "history_proof_unavailable"
-	SourceEpochRecord      = "epoch_record_unavailable"
-	SourceHeaders          = "headers_unavailable"
-	SourceEpochRecordsFail = "epoch_records_invalid"
+	LinkTipNotFinalState  = "tip_not_final_state"
+	LinkBlockAfterSeal    = "block_after_seal"
+	LinkSlotValueMismatch = "slot_value_mismatch"
+	LinkCodeHashMismatch  = "account_codehash_mismatch"
+	LinkProofInvalid      = "proof_invalid"
+	LinkHeaderDecode      = "header_decode"
+	SpineName             = "adiri"
+	PendingEpochOpen      = "epoch_open"
+	PendingCertPending    = "epoch_certificate_pending"
+	PendingEpochOverdue   = "epoch_overdue"
+	PendingHistoryProof   = "history_proof_unavailable"
 )
 
 // ChainBroken is committee_chain_broken{epoch, check, ...}.
@@ -79,7 +74,7 @@ func LinkBroken(check string, from, to, at uint64, kv ...any) *finality.StateErr
 }
 
 // HeaderChainBroken is finality_header_chain_broken{spine:"adiri", at_number, want_hash, got_hash, reason}.
-func HeaderChainBroken(atNumber uint64, want, got [32]byte, reason string) *finality.StateError {
+func HeaderChainBroken(atNumber uint64, want, got [32]byte, reason HeaderChainReason) *finality.StateError {
 	return finality.NewState(CodeHeaderChainBroken, "spine", SpineName, "at_number", atNumber, "want_hash", want, "got_hash", got, "reason", reason)
 }
 
@@ -89,6 +84,41 @@ func Shrunk(epoch uint64, size, expected int) *finality.StateError {
 }
 
 // SourceUnavailable is finality_source_unavailable{reason, endpoints} (builder side); endpoints are already redacted.
-func SourceUnavailable(reason string, endpoints []string, kv ...any) *finality.StateError {
+func SourceUnavailable(reason SourceReason, endpoints []string, kv ...any) *finality.StateError {
 	return finality.NewState(CodeSourceUnavailable, append([]any{"reason", reason, "endpoints", endpoints}, kv...)...)
 }
+
+// The closed reason sets of the Adiri states (testdata/finality/states.json enums.reason of each state); the conformance test
+// adiri_test.go asserts that these constants are exactly the registry sets and that no other reason is ever raised.
+
+// IncompatibleReason is the reason of committee_chain_broken{check:"committee_incompatible"}.
+type IncompatibleReason string
+
+const (
+	ReasonLargerThanExpected    IncompatibleReason = "larger_than_expected"
+	ReasonSetMismatch           IncompatibleReason = "set_mismatch"
+	ReasonNotSubset             IncompatibleReason = "not_subset"
+	ReasonBelowTwoThirds        IncompatibleReason = "below_two_thirds"
+	ReasonBelowMinCommitteeSize IncompatibleReason = "below_min_committee_size"
+)
+
+// SignatureReason is the reason of committee_chain_broken{check:"signature_invalid"}.
+type SignatureReason string
+
+// HeaderChainReason is the reason of finality_header_chain_broken{spine:"adiri"}.
+type HeaderChainReason string
+
+const (
+	ReasonParentHash HeaderChainReason = "parent_hash_mismatch"
+	ReasonNumberGap  HeaderChainReason = "number_gap"
+)
+
+// SourceReason is the reason of finality_source_unavailable.
+type SourceReason string
+
+const (
+	SourceEpochRecord      SourceReason = "epoch_record_unavailable"
+	SourceHeaders          SourceReason = "headers_unavailable"
+	SourceEpochRecordsFail SourceReason = "epoch_records_invalid"
+	SourceHistoryProof     SourceReason = "history_proof_unavailable"
+)

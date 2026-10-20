@@ -1,10 +1,10 @@
 // Copyright 2026 Certen Protocol
 
-// Command vectorgen records the finality_adiri1 vector set (V2_SPEC_S7 5.8, annex R11-adiri) and re-derives the Adiri pins
+// Command vectorgen records the finality_adiri3 vector set (V2_SPEC_S7 5.8, annex R11-adiri) and re-derives the Adiri pins
 // inputs from public data.
 //
 //	go run ./pkg/finality/adiri/vectorgen -mode fetch   -cache <dir>
-//	go run ./pkg/finality/adiri/vectorgen -mode vectors -cache <dir> -out pkg/finality/adiri/testdata/finality_adiri1
+//	go run ./pkg/finality/adiri/vectorgen -mode vectors -cache <dir> -out pkg/finality/adiri/testdata/finality_adiri3
 //
 // fetch reads the public data (tn_genesis, every sealed epoch record, the genesis link headers) from a public Adiri endpoint.
 // vectors builds the LIVE vectors with the Prover against the same endpoint, derives the ADVERSARIAL vectors by mutating the
@@ -12,7 +12,7 @@
 // file (the vectors contain public material only). Every expected verdict is a literal written in this package, not computed
 // by the verifier under test.
 //
-// Vector format (finality_adiri1/1): vectors.json holds {format, vectors[]}; each vector is {name, group live|adversarial|synthetic,
+// Vector format (finality_adiri3/1): vectors.json holds {format, vectors[]}; each vector is {name, group live|adversarial|synthetic,
 // note, leg{chain,number,hash,header_hex?}, pins "embedded" | the adiri pins section, evidence (a file under evidence/) or base +
 // edits, expect}. Edits are {offset, delete, insert(hex)} against the BASE vector's evidence bytes, applied from the highest
 // offset to the lowest. expect is the canonical text {"code":...,"fields":{...}} (sorted keys, unsigned integers as decimal
@@ -44,8 +44,6 @@ func main() {
 		err = fetchLive(*rpc, *cache, nil)
 	case "vectors":
 		err = writeVectors(*rpc, *cache, *out)
-	case "vectors2":
-		err = writeSet2(*out)
 	default:
 		err = fmt.Errorf("unknown mode %q", *mode)
 	}
@@ -74,7 +72,12 @@ func writeVectors(rpc, cache, out string) error {
 		evidence[k] = v
 	}
 	all = append(all, svs...)
-	return writeSet(out, "finality_adiri1/1", "finality_adiri1/manifest/1", evidence, all)
+	ev2, vs2 := set2Vectors()
+	for k, v := range ev2 {
+		evidence[k] = v
+	}
+	all = append(all, vs2...)
+	return writeSet(out, "finality_adiri3/1", "finality_adiri3/manifest/1", evidence, all)
 }
 
 // writeSet writes a vector set: evidence files, vectors.json, MANIFEST.json and MANIFEST.json.sha256.

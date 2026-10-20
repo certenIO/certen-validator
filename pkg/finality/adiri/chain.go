@@ -38,7 +38,7 @@ func VerifyCommitteeChain(par *Params, c *CFA1, mode Mode, rnd io.Reader) (*Chai
 		return nil, CodecUnsupported(0, par.Codec, Codec)
 	}
 	if len(c.Records) == 0 {
-		return nil, finality.Malformed("cfa1.n_records", "at least record 0 is required", 0, 1)
+		return nil, finality.Malformed("cfa1.n_records", finality.ReasonCFA1NoRecords, 0, 1)
 	}
 	keys := newKeyCache()
 	digests := c.RecordDigests()
@@ -75,30 +75,30 @@ func VerifyCommitteeChain(par *Params, c *CFA1, mode Mode, rnd io.Reader) (*Chai
 			size := len(committee)
 			switch {
 			case size > len(expected):
-				return nil, incompatible(ep, "larger_than_expected", size, len(expected), par.MinCommittee)
+				return nil, incompatible(ep, ReasonLargerThanExpected, size, len(expected), par.MinCommittee)
 			case size == len(expected):
 				for _, k := range committee {
 					if !expected[string(k)] {
-						return nil, incompatible(ep, "set_mismatch", size, len(expected), par.MinCommittee)
+						return nil, incompatible(ep, ReasonSetMismatch, size, len(expected), par.MinCommittee)
 					}
 				}
 			default:
 				for _, k := range committee {
 					if !expected[string(k)] {
-						return nil, incompatible(ep, "not_subset", size, len(expected), par.MinCommittee)
+						return nil, incompatible(ep, ReasonNotSubset, size, len(expected), par.MinCommittee)
 					}
 				}
 				if 3*size < 2*len(expected) {
-					return nil, incompatible(ep, "below_two_thirds", size, len(expected), par.MinCommittee)
+					return nil, incompatible(ep, ReasonBelowTwoThirds, size, len(expected), par.MinCommittee)
 				}
 				if size < par.MinCommittee {
-					return nil, incompatible(ep, "below_min_committee_size", size, len(expected), par.MinCommittee)
+					return nil, incompatible(ep, ReasonBelowMinCommitteeSize, size, len(expected), par.MinCommittee)
 				}
 				res.Shrunk = append(res.Shrunk, Shrunk(ep, size, len(expected)))
 			}
 		}
 		if len(committee) < par.MinCommittee {
-			return nil, incompatible(ep, "below_min_committee_size", len(committee), len(committee), par.MinCommittee)
+			return nil, incompatible(ep, ReasonBelowMinCommitteeSize, len(committee), len(committee), par.MinCommittee)
 		}
 		need := quorum(len(committee))
 		if len(rec.Signers) < need {
@@ -126,7 +126,7 @@ func VerifyCommitteeChain(par *Params, c *CFA1, mode Mode, rnd io.Reader) (*Chai
 	return res, nil
 }
 
-func incompatible(epoch uint64, reason string, size, expected, min int) *finality.StateError {
+func incompatible(epoch uint64, reason IncompatibleReason, size, expected, min int) *finality.StateError {
 	return ChainBroken(epoch, CheckCommitteeIncompatible, "reason", reason, "size", uint64(size), "expected", uint64(expected), "min_committee_size", uint64(min))
 }
 

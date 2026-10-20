@@ -99,7 +99,7 @@ func adversarial(base vec, baseEv []byte, facts cacheFacts) []vec {
 		mut(m)
 		out = append(out, vec{Name: name, Group: "adversarial", Note: note, Leg: base.Leg, Pins: m, Base: base.Name, Expect: expect})
 	}
-	for _, e := range []int{300, 5, 7, 8, 9, 12, 13, 100, 110, 125, 130, 150, 200, 201, 250, 300} {
+	for _, e := range []int{300, 5, 7, 8, 9, 12, 13, 100, 110, 125, 130, 140, 150, 200, 201, 250, 300} {
 		if e < len(facts.signers) && facts.signers[e] != 5 {
 			panic(fmt.Sprintf("record %d does not have 5 signers", e))
 		}
@@ -201,6 +201,13 @@ func adversarial(base vec, baseEv []byte, facts cacheFacts) []vec {
 	if gnarkSigReason(ident) != "identity" {
 		panic("the identity encoding is not classified identity")
 	}
+	bad := bytes.Repeat([]byte{0x11}, 48)
+	if gnarkSigReason(bad) != "encoding" {
+		panic("the malformed encoding is not classified encoding")
+	}
+	add("adv-signature-bad-encoding", "record 140's signature is 48 bytes of 0x11: no compressed G1 point (the compression flag is clear)",
+		canon("committee_chain_broken", "epoch", uint64(140), "check", "signature_invalid", "reason", "encoding"),
+		func(p parsed) { copy(p.cf.Records[140].Signature[:], bad) })
 	add("adv-signature-identity", "record 130's signature is the point at infinity",
 		canon("committee_chain_broken", "epoch", uint64(130), "check", "signature_invalid", "reason", "identity"),
 		func(p parsed) { copy(p.cf.Records[130].Signature[:], ident) })

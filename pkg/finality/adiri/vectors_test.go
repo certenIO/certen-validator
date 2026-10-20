@@ -16,10 +16,15 @@ import (
 	"github.com/certen/independant-validator/pkg/finality/adiri"
 )
 
-const vectorDir = "testdata/finality_adiri1"
+// vectorDir is the current set. finality_adiri1 and finality_adiri2 (published before the framework typed every reason and rendered
+// byte values as 0x-hex) stay byte-identical and are SUPERSEDED by finality_adiri3 (testdata/SUPERSEDED.md).
+const vectorDir = "testdata/finality_adiri3"
 
-// vectorDirs are the published sets: finality_adiri1 and its supplement finality_adiri2.
-var vectorDirs = []string{vectorDir, "testdata/finality_adiri2"}
+var (
+	supersededDirs = []string{"testdata/finality_adiri1", "testdata/finality_adiri2"}
+	vectorDirs     = []string{vectorDir}
+	manifestDirs   = []string{"testdata/finality_adiri1", "testdata/finality_adiri2", vectorDir}
+)
 
 type vEdit struct {
 	Offset int    `json:"offset"`
@@ -148,7 +153,7 @@ func flat(m map[string]any) []any {
 }
 
 func TestManifestHashesEveryVectorFile(t *testing.T) {
-	for _, d := range vectorDirs {
+	for _, d := range manifestDirs {
 		manifestCheck(t, d)
 	}
 }
@@ -197,7 +202,7 @@ func TestEveryVectorVerdictBothModesIdentical(t *testing.T) {
 		total += len(f.Vectors)
 		checkSet(t, f, groups)
 	}
-	if total < 55 {
+	if total < 59 {
 		t.Fatalf("only %d vectors", total)
 	}
 	for _, g := range []string{"live", "adversarial", "synthetic"} {

@@ -35,15 +35,15 @@ const (
 
 // The reasons of committee_chain_broken{check:"signature_invalid"}.
 const (
-	ReasonEncoding = "encoding"
-	ReasonIdentity = "identity"
-	ReasonSubgroup = "subgroup"
-	ReasonPairing  = "pairing"
+	ReasonEncoding SignatureReason = "encoding"
+	ReasonIdentity SignatureReason = "identity"
+	ReasonSubgroup SignatureReason = "subgroup"
+	ReasonPairing  SignatureReason = "pairing"
 )
 
 // decodeSignature decodes a compressed G1 signature with the encoding, non-identity and subgroup checks, each reported by its
 // own reason. The decoder is built WITHOUT its own subgroup check so that ours is the one that decides.
-func decodeSignature(b []byte) (bls12381.G1Affine, string) {
+func decodeSignature(b []byte) (bls12381.G1Affine, SignatureReason) {
 	var p bls12381.G1Affine
 	d := bls12381.NewDecoder(bytes.NewReader(b), bls12381.NoSubgroupChecks())
 	if err := d.Decode(&p); err != nil || len(b) != SigBytes {
@@ -99,7 +99,7 @@ type sigItem struct {
 }
 
 // verifyOne judges one item with pkg/crypto/bls: "" = valid, else the reason.
-func verifyOne(it sigItem) string {
+func verifyOne(it sigItem) SignatureReason {
 	if _, reason := decodeSignature(it.sig); reason != "" {
 		return reason
 	}
@@ -121,7 +121,7 @@ func verifyOne(it sigItem) string {
 }
 
 // firstOneByOne verifies every item in ascending epoch order and returns the first failing (index in items, reason), or -1.
-func firstOneByOne(items []sigItem) (int, string) {
+func firstOneByOne(items []sigItem) (int, SignatureReason) {
 	for i, it := range items {
 		if r := verifyOne(it); r != "" {
 			return i, r
@@ -218,7 +218,7 @@ func batchedAccepts(items []sigItem, rnd io.Reader) (bool, error) {
 
 // firstFailure returns the lowest failing item and its reason under the mode, or -1. In batched mode the combination decides
 // acceptance, and a failure is only localised one by one (never accepted by the localisation).
-func firstFailure(items []sigItem, mode Mode, rnd io.Reader) (int, string, error) {
+func firstFailure(items []sigItem, mode Mode, rnd io.Reader) (int, SignatureReason, error) {
 	if len(items) == 0 {
 		return -1, "", nil
 	}

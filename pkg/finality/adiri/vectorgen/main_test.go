@@ -9,11 +9,11 @@ import (
 	"testing"
 )
 
-// The 33 adversarial vectors are mutations of the committed real evidence of block 513643: regenerating them offline from that
+// The 34 adversarial vectors are mutations of the committed real evidence of block 513643: regenerating them offline from that
 // file reproduces the committed vectors.json entries byte for byte (expected verdicts are literals written in adversarial.go).
 // The synthetic vectors need the private test-key seed (gitignored keys/) and are not regenerated here.
 func TestAdversarialSetRegeneratesOfflineFromTheCommittedBase(t *testing.T) {
-	dir := filepath.Join("..", "testdata", "finality_adiri1")
+	dir := filepath.Join("..", "testdata", "finality_adiri3")
 	raw, err := os.ReadFile(filepath.Join(dir, "vectors.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -41,7 +41,7 @@ func TestAdversarialSetRegeneratesOfflineFromTheCommittedBase(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := adversarial(base, ev, factsFromEvidence(ev))
-	if len(got) != 33 {
+	if len(got) != 34 {
 		t.Fatalf("%d adversarial vectors", len(got))
 	}
 	for _, v := range got {

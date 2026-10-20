@@ -114,6 +114,21 @@ const (
 	ReasonHeaderItemNot32Bytes    EvidenceReason = "header_item_not_32_bytes"
 	ReasonHeaderItemNotCanonUint  EvidenceReason = "header_item_not_canonical_uint"
 	ReasonHeaderItemIsList        EvidenceReason = "header_item_is_list"
+
+	// The compact Adiri committee chain (pkg/finality/adiri, RB11-F1): the container body of adiri/finalized/v1.
+	ReasonCFA1BadMagic             EvidenceReason = "cfa1_bad_magic"
+	ReasonCFA1KeyLength            EvidenceReason = "cfa1_key_length"
+	ReasonCFA1NoRecords            EvidenceReason = "cfa1_no_records"
+	ReasonCFA1NoTables             EvidenceReason = "cfa1_no_tables"
+	ReasonCFA1SignersTooMany       EvidenceReason = "cfa1_signers_too_many"
+	ReasonCFA1TableEmpty           EvidenceReason = "cfa1_table_empty"
+	ReasonCFA1TableIndexOutOfRange EvidenceReason = "cfa1_table_index_out_of_range"
+	ReasonCFA1TableSize            EvidenceReason = "cfa1_table_size"
+	ReasonCFA1TooLargeToEncode     EvidenceReason = "cfa1_too_large_to_encode"
+	ReasonLevelNotFinalized        EvidenceReason = "level_not_finalized"
+	ReasonLinkKind2AtSeal          EvidenceReason = "link_kind_2_at_seal"
+	ReasonLinkKindUnknown          EvidenceReason = "link_kind_unknown"
+	ReasonSpineEmpty               EvidenceReason = "spine_empty"
 )
 
 // AddendumReason is the reason of finality_addendum_malformed (the JSON form of an addendum, a section and a proof id).

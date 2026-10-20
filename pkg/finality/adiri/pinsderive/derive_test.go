@@ -88,7 +88,7 @@ func TestGenesisLinkBindsTheCommitteeChainToTheGenesisBlock(t *testing.T) {
 // Epoch 0's record in the live chain carries exactly the pinned committee (as a set), a certificate that verifies, and the
 // pinned final state (annex A7 step 3): verified here through the real evidence.
 func TestRecordZeroMatchesThePins(t *testing.T) {
-	ev, err := os.ReadFile(filepath.Join("..", "testdata", "finality_adiri1", "evidence", "live-500749-epoch600.bin"))
+	ev, err := os.ReadFile(filepath.Join("..", "testdata", "finality_adiri3", "evidence", "live-500749-epoch600.bin"))
 	if err != nil {
 		t.Fatal(err)
 	}

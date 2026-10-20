@@ -6,7 +6,9 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/ethereum/go-ethereum/common"
 	"lukechampine.com/blake3"
@@ -146,40 +148,60 @@ func ParsePins(p *finality.Pins) (*Params, error) {
 	dec := json.NewDecoder(bytes.NewReader(p.Sections["adiri"]))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&j); err != nil {
-		return nil, finality.PinsCorrupt("adiri: " + err.Error())
+		return nil, pinsDecodeError(err)
 	}
 	par := &Params{ChainID: j.ChainID, Codec: j.Codec, GenesisLinkSHA: j.GenesisLinkSHA, MinCommittee: j.MinCommittee, MaxHeaders: j.MaxHeaders}
 	var err error
 	if par.GenesisHash, err = hex32(j.GenesisHash); err != nil {
-		return nil, finality.PinsCorrupt("adiri.genesis_hash: " + err.Error())
+		return nil, finality.PinsCorrupt(finality.PinsBadValue, "key", "adiri.genesis_hash")
 	}
 	if par.Epoch0FinalState.Hash, err = hex32(j.Epoch0FinalState.Hash); err != nil {
-		return nil, finality.PinsCorrupt("adiri.epoch0_final_state.hash: " + err.Error())
+		return nil, finality.PinsCorrupt(finality.PinsBadValue, "key", "adiri.epoch0_final_state.hash")
 	}
 	par.Epoch0FinalState.Number = j.Epoch0FinalState.Number
 	if par.EIP2935CodeHash, err = hex32(j.EIP2935.Codehash); err != nil {
-		return nil, finality.PinsCorrupt("adiri.eip2935.runtime_codehash: " + err.Error())
+		return nil, finality.PinsCorrupt(finality.PinsBadValue, "key", "adiri.eip2935.runtime_codehash")
 	}
 	a, err := decode0x(j.EIP2935.Address)
 	if err != nil || len(a) != 20 {
-		return nil, finality.PinsCorrupt("adiri.eip2935.address is not 0x + 20 bytes")
+		return nil, finality.PinsCorrupt(finality.PinsBadValue, "key", "adiri.eip2935.address")
 	}
 	par.EIP2935Address = common.BytesToAddress(a)
 	if len(j.GenesisCommittee) == 0 || len(j.GenesisCommittee) > 255 {
-		return nil, finality.PinsCorrupt("adiri.genesis_committee must hold 1..255 keys")
+		return nil, finality.PinsCorrupt(finality.PinsBadValue, "key", "adiri.genesis_committee")
 	}
 	for i, h := range j.GenesisCommittee {
 		k := common.FromHex("0x" + h)
 		if len(k) != KeyBytes {
-			return nil, finality.PinsCorrupt(fmt.Sprintf("adiri.genesis_committee[%d] is not 96 bytes of hex", i))
+			return nil, finality.PinsCorrupt(finality.PinsBadValue, "key", "adiri.genesis_committee", "index", uint64(i))
 		}
 		par.GenesisCommittee = append(par.GenesisCommittee, k)
 	}
-	if par.MinCommittee < 1 || par.MaxHeaders < 1 || par.ChainID == 0 {
-		return nil, finality.PinsCorrupt("adiri.min_committee_size, max_headers and chain_id must be positive")
+	for _, c := range []struct {
+		bad bool
+		key string
+	}{{par.ChainID == 0, "adiri.chain_id"}, {par.MinCommittee < 1, "adiri.min_committee_size"}, {par.MaxHeaders < 1, "adiri.max_headers"}} {
+		if c.bad {
+			return nil, finality.PinsCorrupt(finality.PinsBadValue, "key", c.key)
+		}
 	}
 	if len(j.GenesisLinkSHA) != 64 {
-		return nil, finality.PinsCorrupt("adiri.genesis_link_sha256 is not 64 hex characters")
+		return nil, finality.PinsCorrupt(finality.PinsBadValue, "key", "adiri.genesis_link_sha256")
 	}
 	return par, nil
+}
+
+// pinsDecodeError maps a JSON decode failure of the adiri section to a registered reason: an unknown field is
+// pins_unknown_key (with the key), any other value or type error is bad_value (with the key when the decoder names one).
+func pinsDecodeError(err error) *finality.StateError {
+	msg := err.Error()
+	if i := strings.Index(msg, "unknown field \""); i >= 0 {
+		k := msg[i+len("unknown field \""):]
+		return finality.PinsCorrupt(finality.PinsUnknownKey, "key", "adiri."+strings.TrimSuffix(k, "\""))
+	}
+	var ute *json.UnmarshalTypeError
+	if errors.As(err, &ute) {
+		return finality.PinsCorrupt(finality.PinsBadValue, "key", "adiri."+ute.Field)
+	}
+	return finality.PinsCorrupt(finality.PinsNotJSON, "key", "adiri")
 }

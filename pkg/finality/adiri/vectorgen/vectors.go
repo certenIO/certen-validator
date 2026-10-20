@@ -91,7 +91,7 @@ func canonVal(v any) string {
 	case uint64:
 		return jsonStr(strconv.FormatUint(x, 10))
 	case [32]byte:
-		return jsonStr(hex.EncodeToString(x[:]))
+		return jsonStr("0x" + hex.EncodeToString(x[:]))
 	case []string:
 		parts := make([]string, len(x))
 		for i, e := range x {

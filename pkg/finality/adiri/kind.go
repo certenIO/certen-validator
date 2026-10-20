@@ -70,7 +70,7 @@ func DecodeBody(body []byte, lim finality.Limits, maxHeaders int) (*Body, error)
 			return nil, err
 		}
 		if len(b.Spine) == 0 {
-			return nil, finality.Malformed("spine", "a spine holds at least the seal header", 0, 1)
+			return nil, finality.Malformed("spine", finality.ReasonSpineEmpty, 0, 1)
 		}
 	case LinkSlot:
 		if b.FinalHeader, err = r.LP("finalHeader", lim.MaxNodeBytes); err != nil {
@@ -80,7 +80,7 @@ func DecodeBody(body []byte, lim finality.Limits, maxHeaders int) (*Body, error)
 			return nil, err
 		}
 	default:
-		return nil, finality.Malformed("linkKind", "linkKind is 1 (spine) or 2 (history slot)", int(b.LinkKind), 1)
+		return nil, finality.Malformed("linkKind", finality.ReasonLinkKindUnknown, int(b.LinkKind), 1)
 	}
 	if err := r.End("body"); err != nil {
 		return nil, err
@@ -151,7 +151,7 @@ func (v *Verifier) Verify(p *finality.Pins, leg finality.BlockRef, evidence []by
 		return finality.Verdict{}, PinMismatch("chain_id", par.ChainID, h.Chain)
 	}
 	if h.Level != finality.LevelFinalized {
-		return finality.Verdict{}, finality.Malformed("header.level", "adiri/finalized/v1 is level 3", int(h.Level), 3)
+		return finality.Verdict{}, finality.Malformed("header.level", finality.ReasonLevelNotFinalized, int(h.Level), 3)
 	}
 	if h.BlockNumber != leg.Number {
 		return finality.Verdict{}, finality.BlockMismatch("blockNumber", leg.Number, h.BlockNumber)
@@ -258,7 +258,7 @@ func verifySlot(par *Params, res *ChainResult, body *Body, leg finality.BlockRef
 	var out linkResult
 	F := res.Final
 	if leg.Number == F.Number {
-		return out, finality.Malformed("linkKind", "linkKind 2 is used only when the leg block is below the seal; the seal itself is a single-header spine", int(body.LinkKind), 1)
+		return out, finality.Malformed("linkKind", finality.ReasonLinkKind2AtSeal, int(body.LinkKind), 1)
 	}
 	h, err := finality.ReadHeader(body.FinalHeader)
 	if err != nil {

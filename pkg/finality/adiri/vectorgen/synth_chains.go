@@ -347,7 +347,7 @@ func syntheticChains(keysDir string) (map[string][]byte, []vec) {
 		canon("finality_link_broken", "from", uint64(1003), "to", uint64(1000), "at", uint64(1000), "check", "proof_invalid"))
 	o = buildSynth(kp, []epochSpec{{committee: g5, next: g5, signers: seq(0, 5)}}, &kind2{legIsFinal: true}, 12)
 	add("syn-kind2-leg-is-seal", "linkKind 2 for the seal block itself: the single-header spine is the only form", o,
-		canon("finality_evidence_malformed", "part", "linkKind", "reason", "linkKind 2 is used only when the leg block is below the seal; the seal itself is a single-header spine", "got_len", uint64(2), "want_len", uint64(1)))
+		canon("finality_evidence_malformed", "part", "linkKind", "reason", "link_kind_2_at_seal", "got_len", uint64(2), "want_len", uint64(1)))
 	// the single-header spine: the evidence for leg = F
 	o = singleHeader(kp, g5)
 	add("syn-spine-single-header", "N = F: linkKind 1 with the one-header spine [F]", o,
