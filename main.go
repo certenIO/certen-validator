@@ -35,6 +35,7 @@ import (
 	"github.com/certen/independant-validator/pkg/execution"
 	"github.com/certen/independant-validator/pkg/execution/contracts"
 	"github.com/certen/independant-validator/pkg/finality"
+	"github.com/certen/independant-validator/pkg/finality/adiri"
 	"github.com/certen/independant-validator/pkg/firestore"
 	"github.com/certen/independant-validator/pkg/intent"
 	"github.com/certen/independant-validator/pkg/ledger"
@@ -2320,6 +2321,10 @@ func startValidator(
 		// The finality pins are embedded and hash-checked: a verifier whose embedded bytes do not hash to PinsSHA256 refuses to start.
 		finalityPins, ferr := finality.EmbeddedPins()
 		if ferr != nil {
+			return nil, nil, fmt.Errorf("finality pins: %w", ferr)
+		}
+		// The Adiri genesis link is embedded and hash-pinned by those pins; it is checked once here, at startup, never per proof.
+		if ferr := adiri.CheckEmbeddedGenesisLink(finalityPins); ferr != nil {
 			return nil, nil, fmt.Errorf("finality pins: %w", ferr)
 		}
 		if _, ferr := finality.Launch(context.Background(), finalityOn, finalityRepo, finalityRepo, finality.Default, finalityPins,
