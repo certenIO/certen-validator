@@ -4,8 +4,12 @@
 # REPRODUCIBLE BUILD. Every input is pinned, so the same commit and the same key files give byte-identical binaries,
 # and the release publishes their SHA-256 (docs/l4/REPRODUCIBLE_BUILD.md):
 #   - both base images by digest (a tag such as golang:1.25-alpine or alpine:latest moves under the same name);
-#   - the Alpine packages by exact version: apk fails by name when a pinned version leaves the repository, instead of
-#     building against a different compiler or libc without saying so;
+#   - the BUILDER Alpine packages (git, gcc, musl-dev) by exact version: they decide the bytes of the cgo validator
+#     binary, and apk fails by name when a pinned version leaves the repository, instead of building against a different
+#     compiler or libc without saying so. When that happens run deploy/refresh-apk-pins.sh (one command, then commit);
+#   - the RUNTIME packages (ca-certificates, tzdata) are NOT pinned: they are data that enters no binary (the published
+#     SHA-256 are of the binaries), Alpine withdraws old versions every few weeks, and newer CA and time-zone data is
+#     what a runtime image should carry;
 #   - every go build with -trimpath (no host paths), -buildvcs=false (.git is not in the context, .dockerignore) and
 #     -ldflags=-buildid= (no per-build id).
 # To move a pin: change it here, rebuild twice from the same commit, compare, publish the new digests.
@@ -119,8 +123,8 @@ RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -trimpath -buildvcs=
 # ═══════════════════════════════════════════════════════════════
 FROM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
 
-# Install runtime dependencies (versions pinned; see the builder stage)
-RUN apk add --no-cache ca-certificates=20261020-r0 tzdata=2026e-r0
+# Install runtime dependencies (deliberately unpinned data packages; see the header)
+RUN apk add --no-cache ca-certificates tzdata
 
 # Create unprivileged user for security
 RUN adduser -D -s /bin/sh validator
