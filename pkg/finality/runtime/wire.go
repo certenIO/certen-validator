@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 	"github.com/certen/independant-validator/pkg/finality/basefinal"
 	"github.com/certen/independant-validator/pkg/finality/baseposted"
 	"github.com/certen/independant-validator/pkg/finality/ethl1"
+	"github.com/certen/independant-validator/pkg/finality/ethsepolia"
 )
 
 // LCFeed is the light-client source the wiring needs: the L1-finality part of the evidence and the beacon head slot it observed.
@@ -40,21 +42,12 @@ type Env struct {
 	L1Proof []string // near-head proof providers followed by the archive provider
 }
 
-// SepoliaKit is the seam for the Ethereum Sepolia finalized kind (RB11-C2, pkg/finality/ethsepolia): a verifier registration and
-// the prover. A nil kit leaves chain 11155111 switched off by the named state finality_upgrader_disabled (the kind is not built
-// into this binary), never silently.
-type SepoliaKit struct {
-	Register func(*finality.Registry) error
-	Prover   func(Env) (finality.Prover, error)
-}
-
 // Deps are the process-level collaborators of the wiring.
 type Deps struct {
 	Registry *finality.Registry
 	Store    finality.CaptureStore // the durable store (database.FinalityCaptureStore)
 	Status   finality.BuilderStatusStore
 	Logf     func(string, ...any)
-	Sepolia  *SepoliaKit
 
 	// Test hooks.
 	HTTP  *http.Client
@@ -162,11 +155,6 @@ func Wire(cfg Config, d Deps) (*Wiring, error) {
 	if err := allkinds.Register(reg); err != nil {
 		return nil, err
 	}
-	if d.Sepolia != nil && d.Sepolia.Register != nil {
-		if err := d.Sepolia.Register(reg); err != nil {
-			return nil, err
-		}
-	}
 
 	hc := d.HTTP
 	if hc == nil {
@@ -201,6 +189,7 @@ func Wire(cfg Config, d Deps) (*Wiring, error) {
 			return reg.RegisterProver(&adiri.Prover{Endpoints: cfg.Adiri, ProofEndpoints: cfg.AdiriPF, Client: hc, Pins: pins, Verifier: adiri.NewVerifier(),
 				Now: now, BatchSize: cfg.MaxBatch})
 		}},
+		{finality.ChainSepolia, "ethereum-sepolia", func() error { return wireSepolia(reg, env, d) }},
 		{finality.ChainBaseSepolia, "base-sepolia", func() error { return wireBase(reg, env, d, clock, logf) }},
 		{finality.ChainArbitrumSepolia, "arbitrum-sepolia", func() error { return wireArb(reg, env, d, clock, logf, cache) }},
 	}
@@ -214,21 +203,6 @@ func Wire(cfg Config, d Deps) (*Wiring, error) {
 				fmt.Sprintf("the %s builders could not be built (%s); no finality addenda are appended for chain %d by this validator", s.name, ethrpc.RedactText(err.Error()), s.chain))
 		}
 	}
-	switch {
-	case d.Sepolia == nil || d.Sepolia.Prover == nil:
-		w.Disabled[finality.ChainSepolia] = disabledState(finality.ChainSepolia, "binary:pkg/finality/ethsepolia", "absent",
-			"the Ethereum Sepolia finalized kind (RB11-C2) is not built into this binary; no finality addenda are appended for chain 11155111 and its proofs stay at included")
-	case w.Disabled[finality.ChainSepolia] == nil:
-		p, err := d.Sepolia.Prover(env)
-		if err == nil {
-			err = reg.RegisterProver(p)
-		}
-		if err != nil {
-			w.Disabled[finality.ChainSepolia] = disabledState(finality.ChainSepolia, "pins:ethereum-sepolia", "unusable",
-				fmt.Sprintf("the Sepolia builders could not be built (%s); no finality addenda are appended for chain 11155111", ethrpc.RedactText(err.Error())))
-		}
-	}
-
 	// the per-chain switches (CERTEN_FINALITY_CHAIN_<id>_ENABLED) join the missing-configuration chains
 	off, err := finality.DisabledChainsFromEnv(reg.Chains())
 	if err != nil {
@@ -304,4 +278,23 @@ func wireArb(reg *finality.Registry, env Env, d Deps, clock loopClock, logf func
 	bc.Client = env.HTTP
 	cp := capture.NewCapturer(env.Store, l1, bc, capture.Config{Logf: logf, StartBack: 32})
 	return reg.RegisterCapturer(&ArbPostedLoop{Cap: cp, Providers: Hosts(providers), Status: d.Status, Every: cfg.CaptureEvery, Logf: logf, Clock: clock})
+}
+
+// wireSepolia registers the Ethereum Sepolia finalized prover: the light-client objects come from the ordered CERTEN_FINALITY_LC_URLS
+// list (availability only, in order), the execution headers of the spine from the validator's Sepolia endpoints (JSON-RPC batches
+// of at most MaxBatch, 429 retried with a bounded backoff by the shared transport and by the source itself), and the ledger link
+// files are the embedded ones. A spine of several thousand headers takes minutes on a public endpoint: the prover runs only in the
+// background upgrader pass, under the pass's BuildTimeout (CERTEN_FINALITY_BUILD_TIMEOUT_SECONDS), never on the settlement path.
+func wireSepolia(reg *finality.Registry, env Env, d Deps) error {
+	cfg := env.Config
+	links, err := finality.EmbeddedLedgerLinks()
+	if err != nil {
+		return err
+	}
+	srcs := make(ethsepolia.Multi, 0, len(cfg.LC))
+	for _, u := range cfg.LC {
+		srcs = append(srcs, &ethsepolia.HTTPSource{Base: strings.TrimRight(u, "/"), Client: env.HTTP})
+	}
+	return reg.RegisterProver(&ethsepolia.Prover{Source: srcs, Exec: &ethsepolia.RPCHeaders{Endpoints: env.L1Block, Client: env.HTTP, BatchSize: cfg.MaxBatch},
+		Pins: env.Pins, Verifier: ethsepolia.New(), Now: d.Now, ExtraLinks: links})
 }

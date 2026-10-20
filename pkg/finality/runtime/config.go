@@ -219,6 +219,12 @@ func (c Config) Missing() map[uint64][]string {
 		add(finality.ChainBaseSepolia, EnvLCURLs)
 		add(finality.ChainArbitrumSepolia, EnvLCURLs)
 	}
+	if len(c.LC) == 0 {
+		add(finality.ChainSepolia, EnvLCURLs)
+	}
+	if len(c.L1RPC) == 0 {
+		add(finality.ChainSepolia, EnvL1RPCURLs)
+	}
 	if len(c.Adiri) == 0 {
 		add(finality.ChainAdiri, EnvAdiriURLs)
 	}
