@@ -42,6 +42,10 @@ const (
 	LedgerLinkRefused LedgerReason = "link_refused"
 	// LedgerRootPinUnverifiable: the first entry of a re-derived ledger is not a block_root pin with its bootstrap.
 	LedgerRootPinUnverifiable LedgerReason = "root_pin_unverifiable"
+	// LedgerBlockRootOnAppendedEntry: an appended entry carries a block_root. An appended entry is derived by the one link file of its
+	// period (4.3), so there is no bootstrap beside the file to judge a block_root by; a block_root that cannot be judged is refused,
+	// never taken on trust. Only the first entry of a ledger (the root pin, whose bootstrap is its file) may carry one.
+	LedgerBlockRootOnAppendedEntry LedgerReason = "block_root_on_appended_entry"
 )
 
 // LedgerExtensionInvalid is finality_ledger_extension_invalid{period, reason[, inner]}.
@@ -135,6 +139,9 @@ func (e *EthSepoliaPins) LedgerStep(pred, cand AnchorPin, predBody, predBootstra
 	if cand.Period != pred.Period+1 {
 		return nil, LedgerExtensionInvalid(cand.Period, LedgerPeriodNotNext, "predecessor_period", pred.Period)
 	}
+	if cand.BlockRoot != "" {
+		return nil, LedgerExtensionInvalid(cand.Period, LedgerBlockRootOnAppendedEntry)
+	}
 	if len(link) == 0 {
 		return nil, LedgerExtensionInvalid(cand.Period, LedgerLinkMissing)
 	}
@@ -153,18 +160,25 @@ func (e *EthSepoliaPins) LedgerStep(pred, cand AnchorPin, predBody, predBootstra
 		return nil, LedgerExtensionInvalid(cand.Period, LedgerLinkRefused, "inner", CodeEvidenceMalformed)
 	}
 	if _, err := ethl1.VerifyFinalizedHead(e.L1Pins([]AnchorPin{pred, cand}), lc); err != nil {
-		inner := "unknown"
-		if f, ok := err.(*ethl1.Fault); ok {
-			inner = f.Code
-		}
-		return nil, LedgerExtensionInvalid(cand.Period, LedgerLinkRefused, "inner", inner)
+		return nil, LedgerExtensionInvalid(cand.Period, LedgerLinkRefused, "inner", innerCode(err))
 	}
 	return append([]byte(nil), body...), nil
 }
 
+// innerCode is the code of the light-client verifier's fault, "unknown" for any other error.
+func innerCode(err error) string {
+	if f, ok := err.(*ethl1.Fault); ok {
+		return f.Code
+	}
+	return "unknown"
+}
+
 // committeeOf re-establishes the committee body of an anchor from the bytes beside the file: the bootstrap for a block_root pin,
-// the link that derived the entry otherwise. The bytes must hash to the entry's link_sha256 and the committee to its root.
-func committeeOf(a AnchorPin, links map[uint64][]byte) ([]byte, error) {
+// the link that derived the entry otherwise. The bytes must hash to the entry's link_sha256 and the committee to its root. For a
+// block_root pin the bootstrap is also judged as the kind-2 anchor of 5.2 step 2 (ethl1.VerifyBootstrapAnchor): the block_root is the
+// root of the bootstrap's header, the header's execution branch and the committee branch hold, and the header is in the entry's
+// period; without that a ledger whose only entry is the root pin would be "re-derived" from bytes nobody had checked against it.
+func (e *EthSepoliaPins) committeeOf(a AnchorPin, links map[uint64][]byte) ([]byte, error) {
 	raw, ok := links[a.Period]
 	if !ok {
 		return nil, LedgerExtensionInvalid(a.Period, LedgerPredecessorUnavailable)
@@ -184,6 +198,12 @@ func committeeOf(a AnchorPin, links map[uint64][]byte) ([]byte, error) {
 	}
 	if root, err := ethl1.HashTreeRootSyncCommittee(body); err != nil || root != rootOf(a.CommitteeRoot) {
 		return nil, LedgerExtensionInvalid(a.Period, LedgerPredecessorUnavailable)
+	}
+	if a.BlockRoot != "" {
+		lb := ethl1.LB{Layout: L1Layout(lcssz.LayoutOfBootstrap(raw)), SSZ: raw}
+		if err := ethl1.VerifyBootstrapAnchor(e.L1Pins(e.Anchors), a.Period, lb); err != nil {
+			return nil, LedgerExtensionInvalid(a.Period, LedgerPredecessorUnavailable, "inner", innerCode(err))
+		}
 	}
 	return body, nil
 }
@@ -251,7 +271,7 @@ func (p *Pins) Extend(raw []byte, links map[uint64][]byte) (*Pins, error) {
 			maxWsp = a.WspEpochs
 		}
 	}
-	predBody, err := committeeOf(base[len(base)-1], links)
+	predBody, err := p.EthSepolia.committeeOf(base[len(base)-1], links)
 	if err != nil {
 		return nil, err
 	}
@@ -274,7 +294,8 @@ func (p *Pins) Extend(raw []byte, links map[uint64][]byte) (*Pins, error) {
 }
 
 // VerifyLedger re-derives the whole ledger from its first entry, which must be a block_root pin whose bootstrap is
-// links[anchors[0].Period] (the root pin of the annex), through every appended link: the offline form of
+// links[anchors[0].Period] (the root pin of the annex) and is judged as the kind-2 anchor of that period even when it is the only
+// entry, through every appended link (an appended entry may not carry a block_root, LedgerBlockRootOnAppendedEntry): the offline form of
 // `proofverify --pins-selfcheck`. It does I/O nowhere; the caller supplies the link bytes.
 func (p *Pins) VerifyLedger(links map[uint64][]byte) error {
 	if p == nil || p.EthSepolia == nil || len(p.EthSepolia.Anchors) == 0 {
@@ -284,9 +305,15 @@ func (p *Pins) VerifyLedger(links map[uint64][]byte) error {
 	if a[0].BlockRoot == "" {
 		return LedgerExtensionInvalid(a[0].Period, LedgerRootPinUnverifiable)
 	}
-	body, err := committeeOf(a[0], links)
+	body, err := p.EthSepolia.committeeOf(a[0], links)
 	if err != nil {
-		return LedgerExtensionInvalid(a[0].Period, LedgerRootPinUnverifiable)
+		var kv []any
+		if s, ok := AsNamed(err); ok {
+			if inner, ok := s.Fields["inner"]; ok {
+				kv = append(kv, "inner", inner)
+			}
+		}
+		return LedgerExtensionInvalid(a[0].Period, LedgerRootPinUnverifiable, kv...)
 	}
 	boot := links[a[0].Period]
 	for i := 1; i < len(a); i++ {

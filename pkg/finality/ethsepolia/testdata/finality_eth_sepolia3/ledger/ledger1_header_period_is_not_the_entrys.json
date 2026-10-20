@@ -1,0 +1,25 @@
+{
+ "format": "certen-finality-ethsepolia-ledger-case/1",
+ "id": "ledger1_header_period_is_not_the_entrys",
+ "description": "the entry is relabelled period 1377 (its bootstrap file moved to 1377.ssz) although the header's slot is in period 1378 (D1)",
+ "op": "verify_ledger",
+ "pins": "pins/embedded.json",
+ "links_dir": "raw/links",
+ "links_only": [
+  1378
+ ],
+ "anchor_patch": [
+  {
+   "period": 1378,
+   "field": "period",
+   "value": "1377"
+  }
+ ],
+ "link_move": [
+  {
+   "from": 1378,
+   "to": 1377
+  }
+ ],
+ "expect_canonical": "{\"code\":\"finality_ledger_extension_invalid\",\"fields\":{\"inner\":\"finality_bootstrap_invalid\",\"period\":\"1377\",\"reason\":\"root_pin_unverifiable\"}}"
+}

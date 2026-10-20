@@ -1,0 +1,12 @@
+{
+ "format": "certen-finality-ethsepolia-ledger-case/1",
+ "id": "ledger1_embedded_valid",
+ "description": "control: the embedded single-entry ledger re-derives from its root bootstrap, judged as the kind-2 anchor",
+ "op": "verify_ledger",
+ "pins": "pins/embedded.json",
+ "links_dir": "raw/links",
+ "links_only": [
+  1378
+ ],
+ "expect_canonical": "{\"code\":\"verified\",\"fields\":{\"anchors\":\"1\"}}"
+}
