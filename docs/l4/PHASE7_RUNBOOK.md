@@ -181,6 +181,8 @@ reads as "the institution did not authorize this".
 ✅ G (depth 21), H (cycle), I (duplicate), J (wrong chain) all refused, each
 with a distinct, readable reason.
 ✅ K refused with an unsupported-type reason, not a threshold reason.
+   *(SUPERSEDED by RB8-B, 2026-10-17: K is a btc signature, a key-signature type Accumulate's executor accepts; G1 now
+   verifies it from its bytes. The unsupported-type reason remains for a type Accumulate defines no key signature for.)*
 ✅ Case A unchanged — the 1-of-1 path must not regress.
 
 ---

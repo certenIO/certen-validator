@@ -5,10 +5,12 @@ package govvote
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/govreceipt"
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/govsig"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/types/messaging"
 	"gitlab.com/accumulatenetwork/accumulate/protocol"
 )
@@ -40,6 +42,11 @@ type Evidence struct {
 	Pages          []PageHistory       `json:"pages"`
 	// AuthoritySet is what Authorities is replayed from (account.go); the replay must reach it exactly.
 	AuthoritySet *AuthorityEvidence `json:"authoritySet"`
+	// NetworkName is the network's name ("DevNet" on Kermit), carried when a counted signature is typedData: its chain id
+	// is protocol.EthChainID of the name (the executor refuses any other, sig_user.go checkChainID). Empty otherwise, so
+	// evidence recorded before RB8-B keeps its bytes. A typedData signature with no name is the named state
+	// network_name_unproven.
+	NetworkName string `json:"networkName,omitempty"`
 }
 
 // SignatureEvidence is one user signature on the transaction: the fact the model read, the signature, and its receipt
@@ -103,7 +110,7 @@ func VerifyEvidence(ctx context.Context, ev *Evidence) (*AccountVote, error) {
 		if err != nil {
 			return nil, fmt.Errorf("signature %d: %w", i, err)
 		}
-		if err := checkSignatureFact(txn, sig, s.Fact); err != nil {
+		if err := checkSignatureFact(txn, sig, s.Fact, ev.NetworkName); err != nil {
 			return nil, fmt.Errorf("signature %d (%s): %w", i, short(s.Fact.ID), err)
 		}
 		if err := checkMessageReceipt(txn, sig, s.Fact.ID, s.Fact.Block, s.Receipt); err != nil {
@@ -265,21 +272,33 @@ func checkMessageReceipt(txn *protocol.Transaction, sig protocol.Signature, id s
 
 // checkSignatureFact requires the fact to be what the signature says: a user signature on this transaction, by the
 // key and signer version and with the vote the fact records, on the signer and delegation path it records.
-func checkSignatureFact(txn *protocol.Transaction, sig protocol.Signature, f SigFact) error {
-	us, ok := sig.(protocol.UserSignature)
-	if !ok {
+//
+// "A user signature on this transaction" is Accumulate's own rule (govsig.Verify): after unwrapping at most
+// DelegationDepthLimit delegations the innermost value is one of the nine key-signature types the executor accepts,
+// protocol.VerifyUserSignature accepts the outermost signature over the transaction, a typedData signature's chain id
+// is the network's, and the executor version in force where the signature was recorded admits its type. The key hash
+// compared with the fact's is protocol's own for the type (not sha256(key)).
+func checkSignatureFact(txn *protocol.Transaction, sig protocol.Signature, f SigFact, networkName string) error {
+	if _, ok := sig.(protocol.UserSignature); !ok {
 		return fmt.Errorf("a %v is not a user signature", sig.Type())
 	}
-	if !protocol.VerifyUserSignature(us, txn) {
-		return fmt.Errorf("the signature does not sign the transaction")
+	v, err := govsig.Verify(sig, govsig.Env{TxHash: txn.Hash(), Transaction: txn, NetworkName: networkName,
+		Where: govsig.Where{Partition: f.Partition, Block: f.Block}})
+	if err != nil {
+		var inv govsig.SignatureInvalid
+		if errors.As(err, &inv) {
+			return fmt.Errorf("the signature does not sign the transaction")
+		}
+		var nk govsig.NotKeySignature
+		if errors.As(err, &nk) {
+			return fmt.Errorf("a %v carries no key", nk.Type)
+		}
+		return err
 	}
-	key, path := innermost(sig)
-	ks, ok := key.(protocol.KeySignature)
-	if !ok {
-		return fmt.Errorf("a %v carries no key", key.Type())
-	}
-	if !strings.EqualFold(hex.EncodeToString(ks.GetPublicKeyHash()), f.KeyHash) {
-		return fmt.Errorf("the signature's key hash %x is not the fact's %s", ks.GetPublicKeyHash(), short(f.KeyHash))
+	_, path := innermost(sig)
+	ks := v.Inner
+	if !strings.EqualFold(hex.EncodeToString(v.KeyHash), f.KeyHash) {
+		return fmt.Errorf("the signature's key hash %x is not the fact's %s", v.KeyHash, short(f.KeyHash))
 	}
 	if ks.GetSignerVersion() != f.Version {
 		return fmt.Errorf("the signature is at signer version %d, the fact records %d", ks.GetSignerVersion(), f.Version)
@@ -381,6 +400,9 @@ func decodeSignature(h string) (protocol.Signature, error) {
 	if err != nil {
 		return nil, fmt.Errorf("the signature does not decode: %w", err)
 	}
+	if sig == nil { // Accumulate's union decoder answers neither a signature nor an error for bytes that hold no type (a run of zeros)
+		return nil, fmt.Errorf("the signature holds no signature")
+	}
 	return sig, nil
 }
 
@@ -406,4 +428,22 @@ func stringsEqual(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// ReplayPageHistories replays every page history the evidence carries, binding each entry as VerifyEvidence does, and returns
+// the states each page passed through, by page in its canonical spelling. It is how another verifier reads the pages v1
+// evaluated: the proof v2 shadow compares them with the pages it captured.
+func ReplayPageHistories(ev *Evidence) (map[string]States, error) {
+	if ev == nil {
+		return nil, fmt.Errorf("no vote evidence")
+	}
+	out := make(map[string]States, len(ev.Pages))
+	for _, ph := range ev.Pages {
+		states, err := replayHistory(ph)
+		if err != nil {
+			return nil, fmt.Errorf("page %s: %w", ph.Page, err)
+		}
+		out[normalizeAccURL(ph.Page)] = states
+	}
+	return out, nil
 }

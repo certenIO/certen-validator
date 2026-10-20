@@ -16,7 +16,7 @@ import (
 // is what the block's own proof was built from; nothing here is optional, and the result is verified by the same
 // function FinalizeBlock runs before the block is broadcast.
 func (bv *BFTValidator) certifyIntent(vb *ValidatorBlock, chainID string, reg *ledger.BLSRegistryRecord,
-	spine *ledger.AccumulateSpineLog, certenProof *govproof.CertenProof, keyPageURL, keyBookURL string, authorization *govproof.AuthorizationRecord,
+	spine *ledger.AccumulateSpineLog, g1 *ledger.G1ActivationRecord, certenProof *govproof.CertenProof, keyPageURL, keyBookURL string, authorization *govproof.AuthorizationRecord,
 	voteEvidence *govvote.Evidence) error {
 	if certenProof == nil || certenProof.LiteClientProof == nil || certenProof.LiteClientProof.ChainedProof == nil {
 		return fmt.Errorf("the intent's chained proof is not carried, so its certificate cannot prove it")
@@ -45,7 +45,7 @@ func (bv *BFTValidator) certifyIntent(vb *ValidatorBlock, chainID string, reg *l
 		return fmt.Errorf("this validator's BLS key is not initialized")
 	}
 	return BuildIntentCertificate(vb, chainID, reg, key.PrivateKey(), keyPageURL, keyBookURL, authorization, ev,
-		certenProof.LiteClientProof.ChainedProof, spine, pv2)
+		certenProof.LiteClientProof.ChainedProof, spine, g1, pv2)
 }
 
 // PortableInputsRecorder is told, for each intent whose v3 certificate this validator built, the govRoot v3 inputs that are not

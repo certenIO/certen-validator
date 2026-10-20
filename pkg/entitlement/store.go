@@ -58,8 +58,13 @@ type Store struct {
 	// that purpose is judged against block time inside Verify.
 	fetchedAt time.Time
 
-	cfg    StoreConfig
-	keys   KeySet
+	cfg StoreConfig
+	// keys is the key set an epoch must be signed by, read at each use. A validator wires the key set CONSENSUS applies
+	// - the sealed policy as changed by every key rotation since (NewStoreWithKeySource) - so the store holds exactly
+	// the epochs the gate accepts. It used to be the environment's CERTEN_ENTITLEMENT_KEYS, read once: after a rotation
+	// in policy state the store refused every epoch signed by the new key that consensus would accept (and kept serving
+	// evidence under a retired key that consensus refuses).
+	keys   KeySource
 	client *http.Client
 
 	// lastMissRefetch rate-limits miss-triggered refreshes (see refetchOnMiss).
@@ -127,8 +132,23 @@ func StoreConfigFromEnv() (StoreConfig, error) {
 	return cfg, nil
 }
 
-// NewStore builds a store. It does not fetch; call Start.
+// KeySource names the key set an epoch must be signed by, now. An error is a key set that cannot be known, never an
+// empty one: the store then accepts no epoch and builds no evidence.
+type KeySource func() (KeySet, error)
+
+// StaticKeys is a KeySource of one fixed key set (tools and tests; a validator wires the consensus key set).
+func StaticKeys(keys KeySet) KeySource {
+	return func() (KeySet, error) { return keys, nil }
+}
+
+// NewStore builds a store over a fixed key set. It does not fetch; call Start.
 func NewStore(cfg StoreConfig, keys KeySet, logger *log.Logger) *Store {
+	return NewStoreWithKeySource(cfg, StaticKeys(keys), logger)
+}
+
+// NewStoreWithKeySource builds a store whose epochs must be signed by the key set keys names at each use - for a
+// validator, the key set consensus applies. It does not fetch; call Start.
+func NewStoreWithKeySource(cfg StoreConfig, keys KeySource, logger *log.Logger) *Store {
 	if logger == nil {
 		logger = log.New(log.Writer(), "[Entitlement] ", log.LstdFlags)
 	}
@@ -138,6 +158,34 @@ func NewStore(cfg StoreConfig, keys KeySet, logger *log.Logger) *Store {
 		client: &http.Client{Timeout: cfg.Timeout},
 		logger: logger,
 	}
+}
+
+// keysInForce is the key set epochs must be signed by now.
+func (s *Store) keysInForce() (KeySet, error) {
+	if s.keys == nil {
+		return nil, fmt.Errorf("the entitlement store has no key source")
+	}
+	keys, err := s.keys()
+	if err != nil {
+		return nil, fmt.Errorf("the entitlement key set in force could not be read: %w", err)
+	}
+	return keys, nil
+}
+
+// headerInForce reports whether a cached header is still signed by a key in force. A header whose key a rotation has
+// retired is no longer one consensus accepts, so the store stops building evidence on it.
+func (s *Store) headerInForce(h *Header) bool {
+	keys, err := s.keysInForce()
+	if err != nil {
+		s.logger.Printf("⚠️ no entitlement evidence: %v", err)
+		return false
+	}
+	if err := verifyHeaderSignature(*h, keys); err != nil {
+		s.logger.Printf("⚠️ the cached entitlement epoch %d is no longer signed by a key in force (%v); no evidence until "+
+			"an epoch signed by one is fetched", h.Epoch, err)
+		return false
+	}
+	return true
 }
 
 // Enabled reports whether this store can ever produce evidence.
@@ -244,7 +292,11 @@ func (s *Store) Refresh(ctx context.Context) error {
 // verifyDocument checks the document against the pinned keys and its own hash.
 // The transport is untrusted; this is what makes that acceptable.
 func (s *Store) verifyDocument(doc *Document) error {
-	if err := verifyHeaderSignature(doc.Header, s.keys); err != nil {
+	keys, err := s.keysInForce()
+	if err != nil {
+		return err
+	}
+	if err := verifyHeaderSignature(doc.Header, keys); err != nil {
 		return err
 	}
 	// The set must be exactly the set the header committed to.
@@ -343,6 +395,11 @@ func (s *Store) BuildEvidence(adiURL string) *Evidence {
 			return nil
 		}
 	}
+	// Signed by a key consensus applies NOW: an epoch fetched under a key a rotation has since retired is evidence every
+	// validator refuses, so none is built on it.
+	if !s.headerInForce(header) {
+		return nil
+	}
 	return &Evidence{Header: *header, Leaf: leaf, Proof: proof}
 }
 
@@ -384,11 +441,12 @@ func (s *Store) Lookup(adiURL string) (Leaf, bool) {
 		return Leaf{}, false
 	}
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if s.index == nil {
+	index, header := s.index, s.header
+	s.mu.RUnlock()
+	if index == nil || header == nil || !s.headerInForce(header) {
 		return Leaf{}, false
 	}
-	return s.index.Lookup(adiURL)
+	return index.Lookup(adiURL)
 }
 
 // Snapshot reports store health for logging and metrics.

@@ -43,6 +43,13 @@ type OutcomeEvidenceReader interface {
 	QuorumRegistryAt(ctx context.Context, header *types.Header) (*OutcomeQuorumRegistry, error)
 }
 
+// ReplayGuardReader is the optional part of an OutcomeEvidenceSource that serves the S6 evidence captured for a settlement
+// (RB10): the storage proof that its replay-guard slot was consumed, or the named state saying it could not be proven. It
+// is nil when no capture was made for the transaction; the evidence is then built without it and says so.
+type ReplayGuardReader interface {
+	ReplayGuardOf(tx common.Hash) *ethproof.ReplayGuardEvidence
+}
+
 // OutcomeQuorumRegistry is an anchor's validator registry as read.
 type OutcomeQuorumRegistry struct {
 	Validators           []OutcomeQuorumValidator
@@ -230,6 +237,9 @@ func buildMemberEvidence(ctx context.Context, c OutcomeEvidenceSource, leafVersi
 				hdr.Hash().Hex(), leaf.BlockHash)
 		}
 		ev.Transaction = incl
+		if rg, ok := c.(ReplayGuardReader); ok && leaf.Status != OutcomeConsumedElsewhere {
+			ev.ReplayGuard = replayGuardForLeaf(rg.ReplayGuardOf(common.Hash(leaf.Tx)), leaf)
+		}
 		if leaf.Status != OutcomeConsumedElsewhere {
 			var slots []ExpectedStateSlot
 			for _, l := range m.Legs {
@@ -263,7 +273,7 @@ func buildMemberEvidence(ctx context.Context, c OutcomeEvidenceSource, leafVersi
 		if leaf.Tx != ([32]byte{}) {
 			incl, _, err := c.TransactionInclusion(ctx, common.Hash(leaf.Tx))
 			if err != nil {
-				return ev, fmt.Errorf("its last attempt: %w", err)
+				return ev, fmt.Errorf("its last attempt: %w", ethrpc.RedactError(err))
 			}
 			ev.Transaction = incl
 		}
@@ -301,9 +311,9 @@ func (c *AgreedOutcomeChain) TransactionInclusion(ctx context.Context, tx common
 		if !errors.Is(err, ethrpc.ErrTooFewProviders) && !errors.Is(err, ethrpc.ErrProvidersDisagree) {
 			// The block cannot be proven (settled_unproven): the evidence is asked for again, as a read is, until it can.
 			return nil, nil, readErr(fmt.Errorf("settled_unproven: %s cannot be proven in block %d yet (asked again until it can): %w",
-				tx.Hex(), hdr.Number.Uint64(), err))
+				tx.Hex(), hdr.Number.Uint64(), ethrpc.RedactError(err)))
 		}
-		return nil, nil, readErr(fmt.Errorf("inclusion proofs of %s in block %d: %w", tx.Hex(), hdr.Number.Uint64(), err))
+		return nil, nil, readErr(fmt.Errorf("inclusion proofs of %s in block %d: %w", tx.Hex(), hdr.Number.Uint64(), ethrpc.RedactError(err)))
 	}
 	raw, err := rlp.EncodeToBytes(hdr)
 	if err != nil {
@@ -317,6 +327,15 @@ func (c *AgreedOutcomeChain) TransactionInclusion(ctx context.Context, tx common
 		out.ReceiptProof = append(out.ReceiptProof, n)
 	}
 	return out, hdr, nil
+}
+
+// ReplayGuardOf: see ReplayGuardReader. Only evidence already held to the proven settlement (bound) is returned.
+func (c *AgreedOutcomeChain) ReplayGuardOf(tx common.Hash) *ethproof.ReplayGuardEvidence {
+	ev, bound, ok := ethproof.DefaultReplayGuards.Get(c.chainID, tx)
+	if !ok || !bound {
+		return nil
+	}
+	return ev
 }
 
 // StateProofsAt: see OutcomeEvidenceReader. Every slot needs a proof that verifies against the agreed header's state
@@ -365,7 +384,7 @@ func readQuorumRegistry(call func(method string, args ...interface{}) ([]interfa
 	word := func(method string, args ...interface{}) (*big.Int, error) {
 		out, err := call(method, args...)
 		if err != nil {
-			return nil, fmt.Errorf("%s: %w", method, err)
+			return nil, fmt.Errorf("%s: %w", method, ethrpc.RedactError(err))
 		}
 		n, ok := out[0].(*big.Int)
 		if !ok || !n.IsUint64() {
@@ -394,7 +413,7 @@ func readQuorumRegistry(call func(method string, args ...interface{}) ([]interfa
 	for i := uint64(0); i < count.Uint64(); i++ {
 		out, err := call("validatorList", new(big.Int).SetUint64(i))
 		if err != nil {
-			return nil, fmt.Errorf("validatorList(%d): %w", i, err)
+			return nil, fmt.Errorf("validatorList(%d): %w", i, ethrpc.RedactError(err))
 		}
 		addr, ok := out[0].(common.Address)
 		if !ok {
@@ -402,7 +421,7 @@ func readQuorumRegistry(call func(method string, args ...interface{}) ([]interfa
 		}
 		info, err := call("validators", addr)
 		if err != nil {
-			return nil, fmt.Errorf("validators(%s): %w", addr.Hex(), err)
+			return nil, fmt.Errorf("validators(%s): %w", addr.Hex(), ethrpc.RedactError(err))
 		}
 		registered, _ := info[0].(bool)
 		power, _ := info[1].(*big.Int)
@@ -418,4 +437,19 @@ func readQuorumRegistry(call func(method string, args ...interface{}) ([]interfa
 		return nil, fmt.Errorf("the listed validators' powers sum to %s, the anchor's totalVotingPower is %s", sum, total)
 	}
 	return reg, nil
+}
+
+// replayGuardForLeaf is the replay guard a member's evidence carries (V-R10B D5): the capture is keyed by the settlement
+// transaction, so a proof of another leaf's slot of that transaction is replaced by the named state slot_mismatch for this
+// member's leaf, at the settlement it was judged at; layer 6 refuses a proof whose key is not the member's leaf.
+func replayGuardForLeaf(rg *ethproof.ReplayGuardEvidence, leaf OutcomeLeaf) *ethproof.ReplayGuardEvidence {
+	if rg == nil || rg.Proof == nil || rg.Proof.Slot.Key == common.Hash(leaf.BatchLeaf) {
+		return rg
+	}
+	p := rg.Proof
+	return &ethproof.ReplayGuardEvidence{Version: ethproof.ReplayGuardDomain, State: &ethproof.ReplayNamedState{
+		State: ethproof.ReplayUnproven, Reason: ethproof.ReasonSlotMismatch, ChainID: p.ChainID, TxHash: common.Hash(leaf.Tx),
+		BlockNumber: leaf.BlockNumber, BlockHash: common.Hash(leaf.BlockHash), Contract: p.Contract,
+		Detail: fmt.Sprintf("the capture of this settlement proved the slot of leaf %s, not this member's leaf %s", p.Slot.Key.Hex(),
+			common.Hash(leaf.BatchLeaf).Hex())}}
 }

@@ -1,0 +1,251 @@
+{
+  "format": "certen-xpartition5-conformance/1",
+  "domain": "certen:g1:v4",
+  "portableFormat": "certen-proof-v2-accumulate-portable/1",
+  "cases": [
+    {
+      "name": "update-account-auth-remove-op-that-leaves-the-voter",
+      "description": "an UpdateAccountAuth removes the delegate book from the principal's list; the principal proven after the transaction lists the voter alone, so the set the executor required (both books) cannot be derived: refused by name before the vote is re-evaluated",
+      "file": "update-account-auth-remove-op-that-leaves-the-voter.json",
+      "sha256": "5268b2ea8b8e517eac388ecdbf5f37a00d3c407b075d12a2751738f4b372894c",
+      "expect": "refused",
+      "state": "g1_executor_override_unsupported",
+      "partition": "BVN1",
+      "block": 50
+    },
+    {
+      "name": "update-account-auth-remove-op-of-the-voters-book",
+      "description": "an UpdateAccountAuth removes the voter's own book; the principal proven after it lists another book: refused by name",
+      "file": "update-account-auth-remove-op-of-the-voters-book.json",
+      "sha256": "607090032b653b1427016d02bb3ddfc34012817c9766892a46bbe7212bdc2a2b",
+      "expect": "refused",
+      "state": "g1_executor_override_unsupported",
+      "partition": "BVN1",
+      "block": 50
+    },
+    {
+      "name": "update-account-auth-add-op-first-authorities-of-an-inheriting-account",
+      "description": "an UpdateAccountAuth adds the voter's book to an account that listed none: the principal proven after it lists exactly the added book, the executor required the authorities it inherited from its parent, which the document does not carry: refused by name",
+      "file": "update-account-auth-add-op-first-authorities-of-an-inheriting-account.json",
+      "sha256": "5866d73ce86637da87e69c055310f3f9f348b7a56be20bcbde31c73975d1888f",
+      "expect": "refused",
+      "state": "g1_executor_override_unsupported",
+      "partition": "BVN1",
+      "block": 50
+    },
+    {
+      "name": "update-account-auth-add-op-authority-did-not-vote",
+      "description": "an UpdateAccountAuth adds the delegate book to a principal that listed the voter's book: the added authority is required (GetAdditionalAuthorities) and never voted",
+      "file": "update-account-auth-add-op-authority-did-not-vote.json",
+      "sha256": "c61a83bb0f5db3b8f2135d34ed92220e3c51df147ddc09125dd997b1444d65a6",
+      "expect": "refused",
+      "state": "g1_authority_not_ready",
+      "partition": "BVN1",
+      "block": 50
+    },
+    {
+      "name": "update-account-auth-disable-op-voted",
+      "description": "an UpdateAccountAuth disables the voter's own book: a disabled authority is still required by this type, the voter accepted, the mode is authorities_required",
+      "file": "update-account-auth-disable-op-voted.json",
+      "sha256": "66684c572b1c5b9af7f92d54de8fd58b42c1ce7de5626a496553567c8be4f1ff",
+      "expect": "refused",
+      "state": "certify_link_missing",
+      "fields": [
+        "genesis"
+      ],
+      "note": "frozen document; verdict moved by F-VE-2 (b) (2.1 unreleased)"
+    },
+    {
+      "name": "update-account-auth-enable-op-voted",
+      "description": "an UpdateAccountAuth enables the voter's book (it was disabled before): required before and after alike, the voter accepted",
+      "file": "update-account-auth-enable-op-voted.json",
+      "sha256": "835302686fdb60c060f19f0499b6ac79d670720cc787de250cf8727d13a1076f",
+      "expect": "refused",
+      "state": "certify_link_missing",
+      "fields": [
+        "genesis"
+      ],
+      "note": "frozen document; verdict moved by F-VE-2 (b) (2.1 unreleased)"
+    },
+    {
+      "name": "update-account-auth-disable-op-authority-did-not-vote",
+      "description": "an UpdateAccountAuth disables the delegate book, which never voted: it was required before (enabled) and is required after (disabled, by RequireAuthorization)",
+      "file": "update-account-auth-disable-op-authority-did-not-vote.json",
+      "sha256": "effe16d3830577d1c403efd39dad27a250f4374d3b65ed15f621ab57c3be8cab",
+      "expect": "refused",
+      "state": "g1_authority_not_ready",
+      "partition": "BVN1",
+      "block": 50
+    },
+    {
+      "name": "update-account-auth-enable-op-authority-did-not-vote",
+      "description": "an UpdateAccountAuth enables the delegate book, which never voted: it was required before (disabled, by RequireAuthorization) and after",
+      "file": "update-account-auth-enable-op-authority-did-not-vote.json",
+      "sha256": "aeddac7738341333c655ac35c625ae81eec5a56e1e7c800455e41dcef2e807c4",
+      "expect": "refused",
+      "state": "g1_authority_not_ready",
+      "partition": "BVN1",
+      "block": 50
+    },
+    {
+      "name": "update-account-auth-disable-op-voted-g",
+      "description": "an UpdateAccountAuth disables the voter's own book: a disabled authority is still required by this type, the voter accepted, the mode is authorities_required (the sibling of the frozen document update-account-auth-disable-op-voted that carries the genesis link: F-VE-2 (b))",
+      "file": "update-account-auth-disable-op-voted-g.json",
+      "sha256": "288933223c16738ff40af9fb3f225f98e58eda8a7c656641f0582d09a7612230",
+      "expect": "verified",
+      "report": {
+        "version": "2.1",
+        "tag": "certen:g1:v4",
+        "partition": "acc://bvn-BVN1.acme",
+        "anchorBlock": 50,
+        "certifiedRoot": "7e003d8c6032dc9d064b918fb0e181457be987ace7904f478d053a64ad7711ca",
+        "checkBlock": 300,
+        "setVerdict": "verified",
+        "routingHeight": 1,
+        "proven": [
+          {
+            "url": "acc://pv2-cust-5.acme/data",
+            "partition": "acc://bvn-BVN1.acme",
+            "block": 50,
+            "roles": [
+              "principal-chain"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/1",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page",
+              "voter"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/2",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book/1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-page"
+            ]
+          }
+        ],
+        "pagesBound": 6,
+        "unproven": [
+          "g1_vote_held"
+        ],
+        "authorizationMode": "authorities_required",
+        "arrivals": [
+          {
+            "kind": "signature",
+            "account": "acc://pv2-bank-5.acme/book/1",
+            "block": 65
+          }
+        ]
+      }
+    },
+    {
+      "name": "update-account-auth-enable-op-voted-g",
+      "description": "an UpdateAccountAuth enables the voter's book (it was disabled before): required before and after alike, the voter accepted (the sibling of the frozen document update-account-auth-enable-op-voted that carries the genesis link: F-VE-2 (b))",
+      "file": "update-account-auth-enable-op-voted-g.json",
+      "sha256": "702f9b60a6bcee6a3ce219d42702693e9cac9d0998a166b0fb531fb8e17bb849",
+      "expect": "verified",
+      "report": {
+        "version": "2.1",
+        "tag": "certen:g1:v4",
+        "partition": "acc://bvn-BVN1.acme",
+        "anchorBlock": 50,
+        "certifiedRoot": "3848884223f6986dd09199f5e562197642ddfff94733e3b93f4d7555f723a474",
+        "checkBlock": 300,
+        "setVerdict": "verified",
+        "routingHeight": 1,
+        "proven": [
+          {
+            "url": "acc://pv2-cust-5.acme/data",
+            "partition": "acc://bvn-BVN1.acme",
+            "block": 50,
+            "roles": [
+              "principal-chain"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/1",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page",
+              "voter"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/2",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 70,
+            "roles": [
+              "authority-page"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book/1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 90,
+            "roles": [
+              "delegate-page"
+            ]
+          }
+        ],
+        "pagesBound": 6,
+        "unproven": [
+          "g1_vote_held"
+        ],
+        "authorizationMode": "authorities_required",
+        "arrivals": [
+          {
+            "kind": "signature",
+            "account": "acc://pv2-bank-5.acme/book/1",
+            "block": 65
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -669,8 +669,29 @@ func reportIntentCertificate(ctx context.Context, db *sql.DB, store *certenproof
 		return exitSummaryOnly
 	default:
 		fmt.Printf("FAILED (intent certificate)  %s\n  %v\n", id, err)
+		if hint := genesisLinkHint(err); hint != "" {
+			fmt.Printf("  %s\n", hint)
+		}
 		return exitFailed
 	}
+}
+
+// genesisLinkHint explains a certify_link_*{genesis} refusal in the words of what it is. The state names and their fixed texts are shared with the
+// TypeScript verifier (testdata/certify1/names.json, pinned), and the text of certify_link_missing reads "an anchored item has no link"; for the
+// index genesis it means the document carries no genesis link (RB9-F6: every evidence 2.1 document needs it, the continuous form with no anchored
+// item included).
+func genesisLinkHint(err error) string {
+	var cs *proofv2.CertifyState
+	if !errors.As(err, &cs) || len(cs.Fields) != 1 || cs.Fields[0] != "genesis" {
+		return ""
+	}
+	switch cs.Code {
+	case proofv2.StateCertifyLinkMissing:
+		return "Hint: the proof v2 carries no genesis link, the receipt from the pinned incarnation's genesis root chain anchor to the certified root that every evidence 2.1 document needs (the text above says \"an anchored item\" because that wording is shared; this document may have none). A document built before the link was required cannot be verified offline until it is rebuilt."
+	case proofv2.StateCertifyLinkStart, proofv2.StateCertifyLinkEnd, proofv2.StateCertifyLinkInvalid:
+		return "Hint: the refusal is about the proof v2's genesis link (the receipt from the pinned incarnation's genesis root chain anchor to the certified root), not about an item of the certification."
+	}
+	return ""
 }
 
 // incEvidencePath is --incarnation-evidence.

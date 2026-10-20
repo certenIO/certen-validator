@@ -21,3 +21,9 @@ db/*.fingerprint text eol=lf
 
 # The deployed ZK verification key is embedded by its exact bytes (pkg/crypto/bls_zkp/verifier_v2.go pins its SHA-256).
 pkg/crypto/bls_zkp/*.bin binary
+
+# The sigtypes conformance vectors are HASHED (manifest.json pins every file's sha256) and are copied byte-for-byte into the
+# TypeScript verifier's repo. A CRLF checkout would make the pinned hashes fail on Windows and the copies differ.
+accumulate-lite-client-2/liteclient/proof/govsig/testdata/sigtypes/*.json text eol=lf
+# A golden is specification: its bytes are never normalised.
+accumulate-lite-client-2/liteclient/proof/consolidated_governance-proof/testdata/*.golden.json text eol=lf

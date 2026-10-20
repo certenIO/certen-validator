@@ -3,6 +3,7 @@ package execution
 import (
 	"context"
 	"fmt"
+	"github.com/certen/independant-validator/pkg/ethrpc"
 	"math/big"
 
 	"github.com/ethereum/go-ethereum"
@@ -18,7 +19,7 @@ import (
 func ReadAnchorState(ctx context.Context, caller ethereum.ContractCaller, anchor common.Address, bundleID [32]byte, block *big.Int) (*contracts.AnchorState, error) {
 	ret, err := caller.CallContract(ctx, ethereum.CallMsg{To: &anchor, Data: contracts.AnchorsCallData(bundleID)}, block)
 	if err != nil {
-		return nil, fmt.Errorf("reading anchors(0x%x) on %s: %w", bundleID[:8], anchor.Hex(), err)
+		return nil, fmt.Errorf("reading anchors(0x%x) on %s: %w", bundleID[:8], anchor.Hex(), ethrpc.RedactError(err))
 	}
 	return contracts.DecodeAnchorsReturn(ret)
 }

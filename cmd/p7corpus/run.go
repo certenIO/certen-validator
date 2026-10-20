@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/govsig/sigfixture"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/client/signing"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/types/messaging"
 	"gitlab.com/accumulatenetwork/accumulate/protocol"
@@ -41,6 +42,12 @@ func nonce() uint64 {
 // buildSignature produces one signature exactly as accumulate-core would.
 func buildSignature(seeds map[string]string, p signaturePlan, version, ts uint64,
 	txn *protocol.Transaction, initiator bool) (protocol.Signature, error) {
+
+	// Any key-signature type other than the ed25519 the official Builder is driven with here is made through
+	// Accumulate's own signing functions (RB8-B).
+	if p.Type != protocol.SignatureTypeUnknown && p.Type != protocol.SignatureTypeED25519 {
+		return buildKeyTypeSignature(seeds, p, version, ts, txn, initiator)
+	}
 
 	priv, err := keyFor(seeds, p.Seed)
 	if err != nil {
@@ -146,9 +153,9 @@ func keyIsDirectOnOuterPage(ctx context.Context, c *client, sp signaturePlan,
 
 // traceOf renders a built signature into the corpus record, verdict included.
 func traceOf(p casePlan, sp signaturePlan, sig protocol.Signature, txHash [32]byte,
-	partition string) (trace, error) {
+	partition string, txn *protocol.Transaction) (trace, error) {
 
-	verdict, form, digest, err := classify(sig, txHash)
+	verdict, form, digest, err := classifyTxn(sig, txHash, txn)
 	if err != nil {
 		return trace{}, err
 	}
@@ -243,7 +250,7 @@ func runCase(ctx context.Context, c *client, r *router, seeds map[string]string,
 		if err != nil {
 			return nil, err
 		}
-		t, err := traceOf(p, sp, sigs[i], txHash, part)
+		t, err := traceOf(p, sp, sigs[i], txHash, part, txn)
 		if err != nil {
 			return nil, err
 		}
@@ -390,7 +397,7 @@ func ensureKeyRegistered(ctx context.Context, c *client, seeds map[string]string
 	if sp.Type == protocol.SignatureTypeUnknown || sp.Type == protocol.SignatureTypeED25519 {
 		return nil
 	}
-	priv, err := keyFor(seeds, sp.Seed)
+	k, err := keyOfType(seeds, sp.Seed, sp.Type)
 	if err != nil {
 		return err
 	}
@@ -398,18 +405,17 @@ func ensureKeyRegistered(ctx context.Context, c *client, seeds map[string]string
 	// Derive the public key the way the signature will carry it, then hash it
 	// the way the signature type hashes it - both through protocol, so the page
 	// entry and the signature cannot disagree.
-	probe, err := protocol.NewSignature(sp.Type)
+	pub, err := sigfixture.PublicKey(k)
 	if err != nil {
 		return err
 	}
-	if err := signing.PrivateKey(priv).SetPublicKey(probe); err != nil {
+	hash, err := protocol.PublicKeyHash(pub, sp.Type)
+	if err != nil {
 		return err
 	}
-	ks, ok := probe.(protocol.KeySignature)
-	if !ok {
-		return fmt.Errorf("%v is not a key signature", sp.Type)
+	if len(hash) == 0 {
+		return fmt.Errorf("the %v key has no key hash", sp.Type)
 	}
-	hash := ks.GetPublicKeyHash()
 
 	acct, err := account(ctx, c, mustURL(sp.SignerPage))
 	if err != nil {

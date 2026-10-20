@@ -127,6 +127,16 @@ func (bv *BFTValidator) planBatch(ci *CertenIntent, commitHeight uint64) (*batch
 		return nil, refuse(fmt.Errorf("intent %s: %w", ci.IntentID, err))
 	}
 
+	// And that anchor is the one the chain committed (rules v14, RB4-F35, anchor_set.go): until the admin quorum commits
+	// an anchor set nothing is admitted, and a node configured with another anchor says so instead of building a block
+	// every peer refuses. Either is CERTEN's state, so the intent is retried.
+	bv.mu.RLock()
+	anchorSets := bv.anchorSets
+	bv.mu.RUnlock()
+	if err := CheckAnchorSetAdmission(chains, anchorSets, bv.batchEnqueuer.AnchorOf); err != nil {
+		return nil, refuse(fmt.Errorf("intent %s: %w", ci.IntentID, err))
+	}
+
 	// A leg committing a storage slot is proven with eth_getProof at the finalized block: a chain no provider of which
 	// serves that deep is refused by name (state_proof_window.go), retried until one does.
 	if err := bv.checkStateProofsServable(ci); err != nil {

@@ -108,6 +108,7 @@ type HealthStatus struct {
 	DiscoveryUnsearched          int   `json:"discovery_unsearched_blocks"`
 	DiscoveryUnsearchedOldestAge int64 `json:"discovery_unsearched_oldest_seconds"`
 	DiscoveryInProgress          int   `json:"discovery_intents_in_progress"` // zero while "paused" = nothing in flight (RB3-F8)
+	DiscoveryQueued              int   `json:"discovery_intents_queued"`      // handed to the intent workers, none has started them
 	startTime                    time.Time
 	mu                           sync.RWMutex
 }
@@ -156,11 +157,12 @@ func (h *HealthStatus) SetDiscovery(status string, lagBlocks uint64, secondsSinc
 	h.updateOverallStatus()
 }
 
-// SetDiscoveryInProgress records how many intents are being processed now.
-func (h *HealthStatus) SetDiscoveryInProgress(n int) {
+// SetDiscoveryInProgress records how many intents are being processed now, and how many are queued for the intent workers.
+func (h *HealthStatus) SetDiscoveryInProgress(n, queued int) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.DiscoveryInProgress = n
+	h.DiscoveryQueued = queued
 }
 
 // SetDiscoveryUnsearched records the blocks waiting to be searched again.
@@ -428,7 +430,7 @@ func watchDiscoveryLiveness(d *intent.IntentDiscovery) {
 		}
 		healthStatus.SetDiscovery(state, st.LagBlocks, int64(st.SecondsSinceAdvance))
 		healthStatus.SetDiscoveryUnsearched(st.Unsearched, int64(st.OldestUnsearchedSeconds))
-		healthStatus.SetDiscoveryInProgress(st.InProgress)
+		healthStatus.SetDiscoveryInProgress(st.InProgress, st.Queued)
 		if st.UnsearchedError != "" {
 			log.Printf("🚨 [DISCOVERY] the unsearched-block store cannot be read: %s", st.UnsearchedError)
 		} else if st.Unsearched > 0 && st.OldestUnsearchedSeconds > 600 {
@@ -583,6 +585,8 @@ func main() {
 	}
 	log.Println("✅ [Phase 5] Connected to PostgreSQL database")
 	healthStatus.SetDatabase("connected")
+	// Pool waits are the client-side half of a database stall (RB8-F): without them a stall is only a timeout in a log.
+	metrics.RegisterDBPool(dbClient.DB().Stats)
 
 	runner := schema.Runner{DB: dbClient.DB()}
 	migrateOnStart, err := envvar.Bool("MIGRATE_ON_START", false)
@@ -1529,6 +1533,8 @@ func startValidator(
 		return nil, nil, fmt.Errorf("the CometBFT engine has no ValidatorApp, so intent certificates cannot be built against the chain's state")
 	}
 	validator.SetIntentCertificateSource(validatorApp)
+	// Rules v13: intents are admitted only against the anchor set the chain committed (RB4-F35).
+	validator.SetAnchorSetSource(validatorApp)
 
 	// The key page G1 is built against is the page that signed, read from the chain - never a
 	// guess. Without a resolver every governance proof fails rather than naming a page.
@@ -2071,14 +2077,8 @@ func startValidator(
 	if err != nil {
 		return nil, nil, err
 	}
-	intentConfig := &intent.IntentDiscoveryConfig{
-		BlockPollInterval:   5 * time.Second,
-		BFTTimeout:          bftTimeout,
-		MaxConcurrentBlocks: 2000, // Increased from 10 to handle high block rate
-		BlockWorkers:        blockWorkers,
-		IntentBatchSize:     100, // Increased from 50 to process more intents per batch
-		MinStartHeight:      0,
-	}
+	intentConfig := intentDiscoveryConfig(bftTimeout, blockWorkers)
+	log.Printf("[DISCOVERY] block workers: %d, intent workers: %d (BLOCK_WORKERS sets both: the most intents processed at once)", intentConfig.BlockWorkers, intentConfig.IntentWorkers)
 
 	// Get LedgerStore from ABCI application and wrap it for IntentDiscovery
 	var ledgerWrapper *LedgerStoreWrapper
@@ -2104,6 +2104,14 @@ func startValidator(
 	}
 	intentDiscovery.SetRetryJournal(retryJournal)
 	log.Printf("✅ [DISCOVERY] pending intent retries kept at %s; resumed at start", retryJournal.Path())
+	// Lifecycle row writes that failed are kept here until they succeed and serviced by discovery's loop (RB8-F):
+	// an intent without a row has no proof cycle and no answer at the gateway.
+	lifecycleQueue, lqErr := intent.OpenFileRetryJournal(filepath.Join(nsDataDir, intent.LifecycleQueueFile))
+	if lqErr != nil {
+		return nil, nil, fmt.Errorf("intent discovery: %w", lqErr)
+	}
+	intentDiscovery.SetLifecycleQueue(lifecycleQueue)
+	log.Printf("✅ [DISCOVERY] owed lifecycle row writes kept at %s; serviced every %s", lifecycleQueue.Path(), "15s")
 
 	// This is the critical hook: IntentDiscovery calls the canonical BFT consensus method
 	// BFTValidator.ExecuteCanonicalIntentWithBFTConsensus(ctx, certenIntent, certenProof, blockHeight)
@@ -2146,11 +2154,10 @@ func startValidator(
 		if err != nil {
 			log.Fatalf("invalid entitlement configuration: %v", err)
 		}
-		entStore := entitlement.NewStore(
-			entStoreCfg,
-			entGateCfg.Keys,
-			log.New(log.Writer(), "[Entitlement] ", log.LstdFlags),
-		)
+		// The store verifies every epoch against the key set CONSENSUS applies - the sealed policy as changed by every
+		// key rotation since, read from committed state at each use - never CERTEN_ENTITLEMENT_KEYS, which is only the
+		// genesis seed a sealed chain ignores. One source: the store holds exactly the epochs the gate accepts.
+		entStore := validatorApp.NewEntitlementStore(entStoreCfg, log.New(log.Writer(), "[Entitlement] ", log.LstdFlags))
 		// Start is non-blocking and a failed first refresh is not fatal: a
 		// validator must boot while the gateway is down. Background context to
 		// match the other long-lived services started here (bftScheduler,
@@ -2210,8 +2217,9 @@ func startValidator(
 			}
 		}()
 
-		log.Printf("✅ [ENTITLEMENT] store wired: mode=%s enabled=%t keys=%d",
-			entGateCfg.Mode, entStore.Enabled(), len(entGateCfg.Keys))
+		consensusKeys, keysErr := validatorApp.EntitlementKeys()
+		log.Printf("✅ [ENTITLEMENT] store wired: mode=%s enabled=%t consensus keys in force=%d (read error: %v)",
+			entGateCfg.Mode, entStore.Enabled(), len(consensusKeys), keysErr)
 	}
 
 	{
@@ -2529,4 +2537,19 @@ func requireExecutable(name, path string) error {
 		return fmt.Errorf("%s=%s is not executable", name, path)
 	}
 	return nil
+}
+
+// intentDiscoveryConfig is the discovery configuration this validator runs with. BLOCK_WORKERS sets the block workers AND the
+// intent workers: a block job hands the intents it finds to the intent workers (RB8-H), so the most intents processed at once
+// is the number the operator set, not a fixed 12 beside it.
+func intentDiscoveryConfig(bftTimeout time.Duration, blockWorkers int) *intent.IntentDiscoveryConfig {
+	return &intent.IntentDiscoveryConfig{
+		BlockPollInterval:   5 * time.Second,
+		BFTTimeout:          bftTimeout,
+		MaxConcurrentBlocks: 2000, // Increased from 10 to handle high block rate
+		BlockWorkers:        blockWorkers,
+		IntentWorkers:       blockWorkers,
+		IntentBatchSize:     100, // Increased from 50 to process more intents per batch
+		MinStartHeight:      0,
+	}
 }

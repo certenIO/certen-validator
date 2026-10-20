@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/certen/independant-validator/pkg/ethrpc"
 	"math/big"
 	"strings"
 	"time"
@@ -87,7 +88,7 @@ func (s *BatchProofSubmitterImpl) batchOperationIDViaV7(
 	// fields, that test fails rather than this silently decoding the wrong 32 bytes.
 	st, err := ReadAnchorState(ctx, ecm.client, anchorAddr, bundleID, nil)
 	if err != nil {
-		return [32]byte{}, fmt.Errorf("reading batch operationID: %w", err)
+		return [32]byte{}, fmt.Errorf("reading batch operationID: %w", ethrpc.RedactError(err))
 	}
 	v := st.OperationID
 	if v == ([32]byte{}) {
@@ -205,7 +206,7 @@ func (s *BatchProofSubmitterImpl) AnchorProofExecutedConfirmed(
 	receiptBlock := func(ctx context.Context) (*big.Int, error) {
 		rcpt, err := ecm.client.TransactionReceipt(ctx, common.HexToHash(verifyTxHash))
 		if err != nil {
-			return nil, fmt.Errorf("attestation %s receipt: %w", verifyTxHash, err)
+			return nil, fmt.Errorf("attestation %s receipt: %w", verifyTxHash, ethrpc.RedactError(err))
 		}
 		if rcpt == nil || rcpt.BlockNumber == nil {
 			return nil, fmt.Errorf("attestation %s has no receipt block yet", verifyTxHash)
@@ -249,7 +250,7 @@ func (s *BatchProofSubmitterImpl) anchorProofExecutedAt(
 	// an older block - which is the whole point.
 	st, err := ReadAnchorState(ctx, ecm.client, anchorAddr, bundleID, blockNumber)
 	if err != nil {
-		return false, fmt.Errorf("reading anchor: %w", err)
+		return false, fmt.Errorf("reading anchor: %w", ethrpc.RedactError(err))
 	}
 	return st.ProofExecuted, nil
 }
@@ -407,7 +408,7 @@ func (s *BatchProofSubmitterImpl) VerifyBlockTime(ctx context.Context, chainID i
 	}
 	h, err := ecm.client.HeaderByNumber(ctx, new(big.Int).SetUint64(block))
 	if err != nil {
-		return time.Time{}, fmt.Errorf("reading block %d on chain %d: %w", block, chainID, err)
+		return time.Time{}, fmt.Errorf("reading block %d on chain %d: %w", block, chainID, ethrpc.RedactError(err))
 	}
 	if h == nil || h.Number == nil || h.Number.Uint64() != block || h.Time == 0 {
 		return time.Time{}, fmt.Errorf("chain %d answered block %d with another header", chainID, block)

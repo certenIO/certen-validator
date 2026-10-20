@@ -100,6 +100,7 @@ func NewAgreeingReader(ctx context.Context, chainID int64, urls []string, timeou
 		timeout = DefaultReadTimeout
 	}
 	r := &AgreeingReader{chainID: chainID, timeout: timeout}
+	RegisterProviderURLs(urls...) // their keys are secret literals from here on (RB10-B14a)
 	if err := r.verifyAll(ctx, urls); err != nil {
 		return nil, err
 	}
@@ -151,7 +152,7 @@ func askAll[T any](ctx context.Context, r *AgreeingReader, read func(context.Con
 				}
 				return read(c, p.client)
 			})
-			out[i] = answer[T]{host: p.host, value: v, err: err}
+			out[i] = answer[T]{host: p.host, value: v, err: RedactError(err)}
 		}(i, p)
 	}
 	wg.Wait()
@@ -165,7 +166,7 @@ func unanswered[T any](as []answer[T]) string {
 	var parts []string
 	for _, a := range as {
 		if a.err != nil {
-			parts = append(parts, fmt.Sprintf("%s: %v", a.host, a.err))
+			parts = append(parts, RedactText(fmt.Sprintf("%s: %v", a.host, a.err)))
 		}
 	}
 	return strings.Join(parts, "; ")

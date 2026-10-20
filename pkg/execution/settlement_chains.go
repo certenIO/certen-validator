@@ -73,14 +73,14 @@ func VerifySettlementAnchors(ctx context.Context, r *EVMChainResolverImpl, chain
 func verifyAnchorGeneration(ctx context.Context, c anchorGenerationChain, chainID int64, anchor common.Address) error {
 	code, err := c.CodeAt(ctx, anchor, nil)
 	if err != nil {
-		return fmt.Errorf("chain %d: reading the code of anchor %s: %w", chainID, anchor.Hex(), err)
+		return fmt.Errorf("chain %d: reading the code of anchor %s: %w", chainID, anchor.Hex(), ethrpc.RedactError(err))
 	}
 	if len(code) == 0 {
 		return fmt.Errorf("chain %d: anchor %s has no code", chainID, anchor.Hex())
 	}
 	ret, err := c.CallContract(ctx, ethereum.CallMsg{To: &anchor, Data: contracts.AnchorsCallData([32]byte{})}, nil)
 	if err != nil {
-		return fmt.Errorf("chain %d: reading anchors() on %s: %w", chainID, anchor.Hex(), err)
+		return fmt.Errorf("chain %d: reading anchors() on %s: %w", chainID, anchor.Hex(), ethrpc.RedactError(err))
 	}
 	st, err := contracts.DecodeAnchorsReturn(ret)
 	if err != nil {

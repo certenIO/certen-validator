@@ -1,0 +1,26 @@
+{
+  "fixture": "pkg/intentcert/x21_fixture_test.go newX21: principal on BVN1, authority book on BVN2, header book on BVN2, delegate on BVN3, initiator and certified key page on BVN3",
+  "inputs": {
+    "g0Hash": "15c5928a88285b0d8b12fecc8770a5959d36a4e1930607b6cd91fc47965fb040",
+    "g1Hash": "bfb39cc36f288a45263877753b6944836f2958ec2b5e896885005a81ca53cb85",
+    "g2Hash": "39f3176a0c3e42a2ad131c14fa5dc1364ef5021f52704209691f56e781f3925d",
+    "keyBook": "acc://erp.acme/book",
+    "keyPage": "acc://erp.acme/book/1",
+    "operationId": "0700000000000000000000000000000000000000000000000000000000000000"
+  },
+  "pagesRoot": "bab8d1640f59d7da8475708b8c88616b5cf7ddb529803d88f0895c15a0676f14",
+  "votesRoot": "1da2f925304ab81a28a62a9fde411554372a18989b4093a976185b4017e9d2c0",
+  "slots": {
+    "G0": "613ae0949c9a415a5429c7fcdff6be68f59ec8320d766d4234f514a086911efb",
+    "G1": "a6f152428faafe5b7a65f62e42ba2bba618b43a5b9341ec26fc133b70b27621f",
+    "G2": "bc05e4b42e8ff2c087ea72ef2ab439bb354b429de343dc5abea053fc2b4f9728",
+    "L1": "9c95b75741a06abcee2d313675ccb491466bd1a6dc27d6bafc6db779ad0ff8e2",
+    "L2": "a652ec5e2e163dd21bda16e759ae5421709544b63e9442252000b558f1ff19f2",
+    "L3": "420fdfea2ed7b5fd0a47513f2d7e8d67dc2677dff7b08747fdb7f743a165b1d0",
+    "L4": "7a3a3b0e5617a2c80adcbff7d62af2e9b2697135e186b4f1ac7a3467f0bade95",
+    "keyBook": "f81c0e15e551663c9088fa0a756f4533e407963f626787f5eca7cac79594cf40",
+    "keyPage": "3e195e846708795f0b585581f47de9f35a82bbde4ff6d917f55dc014cce91dd9",
+    "operationId": "0700000000000000000000000000000000000000000000000000000000000000"
+  },
+  "govRootV4": "4222e772c7ec8741bab6616e06119a84934164342aab852ef48423b6d45377fd"
+}

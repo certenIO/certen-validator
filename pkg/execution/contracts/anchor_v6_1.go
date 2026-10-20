@@ -18,6 +18,7 @@ package contracts
 import (
 	"context"
 	"fmt"
+	"github.com/certen/independant-validator/pkg/ethrpc"
 	"math/big"
 	"strings"
 
@@ -146,7 +147,7 @@ func (w *CertenAnchorWrapper) GetValidatorSetRootV6_1(ctx context.Context) ([32]
 	out := []interface{}{new([32]byte)}
 	callOpts := &bind.CallOpts{Context: ctx}
 	if err := bound.Call(callOpts, &out, "getValidatorSetRoot"); err != nil {
-		return [32]byte{}, fmt.Errorf("getValidatorSetRoot: %w", err)
+		return [32]byte{}, fmt.Errorf("getValidatorSetRoot: %w", ethrpc.RedactError(err))
 	}
 	return *out[0].(*[32]byte), nil
 }
@@ -159,7 +160,7 @@ func (w *CertenAnchorWrapper) GetAnchorOperationIDV6_1(ctx context.Context, anch
 	out := []interface{}{new([32]byte)}
 	callOpts := &bind.CallOpts{Context: ctx}
 	if err := bound.Call(callOpts, &out, "getAnchorOperationID", anchorId); err != nil {
-		return [32]byte{}, fmt.Errorf("getAnchorOperationID: %w", err)
+		return [32]byte{}, fmt.Errorf("getAnchorOperationID: %w", ethrpc.RedactError(err))
 	}
 	return *out[0].(*[32]byte), nil
 }
@@ -187,7 +188,7 @@ func (w *CertenAnchorWrapper) GetAnchorV6_1(ctx context.Context, anchorId [32]by
 	}
 	callOpts := &bind.CallOpts{Context: ctx}
 	if err := bound.Call(callOpts, &out, "getAnchor", anchorId); err != nil {
-		return nil, fmt.Errorf("getAnchor(%x): %w", anchorId, err)
+		return nil, fmt.Errorf("getAnchor(%x): %w", anchorId, ethrpc.RedactError(err))
 	}
 	return &AnchorV6_1{
 		BundleId:              *out[0].(*[32]byte),

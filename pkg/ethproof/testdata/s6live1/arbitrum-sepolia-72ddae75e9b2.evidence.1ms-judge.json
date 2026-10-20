@@ -1,0 +1,27 @@
+{
+  "version": "certen:s6-replay:v1",
+  "state": {
+    "state": "s6_replay_unproven",
+    "reason": "state_unavailable",
+    "chainId": 421614,
+    "txHash": "0x72ddae75e9b2b9b86e4dc831abacc84cf4681eff360ac48ed315289b56276760",
+    "blockNumber": 320818474,
+    "blockHash": "0x0ce4d5e8b747b19d52e12173e3527ccc390df81d8dc7f69a47bd6fc90a6ae8d7",
+    "contract": "0xb6d37a09f7069ca9715223c9b794354366d1fa2f",
+    "providers": [
+      {
+        "host": "(agreeing providers)",
+        "error": "no agreed latest header: header 320818479: 0 of 2 providers answered, 2 needed (sepolia-rollup.arbitrum.io: not in the recorded world: this provider was not asked this at capture time; arbitrum-sepolia-rpc.publicnode.com: not in the recorded world: this provider was not asked this at capture time)"
+      },
+      {
+        "host": "sepolia-rollup.arbitrum.io",
+        "error": "not asked: the capture budget of 1ms ended"
+      },
+      {
+        "host": "arbitrum-sepolia-rpc.publicnode.com",
+        "error": "not asked: the capture budget of 1ms ended"
+      }
+    ],
+    "detail": "no provider could prove the slot 0x4aee024398becc1888d4d455b6c8bf061222b7caf58bd49d86a5a5fcb6b117af of 0xB6D37A09f7069Ca9715223C9b794354366D1Fa2F at any of the newest 4 blocks (settlement block 320818474, newest seen 0) before the capture budget of 1ms ended"
+  }
+}

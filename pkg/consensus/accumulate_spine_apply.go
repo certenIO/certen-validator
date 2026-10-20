@@ -192,7 +192,9 @@ func (app *ValidatorApp) processAccumulateSpineExtend(et *AccumulateSpineExtendT
 	var cps []ledger.AccumulateSpineCheckpoint
 	var sets []ledger.AccumulateSpineSet
 	err = refusePanic("the records could not be verified", func() (err error) {
-		cps, sets, err = proofv2.ExtendSpine(view, records, height)
+		// From the rules v15 activation in force at this block (accepted below it) a checkpoint also records how many writes to the globals
+		// account the walk applied (evidence 2.1's accounting, V-E A2(b)); before it the checkpoint is v14's, byte for byte.
+		cps, sets, err = proofv2.ExtendSpineCounting(view, records, height, app.g1ActivationInForce(height) != nil)
 		return err
 	})
 	if err != nil {

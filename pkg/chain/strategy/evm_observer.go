@@ -94,6 +94,10 @@ type EVMObserver struct {
 	finality    ethrpc.FinalityReader // RB5-F53: agreeing independent providers
 	finalityErr error
 
+	// replay captures the S6 replay-guard proof of a settlement from inclusion, beside the observation (RB10). Nil when
+	// the finality reader serves no state proofs.
+	replay *ethproof.ReplayGuardCapturer
+
 	// Configuration
 	requiredConfirmations int
 	pollingInterval       time.Duration
@@ -141,10 +145,17 @@ func NewEVMObserver(config *EVMObserverConfig) (*EVMObserver, error) {
 		config.Timeout = 30 * time.Minute
 	}
 
+	var replay *ethproof.ReplayGuardCapturer
+	if config.Finality != nil {
+		if src, ok := ethproof.ReplaySourceOf(config.Finality); ok {
+			replay = ethproof.NewReplayGuardCapturer(ethproof.ReplayCaptureConfig{ChainID: config.ChainID, Source: src, Logf: log.Printf}, nil)
+		}
+	}
 	return &EVMObserver{
 		client:                config.Client,
 		finality:              config.Finality,
 		finalityErr:           config.FinalityErr,
+		replay:                replay,
 		chainID:               config.ChainID,
 		validatorID:           config.ValidatorID,
 		requiredConfirmations: config.RequiredConfirmations,
@@ -212,16 +223,21 @@ func (o *EVMObserver) ObserveTransaction(ctx context.Context, txHash common.Hash
 // A settlement that cannot be proven is refused by name; it is never observed without its proofs.
 func (o *EVMObserver) observeSettled(ctx context.Context, txHash common.Hash, deadline time.Time) (*ObservationResult, error) {
 	if o.finality == nil {
-		return nil, fmt.Errorf("chain %d: no agreeing providers to observe %s with: %v", o.chainID, txHash.Hex(), o.finalityErr)
+		return nil, fmt.Errorf("chain %d: no agreeing providers to observe %s with: %v", o.chainID, txHash.Hex(), ethrpc.RedactError(o.finalityErr))
+	}
+	// The S6 capture starts NOW, at inclusion, not when the chain finalizes: no public provider serves old state. It runs
+	// beside this observation and never delays or fails it.
+	if o.replay != nil {
+		o.replay.Begin(txHash)
 	}
 	receipt, err := ethrpc.SettledInFinalizedChain(ctx, o.finality, txHash, deadline, o.pollingInterval, log.Printf)
 	if err != nil {
-		return nil, fmt.Errorf("observe %s in the finalized chain %d: %w", txHash.Hex(), o.chainID, err)
+		return nil, fmt.Errorf("observe %s in the finalized chain %d: %w", txHash.Hex(), o.chainID, ethrpc.RedactError(err))
 	}
 	// By HASH, from the agreeing providers: a read by height could be answered by a backend on another fork.
 	header, err := o.finality.HeaderByHash(ctx, receipt.BlockHash)
 	if err != nil {
-		return nil, fmt.Errorf("read the finalized header %s on chain %d: %w", receipt.BlockHash.Hex(), o.chainID, err)
+		return nil, fmt.Errorf("read the finalized header %s on chain %d: %w", receipt.BlockHash.Hex(), o.chainID, ethrpc.RedactError(err))
 	}
 	if header.Hash() != receipt.BlockHash {
 		return nil, fmt.Errorf("the finalized header at %d on chain %d is %s, the receipt names %s", receipt.BlockNumber.Uint64(),
@@ -259,6 +275,12 @@ func (o *EVMObserver) observeSettled(ctx context.Context, txHash common.Hash, de
 	result.ObservedAt = time.Now().UTC()
 	if err := bindInclusion(result, settlement); err != nil {
 		return nil, fmt.Errorf("chain %d: %w", o.chainID, err)
+	}
+	// The capture is held to the settlement just proven, in the background; what has been captured so far rides on the
+	// result as a snapshot, outside every hashed input.
+	if o.replay != nil {
+		result.ReplayGuard = o.replay.Resolve(settlement)
+		o.replay.Bind(settlement)
 	}
 	return result, nil
 }
@@ -332,7 +354,7 @@ func (o *EVMObserver) observeTron(ctx context.Context, txHash common.Hash, deadl
 	header, headerErr = o.client.HeaderByHash(ctx, receipt.BlockHash)
 	if headerErr != nil {
 		// Fallback: build result from receipt only (TRON, non-standard EVM chains)
-		log.Printf("⚠️ [EVM-OBSERVER] HeaderByHash failed (non-standard chain): %v — using receipt-only observation", headerErr)
+		log.Printf("⚠️ [EVM-OBSERVER] HeaderByHash failed (non-standard chain): %v — using receipt-only observation", ethrpc.RedactError(headerErr))
 		result = &ObservationResult{
 			TxHash:                receipt.TxHash.Hex(),
 			BlockNumber:           receipt.BlockNumber.Uint64(),
@@ -447,10 +469,10 @@ func (o *EVMObserver) observeTron(ctx context.Context, txHash common.Hash, deadl
 		if from, sErr := types.Sender(signer, tx); sErr == nil {
 			result.TxFrom = from.Hex()
 		} else {
-			log.Printf("⚠️ [EVM-OBSERVER] types.Sender failed (non-standard chain?): %v", sErr)
+			log.Printf("⚠️ [EVM-OBSERVER] types.Sender failed (non-standard chain?): %v", ethrpc.RedactError(sErr))
 		}
 	} else if txErr != nil {
-		log.Printf("⚠️ [EVM-OBSERVER] TransactionByHash failed: %v — trying raw RPC fallback for tx_from", txErr)
+		log.Printf("⚠️ [EVM-OBSERVER] TransactionByHash failed: %v — trying raw RPC fallback for tx_from", ethrpc.RedactError(txErr))
 		// Fallback: raw JSON-RPC call to extract "from" field (works on TRON jsonrpc)
 		type rpcTx struct {
 			From string `json:"from"`

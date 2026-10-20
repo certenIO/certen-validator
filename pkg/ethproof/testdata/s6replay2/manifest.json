@@ -1,0 +1,54 @@
+{
+  "domain": "certen:s6-replay:v1",
+  "generator": "cmd/s6replayvectors -set s6replay2",
+  "spec": "SPEC.md",
+  "vectors": [
+    {
+      "file": "001_v7_2_valid_execute.json",
+      "sha256": "c398ebd79afbeab2d85662ad5845e56557a1b20af6d8f54526d7e49169e77c42"
+    },
+    {
+      "file": "002_v7_2_valid_batch.json",
+      "sha256": "c0322300c0c9e28eb617aa2d33af50f7eafbdf33b9bec4424d1547103a3a232c"
+    },
+    {
+      "file": "003_v7_2_valid_after_header_chain.json",
+      "sha256": "f76ad4cc6bedf16ad084ee75726a3f1c6a99fd4f7e4d332d48084c17e1402c65"
+    },
+    {
+      "file": "004_v7_2_before_unavailable_disclosed.json",
+      "sha256": "1fb855bf1cc425d55204f7bbdb9102916650b904b0936ab2bd9fb28f06b2600f"
+    },
+    {
+      "file": "005_v7_2_proof_of_a_v7_3_call.json",
+      "sha256": "f6c37a0ceb3ad24e20f615907fc3bf667cb693a4f0978276022096af556f8a7a"
+    },
+    {
+      "file": "006_v7_3_proof_of_a_v7_2_call.json",
+      "sha256": "8e9dec98901393f67151d4902a5975120235a063960a87d6c36cfbb7f403cafb"
+    },
+    {
+      "file": "007_v7_2_wrong_base.json",
+      "sha256": "13ea1d9966d50c38bcd55ad7901e46236800c8b7affaa6272d4d8a73ebfbdea9"
+    },
+    {
+      "file": "008_v7_2_slot_set_at_parent.json",
+      "sha256": "81c69be4953b175a197a4d04d623d48c7b951a7413b05cbf5100a11f42dcc2fc"
+    },
+    {
+      "file": "009_v7_2_after_value_zero.json",
+      "sha256": "c83703da1a6735861ca12adf5651490a63b606252ee10d004d9184b5a1bed418"
+    },
+    {
+      "file": "010_generation_unpinned.json",
+      "sha256": "c047a76e916dbd279a0f25f5abc8f9a1665c980f0cd82913c335dd5664327c7f"
+    }
+  ],
+  "mutations": {
+    "file": "mutations.json.gz",
+    "sha256": "5930538688621c0a6ce24e7c5d0c1186496127fd2c70fb34c3cacccce86b087d"
+  },
+  "mutationCount": 622,
+  "mutationsJsonSha256": "46b6e01164cea6c9d6d2ce78e120121ac525c30f44e9ed546713d066c5909ed7",
+  "mutationSeed": "0x56367265706c6179"
+}

@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"github.com/certen/independant-validator/pkg/entitlement"
 	"github.com/certen/independant-validator/pkg/envvar"
+	"io"
 	"log"
 	"runtime/debug"
 	"sort"
@@ -24,6 +25,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/govvote"
 	"github.com/certen/independant-validator/pkg/accumulate"
 	"github.com/certen/independant-validator/pkg/commitment"
 	"github.com/certen/independant-validator/pkg/consensus"
@@ -70,6 +72,11 @@ func (id *IntentDiscovery) executeCanonical(
 	certenProof *proof.CertenProof,
 	blockHeight uint64,
 ) (consensus.TargetChainOutcome, error) {
+	// The BFT stage is where v1's vote evidence for the intent comes into being: it sets certenProof.GovVoteEvidence once the G1 proof is
+	// complete, before the block is signed and broadcast. So this is the first moment the shadow's page cross-check (v1's replayed pages
+	// against v2's captured pages, PROOF_V2 section 11) has anything to compare, and it is asked here for the single- and the multi-leg
+	// path alike, whatever the stage returns afterwards: the comparison does not depend on the settlement.
+	defer id.crossCheckV1Pages(intent.IntentID, certenProof)
 	if withOutcome, ok := id.bftConsensus.(bftConsensusWithOutcome); ok {
 		return withOutcome.ExecuteCanonicalIntentWithOutcome(
 			ctx, (*consensus.CertenIntent)(intent), certenProof, blockHeight)
@@ -99,6 +106,18 @@ const (
 	// endpoint, not on principle.
 	DefaultBlockWorkers = 12
 	INTENT_BATCH_SIZE   = 5
+
+	// DefaultIntentWorkers is the number of intents this validator processes at once. A block job used to process the
+	// intents it found itself, one after another, and held its block worker for all of them: an intent takes minutes
+	// (the production first intent of 2026-10-18 took six), the watermark could not pass the block, and a few such
+	// blocks held every worker. A block job now only finds the intents, records their lifecycle rows and hands each to
+	// these workers (handOffIntent); the same number as the block workers keeps the most intents processed at once what
+	// it always was.
+	DefaultIntentWorkers = 12
+
+	// intentQueueDepth is how many handed-off intents wait for an intent worker. A full queue makes the block job wait
+	// for room (handOffIntent) - the hold is then the queue's, and loud - and never drops the intent.
+	intentQueueDepth = 256
 )
 
 // IntentDiscoveryConfig contains configuration for intent discovery
@@ -117,6 +136,11 @@ type IntentDiscoveryConfig struct {
 	BlockWorkers    int    `json:"block_workers"`
 	IntentBatchSize int    `json:"intent_batch_size"`
 	MinStartHeight  uint64 `json:"min_start_height"` // Minimum starting height fallback
+
+	// IntentWorkers is the number of goroutines processing the intents block jobs hand off; zero means the same number as
+	// BlockWorkers when that is set (the most intents processed at once is then what BLOCK_WORKERS has always set), else
+	// DefaultIntentWorkers.
+	IntentWorkers int `json:"intent_workers"`
 
 	// on_demand consensus-bound proof retry policy.
 	// on_demand (financial) intents REQUIRE the L1-L3 consensus-bound chained proof and
@@ -163,6 +187,10 @@ const (
 	// structural defect in bytes that are already final on Accumulate.
 	// Terminal: never reprocessed.
 	IntentStatusFailedPermanent
+	// IntentStatusQueued: handed to the intent workers (handOffIntent) and not started by any. It holds the intent against
+	// being handed off twice, exactly as InProgress does, but it is NOT in progress: nothing is running for it, so it is not
+	// counted as in flight (the pause and key-rotation procedures read "in progress 0" as "nothing is running").
+	IntentStatusQueued
 )
 
 func (s IntentStatus) String() string {
@@ -177,6 +205,8 @@ func (s IntentStatus) String() string {
 		return "failed"
 	case IntentStatusFailedPermanent:
 		return "failed_permanent"
+	case IntentStatusQueued:
+		return "queued"
 	default:
 		return "unknown"
 	}
@@ -225,6 +255,9 @@ type IntentDiscovery struct {
 	// Intent tracking - E.4 remediation: Two-phase status tracking
 	intentStatus map[string]IntentStatus // Tracks status of each intent
 	intentCount  int64                   // Total intents discovered
+	// crossChecked holds the intents whose v1 vote evidence has been handed to the shadow's page cross-check (crossCheckV1Pages);
+	// guarded by mu, created on first use.
+	crossChecked map[string]struct{}
 
 	// Entitlement pre-screen (see entitlement_prescreen.go). Advisory only —
 	// declines work this node would otherwise do, never admits anything.
@@ -240,6 +273,13 @@ type IntentDiscovery struct {
 	// again (RB3-F141).
 	retryCh chan *intentRetryJob
 
+	// intentCh carries the intents a block job has handed off - each kept in the retry journal first - to the intent
+	// workers (intentWorker). It is what lets a block job end when its intents are found and recorded, not when the
+	// slowest of them is processed (handOffIntent).
+	intentCh chan *intentRetryJob
+	// intentWG counts the running intent workers, so a stop can be waited for (startIntentWorkers, WaitIntentWorkers).
+	intentWG sync.WaitGroup
+
 	// retries keeps every queued retry until it ends (retry_journal.go, RB6-F12).
 	retries RetryJournal
 
@@ -248,6 +288,20 @@ type IntentDiscovery struct {
 
 	// failureWriter records an intent's terminal failure; nil is the lifecycle repository (tests replace it).
 	failureWriter lifecycleStatusWriter
+
+	// The lifecycle row of a discovered intent (lifecycle_upsert.go, RB8-F): lifecycleRows is the writer (nil is the
+	// lifecycle repository; tests replace it), lifecyclePolicy bounds one write's retries, lifecycleQueue keeps the
+	// writes that failed until they succeed, lifecycleOwed holds them in memory with their intents.
+	lifecycleRows   lifecycleRowWriter
+	lifecyclePolicy lifecycleRetryPolicy
+	lifecycleQueue  RetryJournal
+	lifecycleMu     sync.Mutex
+	lifecycleOwed   map[string]*owedLifecycle
+
+	// blockSearchTimeout bounds a block's search only; zero is defaultBlockSearchTimeout. blockProcess runs one
+	// intent of a block; nil is processIntent (tests replace it).
+	blockSearchTimeout time.Duration
+	blockProcess       func(intent *CertenIntent, blockHeight uint64) (consensus.TargetChainOutcome, error)
 
 	// unsearched keeps blocks whose search failed until they are searched (RB3-F125, unsearched_blocks.go).
 	unsearched UnsearchedBlockStore
@@ -304,6 +358,16 @@ func DefaultIntentDiscoveryConfig() *IntentDiscoveryConfig {
 	}
 }
 
+// intentWorkersFor is the intent worker count for a configuration that names none: the block worker count when one is set
+// (BLOCK_WORKERS has always bounded how many intents are processed at once; an operator running N != 12 must not get 12),
+// else DefaultIntentWorkers.
+func intentWorkersFor(blockWorkers int) int {
+	if blockWorkers > 0 {
+		return blockWorkers
+	}
+	return DefaultIntentWorkers
+}
+
 // NewIntentDiscovery creates a new intent discovery service with configuration and persistence
 func NewIntentDiscovery(
 	client accumulate.Client,
@@ -332,6 +396,9 @@ func NewIntentDiscovery(
 	}
 	if config.ChainedProofRequeueBackoff <= 0 {
 		config.ChainedProofRequeueBackoff = 10 * time.Second
+	}
+	if config.IntentWorkers <= 0 {
+		config.IntentWorkers = intentWorkersFor(config.BlockWorkers)
 	}
 
 	return &IntentDiscovery{
@@ -364,9 +431,47 @@ func (id *IntentDiscovery) SetBFTConsensus(consensus BFTConsensusProtocol) {
 // ProofV2Shadow captures an intent's governing pages at discovery and builds its v2 proof after the v1 proof: in the
 // background (Build) until the chain requires the v3 intent certificate, then at once for the certificate (Prove).
 type ProofV2Shadow interface {
-	Capture(intentID, account, tx string)
+	// Capture reads the governing pages. keyBook and keyPage are the key book and page the intent declares (its governance data),
+	// from which the certified key page is resolved; either may be empty.
+	Capture(intentID, account, tx, keyBook, keyPage string)
 	Build(intentID, account, tx, bvn string)
 	Prove(ctx context.Context, intentID, account, tx, bvn string, maxMajors uint64) (*proofv2.Evidence, error)
+}
+
+// ProofV2CrossChecker is implemented by a shadow that compares the pages v1 replayed for an intent with the pages v2 captured
+// (docs/proof/PROOF_V2.md §5.2: a disagreement on any page is stop-the-line). It never delays or fails an intent. Discovery asks once
+// per intent, after the BFT stage has produced v1's vote evidence (crossCheckV1Pages).
+type ProofV2CrossChecker interface {
+	CrossCheck(intentID string, ev *govvote.Evidence)
+}
+
+// crossCheckV1Pages hands the shadow the vote evidence v1 produced for the intent, once, for the shadow's page cross-check. It is
+// called after the BFT stage returns (executeCanonical), because that stage is what sets cp.GovVoteEvidence; it used to be asked for in
+// proveV2, which runs before it on the same proof, so the cross-check never ran (C5-F1).
+//
+//   - Never without evidence: a stage that failed before producing any leaves the proof without, and nothing is asked.
+//   - Once per intent for the life of the process. The retry loop only re-runs an intent whose proof was unavailable
+//     (errChainedProofUnavailable, raised before this stage, so those passes carry no evidence); an intent whose stage failed after
+//     it produced evidence (the broadcast of the certified block) is failed, not retried, and may be found again and run again. The
+//     comparison is of v1's replay against v2's capture of the same pages, which a second pass would repeat.
+//   - Fire and forget: the shadow runs the comparison in the background and reports it by name (counter and log); this never waits
+//     for it, and nothing it finds reaches the intent.
+func (id *IntentDiscovery) crossCheckV1Pages(intentID string, cp *proof.CertenProof) {
+	cc, ok := id.v2Shadow.(ProofV2CrossChecker)
+	if !ok || cp == nil || cp.GovVoteEvidence == nil {
+		return
+	}
+	id.mu.Lock()
+	if _, asked := id.crossChecked[intentID]; asked {
+		id.mu.Unlock()
+		return
+	}
+	if id.crossChecked == nil {
+		id.crossChecked = make(map[string]struct{})
+	}
+	id.crossChecked[intentID] = struct{}{}
+	id.mu.Unlock()
+	cc.CrossCheck(intentID, cp.GovVoteEvidence)
 }
 
 // SetProofV2Shadow installs the proof v2 shadow.
@@ -380,6 +485,39 @@ type ProofV2Gate interface {
 
 // SetProofV2Gate installs the gate; without one, no intent is proven for a v3 certificate.
 func (id *IntentDiscovery) SetProofV2Gate(g ProofV2Gate) { id.v2Gate = g }
+
+// ProofV2G1Gate is implemented by a gate that also knows the rules v15 cross-partition activation: whether the NEXT block requires
+// evidence 2.1 in every v3 certificate (read from the same committed state the proposer builds certificates against, consensus
+// G1ActivationContext). A gate without it (rules before v15) never asks for 2.1.
+type ProofV2G1Gate interface {
+	G1CrossPartitionRequired() (bool, error)
+}
+
+// ProofV2G1Prover is implemented by a shadow that can build evidence 2.1 for an intent's certificate. It is called, instead of Prove, only
+// while the activation is in force (g1InForce is then true); an intent whose 2.1 evidence cannot be built is answered by a named state and
+// retried, never certified under 2.0 or a weaker binding.
+type ProofV2G1Prover interface {
+	ProveG1(ctx context.Context, intentID, account, tx, bvn string, maxMajors uint64, g1InForce bool) (*proofv2.Evidence, error)
+}
+
+// ProofV2G1Capturer is implemented by a shadow whose capture can judge its closure budget for the document form the rules v15 activation makes of
+// it (RB9-F6, B1): g1InForce is the gate's ProofV2G1Gate.G1CrossPartitionRequired, read by the shadow once, when the capture is complete. A shadow
+// without it captures as before and judges the form a capture has without the activation.
+type ProofV2G1Capturer interface {
+	CaptureG1(intentID, account, tx, keyBook, keyPage string, g1InForce func() (bool, error))
+}
+
+// captureV2 starts an intent's capture with the activation signal proveV2 builds the certificate with, when the shadow and the gate both have one: the
+// capture-time budget check is then judged for the document form the build and the signing will produce. Otherwise it is Capture, as it was.
+func (id *IntentDiscovery) captureV2(intentID, account, tx, keyBook, keyPage string) {
+	if c, ok := id.v2Shadow.(ProofV2G1Capturer); ok {
+		if gg, ok := id.v2Gate.(ProofV2G1Gate); ok {
+			c.CaptureG1(intentID, account, tx, keyBook, keyPage, gg.G1CrossPartitionRequired)
+			return
+		}
+	}
+	id.v2Shadow.Capture(intentID, account, tx, keyBook, keyPage)
+}
 
 func (id *IntentDiscovery) SetRepositories(repos *database.Repositories) {
 	id.repos = repos
@@ -403,6 +541,7 @@ func (id *IntentDiscovery) StartMonitoring() {
 	id.stopCh = make(chan struct{})
 	id.blockProcessCh = make(chan *BlockProcessJob, id.config.MaxConcurrentBlocks)
 	id.retryCh = make(chan *intentRetryJob, 256)
+	id.intentCh = make(chan *intentRetryJob, intentQueueDepth)
 	id.processedBlocks = make(map[uint64]bool)
 	id.inFlight = make(map[uint64]bool)
 	id.lastQueuedBlock = id.lastProcessedBlock // reset queue tracker to current watermark
@@ -452,7 +591,10 @@ func (id *IntentDiscovery) StartMonitoring() {
 	// Start the decoupled on_demand consensus-bound proof retry worker, and put back on its queue every retry
 	// an earlier run left unfinished (RB6-F12).
 	go id.retryWorker()
+	intentWorkers := id.startIntentWorkers(id.config.IntentWorkers)
+	id.logger.Printf("   - Intent workers: %d (a block job hands its intents to them and ends; it no longer waits for the slowest)", intentWorkers)
 	go id.resumeRetriesLoop()
+	go id.lifecycleQueueLoop()
 
 	// Start main monitoring loop
 	go id.monitoringLoop()
@@ -924,6 +1066,9 @@ type DiscoveryStatus struct {
 	// being processed - zero is "nothing in flight".
 	IntakePaused bool
 	InProgress   int
+	// Queued is how many intents have been handed to the intent workers and not started by any. A paused intake leaves them
+	// queued; they are not in flight, which is why they are not in InProgress.
+	Queued int
 }
 
 // StallLagFloor is how far behind the head a node must be before a still watermark counts as a
@@ -967,6 +1112,7 @@ func (s DiscoveryStatus) Stalled(threshold time.Duration) bool {
 // Status returns the current discovery health. Safe to call from any goroutine.
 func (id *IntentDiscovery) Status() DiscoveryStatus {
 	inProgress := id.inProgress() // before watermarkMu: the two locks are never held together
+	queued := id.queued()
 	id.watermarkMu.Lock()
 	defer id.watermarkMu.Unlock()
 
@@ -977,6 +1123,7 @@ func (id *IntentDiscovery) Status() DiscoveryStatus {
 		Started:       !id.lastAdvanceAt.IsZero(),
 		IntakePaused:  id.paused,
 		InProgress:    inProgress,
+		Queued:        queued,
 	}
 	if id.unsearched != nil {
 		if kept, err := id.unsearched.List(); err != nil {
@@ -1046,12 +1193,19 @@ func (id *IntentDiscovery) advanceWatermark(height uint64) {
 
 // processBlock processes a single block looking for Certen intents using comprehensive v3 API search
 func (id *IntentDiscovery) processBlock(job *BlockProcessJob, workerID string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	// This context is for the SEARCH. It used to live to the end of the function and be reused for the lifecycle write
+	// of every intent of the block; the first intent's processing takes minutes, so every later intent's write ran on
+	// an expired context (RB8-F, production 2026-10-18). Nothing after the search borrows it.
+	searchTimeout := id.blockSearchTimeout
+	if searchTimeout <= 0 {
+		searchTimeout = defaultBlockSearchTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), searchTimeout)
 
 	foundIntents := 0
 
 	certenTransactions, err := id.client.SearchCertenTransactions(ctx, int64(job.BlockHeight))
+	cancel()
 	if err != nil {
 		return err
 	}
@@ -1072,63 +1226,16 @@ func (id *IntentDiscovery) processBlock(job *BlockProcessJob, workerID string) e
 			continue
 		}
 
-		// Intent lifecycle: record discovery as authorized (validator only sees delivered intents)
-		if id.repos != nil && id.repos.IntentLifecycle != nil {
-			targetChain := ""
-			if tc, _, tcErr := intent.GetTargetChain(); tcErr == nil {
-				targetChain = tc
-			}
-
-			// Multi-leg intents are recorded with their SHAPE — leg count, every target chain,
-			// and execution mode. UpsertOnDiscoveryMultiLeg existed to do exactly this and had
-			// no callers, so every intent went through the single-leg upsert and left
-			// leg_count at its schema default of 1 and target_chains NULL. A multi-leg intent
-			// was therefore indistinguishable from a single-leg one in the durable record,
-			// which is why every analysis of this table concluded multi-leg had never run.
-			recorded := false
-			if isMulti, miErr := intent.IsMultiLeg(); miErr == nil && isMulti {
-				legCount, lcErr := intent.GetLegCount()
-				if lcErr == nil && legCount > 0 {
-					execMode, emErr := intent.GetExecutionMode()
-					if emErr != nil {
-						execMode = "sequential" // the router's own default
-					}
-					var chains []string
-					if grouped, gErr := intent.GetLegsGroupedByChain(); gErr == nil {
-						for chainKey := range grouped {
-							chains = append(chains, chainKey)
-						}
-						sort.Strings(chains) // stable across nodes; the map order is not
-					}
-					if mlErr := id.repos.IntentLifecycle.UpsertOnDiscoveryMultiLeg(
-						ctx, intent.IntentID, intent.TransactionHash,
-						int64(job.BlockHeight), intent.BlockTime, intent.UserID, intent.ProofClass, targetChain,
-						chains, legCount, execMode,
-					); mlErr != nil {
-						id.logger.Printf("⚠️ [LIFECYCLE] Failed to upsert multi-leg lifecycle for %s: %v",
-							intent.IntentID, mlErr)
-					} else {
-						recorded = true
-					}
-				}
-			}
-
-			// Single-leg, or a multi-leg intent whose shape could not be read. Recording it as
-			// single-leg is better than not recording it: the row still carries the identifiers
-			// cost attribution and settlement join on.
-			if !recorded {
-				if lcErr := id.repos.IntentLifecycle.UpsertOnDiscovery(
-					ctx, intent.IntentID, intent.TransactionHash,
-					int64(job.BlockHeight), intent.BlockTime, intent.UserID, intent.ProofClass, targetChain,
-				); lcErr != nil {
-					id.logger.Printf("⚠️ [LIFECYCLE] Failed to upsert lifecycle for %s: %v", intent.IntentID, lcErr)
-				}
-			}
+		// Intent lifecycle: record discovery as authorized (validator only sees delivered intents). The write is
+		// retried on a context of its own per attempt and, if it still fails, owed on a queue discovery services
+		// (lifecycle_upsert.go): the row is never left to a log line.
+		if err := id.recordDiscoveryLifecycle(intent, job.BlockHeight); err != nil {
+			id.logger.Printf("🚨 [LIFECYCLE] intent %s: %v", intent.IntentID, err)
 		}
 
 		// E.4 remediation: Two-phase marking to handle processing failures
 		// Phase 1: Mark as in_progress - prevents concurrent processing
-		if !id.markInProgress(intent.IntentID) {
+		if !id.markQueued(intent.IntentID) {
 			status := id.getIntentStatus(intent.IntentID)
 			id.logger.Printf("⚠️ Intent %s already %s, skipping", intent.IntentID, status.String())
 			continue
@@ -1141,72 +1248,218 @@ func (id *IntentDiscovery) processBlock(job *BlockProcessJob, workerID string) e
 		id.logger.Printf("   Block Height: %d", job.BlockHeight)
 		id.logger.Printf("   Intent Data: %+v", certenTx.IntentData)
 
-		// Process the intent through consensus
-		if outcome, err := id.processIntent(intent, job.BlockHeight); err != nil {
-			id.logger.Printf("❌ Failed to process intent %s: %v", intent.IntentID, err)
-			// E.4 remediation: Phase 2 (failure) - Mark as failed (allows re-acquire on retry),
-			// unless the failure is structural and therefore final.
-			id.markFailedClassified(intent.IntentID, err)
-
-			// on_demand consensus-bound proof not yet available (benign DN-anchoring latency or a
-			// transient DN/BVN CometBFT RPC blip): requeue off the block-worker critical path
-			// instead of dropping the intent or silently downgrading to a basic proof. The error
-			// is returned before any execution/anchor side effect, so the retry is replay-safe.
-			if errors.Is(err, errChainedProofUnavailable) {
-				id.logger.Printf("🔁 Intent %s requeued for consensus-bound proof retry", intent.IntentID)
-				id.enqueueRetry(&intentRetryJob{intent: intent, blockHeight: job.BlockHeight, lastErr: err})
-			} else {
-				id.logger.Printf("   Intent %s marked as 'failed'", intent.IntentID)
-				// Intent lifecycle: record terminal failure (non-fatal)
-				if w := id.lifecycleFailureWriter(); w != nil {
-					if lcErr := recordLifecycleFailed(w, intent.IntentID, err); lcErr != nil {
-						id.logger.Printf("⚠️ [LIFECYCLE] Failed to update lifecycle to failed for %s: %v", intent.IntentID, lcErr)
-					}
-				}
-			}
-		} else {
-			foundIntents++
-			// E.4 remediation: Phase 2 (success) - Mark as completed.
-			//
-			// markCompleted is this PROCESS's in-memory dedup marker — "this node is
-			// done handling this intent" — and stays where it is. What changes is the
-			// sentence printed next to it.
-			id.markCompleted(intent.IntentID)
-
-			// STAGE 1. This line used to say "processed successfully and marked
-			// complete" for every intent whose CONSENSUS committed, including the
-			// ordinary case where the chain write had not resolved yet. On
-			// 2026-08-25 it printed that at 07:33:41 for intent 1638327d…, whose
-			// transaction confirmed at 07:34:32 — and it printed it directly beneath
-			// a warning claiming the same settlement had failed. Both cannot be true,
-			// and neither was.
-			switch {
-			case outcome == consensus.TargetChainOutcomeUnset:
-				// Nothing reports no outcome with no error any more: a declined intent is an error, recorded
-				// failed above (RB6-F12). Said by name should it ever happen, never read as a decline.
-				id.logger.Printf("🚨 Intent %s got through consensus with no target-chain outcome reported", intent.IntentID)
-			case outcome.IsConfirmed():
-				id.logger.Printf("✅ Intent %s processed and its target-chain settlement is CONFIRMED",
-					intent.IntentID)
-			case outcome.IsFailed():
-				id.logger.Printf("❌ Intent %s processed; target-chain settlement FAILED", intent.IntentID)
-			default:
-				// PENDING — the ordinary case. Name the resolver so the reader knows
-				// where the terminal answer comes from and does not treat this as the
-				// end of the story.
-				id.logger.Printf("⏳ Intent %s processed; target-chain settlement is IN FLIGHT, not complete "+
-					"— the proof cycle (Phase 7 observation, [SETTLEMENT-RESOLVED]) records the terminal "+
-					"status and advances intent_lifecycle from 'settling'", intent.IntentID)
-			}
+		// Hand the intent to the intent workers and go on. Processing it takes minutes (consensus, the certificate wait, the
+		// settlement), and this job used to do that itself, intent after intent: it held its block worker for the whole of the
+		// slowest, the watermark could not pass the block, and the intents behind the first waited for it (RB8-H, the
+		// remaining hold behind the 2026-10-18 lifecycle defect). The hand-off is kept in the retry journal before it is
+		// queued, so an intent handed off is never lost with the process; the block is passed once every intent in it is
+		// recorded and handed off, not once every one is processed.
+		if err := id.handOffIntent(intent, job.BlockHeight); err != nil {
+			// Not handed off, so not in progress: released for the next search of this block, which is kept for it.
+			id.markFailed(intent.IntentID)
+			return fmt.Errorf("intent %s of block %d could not be handed to the intent workers: %w", intent.IntentID, job.BlockHeight, err)
 		}
+		foundIntents++
 	}
 
 	if foundIntents > 0 {
-		id.logger.Printf("✅ Worker %s found and processed %d new intents in block %d",
+		id.logger.Printf("✅ Worker %s found %d new intents in block %d and handed them to the intent workers",
 			workerID, foundIntents, job.BlockHeight)
 	}
 
 	return nil
+}
+
+// errNoIntentWorkers: intents were found but nothing is running to process them.
+var errNoIntentWorkers = errors.New("no intent workers are running")
+
+// handOffIntent gives a found intent to the intent workers: kept in the retry journal first - so a hand-off outlives the
+// process, exactly as a queued retry does (RB6-F12) - then queued. A full queue makes the caller wait for room, loudly, and
+// never drops the intent; a stop while waiting leaves it kept for the next start. An intent that cannot be both kept and
+// queued is an error, and the block is searched again.
+func (id *IntentDiscovery) handOffIntent(intent *CertenIntent, blockHeight uint64) error {
+	if id.intentCh == nil {
+		return errNoIntentWorkers
+	}
+	job := &intentRetryJob{intent: intent, blockHeight: blockHeight}
+	if err := id.keepRetry(job); err != nil {
+		return err
+	}
+	select {
+	case id.intentCh <- job:
+		return nil
+	default:
+	}
+	id.logger.Printf("⏳ [HANDOFF] intent %s of block %d waits for room in the intent queue (%d waiting for the intent workers)",
+		intent.IntentID, blockHeight, len(id.intentCh))
+	started := time.Now()
+	select {
+	case id.intentCh <- job:
+		id.logger.Printf("[HANDOFF] intent %s of block %d queued after waiting %s", intent.IntentID, blockHeight,
+			time.Since(started).Round(time.Millisecond))
+		return nil
+	case <-id.stopCh:
+		return errors.New("stopped while waiting for room in the intent queue; the hand-off is kept for the next start")
+	}
+}
+
+// requeueHandOff puts a hand-off the journal already keeps back on the intent queue (a start resuming it), waiting for room.
+func (id *IntentDiscovery) requeueHandOff(job *intentRetryJob) error {
+	if id.intentCh == nil {
+		return errNoIntentWorkers
+	}
+	select {
+	case id.intentCh <- job:
+		return nil
+	case <-id.stopCh:
+		return errors.New("stopped while waiting for room in the intent queue")
+	}
+}
+
+// startIntentWorkers starts n intent workers (zero: DefaultIntentWorkers) on id.intentCh and returns how many it started.
+// They are counted, so a stop can be waited for.
+func (id *IntentDiscovery) startIntentWorkers(n int) int {
+	if n <= 0 {
+		n = DefaultIntentWorkers
+	}
+	for i := 0; i < n; i++ {
+		id.intentWG.Add(1)
+		go id.intentWorker(fmt.Sprintf("intent-worker-%d", i+1))
+	}
+	return n
+}
+
+// WaitIntentWorkers returns when every intent worker has exited (after StopMonitoring: each finishes the intent it is
+// running first, and processing an intent is not interruptible, so this can take as long as that intent).
+func (id *IntentDiscovery) WaitIntentWorkers() { id.intentWG.Wait() }
+
+// intentWorker processes the intents block jobs hand off, one at a time per worker.
+func (id *IntentDiscovery) intentWorker(workerID string) {
+	defer id.intentWG.Done()
+	defer func() {
+		if r := recover(); r != nil {
+			id.logger.Printf("🚨 PANIC in intent worker %s: %v", workerID, r)
+		}
+		id.logger.Printf("🛑 Intent worker %s exited", workerID)
+	}()
+	for {
+		select {
+		case <-id.stopCh:
+			return
+		case job := <-id.intentCh:
+			id.serveHandedOffIntent(job, workerID)
+		}
+	}
+}
+
+// serveHandedOffIntent runs one job so that a panic anywhere in it - the processing, the lifecycle write, the journal - is that
+// job failing and not one worker fewer: the intent is released for the next search of its block, its journal entry stays kept
+// for the next start, and the worker goes on to the next job (as a block search did for a panic, RB3-F151).
+func (id *IntentDiscovery) serveHandedOffIntent(job *intentRetryJob, workerID string) {
+	defer func() {
+		if r := recover(); r != nil {
+			id.logger.Printf("🚨 PANIC handling intent %s in worker %s: %v\n%s", job.intent.IntentID, workerID, r, debug.Stack())
+			id.markFailedIfActive(job.intent.IntentID)
+		}
+	}()
+	id.runHandedOffIntent(job, workerID)
+}
+
+// runHandedOffIntent processes one handed-off intent and ends it the way a block job used to: marked completed, or
+// marked failed and either queued for another attempt at its proof or recorded failed in its lifecycle. Its journal entry
+// ends with it; a failure that could not be recorded keeps the entry, so the next start resumes the intent rather than
+// leave it `authorized`.
+func (id *IntentDiscovery) runHandedOffIntent(job *intentRetryJob, workerID string) {
+	intent := job.intent
+	// A job queued before a pause waits for it to lift (RB3-F8); a stop leaves it kept.
+	if !id.waitWhilePaused() {
+		return
+	}
+	// From here the intent is in progress: a worker has started it. Until now it was only queued, and a paused intake
+	// leaves it queued (RB3-F8: "in progress 0" means nothing is running).
+	id.markStarted(intent.IntentID)
+	id.logger.Printf("📦 Intent worker %s processing intent %s (block %d)", workerID, intent.IntentID, job.blockHeight)
+	outcome, err := id.processHandedOff(job)
+	if err != nil {
+		id.logger.Printf("❌ Failed to process intent %s: %v", intent.IntentID, err)
+		// E.4 remediation: Phase 2 (failure) - Mark as failed (allows re-acquire on retry),
+		// unless the failure is structural and therefore final.
+		id.markFailedClassified(intent.IntentID, err)
+
+		// on_demand consensus-bound proof not yet available (benign DN-anchoring latency or a
+		// transient DN/BVN CometBFT RPC blip): requeue off the worker critical path
+		// instead of dropping the intent or silently downgrading to a basic proof. The error
+		// is returned before any execution/anchor side effect, so the retry is replay-safe.
+		if errors.Is(err, errChainedProofUnavailable) {
+			id.logger.Printf("🔁 Intent %s requeued for consensus-bound proof retry", intent.IntentID)
+			job.lastErr = err
+			id.enqueueRetry(job)
+			return
+		}
+		id.logger.Printf("   Intent %s marked as 'failed'", intent.IntentID)
+		// Intent lifecycle: record the terminal failure.
+		w := id.lifecycleFailureWriter()
+		if w == nil {
+			id.logger.Printf("🚨 [LIFECYCLE] intent %s failed but no lifecycle store is wired to record it; it stays kept for the next start", intent.IntentID)
+			return
+		}
+		if lcErr := recordLifecycleFailed(w, intent.IntentID, err); lcErr != nil {
+			id.logger.Printf("🚨 [LIFECYCLE] intent %s failed and the failure was not recorded (%v); it stays kept for the next start", intent.IntentID, lcErr)
+			return
+		}
+		id.retryEnded(intent.IntentID)
+		return
+	}
+
+	// E.4 remediation: Phase 2 (success) - Mark as completed.
+	//
+	// markCompleted is this PROCESS's in-memory dedup marker — "this node is
+	// done handling this intent" — and stays where it is. What changes is the
+	// sentence printed next to it.
+	id.markCompleted(intent.IntentID)
+	id.retryEnded(intent.IntentID)
+
+	// STAGE 1. This line used to say "processed successfully and marked
+	// complete" for every intent whose CONSENSUS committed, including the
+	// ordinary case where the chain write had not resolved yet. On
+	// 2026-08-25 it printed that at 07:33:41 for intent 1638327d…, whose
+	// transaction confirmed at 07:34:32 — and it printed it directly beneath
+	// a warning claiming the same settlement had failed. Both cannot be true,
+	// and neither was.
+	switch {
+	case outcome == consensus.TargetChainOutcomeUnset:
+		// Nothing reports no outcome with no error any more: a declined intent is an error, recorded
+		// failed above (RB6-F12). Said by name should it ever happen, never read as a decline.
+		id.logger.Printf("🚨 Intent %s got through consensus with no target-chain outcome reported", intent.IntentID)
+	case outcome.IsConfirmed():
+		id.logger.Printf("✅ Intent %s processed and its target-chain settlement is CONFIRMED",
+			intent.IntentID)
+	case outcome.IsFailed():
+		id.logger.Printf("❌ Intent %s processed; target-chain settlement FAILED", intent.IntentID)
+	default:
+		// PENDING — the ordinary case. Name the resolver so the reader knows
+		// where the terminal answer comes from and does not treat this as the
+		// end of the story.
+		id.logger.Printf("⏳ Intent %s processed; target-chain settlement is IN FLIGHT, not complete "+
+			"— the proof cycle (Phase 7 observation, [SETTLEMENT-RESOLVED]) records the terminal "+
+			"status and advances intent_lifecycle from 'settling'", intent.IntentID)
+	}
+}
+
+// processHandedOff runs the intent. A panic in it is a failed intent, not a lost worker (RB3-F151 made the same rule for a
+// block search).
+func (id *IntentDiscovery) processHandedOff(job *intentRetryJob) (outcome consensus.TargetChainOutcome, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			id.logger.Printf("🚨 PANIC processing intent %s: %v\n%s", job.intent.IntentID, r, debug.Stack())
+			outcome, err = consensus.TargetChainFailed, fmt.Errorf("processing intent %s panicked: %v", job.intent.IntentID, r)
+		}
+	}()
+	run := id.blockProcess
+	if run == nil {
+		run = id.processIntent
+	}
+	return run(job.intent, job.blockHeight)
 }
 
 // convertCertenTransactionToIntent converts a CertenTransaction from v3 API to canonical CertenIntent format
@@ -1408,7 +1661,26 @@ func (id *IntentDiscovery) proveV2(ctx context.Context, intentID, accountURL, tx
 	case required && id.v2Shadow == nil:
 		return fmt.Errorf("intent %s: %w: the chain requires proof v2 and no prover is configured", intentID, errChainedProofTerminal)
 	case required:
-		ev, err := id.v2Shadow.Prove(ctx, intentID, accountURL, txHash, partition, maxMajors)
+		// From the block after the rules v15 activation every v3 certificate must carry evidence 2.1; until then the certificate is built
+		// exactly as before. An unreadable activation, or a prover that cannot build 2.1 while it is in force, retries the intent: it is
+		// never proven under the other form.
+		g1InForce := false
+		if gg, ok := id.v2Gate.(ProofV2G1Gate); ok {
+			var err error
+			if g1InForce, err = gg.G1CrossPartitionRequired(); err != nil {
+				return fmt.Errorf("intent %s: %w: whether evidence 2.1 is required: %v", intentID, errChainedProofUnavailable, err)
+			}
+		}
+		var ev *proofv2.Evidence
+		var err error
+		switch p, can := id.v2Shadow.(ProofV2G1Prover); {
+		case g1InForce && !can:
+			return fmt.Errorf("intent %s: %w: evidence 2.1 is required and the prover cannot build it", intentID, errChainedProofUnavailable)
+		case g1InForce:
+			ev, err = p.ProveG1(ctx, intentID, accountURL, txHash, partition, maxMajors, true)
+		default:
+			ev, err = id.v2Shadow.Prove(ctx, intentID, accountURL, txHash, partition, maxMajors)
+		}
 		if err != nil {
 			return fmt.Errorf("intent %s: %w: %v", intentID, errChainedProofUnavailable, err)
 		}
@@ -1614,6 +1886,23 @@ func (id *IntentDiscovery) resumeRetriesOnce(resumed map[string]bool) bool {
 		default:
 			resumed[r.IntentID] = true
 			job.intent = ci
+			if r.Attempts == 0 && r.LastError == "" {
+				// A hand-off that never ran (handOffIntent): not a retry, so it goes back to the intent workers and not behind a
+				// retry's backoff. This process has not marked it, so it does; an intent a block search handed off already in
+				// this run owns its own journal entry and is not queued twice.
+				if !id.markQueued(r.IntentID) {
+					id.logger.Printf("[HANDOFF] kept hand-off of intent %s (block %d) is already being handled by this run", r.IntentID, r.BlockHeight)
+					continue
+				}
+				id.logger.Printf("🔁 [HANDOFF] resuming the hand-off of intent %s (block %d), which never ran", r.IntentID, r.BlockHeight)
+				if err := id.requeueHandOff(job); err != nil {
+					id.markFailed(r.IntentID)
+					delete(resumed, r.IntentID)
+					id.logger.Printf("⚠️ [HANDOFF] intent %s: %v; tried again later", r.IntentID, err)
+					done = false
+				}
+				continue
+			}
 			id.logger.Printf("🔁 [RETRY] resuming the retry of intent %s (block %d, %d attempt(s) so far)", r.IntentID, r.BlockHeight, r.Attempts)
 			id.enqueueRetry(job)
 		}
@@ -1626,23 +1915,57 @@ var errIntentNotInBlock = errors.New("the intent is not in its block")
 
 // intentInBlock rebuilds one intent from its block as discovery builds it.
 func (id *IntentDiscovery) intentInBlock(height uint64, intentID string) (*CertenIntent, error) {
+	intents, err := id.intentsOfBlock(height)
+	if err != nil {
+		return nil, err
+	}
+	for _, ci := range intents {
+		if ci.IntentID == intentID {
+			return ci, nil
+		}
+	}
+	return nil, fmt.Errorf("%w: block %d carries no intent %s", errIntentNotInBlock, height, intentID)
+}
+
+// intentsOfBlock rebuilds every intent a block carries, as discovery builds them: one search of the block, the transactions
+// of that block only, each converted exactly as discovery converts it, and one that does not convert (not a CERTEN intent of
+// four blobs) skipped as discovery skips it.
+func (id *IntentDiscovery) intentsOfBlock(height uint64) ([]*CertenIntent, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	txs, err := id.client.SearchCertenTransactions(ctx, int64(height))
 	if err != nil {
 		return nil, fmt.Errorf("search block %d: %w", height, err)
 	}
+	var intents []*CertenIntent
 	for _, tx := range txs {
 		if tx.BlockHeight != int64(height) {
 			continue
 		}
 		ci, err := id.convertCertenTransactionToIntent(tx)
-		if err != nil || ci.IntentID != intentID {
+		if err != nil {
 			continue
 		}
-		return ci, nil
+		intents = append(intents, ci)
 	}
-	return nil, fmt.Errorf("%w: block %d carries no intent %s", errIntentNotInBlock, height, intentID)
+	return intents, nil
+}
+
+// IntentsInBlock lists, as a set of intent ids, the intents a Directory Network block carries - found with the Accumulate
+// client exactly as discovery's own retry finds one (intentInBlock): the id is the one discovery's conversion builds. A block
+// that cannot be searched is an error, not an empty answer (RB8-G: `repair lifecycle-rows` owes a row only for an intent
+// its block carries).
+func IntentsInBlock(client accumulate.Client, height uint64) (map[string]bool, error) {
+	id := &IntentDiscovery{client: client, logger: log.New(io.Discard, "", 0)}
+	intents, err := id.intentsOfBlock(height)
+	if err != nil {
+		return nil, err
+	}
+	set := make(map[string]bool, len(intents))
+	for _, ci := range intents {
+		set[ci.IntentID] = true
+	}
+	return set, nil
 }
 
 // retryWorker drains the decoupled on_demand retry queue, re-attempting consensus-bound proof
@@ -1765,9 +2088,9 @@ func (id *IntentDiscovery) ReprocessIntent(ctx context.Context, dnBlock uint64, 
 		}
 		id.mu.Lock()
 		switch id.intentStatus[intentID] {
-		case IntentStatusInProgress:
+		case IntentStatusInProgress, IntentStatusQueued:
 			id.mu.Unlock()
-			return fmt.Errorf("intent %s is being processed now; not processed twice", intentID)
+			return fmt.Errorf("intent %s is being processed now (or queued for it); not processed twice", intentID)
 		case IntentStatusFailedPermanent:
 			id.mu.Unlock()
 			return fmt.Errorf("intent %s is permanently invalid; it is not processed again", intentID)
@@ -1861,7 +2184,8 @@ func (id *IntentDiscovery) processIntent(intent *CertenIntent, blockHeight uint6
 				intent.IntentID, intent.TransactionHash[:16]+"...", intent.ProofPartition, inlineAttempts)
 
 			if id.v2Shadow != nil {
-				id.v2Shadow.Capture(intent.IntentID, accountURL, intent.TransactionHash)
+				keyBook, keyPage := declaredKeyPage(intent)
+				id.captureV2(intent.IntentID, accountURL, intent.TransactionHash, keyBook, keyPage)
 			}
 			cp, perr := id.buildChainedCertenProof(ctx, accountURL, intent.TransactionHash, intent.ProofPartition, intent.IntentID, inlineAttempts)
 			if perr != nil {
@@ -2026,7 +2350,8 @@ func (id *IntentDiscovery) processMultiLegIntent(intent *CertenIntent, blockHeig
 			id.logger.Printf("🔗 [MULTI-LEG] Generating L1-L3 chained proof for %s (attempts=%d)", intent.IntentID, inlineAttempts)
 
 			if id.v2Shadow != nil {
-				id.v2Shadow.Capture(intent.IntentID, accountURL, intent.TransactionHash)
+				keyBook, keyPage := declaredKeyPage(intent)
+				id.captureV2(intent.IntentID, accountURL, intent.TransactionHash, keyBook, keyPage)
 			}
 			cp, perr := id.buildChainedCertenProof(ctx, accountURL, intent.TransactionHash, intent.ProofPartition, intent.IntentID, inlineAttempts)
 			if perr != nil {
@@ -2133,25 +2458,44 @@ func (id *IntentDiscovery) isCertenIntent(tx *accumulate.Transaction) bool {
 // E.4 remediation: Two-phase marking to handle processing failures
 // Returns true if the intent was newly marked as in_progress, false if already processing/completed
 func (id *IntentDiscovery) markInProgress(intentID string) bool {
+	return id.acquire(intentID, IntentStatusInProgress)
+}
+
+// markQueued claims an intent for the intent workers exactly as markInProgress claims it for processing - the same intent is
+// never handed off twice - but marks it queued, not in progress: no worker has started it (markStarted does that).
+func (id *IntentDiscovery) markQueued(intentID string) bool {
+	return id.acquire(intentID, IntentStatusQueued)
+}
+
+// markStarted moves a queued intent to in progress when a worker starts it.
+func (id *IntentDiscovery) markStarted(intentID string) {
+	id.mu.Lock()
+	defer id.mu.Unlock()
+	id.intentStatus[intentID] = IntentStatusInProgress
+}
+
+// acquire claims an intent in the given status; false when it is already queued, in progress, completed or unfixable.
+func (id *IntentDiscovery) acquire(intentID string, to IntentStatus) bool {
 	id.mu.Lock()
 	defer id.mu.Unlock()
 
 	status, exists := id.intentStatus[intentID]
 	if exists {
-		// Only allow processing if not already in_progress or completed.
+		// Only allow processing if not already queued, in_progress or completed.
 		// Failed intents CAN be retried — EXCEPT permanently invalid ones,
 		// which no retry can fix and which would otherwise be rediscovered and
 		// re-refused on every poll for the life of the process.
 		if status == IntentStatusInProgress ||
+			status == IntentStatusQueued ||
 			status == IntentStatusCompleted ||
 			status == IntentStatusFailedPermanent {
 			return false // Already being processed, completed, or unfixable
 		}
 	}
 
-	id.intentStatus[intentID] = IntentStatusInProgress
+	id.intentStatus[intentID] = to
 	id.intentCount++
-	return true // Newly marked as in_progress
+	return true
 }
 
 // markCompleted marks an intent as successfully completed
@@ -2171,6 +2515,18 @@ func (id *IntentDiscovery) markFailed(intentID string) {
 	id.mu.Lock()
 	defer id.mu.Unlock()
 	id.intentStatus[intentID] = IntentStatusFailed
+}
+
+// markFailedIfActive is markFailed for a recovered panic: the intent is marked failed only while it is still queued or in
+// progress (compare-and-set under the lock). A panic after the intent was processed and marked completed (the journal write
+// that ends its retry, the log switch) leaves it completed, and a terminal failure stays terminal.
+func (id *IntentDiscovery) markFailedIfActive(intentID string) {
+	id.mu.Lock()
+	defer id.mu.Unlock()
+	switch id.intentStatus[intentID] {
+	case IntentStatusQueued, IntentStatusInProgress:
+		id.intentStatus[intentID] = IntentStatusFailed
+	}
 }
 
 // markFailedTerminal records a failure that no retry can fix.
@@ -2209,7 +2565,7 @@ func (id *IntentDiscovery) isIntentProcessed(intentID string) bool {
 	id.mu.RLock()
 	defer id.mu.RUnlock()
 	status := id.intentStatus[intentID]
-	return status == IntentStatusCompleted || status == IntentStatusInProgress
+	return status == IntentStatusCompleted || status == IntentStatusInProgress || status == IntentStatusQueued
 }
 
 // DEPRECATED: Use markCompleted instead
@@ -2377,4 +2733,13 @@ func failureClassOf(err error) database.IntentFailureClass {
 		return database.FailureGovernanceUnavailable
 	}
 	return database.FailureProcessingFailed
+}
+
+// declaredKeyPage is the key book and page an intent's governance data declares; empty when it declares none or cannot be read.
+func declaredKeyPage(ci *consensus.CertenIntent) (keyBook, keyPage string) {
+	gov, err := ci.ParseGovernance()
+	if err != nil || gov == nil {
+		return "", ""
+	}
+	return gov.Authorization.RequiredKeyBook, gov.Authorization.RequiredKeyPage
 }

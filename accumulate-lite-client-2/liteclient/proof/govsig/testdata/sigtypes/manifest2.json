@@ -1,0 +1,32 @@
+{
+ "format": "certen:sigtypes-manifest:v2",
+ "files": [
+  {
+   "name": "valid.json",
+   "sha256": "459a05eb32fc7febd4edca609bb8b049b4279d8b1a926a2c273d03bbd4161c77",
+   "vectors": 65
+  },
+  {
+   "name": "adversarial.json",
+   "sha256": "f01250d8b47541c09f475ac0f1cf6eb33225e2122fd44f3eae0853cc5ee1b8f8",
+   "vectors": 85
+  },
+  {
+   "name": "kermit.json",
+   "sha256": "dea4082bd496dbd683bd682a58e505eff7720f354bf81ea57fbea468a681d169",
+   "vectors": 4
+  },
+  {
+   "name": "kermit2.json",
+   "sha256": "9975b4a6565ad6dcb44c52f420c42432c098c19d9bd6b895b6c647bb9afc7ba3",
+   "vectors": 25
+  }
+ ],
+ "manifestHash": "46cce1d927632dc06d11e0288c3a3c74e981bc2834e0ed70f1b62be3b4d94866",
+ "sources": {
+  "kermit-delivered": 29,
+  "locally-generated": 150
+ },
+ "vectors": 179,
+ "note": "manifest2: manifest.json's three files, byte for byte (manifest.json and its hash 032b15bd27254856c05ca104d1aa16e73eb0fcb8b1136abf98bbe0ab5f80579c are unchanged and still pinned by the earlier suites), plus kermit2.json: signatures Kermit delivered for live CERTEN intents written by cmd/sigtypelive, one per accepted key-signature type and one delegated ecdsaSha256. 'expect' is what Accumulate's own Verify produced through govsig.Judge; the TypeScript verifier must reach the same verdict, key hash and digest form on every vector."
+}

@@ -5,9 +5,11 @@ package execution
 import (
 	"bytes"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -47,7 +49,7 @@ import (
 //
 // What offline verification CANNOT establish, and says so: that the blocks are canonical and final on their chain (the
 // headers hash to the stated hashes; whether the chain holds them is the online check, --online-rpc); that a LeafConsumed
-// log's emitter is the member's CertenAccountV7_2 (its code is not part of the evidence); that the stated validator BLS
+// log's emitter runs the member's account generation (its code is not part of the evidence); that the stated validator BLS
 // keys are the ones the anchor registered (the set root commits addresses and powers, not keys - the online check reads
 // the registry); that a member not settled stayed unconsumed through its claim block (a LeafConsumed log's absence is
 // not provable from one block; it is the quorum's certified statement) and that its deadline is the one the user signed.
@@ -189,6 +191,10 @@ type OutcomeMemberEvidence struct {
 	Transaction *ChainInclusionEvidence `json:"transaction,omitempty"`
 	// StateProofs: every committed state slot, proven at the settlement block's state root (1, 2).
 	StateProofs []*StateProof `json:"stateProofs,omitempty"`
+	// ReplayGuard: the S6 evidence of the settlement (1, 2) - the storage proof that the member's replay-guard slot was
+	// consumed by this transaction, or the named state saying it could not be proven (certen:s6-replay:v1). Evidence BESIDE
+	// the leaf, never an input of OutcomeLeaf.Hash or of the outcome root: it is provider-dependent (RB10).
+	ReplayGuard *ethproof.ReplayGuardEvidence `json:"replayGuard,omitempty"`
 	// ClaimHeader and ClaimParentHeader: the block a member not settled is decided at, and its parent (3).
 	ClaimHeader       hexutil.Bytes `json:"claimHeader,omitempty"`
 	ClaimParentHeader hexutil.Bytes `json:"claimParentHeader,omitempty"`
@@ -899,7 +905,7 @@ func (m OutcomeMemberEvidence) settlement(leaf OutcomeLeaf, what string) (*types
 }
 
 func (m OutcomeMemberEvidence) verifyExecuted(chainID int64, a *anchorFacts, leaf OutcomeLeaf, account common.Address, chk *OutcomeEvidenceCheck) error {
-	hdr, _, rcpt, err := m.settlement(leaf, "settlement")
+	hdr, settlementTx, rcpt, err := m.settlement(leaf, "settlement")
 	if err != nil {
 		return err
 	}
@@ -978,8 +984,69 @@ func (m OutcomeMemberEvidence) verifyExecuted(chainID int64, a *anchorFacts, lea
 	chk.proved("member: %d committed event(s) checked among the proven receipt's logs and %d committed slot(s) proven at the block's "+
 		"state root; %d absent, %d not holding - consistent with status %d and effects hash 0x%x", nEvents, nSlots, len(missing),
 		len(unset), leaf.Status, leaf.EffectsHash[:8])
-	chk.unproven("that the LeafConsumed log's emitter %s runs CertenAccountV7_2 code (an account consumes a leaf only by "+
-		"executing exactly the calls it recomputes into it)", account.Hex())
+	chk.unproven("that the LeafConsumed log's emitter %s runs %s code (an account consumes a leaf only by "+
+		"executing exactly the calls it recomputes into it)", account.Hex(), m.accountGeneration())
+	return m.verifyReplayGuard(chainID, account, leaf, hdr, settlementTx, rcpt, chk)
+}
+
+// accountGeneration is the account generation the member's leaf version names (RB10-F2): absent or v3 is
+// CertenAccountV7_2, v4 is CertenAccountV7_3 (whose replay guard is _consumedLeaf). The notes name it, never a fixed one.
+func (m OutcomeMemberEvidence) accountGeneration() string {
+	if m.LeafVersion == "" {
+		return AccountLeafV3.AccountGeneration()
+	}
+	v, err := ParseAccountLeafVersion(string(m.LeafVersion))
+	if err != nil {
+		return fmt.Sprintf("an unknown account generation (leaf version %q)", m.LeafVersion)
+	}
+	return v.AccountGeneration()
+}
+
+// bindReplayGuard holds verified S6 evidence to the member it rides beside (V-R10B D5): a proof's key must be the member's
+// leaf (a receipt may hold another leaf's LeafConsumed) and its contract the member's account; a named state must be of
+// the member's account and of the outcome's chain. The one exception is the S6 verifier's own (s6replay3 SPEC section 3
+// step 4, vector 004): a named state with the reason receipt_unavailable - the capture was never served the settlement
+// transaction, so it names no contract - states no contract, and is a named state, not a refusal (V-R10B2 D1). No other
+// reason is exempt.
+func bindReplayGuard(rg *ethproof.ReplayGuardCheck, chainID int64, account common.Address, leaf [32]byte) error {
+	namesNoContract := rg.State != ethproof.ReplayProven && rg.Reason == ethproof.ReasonReceiptUnavailable && rg.Contract == (common.Address{})
+	if rg.Contract != account && !namesNoContract {
+		return fmt.Errorf("%s{contract_mismatch}: the evidence is of contract %s, not the member's account %s", ethproof.ReplayUnproven, rg.Contract.Hex(), account.Hex())
+	}
+	if rg.ChainID != chainID {
+		return fmt.Errorf("%s{contract_mismatch}: the evidence is of chain %d, the outcome of chain %d", ethproof.ReplayUnproven, rg.ChainID, chainID)
+	}
+	if rg.State == ethproof.ReplayProven && rg.Slot.Key != common.Hash(leaf) {
+		return fmt.Errorf("%s{slot_mismatch}: the proof is of key %s, not the member's leaf %s", ethproof.ReplayUnproven, rg.Slot.Key.Hex(), common.Hash(leaf).Hex())
+	}
+	return nil
+}
+
+// verifyReplayGuard holds the S6 evidence to the settlement just proven (RB10). Evidence that is carried and does not
+// verify refuses the member's evidence; evidence not carried, or a named state, is stated as not established - never as
+// established.
+func (m OutcomeMemberEvidence) verifyReplayGuard(chainID int64, account common.Address, leaf OutcomeLeaf, hdr *types.Header, tx *types.Transaction, rcpt *types.Receipt, chk *OutcomeEvidenceCheck) error {
+	if m.ReplayGuard == nil {
+		chk.unproven("S6: that the settlement's replay-guard slot was consumed (storage proof): this evidence carries no replay-guard proof")
+		return nil
+	}
+	rg, err := m.ReplayGuard.VerifyAgainst(hdr, tx, rcpt.Status == types.ReceiptStatusSuccessful, rcpt.Logs)
+	if err != nil {
+		return evidenceFail("the replay-guard evidence: %v", err)
+	}
+	if err := bindReplayGuard(rg, chainID, account, leaf.BatchLeaf); err != nil {
+		return evidenceFail("the replay-guard evidence: %v", err)
+	}
+	if rg.State != ethproof.ReplayProven {
+		chk.unproven("S6: %s{reason=%s} at block %d (%s): %s", rg.State, rg.Reason, rg.SettlementBlock.Number, rg.SettlementBlock.Hash.Hex(), rg.Named.Detail)
+		return nil
+	}
+	for _, line := range rg.Established {
+		chk.proved("%s", line)
+	}
+	if rg.BeforeUnavailable != nil {
+		chk.unproven("S6 transition: s6_before_unavailable{%s}: the slot's value before the settlement block is not proven (the claim is the consumed slot above)", rg.BeforeUnavailable.Reason)
+	}
 	return nil
 }
 
@@ -1002,7 +1069,7 @@ func (m OutcomeMemberEvidence) verifyConsumedElsewhere(a *anchorFacts, leaf Outc
 	chk.ConsumedUnder = lg.Topics[1]
 	chk.proved("member: the leaf was consumed under another anchor, 0x%x, by %s, its receipt proven into block %d (header hashes "+
 		"to 0x%x)", lg.Topics[1][:8], common.Hash(leaf.Tx).Hex(), leaf.BlockNumber, leaf.BlockHash[:8])
-	chk.unproven("that the LeafConsumed log's emitter %s runs CertenAccountV7_2 code", account.Hex())
+	chk.unproven("that the LeafConsumed log's emitter %s runs %s code", account.Hex(), m.accountGeneration())
 	return nil
 }
 
@@ -1096,6 +1163,195 @@ func verifyOutcomeAggregate(signersKey *bls.PublicKey, sigHex, keyHex string, ms
 	}
 	if !signersKey.VerifyG1(sig, bls_zkp.HashMessageToG1V2(msg)) {
 		return evidenceFail("the BLS aggregate signature does not verify under the signers' aggregate key over the outcome message")
+	}
+	return nil
+}
+
+// replayGuardRank is how much a member's S6 replay-guard evidence establishes against the settlement the evidence proves
+// (RB10-F1): what decides between two validators' evidence of one outcome, which may differ only there.
+type replayGuardRank string
+
+const (
+	replayGuardAbsent  replayGuardRank = "no replay guard"
+	replayGuardInvalid replayGuardRank = "a replay guard that does not verify"
+	replayGuardNamed   replayGuardRank = "a named state"
+	replayGuardProven  replayGuardRank = "proven"
+)
+
+// order ranks the replay guards for decideOutcomeLayer (V-R10B D1): a guard that does not verify refuses the whole layer,
+// so it ranks below none; then none, a named state, proven.
+func (r replayGuardRank) order() int {
+	switch r {
+	case replayGuardInvalid:
+		return 0
+	case replayGuardAbsent:
+		return 1
+	case replayGuardNamed:
+		return 2
+	case replayGuardProven:
+		return 3
+	}
+	return 0
+}
+
+// replayGuardStanding verifies the member's replay-guard evidence against its proven settlement and ranks it.
+func (ev OutcomeEvidence) replayGuardStanding() replayGuardRank {
+	m := ev.Member
+	if m.ReplayGuard == nil {
+		return replayGuardAbsent
+	}
+	bundle, err := evHash(ev.Anchor.BundleID, "anchor.bundleId")
+	if err != nil {
+		return replayGuardInvalid
+	}
+	leaf, err := m.Leaf.decode(ev.ChainID, bundle)
+	if err != nil {
+		return replayGuardInvalid
+	}
+	hdr, tx, rcpt, err := m.settlement(leaf, "settlement")
+	if err != nil {
+		return replayGuardInvalid
+	}
+	rg, err := m.ReplayGuard.VerifyAgainst(hdr, tx, rcpt.Status == types.ReceiptStatusSuccessful, rcpt.Logs)
+	if err != nil {
+		return replayGuardInvalid
+	}
+	if bindReplayGuard(rg, ev.ChainID, common.HexToAddress(m.Account), leaf.BatchLeaf) != nil {
+		return replayGuardInvalid
+	}
+	if rg.State == ethproof.ReplayProven {
+		return replayGuardProven
+	}
+	return replayGuardNamed
+}
+
+// UnmarshalJSON decodes the member as encoding/json does, except member.replayGuard, which is decoded by the S6 format's
+// strict decoder (ethproof.DecodeReplayGuardEvidence: unknown or duplicate keys, wrong types and other versions are
+// refused by name). Every path that reads layer 6 decodes through here. The member's hashed fields are untouched: the
+// replay guard is evidence beside the outcome leaf, never an input of it.
+func (m *OutcomeMemberEvidence) UnmarshalJSON(b []byte) error {
+	if err := checkReplayGuardKey(b); err != nil {
+		return evidenceFail("member.replayGuard: %v", err)
+	}
+	type plain OutcomeMemberEvidence
+	var aux struct {
+		*plain
+		ReplayGuard json.RawMessage `json:"replayGuard,omitempty"`
+	}
+	aux.plain = (*plain)(m)
+	if err := json.Unmarshal(b, &aux); err != nil {
+		return err
+	}
+	m.ReplayGuard = nil
+	if len(aux.ReplayGuard) == 0 || string(bytes.TrimSpace(aux.ReplayGuard)) == "null" {
+		return nil
+	}
+	rg, err := ethproof.DecodeReplayGuardEvidence(aux.ReplayGuard)
+	if err != nil {
+		return evidenceFail("member.replayGuard: %v", err)
+	}
+	m.ReplayGuard = rg
+	return nil
+}
+
+// UnmarshalJSON decodes the layer-6 document as encoding/json does, except that its `member` key is read by its exact key,
+// once (V-R10B2 D3): encoding/json matches keys case-insensitively and lets a later duplicate replace the earlier value, so
+// a second "member", or "Member", without the replay guard would silently drop a proven guard (and Go and a
+// case-sensitive reader would read different members). A case variant or a duplicate is refused by name. No other key of
+// the document is policed, and a "Member" nested in another value is not a key of this object. A document with no member
+// key decodes as before and is refused by its verification.
+func (ev *OutcomeEvidence) UnmarshalJSON(b []byte) error {
+	if err := checkExactKeyOnce(b, "member"); err != nil {
+		return evidenceFail("member: %v", err)
+	}
+	type plain OutcomeEvidence
+	if err := json.Unmarshal(b, (*plain)(ev)); err != nil {
+		return documentDecodeError(err)
+	}
+	return nil
+}
+
+// documentDecodeError names a document that does not decode by the document and the field, not by the decoder's internal
+// type (RB10-B10): "outcome evidence does not verify: member.leaf is a JSON number where an object is expected".
+func documentDecodeError(err error) error {
+	if errors.Is(err, ErrOutcomeEvidence) {
+		return err
+	}
+	var te *json.UnmarshalTypeError
+	if !errors.As(err, &te) {
+		return evidenceFail("%v", err)
+	}
+	where := "the document"
+	var path []string
+	for _, p := range strings.Split(te.Field, ".") {
+		if p != "" && p != "plain" { // plain is the decoder's alias type, not a key of the document
+			path = append(path, p)
+		}
+	}
+	if len(path) > 0 {
+		where = strings.Join(path, ".")
+	}
+	want := "a value of another kind"
+	if te.Type != nil {
+		t := te.Type
+		for t.Kind() == reflect.Ptr {
+			t = t.Elem()
+		}
+		switch t.Kind() {
+		case reflect.Struct, reflect.Map:
+			want = "an object"
+		case reflect.Slice, reflect.Array:
+			want = "an array"
+		case reflect.String:
+			want = "a string"
+		case reflect.Bool:
+			want = "a boolean"
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64, reflect.Uint, reflect.Uint8, reflect.Uint16,
+			reflect.Uint32, reflect.Uint64, reflect.Float32, reflect.Float64:
+			want = "a number"
+		}
+	}
+	return evidenceFail("%s is a JSON %s where %s is expected", where, te.Value, want)
+}
+
+// checkReplayGuardKey reads the member object's keys (V-R10B D3): encoding/json matches keys case-insensitively and lets
+// the last duplicate win, so a "replayguard" or a second "replayGuard" would silently replace the first. A key equal to
+// replayGuard under case folding must be exactly "replayGuard" and appear once.
+func checkReplayGuardKey(b []byte) error { return checkExactKeyOnce(b, "replayGuard") }
+
+// checkExactKeyOnce reads the object's own keys (not those of values nested in it): a key equal to want under case folding
+// - which is how encoding/json matches a key to a field - must be exactly want and appear once.
+func checkExactKeyOnce(b []byte, want string) error {
+	dec := json.NewDecoder(bytes.NewReader(b))
+	tok, err := dec.Token()
+	if err != nil {
+		return err
+	}
+	if d, ok := tok.(json.Delim); !ok || d != '{' {
+		return nil // not an object: encoding/json refuses it by its type
+	}
+	seen := 0
+	for dec.More() {
+		kt, err := dec.Token()
+		if err != nil {
+			return err
+		}
+		key, ok := kt.(string)
+		if !ok {
+			return fmt.Errorf("object key %v is not a string", kt)
+		}
+		if strings.EqualFold(key, want) {
+			if key != want {
+				return fmt.Errorf("the key %q is a case variant of %s and is refused", key, want)
+			}
+			if seen++; seen > 1 {
+				return fmt.Errorf("the key %s appears more than once", want)
+			}
+		}
+		var skip json.RawMessage
+		if err := dec.Decode(&skip); err != nil {
+			return err
+		}
 	}
 	return nil
 }

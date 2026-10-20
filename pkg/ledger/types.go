@@ -305,6 +305,27 @@ type BLSRegistryRecord struct {
 	ID            string `json:"id"` // folded into the app hash of Height
 }
 
+// AnchorSetLog is every version of CERTEN's anchor set this chain has accepted, oldest first (rules v14, RB4-F35). The
+// anchor set in force at a height is the newest version accepted below it.
+type AnchorSetLog struct {
+	Versions []AnchorSetRecord `json:"versions"`
+}
+
+// AnchorSetRecord is one accepted anchor-set version: the anchor contract every ValidatorBlock's chain target must name,
+// per settlement chain.
+type AnchorSetRecord struct {
+	Version uint64           `json:"version"`
+	Height  int64            `json:"height"` // the block that accepted it
+	Anchors []AnchorSetEntry `json:"anchors"`
+	ID      string           `json:"id"` // folded into the app hash of Height
+}
+
+// AnchorSetEntry is one chain's committed anchor.
+type AnchorSetEntry struct {
+	ChainID int64  `json:"chain_id"`
+	Anchor  string `json:"anchor"` // EIP-55 checksummed 0x address
+}
+
 // BLSRegistryMember is one validator of the registry.
 type BLSRegistryMember struct {
 	ValidatorID string `json:"validator_id"`
@@ -358,4 +379,19 @@ type IntentQuorumCertificate struct {
 	TotalPower           string   `json:"total_power"`
 	ThresholdNumerator   uint64   `json:"threshold_numerator"`
 	ThresholdDenominator uint64   `json:"threshold_denominator"`
+}
+
+// G1ActivationLog is the cross-partition activations this chain has accepted (rules v15, docs/proof/G1_CROSS_PARTITION.md
+// D7). At most one is ever accepted: the activation is a single height H, and every ValidatorBlock at a height above H
+// must carry proof v2 evidence 2.1. The log is append-only; its first record is the activation.
+type G1ActivationLog struct {
+	Activations []G1ActivationRecord `json:"activations"`
+}
+
+// G1ActivationRecord is one accepted activation: the block that accepted it (H) and the id folded into that block's app
+// hash. Blocks at heights above Height must carry 2.1; blocks at or below it are decided exactly as rules v14 decided them.
+type G1ActivationRecord struct {
+	Version uint64 `json:"version"` // always 1: a second activation is refused
+	Height  int64  `json:"height"`  // H, the block that accepted it
+	ID      string `json:"id"`      // folded into the app hash of Height
 }

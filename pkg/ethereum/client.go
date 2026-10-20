@@ -30,14 +30,14 @@ type Client struct {
 func NewClient(url string) (*Client, error) {
 	client, err := ethrpc.DialRetrying(context.Background(), url)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to Ethereum: %w", err)
+		return nil, fmt.Errorf("failed to connect to Ethereum: %w", ethrpc.RedactError(err))
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	chainID, err := client.ChainID(ctx)
 	if err != nil {
 		client.Close()
-		return nil, fmt.Errorf("ETHEREUM_URL: reading eth_chainId: %w", err)
+		return nil, fmt.Errorf("ETHEREUM_URL: reading eth_chainId: %w", ethrpc.RedactError(err))
 	}
 
 	return &Client{
@@ -51,7 +51,7 @@ func NewClient(url string) (*Client, error) {
 func (c *Client) GetBalance(ctx context.Context, address common.Address) (*big.Int, error) {
 	balance, err := c.client.BalanceAt(ctx, address, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get balance: %w", err)
+		return nil, fmt.Errorf("failed to get balance: %w", ethrpc.RedactError(err))
 	}
 	return balance, nil
 }
@@ -60,7 +60,7 @@ func (c *Client) GetBalance(ctx context.Context, address common.Address) (*big.I
 func (c *Client) GetNonce(ctx context.Context, address common.Address) (uint64, error) {
 	nonce, err := c.client.PendingNonceAt(ctx, address)
 	if err != nil {
-		return 0, fmt.Errorf("failed to get nonce: %w", err)
+		return 0, fmt.Errorf("failed to get nonce: %w", ethrpc.RedactError(err))
 	}
 	return nonce, nil
 }
@@ -69,7 +69,7 @@ func (c *Client) GetNonce(ctx context.Context, address common.Address) (uint64, 
 func (c *Client) GetGasPrice(ctx context.Context) (*big.Int, error) {
 	gasPrice, err := c.client.SuggestGasPrice(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get gas price: %w", err)
+		return nil, fmt.Errorf("failed to get gas price: %w", ethrpc.RedactError(err))
 	}
 	return gasPrice, nil
 }
@@ -133,7 +133,7 @@ func PrivateKeyToHex(privateKey *ecdsa.PrivateKey) string {
 func (c *Client) EstimateGas(ctx context.Context, msg ethereum.CallMsg) (uint64, error) {
 	gasLimit, err := c.client.EstimateGas(ctx, msg)
 	if err != nil {
-		return 0, fmt.Errorf("failed to estimate gas: %w", err)
+		return 0, fmt.Errorf("failed to estimate gas: %w", ethrpc.RedactError(err))
 	}
 	return gasLimit, nil
 }
@@ -142,7 +142,7 @@ func (c *Client) EstimateGas(ctx context.Context, msg ethereum.CallMsg) (uint64,
 func (c *Client) WaitForTransaction(ctx context.Context, tx *types.Transaction) (*types.Receipt, error) {
 	receipt, err := bind.WaitMined(ctx, c.client, tx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to wait for transaction: %w", err)
+		return nil, fmt.Errorf("failed to wait for transaction: %w", ethrpc.RedactError(err))
 	}
 	return receipt, nil
 }
@@ -161,7 +161,7 @@ func (c *Client) GetClient() *ethclient.Client {
 func (c *Client) Health(ctx context.Context) error {
 	_, err := c.client.BlockNumber(ctx)
 	if err != nil {
-		return fmt.Errorf("ethereum health check failed: %w", err)
+		return fmt.Errorf("ethereum health check failed: %w", ethrpc.RedactError(err))
 	}
 	return nil
 }
@@ -198,7 +198,7 @@ func (c *Client) CallContract(ctx context.Context, contractAddr common.Address, 
 		Data: callData,
 	}, nil)
 	if err != nil {
-		return nil, fmt.Errorf("contract call failed: %w", err)
+		return nil, fmt.Errorf("contract call failed: %w", ethrpc.RedactError(err))
 	}
 
 	// Unpack the result
@@ -237,13 +237,13 @@ func (c *Client) SendContractTransaction(ctx context.Context, contractAddr commo
 	// Get nonce
 	nonce, err := c.client.PendingNonceAt(ctx, fromAddress)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get nonce: %w", err)
+		return nil, fmt.Errorf("failed to get nonce: %w", ethrpc.RedactError(err))
 	}
 
 	// Get gas price with minimum floor
 	gasPrice, err := c.client.SuggestGasPrice(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get gas price: %w", err)
+		return nil, fmt.Errorf("failed to get gas price: %w", ethrpc.RedactError(err))
 	}
 	// Enforce minimum 5 Gwei to ensure transactions get included
 	minGasPrice := big.NewInt(5 * 1e9)
@@ -270,7 +270,7 @@ func (c *Client) SendContractTransaction(ctx context.Context, contractAddr commo
 	// Send transaction
 	err = c.client.SendTransaction(ctx, signedTx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to send transaction: %w", err)
+		return nil, fmt.Errorf("failed to send transaction: %w", ethrpc.RedactError(err))
 	}
 
 	// Wait for receipt (with timeout)
@@ -321,13 +321,13 @@ func (c *Client) SendContractTransactionWithRetry(ctx context.Context, contractA
 		// Get fresh nonce and gas price for each attempt
 		nonce, err := c.client.PendingNonceAt(ctx, fromAddress)
 		if err != nil {
-			return nil, fmt.Errorf("failed to get nonce: %w", err)
+			return nil, fmt.Errorf("failed to get nonce: %w", ethrpc.RedactError(err))
 		}
 
 		// Get base gas price and escalate on retries
 		baseGasPrice, err := c.client.SuggestGasPrice(ctx)
 		if err != nil {
-			return nil, fmt.Errorf("failed to get gas price: %w", err)
+			return nil, fmt.Errorf("failed to get gas price: %w", ethrpc.RedactError(err))
 		}
 
 		// Enforce minimum 5 Gwei to ensure transactions get included
@@ -373,7 +373,7 @@ func (c *Client) SendContractTransactionWithRetry(ctx context.Context, contractA
 					continue
 				}
 			}
-			return nil, fmt.Errorf("failed to send transaction after %d attempts: %w", attempt+1, err)
+			return nil, fmt.Errorf("failed to send transaction after %d attempts: %w", attempt+1, ethrpc.RedactError(err))
 		}
 
 		// Success! Wait for receipt
@@ -405,7 +405,7 @@ func (c *Client) SendContractTransactionWithRetry(ctx context.Context, contractA
 func (c *Client) GetHeader(ctx context.Context, blockNumber *big.Int) (*types.Header, error) {
 	header, err := c.client.HeaderByNumber(ctx, blockNumber)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get block header: %w", err)
+		return nil, fmt.Errorf("failed to get block header: %w", ethrpc.RedactError(err))
 	}
 	if header == nil || header.Number == nil {
 		return nil, fmt.Errorf("failed to get block header: none served")
@@ -426,7 +426,7 @@ func (c *Client) GetLatestBlockNumber(ctx context.Context) (int64, error) {
 	// on every block. A number needs no transactions.
 	n, err := c.client.BlockNumber(ctx)
 	if err != nil {
-		return 0, fmt.Errorf("failed to get block number: %w", err)
+		return 0, fmt.Errorf("failed to get block number: %w", ethrpc.RedactError(err))
 	}
 	return int64(n), nil
 }
@@ -437,7 +437,7 @@ func (c *Client) GetBlockInfo(ctx context.Context, blockNumber int64) (hash stri
 	// Header only — see GetLatestBlockNumber for why a full block fails on OP-stack and Arbitrum.
 	header, err := c.client.HeaderByNumber(ctx, big.NewInt(blockNumber))
 	if err != nil {
-		return "", time.Time{}, fmt.Errorf("failed to get block header: %w", err)
+		return "", time.Time{}, fmt.Errorf("failed to get block header: %w", ethrpc.RedactError(err))
 	}
 	return header.Hash().Hex(), time.Unix(int64(header.Time), 0), nil
 }

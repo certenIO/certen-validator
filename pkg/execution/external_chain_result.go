@@ -22,6 +22,7 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 
 	"github.com/certen/independant-validator/pkg/ethproof"
+	"github.com/certen/independant-validator/pkg/ethrpc"
 )
 
 // =============================================================================
@@ -110,6 +111,16 @@ type ExternalChainResult struct {
 
 	// RB-5: optional storage-slot state proofs, independently verifiable against StateRoot.
 	StateProofs []*StateProof `json:"state_proofs,omitempty"`
+
+	// ReplayGuard is the S6 evidence of an account settlement (RB10, certen:s6-replay:v1): the storage proof that the
+	// settlement's replay-guard slot was consumed, or the named state saying it could not be proven. A snapshot taken when
+	// the observation returns (the capture runs from inclusion, beside the observation); it is NOT an input of
+	// ComputeResultHash, which is why a provider-dependent proof can ride beside the settlement without changing what any
+	// validator signs.
+	ReplayGuard *ethproof.ReplayGuardEvidence `json:"replay_guard,omitempty"`
+
+	// settlement is the settlement proof the inclusion proofs above came from, kept to hold the S6 evidence to.
+	settlement *ethproof.Settlement
 
 	// ==========================================================================
 	// TRANSACTION DETAILS
@@ -377,7 +388,7 @@ func (r *ExternalChainResult) GetLogsByTopic(topic common.Hash) []LogEntry {
 func (r *ExternalChainResult) VerifyInclusionProofs() error {
 	if r.TxInclusionProof == nil || r.ReceiptInclusionProof == nil {
 		if r.inclusionErr != nil {
-			return fmt.Errorf("RB-2: no inclusion proofs for %s: %w", r.TxHash.Hex(), r.inclusionErr)
+			return fmt.Errorf("RB-2: no inclusion proofs for %s: %w", r.TxHash.Hex(), ethrpc.RedactError(r.inclusionErr))
 		}
 		return fmt.Errorf("RB-2: no inclusion proofs for %s", r.TxHash.Hex())
 	}

@@ -294,7 +294,7 @@ func repairAnchor(ctx context.Context, cfg AnchorRepairConfig, anchor database.C
 		copy(root[:], anchor.Root)
 		loc, err := cfg.Reader.LocateAnchorCreate(ctx, anchor.ChainID, verify.Contract, bundle, root, uint64(verify.BlockNumber))
 		if err != nil {
-			report.Refused = append(report.Refused, fmt.Sprintf("%s: its create transaction could not be located: %v; nothing changed", label, err))
+			report.Refused = append(report.Refused, fmt.Sprintf("%s: its create transaction could not be located: %v; nothing changed", label, ethrpc.RedactError(err)))
 			return nil
 		}
 		if anchor.AnchorTxHash != "" && !sameHex(anchor.AnchorTxHash, loc.TxHash) {
@@ -304,7 +304,7 @@ func repairAnchor(ctx context.Context, cfg AnchorRepairConfig, anchor database.C
 			named, err := cfg.Reader.ReadAnchorTx(ctx, anchor.ChainID, anchor.AnchorTxHash)
 			if err != nil {
 				report.Refused = append(report.Refused, fmt.Sprintf("%s: the transaction the row names, %s, could not be read: %v; nothing changed",
-					label, anchor.AnchorTxHash, err))
+					label, anchor.AnchorTxHash, ethrpc.RedactError(err)))
 				return nil
 			}
 			if named == nil || !named.Found || named.BlockNumber == 0 {
@@ -762,7 +762,7 @@ func (r *EthAnchorTxReader) reader(ctx context.Context, chainID int64) (*ethrpc.
 	}
 	a, err := ethrpc.NewAgreeingReader(ctx, chainID, urls, ethrpc.DefaultReadTimeout)
 	if err != nil {
-		return nil, fmt.Errorf("chain %d: %w", chainID, err)
+		return nil, fmt.Errorf("chain %d: %w", chainID, ethrpc.RedactError(err))
 	}
 	r.readers[chainID] = a
 	return a, nil
@@ -796,7 +796,7 @@ func ReadAnchorTxAgreed(ctx context.Context, a *ethrpc.AgreeingReader, chainID i
 	for _, loc := range a.Locators() {
 		raw, err := loc.RawTransactionByHash(ctx, hash)
 		if err != nil {
-			failures = append(failures, fmt.Sprintf("%s: %v", loc.Host, err))
+			failures = append(failures, fmt.Sprintf("%s: %v", loc.Host, ethrpc.RedactError(err)))
 			continue
 		}
 		if len(raw) == 0 || string(raw) == "null" {
@@ -826,7 +826,7 @@ func ReadAnchorTxAgreed(ctx context.Context, a *ethrpc.AgreeingReader, chainID i
 		}
 		receipts, blockErr := a.BlockReceipts(ctx, rpc.BlockNumberOrHashWithHash(*stated.BlockHash, false))
 		if blockErr != nil {
-			return nil, fmt.Errorf("receipt of %s, from block %s's receipts: %w", txHash, stated.BlockHash.Hex(), blockErr)
+			return nil, fmt.Errorf("receipt of %s, from block %s's receipts: %w", txHash, stated.BlockHash.Hex(), ethrpc.RedactError(blockErr))
 		}
 		for _, candidate := range receipts {
 			if candidate != nil && candidate.TxHash == hash {
@@ -848,21 +848,21 @@ func ReadAnchorTxAgreed(ctx context.Context, a *ethrpc.AgreeingReader, chainID i
 	block := receipt.BlockNumber.Uint64()
 	header, err := a.HeaderByHash(ctx, receipt.BlockHash)
 	if err != nil {
-		return nil, fmt.Errorf("header of block %d (%s): %w", block, receipt.BlockHash.Hex(), err)
+		return nil, fmt.Errorf("header of block %d (%s): %w", block, receipt.BlockHash.Hex(), ethrpc.RedactError(err))
 	}
 	if header == nil || header.Number == nil || header.Number.Uint64() != block || header.Hash() != receipt.BlockHash || header.Time == 0 {
 		return nil, fmt.Errorf("the header for block hash %s is not block %d", receipt.BlockHash.Hex(), block)
 	}
 	canonical, err := a.HeaderByNumber(ctx, new(big.Int).SetUint64(block))
 	if err != nil {
-		return nil, fmt.Errorf("the canonical block at %d: %w", block, err)
+		return nil, fmt.Errorf("the canonical block at %d: %w", block, ethrpc.RedactError(err))
 	}
 	if canonical.Hash() != receipt.BlockHash {
 		return nil, fmt.Errorf("transaction %s's block %s is not the canonical block %d (%s)", txHash, receipt.BlockHash.Hex(), block, canonical.Hash().Hex())
 	}
 	head, err := a.HeaderByNumber(ctx, big.NewInt(int64(rpc.LatestBlockNumber)))
 	if err != nil {
-		return nil, fmt.Errorf("the head: %w", err)
+		return nil, fmt.Errorf("the head: %w", ethrpc.RedactError(err))
 	}
 	to := ""
 	if signed.To() != nil {
@@ -969,7 +969,7 @@ func ReadAnchorTxFrom(ctx context.Context, c *ethclient.Client, chainID int64, t
 	}
 	header, err := c.HeaderByHash(ctx, *tx.BlockHash)
 	if err != nil {
-		return nil, fmt.Errorf("header of block %d (%s): %w", block, tx.BlockHash.Hex(), err)
+		return nil, fmt.Errorf("header of block %d (%s): %w", block, tx.BlockHash.Hex(), ethrpc.RedactError(err))
 	}
 	if header == nil || header.Number == nil || header.Number.Uint64() != block || header.Hash() != *tx.BlockHash || header.Time == 0 {
 		return nil, fmt.Errorf("the header for block hash %s is not block %d", tx.BlockHash.Hex(), block)

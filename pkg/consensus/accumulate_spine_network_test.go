@@ -233,7 +233,7 @@ func sameHashV13(t *testing.T, nodes []*rehearsalNode) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if info.Response.AppVersion != executionRulesV13 {
+		if info.Response.AppVersion != CurrentExecutionRulesVersion {
 			t.Fatalf("%s reports app version %d", nd.name, info.Response.AppVersion)
 		}
 		st, err := ledger.NewLedgerStore(nd.kv).LoadABCIState()

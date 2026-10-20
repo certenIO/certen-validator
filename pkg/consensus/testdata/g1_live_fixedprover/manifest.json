@@ -1,0 +1,222 @@
+{
+  "format": "certen-g1live/1",
+  "archive": "archive.json.gz",
+  "archiveSha256": "56e15870f3188aa7e4003e7c5587e894e493ed55ba39acceddf45e1158b78d24",
+  "cases": [
+    {
+      "name": "cross-504",
+      "file": "cross-504.json.gz",
+      "sha256": "cd98446b03ab547b2df136e69886877c72ec28d02a6f6b05f462e6d1038543a3",
+      "captureFile": "cross-504.capture.json.gz",
+      "captureSha256": "76810a6b910e49fa6e0cf3e9245ac264c644ca67342d529ce0ac06bb4b184336",
+      "intentId": "94bf1a03-4528-419f-84be-11ed54cb3280",
+      "operationId": "0x612d4e075a1e61a5d2132fe03bd547a600f0d89a37b31e6567bfa193cd57820b",
+      "txHash": "7a8ae3a80665364a0fc6b7fc1ceea8bf94687300b48611e8dec2f18fdef00600",
+      "principal": "acc://pv2-cust-504.acme/data",
+      "partitions": [
+        "acc://bvn-bvn2.acme",
+        "acc://bvn-bvn3.acme"
+      ],
+      "pages": 5,
+      "builtAt": "2026-10-18T13:07:36Z",
+      "submittedAt": "2026-10-18T12:42:53Z",
+      "signers": [
+        "acc://pv2-cust-504.acme/book/1",
+        "acc://pv2-bank-504.acme/book/1"
+      ]
+    },
+    {
+      "name": "cross-510",
+      "file": "cross-510.json.gz",
+      "sha256": "bd92ce7af2c795d2045f4bcb66d30ef9667bb12943dc4acd5c1a48e50429b30e",
+      "captureFile": "cross-510.capture.json.gz",
+      "captureSha256": "b00181909d6524c4bfe8190478bff4b44e77525e9fe0aa1313faf7210852c382",
+      "intentId": "ac9564d0-27fd-4a1f-a85a-b2c15a703a7e",
+      "operationId": "0x9c437062f4224336975fd4063ecfd5daff8a6cc5d955f3ccc5e9ae6099e679c9",
+      "txHash": "b397c35730a4ee573209591cbaeca53ac1fdbc716ea66872510b364ed91d65cb",
+      "principal": "acc://pv2-cust-510.acme/data",
+      "partitions": [
+        "acc://bvn-bvn1.acme",
+        "acc://bvn-bvn2.acme"
+      ],
+      "pages": 5,
+      "builtAt": "2026-10-18T13:07:35Z",
+      "submittedAt": "2026-10-18T12:42:53Z",
+      "signers": [
+        "acc://pv2-cust-510.acme/book/1",
+        "acc://pv2-bank-510.acme/book/1"
+      ]
+    },
+    {
+      "name": "thresh2-590",
+      "file": "thresh2-590.json.gz",
+      "sha256": "6ea73f5d3a568638fb1920b865563eaf11bd0b268c2112807cf9bc1186deb70b",
+      "captureFile": "thresh2-590.capture.json.gz",
+      "captureSha256": "c8315147543830555848beefbb34d8afc24a61d19d7806f2b9834bee3f93ba9a",
+      "intentId": "ca2aaf1c-fd5e-4a52-9045-c32840b9d097",
+      "operationId": "0x2ac76c4692c85b765250996758ee2a26e9818015632760e7c059bfbd4fb1f206",
+      "txHash": "f227a4b9f2bdb580f2604d8a6d419537129da940f14ce0bf9874701b0dd7ef66",
+      "principal": "acc://pv2-cust-590.acme/data",
+      "partitions": [
+        "acc://bvn-bvn2.acme",
+        "acc://bvn-bvn3.acme"
+      ],
+      "pages": 5,
+      "builtAt": "2026-10-18T13:07:37Z",
+      "submittedAt": "2026-10-18T12:42:53Z",
+      "signers": [
+        "acc://pv2-cust-590.acme/book/1",
+        "acc://pv2-cust-590.acme/book/1",
+        "acc://pv2-bank-590.acme/book/1"
+      ],
+      "note": "the customer's page has threshold 2 with two keys that both sign"
+    },
+    {
+      "name": "page2-519",
+      "file": "page2-519.json.gz",
+      "sha256": "5dad5a887481c15c1d3e06b261e2621fe4da82fbee6125c492551266923cd906",
+      "captureFile": "page2-519.capture.json.gz",
+      "captureSha256": "ef89641505896c456b5e7841dd8a98c081008859f6d56b006c8295fcec7198a1",
+      "intentId": "fec5aad0-7cff-429f-8b2c-9630e0cf3856",
+      "operationId": "0xefd44e0a5bd50d6be5a3be8816b9650b7a4fa42984772eb7e2af86852c6d548b",
+      "txHash": "20bf788d5890855dc8800ecc2ea2f4e3d651f5f9d088968c46d8d9ff78eb40f0",
+      "principal": "acc://pv2-cust-519.acme/data",
+      "partitions": [
+        "acc://bvn-bvn2.acme",
+        "acc://bvn-bvn3.acme"
+      ],
+      "pages": 6,
+      "builtAt": "2026-10-18T13:07:37Z",
+      "submittedAt": "2026-10-18T12:43:01Z",
+      "signers": [
+        "acc://pv2-cust-519.acme/book/1",
+        "acc://pv2-bank-519.acme/book/2"
+      ],
+      "note": "the foreign book has two pages and the second one's key votes"
+    },
+    {
+      "name": "deleg-555",
+      "file": "deleg-555.json.gz",
+      "sha256": "12a6a41a7761e2bb5e393c00df57d5d36e7f3e35bc77c51bf54b12f17733058a",
+      "captureFile": "deleg-555.capture.json.gz",
+      "captureSha256": "9b7fa7b8367b615d74fa82ca9323d93254edd918a468a536b52df00d3de21f63",
+      "intentId": "8d4036d0-3ec0-4870-96ac-878f1937b538",
+      "operationId": "0xf7a38aab190938e089e9865235627717b05b172581a95415f2385d948f5ec28a",
+      "txHash": "369149a681d5577ae52289feab72841ac609de443119939709aed3debef8afcd",
+      "principal": "acc://pv2-cust-555.acme/data",
+      "partitions": [
+        "acc://bvn-bvn2.acme"
+      ],
+      "pages": 7,
+      "builtAt": "2026-10-18T13:07:34Z",
+      "submittedAt": "2026-10-18T12:42:53Z",
+      "signers": [
+        "acc://pv2-cust-555.acme/book/1",
+        "acc://pv2-deleg-555.acme/book-d1/1"
+      ],
+      "delegators": 1,
+      "note": "the bank's vote is a delegated signature through 1 delegator page(s): acc://pv2-bank-555.acme/book/1"
+    },
+    {
+      "name": "deleg-537",
+      "file": "deleg-537.json.gz",
+      "sha256": "5491f049f5b6f95f927fdfbccde661a43cf437446a9edc9e0f54af7766c83b36",
+      "captureFile": "deleg-537.capture.json.gz",
+      "captureSha256": "185cd364def0f1459e92f2170f0b03b6d99ddffd7abce001b7dae9a6c39687fb",
+      "intentId": "9483e8ae-503c-447a-acc2-3b8bacfe7890",
+      "operationId": "0x5f70a4685406cadd163bcef74e5e28d60292914b3d29d5120c43ce7290f65179",
+      "txHash": "2bfb751491be281e6d6ce7b9b70279e694d63e574d9fbe3c975a530ae325203b",
+      "principal": "acc://pv2-cust-537.acme/data",
+      "partitions": [
+        "acc://bvn-bvn1.acme",
+        "acc://bvn-bvn2.acme",
+        "acc://bvn-bvn3.acme"
+      ],
+      "pages": 7,
+      "builtAt": "2026-10-18T13:07:42Z",
+      "submittedAt": "2026-10-18T12:42:53Z",
+      "signers": [
+        "acc://pv2-cust-537.acme/book/1",
+        "acc://pv2-deleg-537.acme/book-d1/1"
+      ],
+      "delegators": 1,
+      "note": "the bank's vote is a delegated signature through 1 delegator page(s): acc://pv2-bank-537.acme/book/1"
+    },
+    {
+      "name": "deleg-515",
+      "file": "deleg-515.json.gz",
+      "sha256": "3272c9ecfa12c999a55106ad3b104b3a7545172c5b5203d73c4563b3370ccf8a",
+      "captureFile": "deleg-515.capture.json.gz",
+      "captureSha256": "bb8c117b79f3a0c9bc30b96ed4d02e15c78f93d9c9217aef4e20a7ed085b6efe",
+      "intentId": "56b24aa8-2a53-4289-aa8c-92bdd97e34dc",
+      "operationId": "0x5350b08646d35f240d9499ed02ab26c85bfa566b3ed8f66fb2acb02e7e093994",
+      "txHash": "462dd8edc25c00568ee7ada341fe63b59f0ccd670d975013a6db1f4aff41f980",
+      "principal": "acc://pv2-cust-515.acme/data",
+      "partitions": [
+        "acc://bvn-bvn1.acme",
+        "acc://bvn-bvn2.acme",
+        "acc://bvn-bvn3.acme"
+      ],
+      "pages": 9,
+      "builtAt": "2026-10-18T13:07:41Z",
+      "submittedAt": "2026-10-18T12:43:02Z",
+      "signers": [
+        "acc://pv2-cust-515.acme/book/1",
+        "acc://pv2-deleg-511.acme/book-d2/1"
+      ],
+      "delegators": 2,
+      "note": "the bank's vote is a delegated signature through 2 delegator page(s): acc://pv2-bank-515.acme/book/1 > acc://pv2-deleg-515.acme/book-d1/1"
+    },
+    {
+      "name": "deleg-532",
+      "file": "deleg-532.json.gz",
+      "sha256": "dc03c799059d272871feb25a99632f116eb3709d2aceb478e25f0f76b69c909d",
+      "captureFile": "deleg-532.capture.json.gz",
+      "captureSha256": "f3eb6aa612b73463c81c81816e8499a8b6cc56ae2f28cac35abcb072597d1f0a",
+      "intentId": "e92d0817-d650-4e92-b989-01225c50371c",
+      "operationId": "0xcbf8194c1bc8b4a9b9713db693889d1aaae5156e4f679c291acbf496bc89e4e9",
+      "txHash": "123757ac026a09cc5bf40390d1a4f560399cfff2e0b2ce2275352c720d027383",
+      "principal": "acc://pv2-cust-532.acme/data",
+      "partitions": [
+        "acc://bvn-bvn1.acme",
+        "acc://bvn-bvn2.acme",
+        "acc://bvn-bvn3.acme"
+      ],
+      "pages": 45,
+      "builtAt": "2026-10-18T13:09:49Z",
+      "submittedAt": "2026-10-18T12:43:01Z",
+      "signers": [
+        "acc://pv2-cust-532.acme/book/1",
+        "acc://pv2-deleg-518.acme/book-d20/1"
+      ],
+      "delegators": 20,
+      "note": "the bank's vote is a delegated signature through 20 delegator page(s): acc://pv2-bank-532.acme/book/1 > acc://pv2-deleg-532.acme/book-d1/1 > acc://pv2-deleg-518.acme/book-d2/1 > acc://pv2-deleg-502.acme/book-d3/1 > acc://pv2-deleg-532.acme/book-d4/1 > acc://pv2-deleg-518.acme/book-d5/1 > acc://pv2-deleg-502.acme/book-d6/1 > acc://pv2-deleg-532.acme/book-d7/1 > acc://pv2-deleg-518.acme/book-d8/1 > acc://pv2-deleg-502.acme/book-d9/1 > acc://pv2-deleg-532.acme/book-d10/1 > acc://pv2-deleg-518.acme/book-d11/1 > acc://pv2-deleg-502.acme/book-d12/1 > acc://pv2-deleg-532.acme/book-d13/1 > acc://pv2-deleg-518.acme/book-d14/1 > acc://pv2-deleg-502.acme/book-d15/1 > acc://pv2-deleg-532.acme/book-d16/1 > acc://pv2-deleg-518.acme/book-d17/1 > acc://pv2-deleg-502.acme/book-d18/1 > acc://pv2-deleg-532.acme/book-d19/1"
+    },
+    {
+      "name": "cycle-518",
+      "file": "cycle-518.json.gz",
+      "sha256": "f3572ff2d09dc589af410f0449d9086f6f39405e2dac8e452ccb1458d607580a",
+      "captureFile": "cycle-518.capture.json.gz",
+      "captureSha256": "2228ebd0f120eb578237d1c761e46fb45b82c80fd8e85b8a748879754aca0f4f",
+      "intentId": "822a8a9e-f0bc-40e8-9a3c-090d8458ae6a",
+      "operationId": "0xf8b594504dac4df0bbb834f04ef4eb670674d4177dc2b27ddf6e28a0dbb5b41b",
+      "txHash": "2ed489a432ff620a3fddd0425fea73cfaf329f27a574d320f9833e7627883b92",
+      "principal": "acc://pv2-cust-518.acme/data",
+      "partitions": [
+        "acc://bvn-bvn1.acme",
+        "acc://bvn-bvn2.acme",
+        "acc://bvn-bvn3.acme"
+      ],
+      "pages": 7,
+      "builtAt": "2026-10-18T13:07:41Z",
+      "submittedAt": "2026-10-18T12:42:53Z",
+      "signers": [
+        "acc://pv2-cust-518.acme/book/1",
+        "acc://pv2-deleg-518.acme/book-d1/1"
+      ],
+      "delegators": 1,
+      "note": "the delegate page also delegates back to the bank book (a cycle between the books); the bank's vote is a delegated signature through 1 delegator page(s): acc://pv2-bank-518.acme/book/1"
+    }
+  ],
+  "prover": "G0-G2, the vote record and its evidence were produced by govproof built from pv2/rb9-e-g1-delegation d6d85b6 merged with pv2/rb9-e-g2-effect b0465e3 (the deployed build refuses these intents: findings C5-F6 and C5-F7); L1-L4, the chained-proof generator, the key page resolver and evidence 2.1 are the base build 3419863."
+}

@@ -137,6 +137,9 @@ func decodeEntry(e AccountEntry) (*protocol.Transaction, error) {
 	if err != nil {
 		return nil, fmt.Errorf("the body does not decode: %w", err)
 	}
+	if body == nil { // Accumulate's union decoder answers neither a body nor an error for bytes that hold no type (a run of zeros)
+		return nil, fmt.Errorf("the body holds no transaction body")
+	}
 	txn.Body = body
 
 	var got []byte

@@ -98,11 +98,11 @@ func (m *AnchorEventMonitor) Start(ctx context.Context) error {
 		}
 		client, err := ethrpc.DialRetrying(ctx, rpc)
 		if err != nil {
-			return fmt.Errorf("anchor event monitor: chain %d: dial: %w", chainID, err)
+			return fmt.Errorf("anchor event monitor: chain %d: dial: %w", chainID, ethrpc.RedactError(err))
 		}
 		head, err := client.BlockNumber(ctx)
 		if err != nil {
-			return fmt.Errorf("anchor event monitor: chain %d: head: %w", chainID, err)
+			return fmt.Errorf("anchor event monitor: chain %d: head: %w", chainID, ethrpc.RedactError(err))
 		}
 		go m.poll(ctx, chainID, client, anchor, head)
 		m.Logf("✅ [ANCHOR-EVENTS] watching chain %d anchor %s from block %d", chainID, anchor.Hex(), head)
@@ -121,7 +121,7 @@ func (m *AnchorEventMonitor) poll(ctx context.Context, chainID int64, client *et
 		}
 		head, err := client.BlockNumber(ctx)
 		if err != nil {
-			m.Logf("⚠️ [ANCHOR-EVENTS] chain %d: head unreadable, retrying from block %d: %v", chainID, from, err)
+			m.Logf("⚠️ [ANCHOR-EVENTS] chain %d: head unreadable, retrying from block %d: %v", chainID, from, ethrpc.RedactError(err))
 			continue
 		}
 		for from <= head {
@@ -131,7 +131,7 @@ func (m *AnchorEventMonitor) poll(ctx context.Context, chainID int64, client *et
 			}
 			logs, err := client.FilterLogs(ctx, anchorEventsQuery(anchor, from, to))
 			if err != nil {
-				m.Logf("⚠️ [ANCHOR-EVENTS] chain %d: logs %d-%d unreadable, retrying: %v", chainID, from, to, err)
+				m.Logf("⚠️ [ANCHOR-EVENTS] chain %d: logs %d-%d unreadable, retrying: %v", chainID, from, to, ethrpc.RedactError(err))
 				break
 			}
 			for _, lg := range logs {
