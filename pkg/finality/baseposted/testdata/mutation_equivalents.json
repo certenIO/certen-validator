@@ -80,6 +80,14 @@
     "reason": "No caller passes a negative n (the constants 20 and 64, and int(l) with l at most 2^17), so n == -1 never occurs and n < -1 and n < 0 agree."
   },
   {
+    "file": "channel.go",
+    "function": "parseFrames",
+    "operator": "int_literal",
+    "original": "buf[:16]",
+    "mutated": "*",
+    "reason": "copy(f.ID[:], buf[:17]) copies at most len(f.ID) = 16 bytes, the same as buf[:16]; (len(buf) >= 22 is checked before, so the longer slice is valid)."
+  },
+  {
     "file": "span.go",
     "function": "spanReader.bits",
     "operator": "guard_off",
