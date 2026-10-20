@@ -1,0 +1,20 @@
+{
+  "format": "certen-base-posted-case/1",
+  "id": "deposit_epoch_hash_altered",
+  "description": "the L1-info deposit's epoch hash changed",
+  "pins": "pins/main.json",
+  "leg": "legs/a.json",
+  "evidence": "evidence/valid_a.bin",
+  "splice": {
+    "offset": 966837,
+    "delete": 1,
+    "insert": "0x6e"
+  },
+  "expect": {
+    "result": "state",
+    "code": "batch_binding_mismatch",
+    "fields": {
+      "field": "epoch_hash"
+    }
+  }
+}

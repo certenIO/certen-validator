@@ -61,14 +61,14 @@ func TestPortableBytesAreUnchangedByTheFinalitySection(t *testing.T) {
 
 	// with a finality section: exactly the old bytes, then the new field
 	before, _ := json.Marshal(whole)
-	section := []json.RawMessage{json.RawMessage(`{"proofId":"p","seq":1}`), json.RawMessage(`{"proofId":"p","seq":2}`)}
+	section := json.RawMessage(spec25Member)
 	with := *whole
 	with.Finality = section
 	after, err := json.Marshal(&with)
 	if err != nil {
 		t.Fatal(err)
 	}
-	suffix := `,"finality":[{"proofId":"p","seq":1},{"proofId":"p","seq":2}]}`
+	suffix := `,"finality":` + spec25Member + `}`
 	if !bytes.HasSuffix(after, []byte(suffix)) || !bytes.Equal(after[:len(after)-len(suffix)], before[:len(before)-1]) {
 		t.Fatal("a document with finality differs from the old bytes by more than the trailing field")
 	}
@@ -82,8 +82,8 @@ func TestPortableBytesAreUnchangedByTheFinalitySection(t *testing.T) {
 	if err := json.Unmarshal(after, withJSON); err != nil {
 		t.Fatal(err)
 	}
-	if len(withJSON.Finality) != 2 {
-		t.Fatalf("finality did not round-trip: %d", len(withJSON.Finality))
+	if !bytes.Equal(withJSON.Finality, section) {
+		t.Fatalf("finality did not round-trip: %s", withJSON.Finality)
 	}
 	b, err := VerifyPortable(withJSON)
 	if err != nil {
@@ -118,16 +118,16 @@ func TestFinalitySectionIsTheLastOmittedWhenEmptyMemberOfThePortableDocument(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	doc.Finality = []json.RawMessage{json.RawMessage(`{"seq":1}`)}
+	doc.Finality = json.RawMessage(`{"seq":1}`)
 	after, err := json.Marshal(doc)
 	if err != nil {
 		t.Fatal(err)
 	}
-	suffix := `,"finality":[{"seq":1}]}`
+	suffix := `,"finality":{"seq":1}}`
 	if !bytes.HasSuffix(after, []byte(suffix)) || !bytes.Equal(after[:len(after)-len(suffix)], before[:len(before)-1]) {
 		t.Fatal("with govRootV3Inputs present, a document with finality differs from the one without by more than the trailing member")
 	}
-	doc.Finality = []json.RawMessage{}
+	doc.Finality = json.RawMessage{}
 	empty, err := json.Marshal(doc)
 	if err != nil {
 		t.Fatal(err)

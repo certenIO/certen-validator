@@ -1,32 +1,31 @@
 -- Staged finality evidence for a settled leg (PROOF_V2 section 7, RB11 Phase B, domain tag certen:finality:v1).
 --
--- A proof is upgraded append-only: when stronger finality evidence becomes buildable for a leg's settlement (included,
--- then l1_posted, then finalized), one addendum is appended to that leg's chain. The stored proof itself never changes; an
--- addendum commits to the proof's original digest (proof_artifacts.artifact_hash) and to the previous addendum, so the whole
--- chain is tamper-evident, and a verifier recomputes it offline (pkg/finality VerifyChain).
---   proof_id    the stored proof the chain belongs to (proof_artifacts.proof_id as text)
+-- A leg is upgraded append-only: when finality evidence becomes buildable for a leg's settlement block (l1_posted and/or
+-- finalized, in any order; included is derived from the Settlement and never stored), one addendum is appended to that leg's chain. The stored proof itself never changes; an
+-- addendum commits to the leg binding D0 = SHA-256(lp("certen:finality:d0/v1") || lp(be64 chain) || lp(be64 number) || lp(blockHash)), a pure function of the leg's verified Settlement block, and to the previous addendum, so the whole
+-- chain is a consistency check of the stored hashes against that block, recomputed offline (pkg/finality VerifyChain).
+--   proof_id    the stored proof the chain belongs to (proof_artifacts.proof_id); one leg per proof_id
 --   seq         1, 2, 3 ... within the proof, contiguous
---   level       1 included, 2 l1_posted, 3 finalized; strictly increasing along the chain
+--   level       2 l1_posted or 3 finalized, any order, at most one addendum per level (1 included is derived, never stored)
 --   chain       the target chain id the evidence is about; one chain per proof_id
---   kind        the evidence kind (e.g. included.eth-mpt/v1), a lowercase identifier
---   evidence    the canonical Evidence container (pkg/finality), whose Subject names the settled block and transaction
+--   kind        the evidence kind (e.g. base-sepolia/finalized/v1), a lowercase identifier
+--   evidence    the CFE1 evidence container (pkg/finality), whose header names the leg block (chain, number, hash)
 --   prev_hash   the previous addendum's own_hash; 32 zero bytes for seq 1
---   own_hash    sha256 over the domain, the original proof digest, prev_hash, seq, level, chain, kind and sha256(evidence)
+--   own_hash    sha256 over the domain, D0, prev_hash, seq, level, chain, kind and sha256(evidence)
 --
 -- The table is INSERT-ONLY, enforced here and not only in the repository: a trigger refuses UPDATE, DELETE and TRUNCATE
 -- (SQLSTATE 23001), and refuses an INSERT that does not extend its proof's chain exactly (seq 1 with a zero prev_hash, or
--- the next seq with prev_hash equal to the previous own_hash, a strictly higher level, the same chain). Only the table's
+-- the next seq with prev_hash equal to the previous own_hash, a level the proof does not yet hold, the same chain). Only the table's
 -- owner can disable the trigger, as with any trigger; nothing in the application does.
 --
 -- Expand-only: one new table, one function, two triggers. Nothing reads or alters an existing object.
 
 CREATE TABLE public.proof_finality_addenda (
-    proof_id    character varying(128) NOT NULL
-        CONSTRAINT proof_finality_proof_id_is_not_empty CHECK (proof_id <> ''),
+    proof_id    uuid NOT NULL,
     seq         bigint NOT NULL
         CONSTRAINT proof_finality_seq_is_positive CHECK (seq > 0),
     level       smallint NOT NULL
-        CONSTRAINT proof_finality_level_is_known CHECK (level BETWEEN 1 AND 3),
+        CONSTRAINT proof_finality_level_is_known CHECK (level IN (2, 3)),
     chain       bigint NOT NULL
         CONSTRAINT proof_finality_chain_is_positive CHECK (chain > 0),
     kind        character varying(64) NOT NULL
@@ -41,7 +40,7 @@ CREATE TABLE public.proof_finality_addenda (
     CONSTRAINT proof_finality_addenda_pkey PRIMARY KEY (proof_id, seq)
 );
 
-CREATE INDEX proof_finality_addenda_level_idx ON public.proof_finality_addenda (proof_id, level);
+CREATE UNIQUE INDEX proof_finality_addenda_level_idx ON public.proof_finality_addenda (proof_id, level);
 
 CREATE FUNCTION public.proof_finality_addenda_guard() RETURNS trigger
     LANGUAGE plpgsql
@@ -65,8 +64,8 @@ BEGIN
     IF previous.own_hash <> NEW.prev_hash THEN
         RAISE EXCEPTION 'addendum % of % does not link to the previous own_hash', NEW.seq, NEW.proof_id USING ERRCODE = 'restrict_violation';
     END IF;
-    IF NEW.level <= previous.level THEN
-        RAISE EXCEPTION 'addendum % of % does not raise the level (% after %)', NEW.seq, NEW.proof_id, NEW.level, previous.level USING ERRCODE = 'restrict_violation';
+    IF EXISTS (SELECT 1 FROM public.proof_finality_addenda WHERE proof_id = NEW.proof_id AND level = NEW.level) THEN
+        RAISE EXCEPTION 'addendum % of % is a second addendum at level %', NEW.seq, NEW.proof_id, NEW.level USING ERRCODE = 'restrict_violation';
     END IF;
     IF NEW.chain <> previous.chain THEN
         RAISE EXCEPTION 'addendum % of % is for chain % but the chain is %', NEW.seq, NEW.proof_id, NEW.chain, previous.chain USING ERRCODE = 'restrict_violation';

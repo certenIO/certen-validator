@@ -1,0 +1,23 @@
+{
+  "format": "certen-base-posted-case/1",
+  "id": "trailing_byte",
+  "description": "one byte appended to the container",
+  "pins": "pins/main.json",
+  "leg": "legs/a.json",
+  "evidence": "evidence/valid_a.bin",
+  "splice": {
+    "offset": 975758,
+    "delete": 0,
+    "insert": "0x00"
+  },
+  "expect": {
+    "result": "state",
+    "code": "finality_evidence_malformed",
+    "fields": {
+      "got_len": "1",
+      "part": "body",
+      "reason": "trailing_bytes",
+      "want_len": "0"
+    }
+  }
+}

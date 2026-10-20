@@ -18,8 +18,8 @@ import (
 )
 
 // buildLeg stores a proof_artifacts row whose bundle carries a real L6 execution proof (component 5), the input the worker
-// reads, and returns its proof id, original digest and settlement.
-func storeLeg(t *testing.T, fixture string) (string, [32]byte, finality.Settlement) {
+// reads, and returns its proof id and settlement.
+func storeLeg(t *testing.T, fixture string) (string, finality.Settlement) {
 	t.Helper()
 	f := ethprooftest.Load(t, fixture)
 	r, err := ethrpc.NewAgreeingReader(context.Background(), f.ChainID,
@@ -54,9 +54,7 @@ func storeLeg(t *testing.T, fixture string) (string, [32]byte, finality.Settleme
 	if err != nil {
 		t.Fatal(err)
 	}
-	var digest [32]byte
-	copy(digest[:], created.ArtifactHash)
-	return created.ProofID.String(), digest, finality.Settlement{Chain: uint64(f.ChainID), Subject: subject, Included: proof}
+	return created.ProofID.String(), finality.Settlement{Chain: uint64(f.ChainID), Subject: subject, Included: proof}
 }
 
 func reflectChain(id int64) string {
@@ -64,27 +62,43 @@ func reflectChain(id int64) string {
 	return string(b)
 }
 
-func addendaChain(t *testing.T, proofID string, digest [32]byte, s finality.Settlement) []finality.Addendum {
+// addendaChain builds the leg's chain for the given levels (Base kinds for a Base leg, the Adiri kind for Adiri), bound to the
+// leg binding of the settlement's block.
+func addendaChain(t *testing.T, proofID string, s finality.Settlement, levels ...finality.Level) []finality.Addendum {
 	t.Helper()
-	ev, _, err := finality.Default.Provers(s.Chain)[0].Build(context.Background(), s)
+	return addendaChainUnder(t, proofID, s, finality.LegBindingOf(s.Block()), levels...)
+}
+
+// addendaChainUnder is addendaChain bound to an arbitrary d0: the forged chain of a writer that is not the repository.
+func addendaChainUnder(t *testing.T, proofID string, s finality.Settlement, d0 [32]byte, levels ...finality.Level) []finality.Addendum {
+	t.Helper()
+	pid, err := finality.ParseProofID(proofID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	first, err := finality.NewAddendum(digest, proofID, nil, s.Chain, finality.LevelIncluded, ev)
-	if err != nil {
-		t.Fatal(err)
+	block := s.Block()
+	var out []finality.Addendum
+	for _, l := range levels {
+		kind, err := finality.KindFor(block.Chain, l)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ev, err := finality.Container{Header: finality.ContainerHeader{Kind: kind, Chain: block.Chain, Level: l, BlockNumber: block.Number, BlockHash: block.Hash}, Body: []byte("b")}.Encode()
+		if err != nil {
+			t.Fatal(err)
+		}
+		a, err := finality.NewAddendum(d0, pid, out, block.Chain, l, kind, ev)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, a)
 	}
-	fin := finality.NewEvidence("t.fin/v1", s, []byte("final"))
-	second, err := finality.NewAddendum(digest, proofID, &first, s.Chain, finality.LevelFinalized, fin)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return []finality.Addendum{first, second}
+	return out
 }
 
 func stateCode(err error) string {
 	if n, ok := finality.AsNamed(err); ok {
-		return n.Code()
+		return n.Code
 	}
 	return ""
 }
@@ -94,19 +108,22 @@ func stateCode(err error) string {
 func TestFinalityAddendaAreAppendOnly(t *testing.T) {
 	ctx := context.Background()
 	repo := NewFinalityAddendaRepository(NewClientFromDB(testDB))
-	proofID, digest, settlement := storeLeg(t, "base_sepolia_47368146")
-	chain := addendaChain(t, proofID, digest, settlement)
-
-	for _, a := range chain {
-		if err := repo.Append(ctx, a); err != nil {
-			t.Fatalf("append %d: %v", a.Seq, err)
+	proofID, settlement := storeLeg(t, "base_sepolia_47368146")
+	reg := kindRegistry(t, nil)
+	d0 := finality.LegBindingOf(settlement.Block())
+	var chain []finality.Addendum
+	for _, l := range []finality.Level{finality.LevelL1Posted, finality.LevelFinalized} {
+		a, err := repo.Append(ctx, appendRequest(t, reg, proofID, settlement, l, "b"))
+		if err != nil {
+			t.Fatalf("append %s: %v", l, err)
 		}
+		chain = append(chain, a)
 	}
 	got, err := repo.Chain(ctx, proofID)
 	if err != nil || len(got) != 2 {
 		t.Fatalf("read back: %v %d", err, len(got))
 	}
-	if err := finality.VerifyChain(digest, got); err != nil {
+	if err := finality.VerifyChain(d0, got); err != nil {
 		t.Fatalf("the stored chain does not verify: %v", err)
 	}
 	rowCount := func() int {
@@ -118,30 +135,24 @@ func TestFinalityAddendaAreAppendOnly(t *testing.T) {
 	}
 
 	// -- repository level --
-	t.Run("a rewrite of a stored seq is a conflict and changes nothing", func(t *testing.T) {
-		forged := chain[1]
-		forged.Evidence = append([]byte(nil), forged.Evidence...)
-		forged.Evidence[len(forged.Evidence)-1] ^= 1
-		forged.OwnHash = forged.ComputeHash(digest)
-		if err := repo.Append(ctx, forged); stateCode(err) != finality.CodeAppendConflict {
-			t.Fatalf("want %s, got %v", finality.CodeAppendConflict, err)
+	t.Run("a second addendum at a stored level is level_already_present whatever its evidence, and changes nothing", func(t *testing.T) {
+		for _, l := range []finality.Level{finality.LevelL1Posted, finality.LevelFinalized} {
+			if _, err := repo.Append(ctx, appendRequest(t, reg, proofID, settlement, l, "a different body")); stateCode(err) != finality.CodeLevelAlreadyPresent {
+				t.Fatalf("%s: want %s, got %v", l, finality.CodeLevelAlreadyPresent, err)
+			}
 		}
 		again, _ := repo.Chain(ctx, proofID)
-		if len(again) != 2 || again[1].OwnHash != chain[1].OwnHash {
-			t.Fatal("the stored addendum changed")
+		if len(again) != 2 || again[0].OwnHash != chain[0].OwnHash || again[1].OwnHash != chain[1].OwnHash {
+			t.Fatal("the stored addenda changed")
 		}
 	})
-	t.Run("an addendum that does not extend the chain is refused by name", func(t *testing.T) {
-		next := chain[1]
-		next.Seq, next.PrevHash = 3, chain[0].OwnHash // links to the wrong predecessor
-		next.OwnHash = next.ComputeHash(digest)
-		if err := repo.Append(ctx, next); stateCode(err) != finality.CodeChainBroken {
-			t.Fatalf("want %s, got %v", finality.CodeChainBroken, err)
-		}
-		skip := chain[1]
-		skip.Seq = 9
-		if err := repo.Append(ctx, skip); stateCode(err) != finality.CodeChainBroken {
-			t.Fatalf("a gap in seq: %v", err)
+	t.Run("the request carries no link: a gap in seq or a wrong prev_hash cannot be asked for", func(t *testing.T) {
+		typ := reflect.TypeOf(finality.AppendRequest{})
+		for i := 0; i < typ.NumField(); i++ {
+			switch typ.Field(i).Name {
+			case "Seq", "PrevHash", "OwnHash", "D0":
+				t.Fatalf("AppendRequest.%s would let a caller form the link or the binding", typ.Field(i).Name)
+			}
 		}
 	})
 	t.Run("the repository has no method that changes or removes a row", func(t *testing.T) {
@@ -162,7 +173,7 @@ func TestFinalityAddendaAreAppendOnly(t *testing.T) {
 	// -- database level: the same refusals for any writer that is not the repository --
 	t.Run("the table itself refuses UPDATE, DELETE and TRUNCATE", func(t *testing.T) {
 		for name, stmt := range map[string]string{
-			"update level":    `UPDATE proof_finality_addenda SET level = 1 WHERE proof_id = $1`,
+			"update level":    `UPDATE proof_finality_addenda SET level = 2 WHERE proof_id = $1`,
 			"update evidence": `UPDATE proof_finality_addenda SET evidence = '\x00' WHERE proof_id = $1`,
 			"update hash":     `UPDATE proof_finality_addenda SET own_hash = prev_hash WHERE proof_id = $1`,
 			"delete":          `DELETE FROM proof_finality_addenda WHERE proof_id = $1`,
@@ -189,28 +200,32 @@ func TestFinalityAddendaAreAppendOnly(t *testing.T) {
 				VALUES ($1, $2, $3, $4, 'x.y/v1', '', $5, $6)`, id, seq, level, chainID, prev, own)
 			return err
 		}
-		if err := insert(pid, 1, 1, one, one, 84532); pgCode(err) != "23001" {
+		if err := insert(pid, 1, 2, one, one, 84532); pgCode(err) != "23001" {
 			t.Fatalf("first addendum with a non-zero prev_hash: %v", err)
 		}
-		if err := insert(pid, 1, 1, zero, one, 84532); err != nil {
+		if err := insert(pid, 1, 2, zero, one, 84532); err != nil {
 			t.Fatalf("a well-formed first addendum was refused: %v", err)
 		}
 		for name, err := range map[string]error{
-			"wrong prev_hash":            insert(pid, 2, 3, zero, one, 84532),
-			"a level that does not rise": insert(pid, 2, 1, one, one, 84532),
-			"another chain":              insert(pid, 2, 3, one, one, 421614),
-			"a gap in seq":               insert(pid, 3, 3, one, one, 84532),
-			"no predecessor at all":      insert(uuid.NewString(), 2, 3, one, one, 84532),
+			"wrong prev_hash":                 insert(pid, 2, 3, zero, one, 84532),
+			"a level the proof already holds": insert(pid, 2, 2, one, one, 84532),
+			"another chain":                   insert(pid, 2, 3, one, one, 421614),
+			"a gap in seq":                    insert(pid, 3, 3, one, one, 84532),
+			"no predecessor at all":           insert(uuid.NewString(), 2, 3, one, one, 84532),
 		} {
 			if pgCode(err) != "23001" {
 				t.Fatalf("%s: want SQLSTATE 23001, got %v", name, err)
 			}
 		}
+		// level 1 (included) is derived and never stored: the table's own CHECK refuses it, whatever the writer
+		if err := insert(pid, 2, 1, one, one, 84532); pgCode(err) != "23514" {
+			t.Fatalf("level 1: want SQLSTATE 23514 (check_violation), got %v", err)
+		}
 		if err := insert(pid, 2, 3, one, one, 84532); err != nil {
 			t.Fatalf("a well-formed second addendum was refused: %v", err)
 		}
-		// a duplicate (proof_id, seq) is the primary key's refusal
-		if err := insert(pid, 2, 3, one, one, 84532); pgCode(err) != "23505" {
+		// a duplicate (proof_id, seq) repeats a level the proof already holds, so the trigger refuses it before the primary key can
+		if err := insert(pid, 2, 3, one, one, 84532); pgCode(err) != "23001" {
 			t.Fatalf("duplicate seq: %v", err)
 		}
 		if rowCount() != 2 {
@@ -224,7 +239,7 @@ func TestFinalityAddendaAreAppendOnly(t *testing.T) {
 func TestFinalityLegSourceReadsTheStoredBundle(t *testing.T) {
 	ctx := context.Background()
 	repo := NewFinalityAddendaRepository(NewClientFromDB(testDB))
-	proofID, digest, want := storeLeg(t, "telcoin_adiri_498759")
+	proofID, want := storeLeg(t, "telcoin_adiri_498759")
 
 	var ref *finality.LegRef
 	after := ""
@@ -243,8 +258,8 @@ func TestFinalityLegSourceReadsTheStoredBundle(t *testing.T) {
 			}
 		}
 	}
-	if ref == nil || ref.Digest != digest || ref.Chain != 2017 {
-		t.Fatalf("the settled leg is not listed with its digest and chain: %+v", ref)
+	if ref == nil || ref.Chain != 2017 {
+		t.Fatalf("the settled leg is not listed with its chain: %+v", ref)
 	}
 	got, err := repo.LegSettlement(ctx, *ref)
 	if err != nil || got.Subject != want.Subject || got.Chain != 2017 || got.Included == nil {
@@ -252,10 +267,8 @@ func TestFinalityLegSourceReadsTheStoredBundle(t *testing.T) {
 	}
 
 	// once its chain stands at finalized it is no longer listed
-	for _, a := range addendaChain(t, proofID, digest, want) {
-		if err := repo.Append(ctx, a); err != nil {
-			t.Fatal(err)
-		}
+	if _, err := repo.Append(ctx, appendRequest(t, kindRegistry(t, nil), proofID, want, finality.LevelFinalized, "b")); err != nil {
+		t.Fatal(err)
 	}
 	page, err := repo.SettledLegs(ctx, "", 1000)
 	if err != nil {

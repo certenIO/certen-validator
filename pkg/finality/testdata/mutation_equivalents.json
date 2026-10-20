@@ -1,0 +1,26 @@
+[
+  {
+    "file": "append.go",
+    "function": "PlanAppend",
+    "operator": "guard_off",
+    "original": "if err != nil",
+    "mutated": "if false",
+    "reason": "The error of the final NewAddendum call is unreachable: NewAddendum fails only for a (chain, level, kind) that is not a table row (PlanAppend returns finality_chain_broken{kind} for exactly that two statements earlier), for a level the chain already holds (PlanAppend returns level_already_present just before), for a container that does not decode or whose header disagrees with the addendum's kind, chain or level (Registry.JudgeAddendum, which runs immediately before it on the same evidence, decodes the same container strictly and returns finality_evidence_malformed or finality_block_mismatch for exactly those). With the guard off the same value is returned. The guard stays as the defence in depth of the last constructor call, and every other error guard of PlanAppend is killed by a test."
+  },
+  {
+    "file": "capturers.go",
+    "function": "SupervisorConfig.withDefaults",
+    "operator": "cmp_boundary",
+    "original": "c.RestartMax < c.RestartMin",
+    "mutated": "c.RestartMax <= c.RestartMin",
+    "reason": "The mutated comparison is the inner one, evaluated after RestartMax was replaced by the 5 minute default: it differs only when RestartMin equals exactly 5 minutes, and then 'RestartMax = RestartMin' assigns the value RestartMax already has. (The outer comparison with the same text is killed: TestSupervisorConfigDefaultsAndClamps keeps equal bounds of 3 s.)"
+  },
+  {
+    "file": "capturers.go",
+    "function": "superviseCapturer",
+    "operator": "cmp_boundary",
+    "original": "wait > cfg.RestartMax",
+    "mutated": "wait >= cfg.RestartMax",
+    "reason": "The clamp assigns cfg.RestartMax to wait when wait exceeds it; at wait == cfg.RestartMax the mutated comparison also assigns cfg.RestartMax, the value wait already has, so no execution can tell > from >=. (The flip to <= and the unclamped doubling are killed by TestCapturerRestartBackoffDoublesIsClampedAndResetsAfterALongRun.)"
+  }
+]

@@ -13,7 +13,7 @@ type ChainProfile struct {
 	// Levels the chain offers, ascending. The last is the chain's top level and the worker's stopping point.
 	Levels []Level
 	// NotApplicable maps each level the chain does not offer to the published reason.
-	NotApplicable map[Level]string
+	NotApplicable map[Level]NotApplicableReason
 }
 
 func (p ChainProfile) validate() error {
@@ -59,13 +59,13 @@ func (p ChainProfile) Next(l Level) Level {
 	return LevelNone
 }
 
-// NotApplicableFor returns the typed non-level for a level the chain does not offer.
-func (p ChainProfile) NotApplicableFor(l Level) (*NotApplicable, bool) {
+// NotApplicableFor returns the named non-level for a level the chain does not offer.
+func (p ChainProfile) NotApplicableFor(l Level) (*StateError, bool) {
 	reason, ok := p.NotApplicable[l]
 	if !ok {
 		return nil, false
 	}
-	return &NotApplicable{Chain: p.Chain, Level: l, Reason: reason}, true
+	return NotApplicableState(p.Chain, l, reason), true
 }
 
 // The four live chains (R11-sepolia, R11-base-sepolia, R11-arbitrum-sepolia, R11-adiri).
@@ -81,19 +81,19 @@ func DefaultProfiles() []ChainProfile {
 	return []ChainProfile{
 		{
 			Chain: ChainSepolia, Name: "ethereum-sepolia", Levels: []Level{LevelIncluded, LevelFinalized},
-			NotApplicable: map[Level]string{LevelL1Posted: "Sepolia is the L1: its blocks are not posted to another chain"},
+			NotApplicable: map[Level]NotApplicableReason{LevelL1Posted: ReasonChainIsL1},
 		},
 		{
 			Chain: ChainBaseSepolia, Name: "base-sepolia", Levels: []Level{LevelIncluded, LevelL1Posted, LevelFinalized},
-			NotApplicable: map[Level]string{},
+			NotApplicable: map[Level]NotApplicableReason{},
 		},
 		{
 			Chain: ChainArbitrumSepolia, Name: "arbitrum-sepolia", Levels: []Level{LevelIncluded, LevelL1Posted, LevelFinalized},
-			NotApplicable: map[Level]string{},
+			NotApplicable: map[Level]NotApplicableReason{},
 		},
 		{
 			Chain: ChainAdiri, Name: "telcoin-adiri", Levels: []Level{LevelIncluded, LevelFinalized},
-			NotApplicable: map[Level]string{LevelL1Posted: "no L1 settlement exists for Telcoin Adiri (R11-adiri A6)"},
+			NotApplicable: map[Level]NotApplicableReason{LevelL1Posted: ReasonNoL1Settlment},
 		},
 	}
 }

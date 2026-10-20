@@ -1,0 +1,18 @@
+{
+  "format": "certen-base-posted-case/1",
+  "id": "blob_raw_flipped",
+  "description": "one byte of blob 0 flipped: the commitment and proof no longer open to the blob",
+  "pins": "pins/main.json",
+  "leg": "legs/a.json",
+  "evidence": "evidence/valid_a.bin",
+  "splice": {
+    "offset": 48365,
+    "delete": 1,
+    "insert": "0x57"
+  },
+  "expect": {
+    "result": "state",
+    "code": "blob_commitment_mismatch",
+    "fields": {}
+  }
+}

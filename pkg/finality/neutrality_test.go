@@ -142,7 +142,10 @@ func TestMainWiresTheUpgraderAloneAndGivesItNoConsensusObject(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	allowed := map[string]bool{"Enabled": true, "Launch": true, "Default": true, "NewPins": true, "UpgraderConfig": true}
+	allowed := map[string]bool{"Enabled": true, "Launch": true, "Default": true, "EmbeddedPins": true, "UpgraderConfig": true}
+	// RB11-B2B2b: the production wiring (pkg/finality/runtime, imported as finruntime) is reached through exactly these symbols:
+	// the configuration read, the wiring call and its collaborator struct. Everything else it builds stays inside that package.
+	runtimeAllowed := map[string]bool{"ConfigFromEnv": true, "Wire": true, "Deps": true}
 	var launches []*ast.CallExpr
 	var repoCtors int
 	for _, decl := range f.Decls {
@@ -166,6 +169,13 @@ func TestMainWiresTheUpgraderAloneAndGivesItNoConsensusObject(t *testing.T) {
 				}
 				if !allowed[sel.Sel.Name] {
 					t.Errorf("main.go: finality.%s is not one of the upgrader wiring symbols", sel.Sel.Name)
+				}
+			case "finruntime":
+				if fn.Name.Name != "startValidator" {
+					t.Errorf("main.go: finruntime.%s is used in %s; the finality wiring is built in startValidator only", sel.Sel.Name, fn.Name.Name)
+				}
+				if !runtimeAllowed[sel.Sel.Name] {
+					t.Errorf("main.go: finruntime.%s is not one of the finality runtime wiring symbols", sel.Sel.Name)
 				}
 			case "database":
 				if strings.Contains(sel.Sel.Name, "FinalityAddenda") {
@@ -191,7 +201,7 @@ func TestMainWiresTheUpgraderAloneAndGivesItNoConsensusObject(t *testing.T) {
 	for i, arg := range launches[0].Args {
 		switch a := arg.(type) {
 		case *ast.Ident:
-			if a.Name != "finalityOn" && a.Name != "finalityRepo" {
+			if a.Name != "finalityOn" && a.Name != "finalityRepo" && a.Name != "finalityPins" {
 				t.Errorf("main.go: finality.Launch argument %d is %q; only the switch and the addendum repository may be passed", i, a.Name)
 			}
 		case *ast.CallExpr, *ast.SelectorExpr, *ast.CompositeLit:
@@ -206,6 +216,126 @@ func TestMainWiresTheUpgraderAloneAndGivesItNoConsensusObject(t *testing.T) {
 			})
 		default:
 			t.Errorf("main.go: finality.Launch argument %d has unexpected form %T", i, arg)
+		}
+	}
+}
+
+// namedNewRequirements are the only requirement lines that may appear beyond the framework base: RB11-D2 adds the Brotli
+// channel decoder (a module that had no line at all). Promotions of an already present indirect requirement to a direct one
+// add no line; they are named in allowedDirectRequirements below.
+var namedNewRequirements = map[string]string{
+	"github.com/andybalholm/brotli": "v1.1.1",
+}
+
+// RB11-F1 promotes lukechampine.com/blake3 (already an indirect requirement) to a direct one for the Adiri record digest. The
+// freeze rule is therefore: no requirement that existed at the framework base (9941b83) changes its version, every one of
+// them is still present, and the only difference in the direct/indirect marking is that promotion. The snapshot of the base
+// requirements is testdata/finality/gomod_requirements_9941b83.txt.
+func TestGoModKeepsEveryRequirementVersionOfTheFrameworkBase(t *testing.T) {
+	root := repoRoot(t)
+	snap, err := os.ReadFile(filepath.Join("testdata", "finality", "gomod_requirements_9941b83.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mod, err := os.ReadFile(filepath.Join(root, "go.mod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	have := map[string]string{}
+	direct := map[string]bool{}
+	inReq := false
+	for _, l := range strings.Split(string(mod), "\n") {
+		l = strings.TrimRight(l, "\r")
+		switch {
+		case strings.HasPrefix(l, "require ("):
+			inReq = true
+			continue
+		case inReq && l == ")":
+			inReq = false
+			continue
+		}
+		if !inReq {
+			continue
+		}
+		f := strings.Fields(l)
+		if len(f) >= 2 {
+			have[f[0]] = f[1]
+			direct[f[0]] = !strings.Contains(l, "// indirect")
+		}
+	}
+	n := 0
+	base := map[string]bool{}
+	for _, l := range strings.Split(strings.TrimSpace(string(snap)), "\n") {
+		f := strings.Fields(l)
+		n++
+		base[f[0]] = true
+		if v, ok := have[f[0]]; !ok || v != f[1] {
+			t.Errorf("go.mod requirement %s was %s at the base and is now %q", f[0], f[1], v)
+		}
+	}
+	if n < 300 {
+		t.Fatalf("the base snapshot lists only %d requirements", n)
+	}
+	if !direct["lukechampine.com/blake3"] || have["lukechampine.com/blake3"] != "v1.2.1" {
+		t.Errorf("lukechampine.com/blake3 must be a direct requirement at v1.2.1, got %q direct=%v", have["lukechampine.com/blake3"], direct["lukechampine.com/blake3"])
+	}
+	for k, v := range have {
+		if base[k] {
+			continue
+		}
+		if want, ok := namedNewRequirements[k]; ok && want == v {
+			continue
+		}
+		t.Errorf("go.mod gained the requirement %s %s that the framework base did not have and that no work package was allowed to add", k, v)
+	}
+}
+
+// go.mod rule (RB11-D2): no existing requirement version changes; the additions are limited to the named modules of the
+// work packages that were allowed one. The direct requirements of the module are exactly this set.
+var allowedDirectRequirements = map[string]string{
+	"cloud.google.com/go/firestore": "v1.21.0", "firebase.google.com/go/v4": "v4.19.0",
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient": "v0.0.0-00010101000000-000000000000",
+	"github.com/cometbft/cometbft": "v0.38.21", "github.com/cometbft/cometbft-db": "v0.14.1",
+	"github.com/consensys/gnark": "v0.14.0", "github.com/consensys/gnark-crypto": "v0.19.2",
+	"github.com/ethereum/go-ethereum": "v1.17.7", "github.com/google/uuid": "v1.6.0", "github.com/lib/pq": "v1.10.9",
+	"github.com/mr-tron/base58": "v1.2.0", "github.com/prometheus/client_golang": "v1.21.0", "github.com/xssnick/tonutils-go": "v1.15.5",
+	"gitlab.com/accumulatenetwork/accumulate": "v1.4.7-0.20260926030013-e1d1db9ebb7c", "go.etcd.io/bbolt": "v1.4.3",
+	"golang.org/x/crypto": "v0.55.0", "google.golang.org/api": "v0.278.0", "gopkg.in/yaml.v3": "v3.0.1",
+	// RB11-D2: the Brotli channel decoder and the KZG blob-proof verifier (go-eth-kzg, the pure-Go backend of go-ethereum's
+	// crypto/kzg4844, promoted from indirect so the hash-checked ceremony setup can be loaded)
+	"github.com/andybalholm/brotli": "v1.1.1", "github.com/crate-crypto/go-eth-kzg": "v1.5.0",
+	// RB11-F1: the Adiri record digest (BLAKE3), promoted from indirect without a version change (see
+	// TestGoModKeepsEveryRequirementVersionOfTheFrameworkBase)
+	"lukechampine.com/blake3": "v1.2.1",
+}
+
+func TestGoModDirectRequirementsAreTheBaseSetPlusTheNamedAdditions(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(repoRoot(t), "go.mod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	in := false
+	for _, line := range strings.Split(strings.ReplaceAll(string(raw), "\r", ""), "\n") {
+		line = strings.TrimSpace(line)
+		switch {
+		case line == "require (":
+			in = true
+		case line == ")":
+			in = false
+		case in && line != "" && !strings.HasSuffix(line, "// indirect"):
+			f := strings.Fields(line)
+			got[f[0]] = f[1]
+		}
+	}
+	for m, v := range allowedDirectRequirements {
+		if got[m] != v {
+			t.Errorf("direct requirement %s is %q, want %q", m, got[m], v)
+		}
+	}
+	for m, v := range got {
+		if _, ok := allowedDirectRequirements[m]; !ok {
+			t.Errorf("direct requirement %s %s is not one of the named additions", m, v)
 		}
 	}
 }

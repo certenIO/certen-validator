@@ -52,6 +52,7 @@ import (
 	"github.com/certen/independant-validator/pkg/database"
 	"github.com/certen/independant-validator/pkg/execution"
 	"github.com/certen/independant-validator/pkg/finality"
+	"github.com/certen/independant-validator/pkg/finality/allkinds"
 	certenproof "github.com/certen/independant-validator/pkg/proof"
 	proofv2 "github.com/certen/independant-validator/pkg/proof/v2"
 	gnarklogger "github.com/consensys/gnark/logger"
@@ -92,8 +93,13 @@ func main() {
 			"committed validator set belongs to rests on the anchor alone")
 		finalityOn = flag.Bool("finality", false, "also verify the proof's staged finality (S7): its bundle's L6 settlement and the "+
 			"finality addenda stored for it (certen:finality:v1), reporting the level reached")
-		finalityFile = flag.String("finality-file", "", "verify the finality section of a portable proof v2 document (or a JSON list of "+
-			"addenda) offline, with no database")
+		finalityFile = flag.String("finality-file", "", "read the finality section of a portable proof v2 document (carried leg and "+
+			"addenda) offline and judge it against the leg's Settlement, from which D0 is recomputed: name the Settlement with "+
+			"--outcome-file <exported outcome evidence> or with --proof-id and --db (the stored bundle); with no Settlement the "+
+			"file judges no level and says so (finality_included_unavailable)")
+		pinsSelfcheck = flag.Bool("pins-selfcheck", false, "re-derive the whole embedded Sepolia ledger of the finality pins from its root pin: every "+
+			"entry from its predecessor by the light-client link beside the file (pkg/finality/pins-links), judged by the same verifier as a proof; "+
+			"offline, no database (V2_SPEC_S7 4.3, SO3)")
 		incEvidence = flag.String("incarnation-evidence", "", "with --governance: the incarnation's genesis evidence (JSON, "+
 			"cmd/incarnation), from which a v3 intent certificate's proof v2 is verified, walking the Directory's major "+
 			"blocks stored in the database from that genesis")
@@ -102,14 +108,59 @@ func main() {
 	incEvidencePath = *incEvidence
 	// The Groth16 verifier's debug lines are not part of a verdict.
 	gnarklogger.Disable()
+	// The finality pins are embedded and hash-checked (finality_pins_corrupt refuses to start).
+	pins, pinsErr := finality.EmbeddedPins()
+	if pinsErr != nil {
+		fmt.Fprintln(os.Stderr, pinsErr)
+		os.Exit(exitFailed)
+	}
+	// Every implemented finality verifier kind is registered (explicitly, no init()), so --offline and --finality judge every
+	// level of every chain from files and the embedded pins. The provers need live sources and stay unregistered here.
+	if err := allkinds.Register(finality.Default); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(exitFailed)
+	}
 
-	if *finalityFile != "" {
-		if *proofID != "" || *outcome || *outcomeFile != "" || *l5 || *govern || *finalityOn {
-			fmt.Fprintln(os.Stderr, "--finality-file verifies a file on its own: no --proof-id, --finality, --outcome, --outcome-file, --l5 or --governance")
+	if *pinsSelfcheck {
+		if *proofID != "" || *outcome || *outcomeFile != "" || *l5 || *govern || *finalityOn || *finalityFile != "" {
+			fmt.Fprintln(os.Stderr, "--pins-selfcheck checks the embedded pins on their own: no --proof-id, --finality, --finality-file, --outcome, --outcome-file, --l5 or --governance")
 			os.Exit(exitUsage)
 		}
 		cutNetwork()
-		os.Exit(reportFinalityFile(os.Stdout, *finalityFile, finality.Default, finality.NewPins()))
+		os.Exit(reportPinsSelfcheck(os.Stdout, os.Stderr, pins))
+	}
+	if *finalityFile != "" {
+		// the Settlement source of the file: an exported outcome evidence file, or a stored proof's bundle (--proof-id with --db)
+		if *outcome || *l5 || *govern || *finalityOn || (*outcomeFile != "" && *proofID != "") {
+			fmt.Fprintln(os.Stderr, "--finality-file verifies a file against ONE Settlement source: --outcome-file <evidence.json> or --proof-id with --db; "+
+				"not --finality, --outcome, --l5 or --governance")
+			os.Exit(exitUsage)
+		}
+		var leg *legSettlement
+		switch {
+		case *outcomeFile != "":
+			var lerr error
+			if leg, lerr = settlementFromOutcomeFile(*outcomeFile); lerr != nil {
+				fmt.Fprintf(os.Stdout, "FAILED (finality)  %s\n  the Settlement source %s does not decode: %v\n", *finalityFile, *outcomeFile, lerr)
+				os.Exit(exitFailed)
+			}
+		case *proofID != "":
+			if *dsn == "" {
+				fmt.Fprintln(os.Stderr, "--finality-file with --proof-id needs --db (the stored bundle is the Settlement source)")
+				os.Exit(exitUsage)
+			}
+			var lerr error
+			if leg, lerr = settlementFromDB(context.Background(), *dsn, *proofID); lerr != nil {
+				if n, ok := finality.AsNamed(lerr); ok {
+					fmt.Fprintf(os.Stdout, "SUMMARY-ONLY (finality)  %s\n  %v\n  The proof carries no settlement evidence to recompute D0 from.\n", *finalityFile, n)
+					os.Exit(exitSummaryOnly)
+				}
+				fmt.Fprintf(os.Stdout, "FAILED (finality)  %s\n  the Settlement source (proof %s) cannot be read: %v\n", *finalityFile, *proofID, lerr)
+				os.Exit(exitFailed)
+			}
+		}
+		cutNetwork()
+		os.Exit(reportFinalityFile(os.Stdout, *finalityFile, finality.Default, pins, leg))
 	}
 	if *outcomeFile != "" {
 		if *proofID != "" || *outcome || *l5 || *govern {
@@ -253,7 +304,7 @@ func main() {
 			code = worseExit(code, reportOutcome(ctx, os.Stdout, store, id, *online))
 		}
 		if *finalityOn {
-			code = worseExit(code, reportFinality(ctx, os.Stdout, db, id, finality.Default, finality.NewPins()))
+			code = worseExit(code, reportFinality(ctx, os.Stdout, db, id, finality.Default, pins))
 		}
 		os.Exit(code)
 
@@ -272,7 +323,7 @@ func main() {
 		}
 		if *finalityOn {
 			// Finality rests on the settlement's own evidence, not on L1-L4's, so it is checked all the same.
-			code = worseExit(code, reportFinality(ctx, os.Stdout, db, id, finality.Default, finality.NewPins()))
+			code = worseExit(code, reportFinality(ctx, os.Stdout, db, id, finality.Default, pins))
 		}
 		os.Exit(code)
 

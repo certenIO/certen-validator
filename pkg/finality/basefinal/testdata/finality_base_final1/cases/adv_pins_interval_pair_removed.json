@@ -1,0 +1,16 @@
+{
+  "format": "certen-finality-vectors/1",
+  "id": "adv_pins_interval_pair_removed",
+  "description": "the 0.2.0 row only knows a 6000/300 pair: the game's 600-block total is not a pinned pair",
+  "pins": "pins/adv_pins_interval_pair_removed.json",
+  "leg": "legs/leg_47604755.json",
+  "evidence": "evidence/valid_leg_47604755.bin",
+  "expect": {
+    "code": "game_unrecognised",
+    "fields": {
+      "n": "20",
+      "reason": "interval_pair",
+      "total": "600"
+    }
+  }
+}

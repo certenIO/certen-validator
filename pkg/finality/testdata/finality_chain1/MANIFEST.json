@@ -1,0 +1,11 @@
+{
+  "files": {
+    "chains.json": "54cbcde7d2b95d7f2538ae1a3b36ffec3b9b299b2d24ba3fff69dc6e02a518bb",
+    "codec_probe.json": "c2ce0aef7f1e25df2369ebc763ce795a0dc5c05d0949acc49b1ac9c69fad65c4",
+    "containers.json": "f483d5189c36fdad03489dc7255e07baa41e52d929f6e4fdc34261e581019184",
+    "goldens.json": "142e780cad8053af4db04a6107b617630655295b97bc8ffceacc02e163e82e23",
+    "table.json": "028e08907f78920d4e76ad8009003215009437a8c60149abf734d0db87eb8d4d"
+  },
+  "format": "certen-finality-manifest/1",
+  "set": "finality_chain1"
+}

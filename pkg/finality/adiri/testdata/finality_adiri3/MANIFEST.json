@@ -1,0 +1,26 @@
+{
+ "files": {
+  "evidence/live-500749-epoch600.bin": "67d9e32f9431dbc5caf32e023d1128bdee48b19657bc782980cdbab6055ae681",
+  "evidence/live-500980-epoch602.bin": "c4c90877cba867befcf8b2e88bf8249acb95e4a1d52f43be60ba7342b15b62f5",
+  "evidence/live-513643-epoch651.bin": "a76b27a989acb4a55f0eb586ea3c6bde46ddd20b4a702a1b752cd9d5020c20c4",
+  "evidence/syn-below-min-committee-size.bin": "797c88e3434f2bbd22a259d463d763756f9ee2fb64c038118297b802e9e0f9fd",
+  "evidence/syn-below-two-thirds.bin": "09187349d06114de681c86a220234587ecfd6f4fbb18cd42467b8d96e0112c6e",
+  "evidence/syn-cumulative-shrink-to-4.bin": "5a05f67c3e11d94f6c2807f3bece2891f3f608cf34ad3c85924a3b941f6cd786",
+  "evidence/syn-ejection-4-of-5.bin": "8d23a9b2bacef114ce30a703092481d30e71259effd03ddcf2a1cdb58d6d556b",
+  "evidence/syn-kind2-account-codehash-mismatch.bin": "77650be5d9712ec1c10f9d16348d20d3cf855f05030e67ec93f6ec322aff0584",
+  "evidence/syn-kind2-leg-is-seal.bin": "dbcd7250e0bb79c437aefc90ac35a963d6c31d673cc5c29348dad2422515bb16",
+  "evidence/syn-kind2-proof-invalid.bin": "52a283d79d2a761508811d482b5c2f152763a1c00b0158d8ac2b2dc17d9a36d8",
+  "evidence/syn-kind2-slot-value-mismatch.bin": "9ecd74f83493518e232680a410661c7c82a6259085d4fe5f239d19ff5b42a608",
+  "evidence/syn-kind2.bin": "9ff7706d4eca0f722740c228ef1524cb1553355ad8facbcd7d2f0f28ad8e6698",
+  "evidence/syn-larger-than-expected.bin": "5bfaabc4a2423f475ead1ae55b28cf89afe973bccd3df691ff246161df1116dc",
+  "evidence/syn-rotation.bin": "031d6a75c0e15f03c5af206fe4ef690ef18288f35e2ea2b461e5a13d261af9c3",
+  "evidence/syn-shrink-not-a-subset.bin": "58d50c8d96ad117aee2ef7e22c1b96a054a64770355e6d62a6161f7bcb8fe25b",
+  "evidence/syn-spine-single-header.bin": "85e2b6caa20619f7b5182320d7ff323b35ca7308d2c2c1537cec0719f2484cf1",
+  "evidence/syn2-kind2.bin": "9044e02873375a83b8eefe23b691d3c51e5bbbf55a73964d1843ea035334f3ad",
+  "evidence/syn2-spine-4.bin": "2563da2c05430af6abb9629dc433269518caebcfc326b3e947f102526a294496",
+  "evidence/syn2-spine-number-gap.bin": "78259eaebc06f1780f4d0a327d4daae4c0b6b2318e10de79b4a9bd41ceb3abe2",
+  "evidence/syn2-two-thirds-boundary.bin": "e067b1b3c212775979fd438e7ceadb58261410609001ee078beebb4f604fad8c",
+  "vectors.json": "0e37506eff80210d2da7226d0a87889acaab02d5a48966e6f323e9c21d52f82f"
+ },
+ "format": "finality_adiri3/manifest/1"
+}

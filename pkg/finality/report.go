@@ -3,181 +3,164 @@
 package finality
 
 import (
-	"encoding/json"
-	"strconv"
+	"github.com/certen/independant-validator/pkg/ethproof"
 )
 
-// Verdict is the outcome of judging one leg's addendum chain.
-type Verdict string
+// Status of one level in a Report (R2).
+type Status string
 
 const (
-	// VerdictVerified: the chain verifies and every addendum's evidence verifies to exactly its level.
-	VerdictVerified Verdict = "verified"
-	// VerdictSummaryOnly: nothing is wrong, but some addendum could not be judged here (no verifier registered for its kind,
-	// a pin this verifier does not hold, an unrecognised container version). The levels below it are reported; it is not.
-	VerdictSummaryOnly Verdict = "summary_only"
-	// VerdictFailed: the chain or an addendum's evidence is present and does not check out.
-	VerdictFailed Verdict = "failed"
+	StatusVerified      Status = "verified"
+	StatusNotApplicable Status = "level_not_applicable"
+	StatusPending       Status = "pending"
+	StatusRefused       Status = "refused"
 )
 
-// AddendumVerdict is the judgement of one addendum.
-type AddendumVerdict struct {
-	Seq      uint64
-	Level    Level
-	Kind     string
-	Verified bool
-	// Err is the named state when not verified.
-	Err error
-	// Unjudged is true when Err means "this verifier cannot judge it" rather than "it is wrong".
-	Unjudged bool
+// LevelStatus is one level's outcome: verified (with the Kind's Verdict), level_not_applicable (the table's reason),
+// pending (finality_pending, always with the level reached) or refused{code} (evidence present, predicate false).
+type LevelStatus struct {
+	Status  Status
+	Verdict *Verdict
+	State   *StateError // not-applicable, pending or refusal state; nil when verified
 }
 
-// LegReport is the per-statement S7 report of one leg: the level reached and why not further.
-type LegReport struct {
-	ProofID string
-	Chain   uint64
-	Subject Subject
-	Digest  [32]byte
-	Verdict Verdict
-	// Reached is the highest level whose addendum, and every addendum before it, verified. LevelNone if none.
-	Reached Level
-	// Top is the chain's top level; Next the lowest offered level above Reached (LevelNone when Reached is the top).
-	Top  Level
-	Next Level
-	// NotApplicable lists the levels this chain does not have, with reasons.
-	NotApplicable []*NotApplicable
-	// ChainErr is VerifyChain's refusal (nothing in a broken chain is reported as reached).
-	ChainErr error
-	Addenda  []AddendumVerdict
+// FinalizedBlock is the leg's own block as S7 finalized it, for S8 (R6).
+type FinalizedBlock struct {
+	Number    uint64
+	Hash      [32]byte
+	StateRoot [32]byte
 }
 
-// unjudgedCodes are the named states that say "this verifier cannot judge", not "the evidence is wrong".
-var unjudgedCodes = map[string]bool{
-	CodeKindUnknown: true, CodePinMissing: true, CodeChainUnsupported: true, CodeEvidenceUnrecognised: true,
+// Report is the S7 outcome for ONE leg: the pair (Settlement block, addenda) it judged.
+type Report struct {
+	Block BlockRef
+	// Unsupported is finality_chain_unsupported when the chain is not a row of the table (R5): no S7 statement at all.
+	Unsupported *StateError
+	// Included is level 1, derived from the Settlement (R1); Levels[LevelIncluded] mirrors it.
+	Levels map[Level]LevelStatus
+	// Headline is the highest verified level (LevelNone if the Settlement itself did not verify).
+	Headline Level
+	// Broken is finality_chain_broken when the addendum chain, or the carried leg, does not verify: it voids every addendum
+	// (R3), the headline is included.
+	Broken *StateError
+	// FinalizedBlock is exposed when finalized is verified (R6).
+	FinalizedBlock *FinalizedBlock
+	// FinalizedBlockState is the named state raised when finalized is verified and the leg block still cannot be exposed (the
+	// BlockRef has no header, or its header is unreadable): R6 is never silently omitted.
+	FinalizedBlockState *StateError
+	// PinsSHA256 and PinsSource name the pins judged against (4.1).
+	PinsSHA256 string
+	PinsSource string
 }
 
-func isUnjudged(err error) bool {
-	n, ok := AsNamed(err)
-	return ok && unjudgedCodes[n.Code()]
-}
-
-// VerifyLeg judges one leg's chain against its original digest: VerifyChain first (a broken chain reports nothing as
-// reached), then each addendum through VerifyAddendum, stopping the reached level at the first addendum that does not verify.
-func (r *Registry) VerifyLeg(digest [32]byte, chain []Addendum, pins *Pins) LegReport {
-	rep := LegReport{Digest: digest, Verdict: VerdictVerified}
-	if len(chain) > 0 {
-		rep.ProofID, rep.Chain = chain[0].ProofID, chain[0].Chain
-		if subject, err := ChainSubject(chain); err == nil {
-			rep.Subject = subject
-		}
-	}
-	if profile, err := r.Profile(rep.Chain); err == nil {
-		rep.Top = profile.Top()
-		for _, l := range Levels {
-			if na, ok := profile.NotApplicableFor(l); ok {
-				rep.NotApplicable = append(rep.NotApplicable, na)
-			}
-		}
-	}
-	if err := VerifyChain(digest, chain); err != nil {
-		rep.Verdict, rep.ChainErr = VerdictFailed, err
+// Verify is the pure S7 judgement of one leg: the Settlement is verified (S6, level 1 derived, R1), the carried leg is
+// compared with the verified Settlement's triple, the chain is verified against D0 recomputed from that triple, and each
+// addendum is judged alone. The addenda never supply D0.
+func (r *Registry) Verify(chain uint64, s *ethproof.Settlement, carried BlockRef, adds []Addendum, p *Pins) Report {
+	b, err := DeriveIncluded(chain, s)
+	if err != nil {
+		st, _ := AsNamed(err)
+		rep := Report{Block: BlockRef{Chain: chain}, Levels: map[Level]LevelStatus{LevelIncluded: {Status: StatusRefused, State: st}}}
+		rep.PinsSHA256, rep.PinsSource = p.Identity()
 		return rep
 	}
-	stopped := false
-	for _, a := range chain {
-		v := AddendumVerdict{Seq: a.Seq, Level: a.Level, Kind: a.Kind}
-		if stopped {
-			v.Err = NewState(CodeVerifierFailed, "reason", "an earlier addendum did not verify", "seq", a.Seq)
-			v.Unjudged = true
-			rep.Addenda = append(rep.Addenda, v)
+	return r.VerifyLeg(b, carried, adds, p)
+}
+
+// Verify is Registry.Verify over the Default registry.
+func Verify(chain uint64, s *ethproof.Settlement, carried BlockRef, adds []Addendum, p *Pins) Report {
+	return Default.Verify(chain, s, carried, adds, p)
+}
+
+// VerifyLeg judges addenda against an already verified leg block b (the triple of a verified Settlement). Rules:
+//
+//	R1 included is derived, never stored.            R2 levels are independent; the headline is the highest verified.
+//	R3 a broken chain voids all addenda.             R4 an absent level is finality_pending{no_evidence_in_file}.
+//	R5 not-applicable comes from the table.          R6 finalized exposes finalized_block.
+func (r *Registry) VerifyLeg(b BlockRef, carried BlockRef, adds []Addendum, p *Pins) Report {
+	rep := Report{Block: b, Levels: map[Level]LevelStatus{}}
+	rep.PinsSHA256, rep.PinsSource = p.Identity()
+	if !ChainSupported(b.Chain) {
+		rep.Unsupported = ChainUnsupported(b.Chain)
+		return rep
+	}
+	rep.Levels[LevelIncluded] = LevelStatus{Status: StatusVerified}
+	rep.Headline = LevelIncluded
+
+	voided := func(st *StateError) {
+		rep.Broken = st
+		for _, l := range []Level{LevelL1Posted, LevelFinalized} {
+			rep.Levels[l] = r.absentOrNA(b.Chain, l, LevelIncluded, &LevelStatus{Status: StatusRefused, State: st})
+		}
+	}
+	if err := CheckLegChain(b, carried, adds); err != nil {
+		st, _ := AsNamed(err)
+		voided(st)
+		return rep
+	}
+	byLevel := map[Level]Addendum{}
+	for _, a := range adds {
+		byLevel[a.Level] = a
+	}
+	// independent judgement per level (R2); the headline is the highest verified
+	for _, l := range []Level{LevelL1Posted, LevelFinalized} {
+		a, present := byLevel[l]
+		if !present {
 			continue
 		}
-		level, err := r.VerifyAddendum(a, pins)
+		v, err := r.JudgeAddendum(b, a, p)
 		if err != nil {
-			v.Err, v.Unjudged = err, isUnjudged(err)
-			stopped = true
-			if v.Unjudged {
-				if rep.Verdict == VerdictVerified {
-					rep.Verdict = VerdictSummaryOnly
-				}
-			} else {
-				rep.Verdict = VerdictFailed
+			st, _ := AsNamed(err)
+			if st == nil {
+				st = NewState(CodeVerifierFailed, "chain", b.Chain, "kind", a.Kind, "cause", err.Error())
 			}
-		} else {
-			v.Verified = true
-			rep.Reached = level
+			rep.Levels[l] = LevelStatus{Status: StatusRefused, State: st}
+			continue
 		}
-		rep.Addenda = append(rep.Addenda, v)
+		vv := v
+		rep.Levels[l] = LevelStatus{Status: StatusVerified, Verdict: &vv}
+		if l > rep.Headline {
+			rep.Headline = l
+		}
 	}
-	if profile, err := r.Profile(rep.Chain); err == nil {
-		rep.Next = profile.Next(rep.Reached)
+	for _, l := range []Level{LevelL1Posted, LevelFinalized} {
+		if _, done := rep.Levels[l]; done {
+			continue
+		}
+		rep.Levels[l] = r.absentOrNA(b.Chain, l, rep.Headline, nil)
+	}
+	if st := rep.Levels[LevelFinalized]; st.Status == StatusVerified {
+		switch {
+		case len(b.HeaderRLP) == 0:
+			rep.FinalizedBlockState = FinalizedBlockUnavailable(b.Chain, b.Number, FinalizedBlockNoHeader)
+		default:
+			h, err := ReadHeader(b.HeaderRLP)
+			if err != nil {
+				kv := []any{}
+				if hs, ok := AsNamed(err); ok {
+					if idx, has := hs.Fields["index"]; has {
+						kv = append(kv, "index", idx)
+					}
+				}
+				rep.FinalizedBlockState = FinalizedBlockUnavailable(b.Chain, b.Number, FinalizedBlockHeaderUnreadable, kv...)
+			} else {
+				rep.FinalizedBlock = &FinalizedBlock{Number: b.Number, Hash: b.Hash, StateRoot: h.StateRoot}
+			}
+		}
 	}
 	return rep
 }
 
-// PendingState returns the finality_pending state the report implies: the level reached is proven and the next is not yet
-// evidenced. It is nil when the chain is at its top, or when the chain is broken or unjudged (those are not pending).
-func (l LegReport) PendingState() *Pending {
-	if l.Verdict != VerdictVerified || l.Next == LevelNone || l.Reached == LevelNone {
-		return nil
+// absentOrNA is the status of a level with no addendum: level_not_applicable from the table (never from the file), else
+// finality_pending{no_evidence_in_file} (R4) - or `fallback` when the chain is broken and the level is offered.
+func (r *Registry) absentOrNA(chain uint64, l, reached Level, fallback *LevelStatus) LevelStatus {
+	if _, err := KindFor(chain, l); err != nil {
+		if st, ok := AsNamed(err); ok && st.Code == CodeNotApplicable {
+			return LevelStatus{Status: StatusNotApplicable, State: st}
+		}
 	}
-	return &Pending{Chain: l.Chain, LevelReached: l.Reached, NextLevel: l.Next, Reason: "no addendum for the next level yet",
-		Judged: map[string]string{"block": strconv.FormatUint(l.Subject.BlockNumber, 10)}}
-}
-
-// DocumentSection is the value of a portable document's `finality` field for a proof: its addenda as JSON, each carrying the
-// original digest it commits to. The field sits beside the document's hashed content and never inside it (PROOF_V2 10.3).
-func DocumentSection(digest [32]byte, chain []Addendum) ([]json.RawMessage, error) {
-	out := make([]json.RawMessage, 0, len(chain))
-	for _, a := range chain {
-		a.OriginalDigest = digest
-		raw, err := json.Marshal(a)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, raw)
+	if fallback != nil {
+		return *fallback
 	}
-	return out, nil
-}
-
-// VerifyDocumentSection judges the `finality` field of a portable document with no database: it groups the addenda by proof
-// id (in document order), takes each group's original digest from its addenda (which must agree, and which the chain hash
-// recomputes), and verifies every group as VerifyLeg does. A document with no finality section yields no legs.
-func (r *Registry) VerifyDocumentSection(raw []json.RawMessage, pins *Pins) ([]LegReport, error) {
-	groups := map[string][]Addendum{}
-	var order []string
-	for i, j := range raw {
-		var a Addendum
-		if err := json.Unmarshal(j, &a); err != nil {
-			return nil, err
-		}
-		if a.OriginalDigest == ([32]byte{}) {
-			return nil, NewState(CodeAddendumMalformed, "field", "originalDigest", "reason", "a document's addendum must carry the digest it commits to", "index", i)
-		}
-		if _, seen := groups[a.ProofID]; !seen {
-			order = append(order, a.ProofID)
-		}
-		groups[a.ProofID] = append(groups[a.ProofID], a)
-	}
-	var reports []LegReport
-	for _, id := range order {
-		chain := groups[id]
-		digest := chain[0].OriginalDigest
-		bad := false
-		for _, a := range chain {
-			if a.OriginalDigest != digest {
-				bad = true
-			}
-		}
-		if bad {
-			reports = append(reports, LegReport{
-				ProofID: id, Chain: chain[0].Chain, Digest: digest, Verdict: VerdictFailed,
-				ChainErr: NewState(CodeChainBroken, "check", "original_digest", "reason", "the addenda of one proof state different original digests"),
-			})
-			continue
-		}
-		rep := r.VerifyLeg(digest, chain, pins)
-		reports = append(reports, rep)
-	}
-	return reports, nil
+	return LevelStatus{Status: StatusPending, State: NoEvidenceInFile(chain, reached, l).State()}
 }

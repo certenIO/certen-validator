@@ -1,0 +1,20 @@
+{
+  "format": "certen-finality-vectors/1",
+  "id": "adv_lc_signature_flipped",
+  "description": "a bit of the finality update's sync-committee signature flipped: L1 finality is refused and the inner code is carried",
+  "pins": "pins/main.json",
+  "leg": "legs/leg_47604755.json",
+  "evidence": "evidence/valid_leg_47604755.bin",
+  "splice": {
+    "offset": 26117,
+    "delete": 1,
+    "insert": "0x8c"
+  },
+  "expect": {
+    "code": "l1_finality_unproven",
+    "fields": {
+      "inner": "finality_signature_invalid",
+      "reason": "lc_refused"
+    }
+  }
+}

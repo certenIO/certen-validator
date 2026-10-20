@@ -1,0 +1,16 @@
+{
+  "format": "certen-finality-vectors/1",
+  "id": "adv_pins_synthetic_finality_delay",
+  "description": "the pinned AnchorStateRegistry implementation carries a 10-billion-second finality delay: the game is within it",
+  "pins": "pins/adv_pins_synthetic_finality_delay.json",
+  "leg": "legs/leg_47604755.json",
+  "evidence": "evidence/valid_leg_47604755.bin",
+  "expect": {
+    "code": "game_within_finality_delay",
+    "fields": {
+      "T": "1792485444",
+      "delay": "10000000000",
+      "resolvedAt": "1791412824"
+    }
+  }
+}

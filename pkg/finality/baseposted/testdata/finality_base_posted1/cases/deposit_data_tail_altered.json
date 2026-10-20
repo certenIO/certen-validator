@@ -1,0 +1,20 @@
+{
+  "format": "certen-base-posted-case/1",
+  "id": "deposit_data_tail_altered",
+  "description": "the last byte of the L1-info deposit changed: transactionsRoot over deposits and batch transactions differs from the header's",
+  "pins": "pins/main.json",
+  "leg": "legs/a.json",
+  "evidence": "evidence/valid_a.bin",
+  "splice": {
+    "offset": 966914,
+    "delete": 1,
+    "insert": "0xbf"
+  },
+  "expect": {
+    "result": "state",
+    "code": "batch_binding_mismatch",
+    "fields": {
+      "field": "transactions_root"
+    }
+  }
+}

@@ -44,87 +44,53 @@ var realBlocks = map[string]uint64{
 	"telcoin_adiri_498759":       ChainAdiri,
 }
 
-// Level 1 is today's L6 evidence re-expressed, and its verifier is registered for all four chains.
-func TestIncludedLevelOnRealBlocksOfAllFourChains(t *testing.T) {
+// Level 1 is derived from the original proof's Settlement on all four chains: S6 verifies, the block number is read
+// positionally from the header, and the leg's block is the one every other level binds to. It has no addendum.
+func TestIncludedIsDerivedFromTheSettlementOnRealBlocksOfAllFourChains(t *testing.T) {
 	for name, chain := range realBlocks {
 		t.Run(name, func(t *testing.T) {
 			s := realSettlement(t, name)
 			if s.Chain != chain {
 				t.Fatalf("fixture chain %d, want %d", s.Chain, chain)
 			}
-			provers := Default.Provers(chain)
-			if len(provers) == 0 {
-				t.Fatal("no prover registered for the chain")
-			}
-			ev, level, err := provers[0].Build(context.Background(), s)
-			if err != nil || level != LevelIncluded {
-				t.Fatalf("build: level %v err %v", level, err)
-			}
-			if got, err := Verify(chain, s, ev, nil); err != nil || got != LevelIncluded {
-				t.Fatalf("verify: %v %v", got, err)
-			}
-
-			// as the first addendum of a chain, which verifies end to end
-			original := [32]byte{0xA1}
-			a, err := NewAddendum(original, "proof-"+name, nil, chain, LevelIncluded, ev)
+			b, err := DeriveIncluded(chain, s.Included)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := VerifyChain(original, []Addendum{a}); err != nil {
+			h, err := ReadHeader(s.Included.Header)
+			if err != nil {
 				t.Fatal(err)
 			}
-			if got, err := Default.VerifyAddendum(a, nil); err != nil || got != LevelIncluded {
-				t.Fatalf("addendum: %v %v", got, err)
+			if b.Chain != chain || b.Number != s.BlockNumber || b.Hash != s.BlockHash || h.Number != b.Number || h.Hash != b.Hash {
+				t.Fatalf("%+v vs %+v", b, s.Subject)
 			}
-
-			// refusals, each named
-			mutate := func(edit func(ev *Evidence), want string) {
-				t.Helper()
-				bad := ev
-				bad.Body = append([]byte(nil), ev.Body...)
-				edit(&bad)
-				_, err := Verify(chain, s, bad, nil)
-				if err == nil {
-					t.Fatal("a tampered included evidence verified")
-				}
-				if n, ok := AsNamed(err); !ok || (want != "" && n.Code() != want) {
-					t.Fatalf("want %s, got %v", want, err)
-				}
+			// the same through the report: included is verified and nothing is stored
+			rep := NewRegistry().Verify(chain, s.Included, b, nil, nil)
+			if rep.Headline != LevelIncluded || rep.Levels[LevelIncluded].Status != StatusVerified {
+				t.Fatalf("%+v", rep)
 			}
-			mutate(func(e *Evidence) { e.Body[10] ^= 0x01 }, CodeIncludedInvalid)                // a bit in the header
-			mutate(func(e *Evidence) { e.Body = e.Body[:len(e.Body)-1] }, CodeEvidenceMalformed) // truncated
-			mutate(func(e *Evidence) { e.Body = append(e.Body, 0) }, CodeEvidenceMalformed)      // trailing byte
-			mutate(func(e *Evidence) { e.Subject.BlockNumber++ }, CodeSubjectMismatch)           // another block number
-			mutate(func(e *Evidence) { e.Subject.TxHash[0] ^= 1 }, CodeSubjectMismatch)          // another transaction
-			mutate(func(e *Evidence) { e.Kind = "included.eth-mpt/v2" }, CodeKindUnknown)        // unknown kind
 		})
 	}
 }
 
-// A transaction that is not in the block the evidence carries is refused even when the subject says it is: the subject is
-// what the verifier is asked about, the body is what proves it.
-func TestIncludedRefusesAnotherTransactionAndAnotherChainsRegistration(t *testing.T) {
+func TestIncludedRefusesAnotherTransactionAndATamperedHeader(t *testing.T) {
 	s := realSettlement(t, "base_sepolia_47368146")
-	ev, _, err := Default.Provers(ChainBaseSepolia)[0].Build(context.Background(), s)
-	if err != nil {
-		t.Fatal(err)
+	wrong := *s.Included
+	wrong.TxHash[0] ^= 0xFF
+	if _, err := DeriveIncluded(ChainBaseSepolia, &wrong); err == nil || stateOf(t, err).Code != CodeIncludedInvalid {
+		t.Fatalf("another transaction's hash derived a block: %v", err)
 	}
-	other := s
-	other.TxHash[5] ^= 0xFF
-	ev.Subject.TxHash = other.TxHash
-	if _, err := Verify(ChainBaseSepolia, other, ev, nil); err == nil {
-		t.Fatal("evidence proving one transaction verified for another")
+	torn := *s.Included
+	torn.Header = append([]byte(nil), torn.Header...)
+	torn.Header[len(torn.Header)-1] ^= 1
+	if _, err := DeriveIncluded(ChainBaseSepolia, &torn); err == nil {
+		t.Fatal("a header that does not hash to the block hash derived a block")
 	}
-	// built for one settlement, offered on a chain it does not belong to: refused by the settlement's chain
-	if _, err := Verify(ChainAdiri, s, ev, nil); err == nil {
-		t.Fatal("base evidence verified for an Adiri settlement")
+	if _, err := DeriveIncluded(ChainBaseSepolia, nil); err == nil || stateOf(t, err).Code != CodeIncludedUnavailable {
+		t.Fatalf("a missing settlement: %v", err)
 	}
-	// no L6 evidence held: a named unavailability, no level
-	bare := s
-	bare.Included = nil
-	if _, lvl, err := Default.Provers(ChainBaseSepolia)[0].Build(context.Background(), bare); err == nil || lvl != LevelNone {
-		t.Fatalf("built included without evidence: %v %v", lvl, err)
-	} else if n, _ := AsNamed(err); n == nil || n.Code() != CodeIncludedUnavailable {
-		t.Fatalf("%v", err)
+	rep := NewRegistry().Verify(ChainBaseSepolia, &wrong, BlockRef{}, nil, nil)
+	if st := rep.Levels[LevelIncluded]; st.Status != StatusRefused || rep.Headline != LevelNone {
+		t.Fatalf("%+v", rep)
 	}
 }

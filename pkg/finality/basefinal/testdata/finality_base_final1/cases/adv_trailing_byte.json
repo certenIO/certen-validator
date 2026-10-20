@@ -1,0 +1,22 @@
+{
+  "format": "certen-finality-vectors/1",
+  "id": "adv_trailing_byte",
+  "description": "one byte after the NODES set",
+  "pins": "pins/main.json",
+  "leg": "legs/leg_47604755.json",
+  "evidence": "evidence/valid_leg_47604755.bin",
+  "splice": {
+    "offset": 96270,
+    "delete": 0,
+    "insert": "0x00"
+  },
+  "expect": {
+    "code": "finality_evidence_malformed",
+    "fields": {
+      "got_len": "1",
+      "part": "body",
+      "reason": "trailing_bytes",
+      "want_len": "0"
+    }
+  }
+}
