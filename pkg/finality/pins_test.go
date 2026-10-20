@@ -79,9 +79,10 @@ func TestTheInitialPinsHoldExactlyTheSepoliaNetworkSectionOfSection42(t *testing
 	if _, err := e.AnchorFor(1000); err == nil || stateOf(t, err).Code != CodePinUnknown {
 		t.Fatalf("an empty ledger gave an anchor: %v", err)
 	}
-	// the invented values stay out: no kzg setup hash, no other chain
-	if bytes.Contains(EmbeddedPinsBytes(), []byte("kzg")) {
-		t.Fatal("the unverified KZG candidate is not a pin yet (V2_SPEC_S7 11.9)")
+	// RB11-D2: the KZG setup hash is a pin now - verified 2026-10-20 byte-for-byte against consensus-specs v1.7.0-beta.4
+	// presets/mainnet/trusted_setups/trusted_setup_4096.json (V2_SPEC_S7 11 item 9) - and lives only in the base_sepolia section
+	if bytes.Count(EmbeddedPinsBytes(), []byte("kzg_setup_sha256")) != 1 || !bytes.Contains(EmbeddedPinsBytes(), []byte("f8e44a31ebf0a6d0734dcb301b0716e2c77f3ae18ed0cab0870fbcc2ca55616f")) {
+		t.Fatal("the verified KZG setup hash must be pinned exactly once")
 	}
 }
 
