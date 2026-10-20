@@ -426,3 +426,47 @@ func TestKindVerifyRefusesAMislabelledContainerAndAnUnreadableLeg(t *testing.T) 
 	_, err = Kind{}.Verify(empty, ref, ev)
 	wantCode(t, err, finality.CodePinUnknown, map[string]string{"kind": "base_sepolia"})
 }
+
+func TestBodyBoundsMaxBlobsMaxDepositsAndLeafSizeAreNamed(t *testing.T) {
+	lim := finality.DefaultLimits()
+	ep := testEthl1Pins()
+	base := Body{LC: tinyLC(t), ChannelID: [16]byte{1}}
+
+	over := base
+	over.Frames = []FrameTx{{L1Block: 1, TxRaw: []byte{1}}}
+	for i := 0; i < 33; i++ {
+		over.Frames[0].Blobs = append(over.Frames[0].Blobs, Blob{Raw: make([]byte, BlobSize)})
+	}
+	_, err := DecodeBody(EncodeBody(over), lim, ep, 32)
+	wantCode(t, err, finality.CodeEvidenceTooLarge, map[string]string{"part": "frameTx.blobs", "count": "33", "limit": "32"})
+
+	// the bound is per container: two transactions of 17 blobs each
+	two := base
+	for k := 0; k < 2; k++ {
+		f := FrameTx{L1Block: 1, TxIndex: uint32(k), TxRaw: []byte{1}}
+		for i := 0; i < 17; i++ {
+			f.Blobs = append(f.Blobs, Blob{Raw: make([]byte, BlobSize)})
+		}
+		two.Frames = append(two.Frames, f)
+	}
+	_, err = DecodeBody(EncodeBody(two), lim, ep, 32)
+	wantCode(t, err, finality.CodeEvidenceTooLarge, map[string]string{"part": "blobs", "count": "34", "limit": "32"})
+
+	deps := base
+	for i := 0; i < lim.MaxDepositTxs+1; i++ {
+		deps.Deposits = append(deps.Deposits, []byte{0x7e})
+	}
+	_, err = DecodeBody(EncodeBody(deps), lim, ep, 32)
+	wantCode(t, err, finality.CodeEvidenceTooLarge, map[string]string{"part": "depositTxs", "count": "4097", "limit": "4096"})
+
+	leaf := base
+	leaf.Frames = []FrameTx{{L1Block: 1, TxRaw: make([]byte, lim.MaxTxLeafBytes+1)}}
+	_, err = DecodeBody(EncodeBody(leaf), lim, ep, 32)
+	wantCode(t, err, finality.CodeEvidenceTooLarge, map[string]string{"part": "frameTx.txRaw", "limit": "2097152"})
+
+	// a blob that is not exactly 131072 bytes
+	short := base
+	short.Frames = []FrameTx{{L1Block: 1, TxRaw: []byte{1}, Blobs: []Blob{{Raw: make([]byte, BlobSize-1)}}}}
+	_, err = DecodeBody(EncodeBody(short), lim, ep, 32)
+	wantCode(t, err, finality.CodeEvidenceMalformed, map[string]string{"part": "blob.raw", "reason": "truncated"})
+}
