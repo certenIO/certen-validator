@@ -106,6 +106,16 @@ type Parts struct {
 	RcLeaf       []byte   // when set: the receipt leaf likewise
 	OmitS, OmitK []string // proofs left out of the state at S and K: admin_slot, user_slot, node_slot, config_slot, admin_account, user_account
 	NoFastProof  bool     // leave out the proof of the anyTrustFastConfirmer slot
+	TxCreate     bool     // the confirmation transaction is a contract creation (no To); TxInput is then its init code
+	LogDataBytes int      // the data length of the default AssertionConfirmed log (0: 64); a larger log makes the receipt leaf larger
+}
+
+// confIndex is the position of the confirmation transaction in K's block.
+func (p Parts) confIndex() int {
+	if p.TxIndex != 0 {
+		return p.TxIndex
+	}
+	return p.TxPadding
 }
 
 // NewParts is the valid world named by label.
@@ -522,7 +532,11 @@ func Assemble(p Parts) *World {
 	}
 	signer := types.LatestSignerForChainID(big.NewInt(11155111))
 	mk := func(nonce uint64, to common.Address, data []byte) *types.Transaction {
-		tx := types.NewTx(&types.DynamicFeeTx{ChainID: big.NewInt(11155111), Nonce: nonce, GasTipCap: big.NewInt(1), GasFeeCap: big.NewInt(10), Gas: 500000, To: &to, Value: big.NewInt(0), Data: data})
+		dest := &to
+		if p.TxCreate && int(nonce) == p.confIndex() {
+			dest = nil
+		}
+		tx := types.NewTx(&types.DynamicFeeTx{ChainID: big.NewInt(11155111), Nonce: nonce, GasTipCap: big.NewInt(1), GasFeeCap: big.NewInt(10), Gas: 500000, To: dest, Value: big.NewInt(0), Data: data})
 		st, err := types.SignTx(tx, signer, p.txKey().k)
 		if err != nil {
 			panic(err)
@@ -544,12 +558,13 @@ func Assemble(p Parts) *World {
 			logs = append(logs, &types.Log{Address: l.Address, Topics: topics})
 		}
 	default:
-		logs = []*types.Log{{Address: Rollup, Topics: []common.Hash{TopicConfirm, common.Hash(assertion)}, Data: bytes.Repeat([]byte{0x22}, 64)}}
+		dataLen := 64
+		if p.LogDataBytes > 0 {
+			dataLen = p.LogDataBytes
+		}
+		logs = []*types.Log{{Address: Rollup, Topics: []common.Hash{TopicConfirm, common.Hash(assertion)}, Data: bytes.Repeat([]byte{0x22}, dataLen)}}
 	}
-	idx := p.TxPadding
-	if p.TxIndex != 0 {
-		idx = p.TxIndex
-	}
+	idx := p.confIndex()
 	for i := 0; i < p.TxPadding*2+1; i++ {
 		var tx *types.Transaction
 		var rc *types.Receipt

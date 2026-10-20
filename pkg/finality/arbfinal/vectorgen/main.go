@@ -210,7 +210,15 @@ func (g *gen) write(out string) error {
 func main() {
 	out := flag.String("out", "pkg/finality/arbfinal/testdata/finality_arb_final1", "output directory")
 	live := flag.String("live", "", "directory written by cmd/finalityarbfinalrecord (adds the real vectors)")
+	set2 := flag.String("set2", "", "write the second set (finality_arb_final2) to this directory instead")
 	flag.Parse()
+	if *set2 != "" {
+		if err := generate2(*set2); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	if err := generate(*out, *live); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
