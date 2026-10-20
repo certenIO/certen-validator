@@ -4,12 +4,14 @@ package arbposted
 
 import (
 	"bytes"
-	"encoding/binary"
 	"errors"
-	"io"
+	"math/big"
 
-	"github.com/andybalholm/brotli"
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/rlp"
+
+	"github.com/certen/independant-validator/pkg/ethproof"
+	"github.com/certen/independant-validator/pkg/finality/strictbrotli"
 )
 
 // This file is the Nitro batch payload decoder the verifier replays (annex A6.3 steps 4-6): blobs -> RLP payload -> brotli ->
@@ -89,17 +91,10 @@ func decodeBlobs(blobs [][]byte) ([]byte, error) {
 	return payload, nil
 }
 
-// uncompress is brotli decompression capped at max bytes: it reports exceeded when the stream would produce more.
+// uncompress is brotli decompression capped at max bytes: it reports exceeded when the stream would produce more. A stream that is
+// incomplete, empty or followed by extra bytes is an error (package strictbrotli: the library alone would return a prefix).
 func uncompress(in []byte, max int) (out []byte, exceeded bool, err error) {
-	rd := brotli.NewReader(bytes.NewReader(in))
-	out, err = io.ReadAll(io.LimitReader(rd, int64(max)+1))
-	if err != nil {
-		return nil, false, err
-	}
-	if len(out) > max {
-		return nil, true, nil
-	}
-	return out, false, nil
+	return strictbrotli.Decompress(in, max)
 }
 
 // segment is one decoded batch segment.
@@ -134,37 +129,24 @@ type l2Message struct {
 	txs     [][]byte
 }
 
-// parseL2 returns the signed transactions of an L2 message, mirroring nitro's ParseL2Transactions for the kinds that carry
-// user-signed transactions: kind 4 (one transaction) and kind 3 (a batch of nested messages, depth <= 16). Every other kind
-// contributes none (kinds 0/1 build poster-derived transactions that cannot equal a user-signed one).
-func parseL2(msg []byte, depth int) [][]byte {
-	if len(msg) == 0 {
-		return nil
+// parseL2 returns the signed transactions of one sequencer-batch L2 message, as Nitro's parseL2Message (arbos/parse_l2.go) builds it
+// with no L1 request id: kind 4 is one transaction, kind 3 a batch of nested messages (depth < 16; a length prefix that is cut,
+// oversize or past the data ends the batch quietly), kind 0 is an unsigned transaction whose fields must parse (it is built from
+// the poster and is not a signed transaction, so it contributes none). Everything else fails the message: kind 1 (a contract
+// transaction needs a request id), 2, 6 (heartbeats are disabled), 7, unknown kinds, a short field, and ANY nested failure fails the
+// WHOLE message. A failed message has no transactions: a malformed message is not a message. ok is false for those.
+func parseL2(msg []byte, depth int) ([][]byte, bool) {
+	txs, ok := parseL2Msg(msg, common.Address{}, nil, big.NewInt(0), depth, false)
+	if !ok {
+		return nil, false
 	}
-	switch msg[0] {
-	case l2SignedTx:
-		if len(msg) == 1 {
-			return nil
+	var signed [][]byte
+	for _, tx := range txs {
+		if ethproof.TxType(tx) <= 4 {
+			signed = append(signed, tx)
 		}
-		return [][]byte{append([]byte(nil), msg[1:]...)}
-	case l2Batch:
-		if depth >= maxL2Depth {
-			return nil
-		}
-		var out [][]byte
-		rest := msg[1:]
-		for len(rest) >= 8 {
-			n := binary.BigEndian.Uint64(rest[:8])
-			rest = rest[8:]
-			if n > maxL2MessageSize || n > uint64(len(rest)) {
-				break
-			}
-			out = append(out, parseL2(rest[:n], depth+1)...)
-			rest = rest[n:]
-		}
-		return out
 	}
-	return nil
+	return signed, true
 }
 
 // decodePayload turns a batch payload (header byte then brotli) into messages. res.state is "" on success; otherwise it
@@ -204,6 +186,24 @@ func decodePayload(payload []byte, maxUncompressed, maxSegments int) payloadResu
 	case headerDAS, headerDASTree, headerDACert:
 		res.status = payloadOffL1
 		return res
+	case headerZeroheavy:
+		// Nitro decodes the zero-heavy layer once (limit 101% of the batch bound + 64) and then reads the result as an ordinary
+		// payload: it must begin with the Brotli header byte, nothing else is decoded after it.
+		dec, big := zeroheavyDecode(payload[1:], maxUncompressed+maxUncompressed/100+64)
+		if big {
+			res.status, res.exceededUncompressed = payloadTooLarge, true
+			return res
+		}
+		if len(dec) == 0 {
+			res.status = payloadUndecodable
+			return res
+		}
+		res.headerByte = dec[0]
+		if dec[0] != headerBrotli {
+			res.status = payloadUnknownHeader
+			return res
+		}
+		payload = dec
 	default:
 		res.status = payloadUnknownHeader
 		return res
@@ -241,7 +241,8 @@ func decodePayload(payload []byte, maxUncompressed, maxSegments int) payloadResu
 		default:
 			continue
 		}
-		res.messages = append(res.messages, l2Message{ordinal: ord, txs: parseL2(msg, 0)})
+		txs, _ := parseL2(msg, 0)
+		res.messages = append(res.messages, l2Message{ordinal: ord, txs: txs})
 		ord++
 	}
 	return res

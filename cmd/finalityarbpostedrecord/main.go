@@ -33,6 +33,10 @@ func main() {
 		err = record(*store, *out, *batch)
 	case "build":
 		err = build(*raw, *out)
+	case "build2":
+		err = build2(*raw, *out)
+	case "build3":
+		err = build3(*raw, *out)
 	case "measure":
 		err = measure(*raw)
 	default:

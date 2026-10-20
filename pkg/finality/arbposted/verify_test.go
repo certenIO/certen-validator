@@ -119,6 +119,8 @@ var (
 var (
 	implWordOverride *common.Hash
 	absentProve      []common.Address
+	// skipProve names storage slots whose proof nodes are left out of the evidence
+	skipProve []common.Hash
 )
 
 type synthState struct {
@@ -178,6 +180,13 @@ func newSynthState(t *testing.T, acc map[uint64]common.Hash, delayed map[uint64]
 		all = append(all, c.nodes...)
 	}
 	for _, s := range slots {
+		skip := false
+		for _, k := range skipProve {
+			skip = skip || k == s
+		}
+		if skip {
+			continue
+		}
 		var c collector
 		if err := st.Prove(crypto.Keccak256(s[:]), &c); err != nil {
 			t.Fatal(err)
@@ -280,7 +289,7 @@ func TestPayloadHeaderBytesAndBounds(t *testing.T) {
 		{"das", append([]byte{headerDAS}, good[1:]...), payloadOffL1},
 		{"das tree", append([]byte{headerDASTree}, good[1:]...), payloadOffL1},
 		{"dacert", append([]byte{headerDACert}, good[1:]...), payloadOffL1},
-		{"zeroheavy is not decoded", append([]byte{headerZeroheavy}, good[1:]...), payloadUnknownHeader},
+		{"zeroheavy layer over a stream that is not a payload", append([]byte{headerZeroheavy}, good[1:]...), payloadUnknownHeader},
 		{"unknown byte", append([]byte{0x05}, good[1:]...), payloadUnknownHeader},
 		{"empty", nil, payloadUndecodable},
 		{"not brotli", append([]byte{headerBrotli}, bytes.Repeat([]byte{0xff}, 40)...), payloadUndecodable},
@@ -340,16 +349,22 @@ func TestSegmentsAndMessages(t *testing.T) {
 	for i := 0; i < 16; i++ {
 		nested = batchMsg(nested)
 	}
-	if got := parseL2(nested, 0); len(got) != 1 {
-		t.Fatalf("16 nested batches: %d txs", len(got))
+	if got, ok := parseL2(nested, 0); !ok || len(got) != 1 {
+		t.Fatalf("16 nested batches: ok %v, %d txs", ok, len(got))
 	}
-	if got := parseL2(batchMsg(nested), 0); len(got) != 0 {
-		t.Fatalf("a 17th nested batch must be dropped: %d txs", len(got))
+	if got, ok := parseL2(batchMsg(nested), 0); ok || len(got) != 0 {
+		t.Fatalf("a 17th nested batch must fail the whole message: ok %v, %d txs", ok, len(got))
 	}
-	// an oversize or overrunning nested length stops the batch
+	// an oversize or overrunning nested length ends the batch quietly: the message is valid and empty
 	over := append([]byte{l2Batch}, binary.BigEndian.AppendUint64(nil, 1<<40)...)
-	if len(parseL2(over, 0)) != 0 || len(parseL2([]byte{l2SignedTx}, 0)) != 0 || len(parseL2(nil, 0)) != 0 {
-		t.Fatal("a malformed message yielded transactions")
+	if got, ok := parseL2(over, 0); !ok || len(got) != 0 {
+		t.Fatalf("an oversize nested length: ok %v, %d txs", ok, len(got))
+	}
+	// an empty signed message, an empty message and a missing kind fail the message
+	for _, m := range [][]byte{{l2SignedTx}, nil} {
+		if got, ok := parseL2(m, 0); ok || len(got) != 0 {
+			t.Fatalf("message %x: ok %v, %d txs", m, ok, len(got))
+		}
 	}
 }
 
@@ -378,7 +393,6 @@ func TestCalldataBatchIsJudgedLikeABlobBatch(t *testing.T) {
 	}{
 		{headerDAS, want("l1_batch_data_off_l1", "batch", uint64(55), "header_byte", uint8(headerDAS))},
 		{headerDASTree, want("l1_batch_data_off_l1", "batch", uint64(55), "header_byte", uint8(headerDASTree))},
-		{headerZeroheavy, want("l1_batch_header_unknown", "batch", uint64(55), "byte", uint8(headerZeroheavy))},
 	} {
 		c := calldataEvidence(txs, append([]byte{tc.flag}, data[1:]...), 55, h40, common.Hash{})
 		if _, err := runState(t, c, nil, nil); canon(err) != tc.want {

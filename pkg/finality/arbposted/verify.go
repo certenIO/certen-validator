@@ -265,19 +265,19 @@ func (k *Kind) verifyState(arb *arbPins, s ethl1.L1Block, b finality.BlockRef, h
 		}
 	}
 	var delayedK *uint64
-	if delayedOrigin {
+	ordinal := -1
+	if e.Delayed != nil || delayedOrigin {
+		// the block comes from a delayed-inbox message: the whole of its non-internal transactions must be what that message derives
 		nonce, _ := headerNonce(b.HeaderRLP)
 		kk, err := verifyDelayed(arb, root, bridge, e, res, types, nonce)
 		if err != nil {
 			return finality.Verdict{}, err
 		}
 		delayedK = &kk
-	}
-	if len(std) == 0 && !delayedOrigin {
-		return finality.Verdict{}, contentNotFound(ContentNoStandardTransactions, "batch", e.BatchSeq)
-	}
-	ordinal := -1
-	if len(std) > 0 {
+	} else {
+		if len(std) == 0 {
+			return finality.Verdict{}, contentNotFound(ContentNoStandardTransactions, "batch", e.BatchSeq)
+		}
 		for _, m := range res.messages {
 			if sameTxs(std, m.txs) {
 				ordinal = m.ordinal
