@@ -114,6 +114,13 @@ var (
 	testImplCode = crypto.Keccak256Hash([]byte("test bridge implementation code"))
 )
 
+// implWordOverride, when set, replaces the EIP-1967 implementation word the synthetic Bridge stores, and absentProve names accounts
+// whose (exclusion) proof is added to the nodes. Only the identity tests below set them.
+var (
+	implWordOverride *common.Hash
+	absentProve      []common.Address
+)
+
 type synthState struct {
 	root  common.Hash
 	nodes [][]byte
@@ -135,6 +142,9 @@ func newSynthState(t *testing.T, acc map[uint64]common.Hash, delayed map[uint64]
 	}
 	var iv common.Hash
 	copy(iv[12:], testImpl[:])
+	if implWordOverride != nil {
+		iv = *implWordOverride
+	}
 	put(eip1967ImplSlot, iv)
 	var slots []common.Hash
 	for n, v := range acc {
@@ -160,7 +170,7 @@ func newSynthState(t *testing.T, acc map[uint64]common.Hash, delayed map[uint64]
 		t.Fatal(err)
 	}
 	var all [][]byte
-	for _, addr := range []common.Address{testBridge, testImpl} {
+	for _, addr := range append([]common.Address{testBridge, testImpl}, absentProve...) {
 		var c collector
 		if err := at.Prove(crypto.Keccak256(addr[:]), &c); err != nil {
 			t.Fatal(err)
@@ -664,5 +674,34 @@ func TestNoDataBatchIsANamedContentState(t *testing.T) {
 	e.BlockTxs = [][]byte{a}
 	if _, err := New().verifyBody(&arbPins{}, ethl1.Pins{}, finality.BlockRef{HeaderRLP: hdrRLP}, hdr, e); canon(err) != want("l1_posted_content_not_found", "reason", "block_txs_root_mismatch", "batch", uint64(4)) {
 		t.Fatalf("root: %s", canon(err))
+	}
+}
+
+// The implementation word and the implementation account are judged, not just its code hash: a word with non-zero high bytes is
+// not an address, and an absent account has no code even when the pins (wrongly) pin the zero hash.
+func TestTheBridgeImplementationWordAndAccountAreJudged(t *testing.T) {
+	a := legacyTx(1)
+	txs := [][]byte{{0x6a, 0xc0}, a}
+	good := calldataEvidence(txs, payloadOf(seg(segL2Message, signedTxMsg(a))), 9, h40, common.Hash{})
+	defer func() { implWordOverride, absentProve = nil, nil }()
+
+	var high common.Hash
+	copy(high[12:], testImpl[:])
+	high[0] = 1
+	implWordOverride = &high
+	_, err := runState(t, good, nil, nil)
+	if canon(err) != want("contract_identity_unproven", "role", "bridge_impl", "address", testImpl[:], "code_hash", testImplCode[:], "judged_at", uint64(1234)) {
+		t.Fatalf("a word with non-zero high bytes: %s", canon(err))
+	}
+
+	absent := common.HexToAddress("0x00000000000000000000000000000000000000ab")
+	var w common.Hash
+	copy(w[12:], absent[:])
+	implWordOverride, absentProve = &w, []common.Address{absent}
+	_, err = runState(t, good, nil, func(s *synthState) {
+		s.arb.LogicPins = map[string]string{"0x" + common.Bytes2Hex(make([]byte, 32)): bridgeImplRole}
+	})
+	if canon(err) != want("contract_identity_unproven", "role", "bridge_impl", "address", absent[:], "code_hash", make([]byte, 32), "judged_at", uint64(1234)) {
+		t.Fatalf("an absent implementation account whose zero hash is pinned: %s", canon(err))
 	}
 }
