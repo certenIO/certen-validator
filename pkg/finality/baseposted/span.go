@@ -97,14 +97,24 @@ func decodeSpanBatch(payload []byte, sp spanParams) ([]Batch, error) {
 	var total uint64
 	for i := uint64(0); i < blockCount && r.err == nil; i++ {
 		c := r.uvarint()
-		total += c
-		if total > maxSpanTxs {
+		// The bound is applied to the exact sum: c is compared with what remains of it before it is added, because a uint64 sum of
+		// hostile counts wraps ([1, 2^64-1] sums to 0) and would slip under the bound.
+		if c > maxSpanTxs-total {
 			return nil, errors.New("span: tx count")
 		}
+		total += c
 		counts = append(counts, c)
 	}
 	creation := r.bits(total)
 	yParity := r.bits(total)
+	// Nothing below is allocated for a stream already known to be bad. The signatures alone take 64 bytes per transaction, so a count
+	// the payload cannot carry is short before the lists sized by the declared count (up to maxSpanTxs) are allocated.
+	if r.err != nil {
+		return nil, r.err
+	}
+	if uint64(len(r.b)) < total*64 {
+		return nil, errors.New("span: short")
+	}
 	sigs := make([][64]byte, total)
 	for i := range sigs {
 		copy(sigs[i][:], r.fixed(64))

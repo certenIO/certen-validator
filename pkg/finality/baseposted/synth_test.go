@@ -52,10 +52,11 @@ type synthOpts struct {
 	batcher          *ecdsa.PrivateKey // signs the frame txs
 	chainBatch       *ecdsa.PrivateKey // the batcher recorded in the SystemConfig (default: the signing key)
 	toInbox          bool
-	dirtyBatcherHash bool // the recorded batcherHash has a non-zero byte above its 20-byte address
-	dirtyIndex       int  // which of the 12 upper bytes
-	dirtyValue       byte // and its value
-	omitImpl         bool // the implementation account is absent from the state
+	dirtyBatcherHash bool   // the recorded batcherHash has a non-zero byte above its 20-byte address
+	dirtyIndex       int    // which of the 12 upper bytes
+	dirtyValue       byte   // and its value
+	omitImpl         bool   // the implementation account is absent from the state
+	rawStream        []byte // the decompressed channel used as given, instead of the batches built here
 }
 
 type synth struct {
@@ -144,6 +145,9 @@ func makeSynth(t *testing.T, o synthOpts) *synth {
 		enc, _ := rlp.EncodeToBytes(singularRLP{ParentHash: crypto.Keccak256Hash([]byte{byte(i)}), EpochNum: o.epochNum, EpochHash: epochHash, Timestamp: o.batchTs + 2*i, Txs: nil})
 		b, _ := rlp.EncodeToBytes(append([]byte{0}, enc...))
 		stream = append(stream, b...)
+	}
+	if o.rawStream != nil {
+		stream = o.rawStream
 	}
 	chData := compress(o.compression, stream)
 	var id [16]byte

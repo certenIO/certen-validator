@@ -9,6 +9,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	"math"
 
 	"github.com/andybalholm/brotli"
 	"github.com/ethereum/go-ethereum/rlp"
@@ -226,7 +227,11 @@ func decompress(ch []byte, max uint64) ([]byte, error) {
 	default:
 		return nil, errors.New("compression type")
 	}
-	out, err := io.ReadAll(io.LimitReader(r, int64(max)+1))
+	limit := int64(math.MaxInt64) // max+1 does not fit a signed limit from max = 2^63-1 up: that is no cap at all
+	if max < math.MaxInt64 {
+		limit = int64(max) + 1
+	}
+	out, err := io.ReadAll(io.LimitReader(r, limit))
 	if err != nil {
 		return nil, err
 	}

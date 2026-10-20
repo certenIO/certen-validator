@@ -1,0 +1,19 @@
+{
+  "decode": {
+    "result": "stream_error"
+  },
+  "description": "block tx counts [2^64-1, 2]: the first count alone is over the 2^20 bound.",
+  "format": "certen-base-posted-stream/1",
+  "id": "span_first_count_is_2_64_minus_1",
+  "params": {
+    "chain_id": "84532",
+    "l2_block_time": "2",
+    "l2_genesis_time": "1695768288"
+  },
+  "stream": "0xb838010009111111111111111111111111111111111111111122222222222222222222222222222222222222220200ffffffffffffffffff0102",
+  "verifier": {
+    "code": "channel_malformed",
+    "fields": {},
+    "result": "state"
+  }
+}

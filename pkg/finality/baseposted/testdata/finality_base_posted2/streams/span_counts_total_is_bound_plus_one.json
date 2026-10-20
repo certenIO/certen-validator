@@ -1,0 +1,19 @@
+{
+  "decode": {
+    "result": "stream_error"
+  },
+  "description": "block tx counts [2^20, 1]: the exact total 2^20+1 is over the bound.",
+  "format": "certen-base-posted-stream/1",
+  "id": "span_counts_total_is_bound_plus_one",
+  "params": {
+    "chain_id": "84532",
+    "l2_block_time": "2",
+    "l2_genesis_time": "1695768288"
+  },
+  "stream": "0xb101000911111111111111111111111111111111111111112222222222222222222222222222222222222222020080804001",
+  "verifier": {
+    "code": "channel_malformed",
+    "fields": {},
+    "result": "state"
+  }
+}
