@@ -39,10 +39,10 @@ func TestAdiriPinsBoundsAreExactAndEachRefusalNamesItsKey(t *testing.T) {
 	if par, err := gateAdiriPins(t, func(map[string]any) {}); err != nil || par.ChainID != 2017 || len(par.GenesisCommittee) != 5 {
 		t.Fatalf("the embedded section: %v", err)
 	}
-	// the smallest valid positive bounds
-	par, err := gateAdiriPins(t, func(s map[string]any) { s["min_committee_size"], s["max_headers"] = json.Number("1"), json.Number("1") })
-	if err != nil || par.MinCommittee != 1 || par.MaxHeaders != 1 {
-		t.Fatalf("bounds of 1 are valid: %v", err)
+	// the smallest valid bounds: min_committee_size 4 is Telcoin's own shrink floor (annex A4), max_headers 1
+	par, err := gateAdiriPins(t, func(s map[string]any) { s["min_committee_size"], s["max_headers"] = json.Number("4"), json.Number("1") })
+	if err != nil || par.MinCommittee != 4 || par.MaxHeaders != 1 {
+		t.Fatalf("min_committee_size 4 and max_headers 1 are valid: %v", err)
 	}
 	refused := func(name, key string, mutate func(s map[string]any)) {
 		t.Helper()

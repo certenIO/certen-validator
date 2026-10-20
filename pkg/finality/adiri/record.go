@@ -86,6 +86,11 @@ func (c *CFA1) RecordDigests() [][32]byte {
 	return out
 }
 
+// MinCommitteeFloor is the least min_committee_size a pin may carry: Telcoin's own rule lets a committee shrink only to at least 4
+// members (annex A4: "when smaller: len >= 4"; V2_SPEC_S7 4.2 pins 4). A pin is a user's strictness on top of that rule, never
+// a relaxation of it: a pin of 3 would accept committee chains Telcoin itself refuses.
+const MinCommitteeFloor = 4
+
 // Params are the Adiri pins of V2_SPEC_S7 4.2.
 type Params struct {
 	ChainID          uint64
@@ -182,7 +187,7 @@ func ParsePins(p *finality.Pins) (*Params, error) {
 	for _, c := range []struct {
 		bad bool
 		key string
-	}{{par.ChainID == 0, "adiri.chain_id"}, {par.MinCommittee < 1, "adiri.min_committee_size"}, {par.MaxHeaders < 1, "adiri.max_headers"}} {
+	}{{par.ChainID == 0, "adiri.chain_id"}, {par.MinCommittee < MinCommitteeFloor, "adiri.min_committee_size"}, {par.MaxHeaders < 1, "adiri.max_headers"}} {
 		if c.bad {
 			return nil, finality.PinsCorrupt(finality.PinsBadValue, "key", c.key)
 		}
