@@ -109,7 +109,7 @@ func TestTheBuilderPassesTheCoveredBoundaryAndRefusesWhatItCannotReadOrTrust(t *
 	b.Pins = &finality.Pins{}
 	wantCode(t, settle(b, w.ref.HeaderRLP), finality.CodePinUnknown, map[string]string{"kind": "base_sepolia"})
 	var m map[string]any
-	pinsRaw, _ := ReadFile(setDir, "pins/main.json")
+	pinsRaw, _ := readPublishedPins(setDir, "pins/main.json")
 	_ = json.Unmarshal(pinsRaw, &m)
 	delete(m, "eth_sepolia")
 	nb, _ := json.MarshalIndent(m, "", "  ")

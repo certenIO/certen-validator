@@ -25,3 +25,13 @@ func tinyLC(t *testing.T) ethl1.LC {
 	}
 	return lc
 }
+
+// readPublishedPins reads a pins file of a published set (1 or 2) and supplies the base_sepolia pins those sets predate
+// (PublishedSetPinSupply): the verifier has no defaults, the harness is explicit.
+func readPublishedPins(dir, name string) ([]byte, error) {
+	raw, err := ReadFile(dir, name)
+	if err != nil {
+		return nil, err
+	}
+	return SupplyBaseSepoliaPins(raw, PublishedSetPinSupply)
+}

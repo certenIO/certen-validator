@@ -225,6 +225,7 @@ func verifyChannel(bp *Pins, body Body, covered []ethl1.L1Block, l2 finality.Hea
 	var kz *kzgsetup.Context
 	var frames []Frame
 	var frameL1 []uint64
+	var frameTime []uint64 // the timestamp of the L1 block of each entry of frameL1 (selects the channel timeout, see below)
 	var batcher [20]byte
 	var prevL1 uint64
 	var prevIdx uint32
@@ -307,6 +308,7 @@ func verifyChannel(bp *Pins, body Body, covered []ethl1.L1Block, l2 finality.Hea
 				if x.ID == body.ChannelID {
 					frames = append(frames, x)
 					frameL1 = append(frameL1, f.L1Block)
+					frameTime = append(frameTime, hdr.Timestamp)
 				}
 			}
 		}
@@ -322,8 +324,11 @@ func verifyChannel(bp *Pins, body Body, covered []ethl1.L1Block, l2 finality.Hea
 		}
 		stream = append(stream, fr.Data...)
 	}
-	for _, l := range frameL1 {
-		if l-frameL1[0] > bp.ChannelTimeout { // frameL1 is non-decreasing (the frames are in order), so this cannot wrap
+	// op-node IngestFrame ignores a frame when `currentCh.OpenBlockNumber()+cb.spec.ChannelTimeout(origin.Time) < origin.Number`: origin
+	// is the L1 block that holds the frame, so the timeout in force (50 from Granite, 300 before) is selected by that block's own
+	// timestamp, frame by frame [r2:D2FIX].
+	for i, l := range frameL1 {
+		if l-frameL1[0] > bp.ChannelTimeoutAt(frameTime[i]) { // frameL1 is non-decreasing (the frames are in order), so this cannot wrap
 			return finality.Verdict{}, st(CodeChannelTimedOut)
 		}
 	}
@@ -354,6 +359,20 @@ func verifyChannel(bp *Pins, body Body, covered []ethl1.L1Block, l2 finality.Hea
 	}
 	if len(body.Deposits) == 0 || len(body.Deposits[0]) == 0 || body.Deposits[0][0] != 0x7e {
 		return finality.Verdict{}, st(CodeBatchBindingMismatch, "field", "l1_info_deposit")
+	}
+	// O2/O5: the block's transaction list is depositTxs followed by the batch's transactions and the two lists are told apart by
+	// type alone, as OP derivation does (a batch may not embed a deposit or an empty transaction: checkSingularBatch / span
+	// batch validation drop it). Without this a prover moves any block transaction the batcher never posted into depositTxs
+	// and the recomputed root still matches [r2:D2FIX].
+	for _, d := range body.Deposits {
+		if len(d) == 0 || d[0] != 0x7e {
+			return finality.Verdict{}, st(CodeBatchBindingMismatch, "field", "deposit_txs")
+		}
+	}
+	for _, x := range bt.Txs {
+		if len(x) == 0 || x[0] == 0x7e {
+			return finality.Verdict{}, st(CodeBatchBindingMismatch, "field", "batch_txs")
+		}
 	}
 	num, hash, ok := l1Info(body.Deposits[0])
 	if !ok {

@@ -73,6 +73,7 @@
     "batch_inbox": "0xff00000000000000000000000000000000084532",
     "chain_id": 84532,
     "channel_timeout": 300,
+    "channel_timeout_granite": 50,
     "denim_time": 1792605600,
     "game_layout": {
       "aggregate_v1": {
@@ -93,6 +94,7 @@
         }
       }
     },
+    "granite_time": 1723478400,
     "impl_pins": {
       "0x35c04acf3bb541d90092bf3e328475377142f70760fa82f372ac0c4e4b3ff4f6": {
         "role": "syscfg_impl"

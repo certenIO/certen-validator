@@ -100,10 +100,14 @@ func TestSynthMissingDuplicateAndMisorderedFrames(t *testing.T) {
 	wantCode(t, err, CodeChannelIncomplete, nil)
 }
 
+// The Bedrock regime (300 L1 blocks): the synthetic L1 blocks are timed 1790000000+number, so Granite is moved past all of them.
+// The post-Granite regime (50) and the switch are in d2fix_test.go.
 func TestSynthChannelTimedOut(t *testing.T) {
 	ok := makeSynth(t, synthOpts{compression: "zlib", calldata: true, nFrames: 2, frameBlocks: []uint64{1000, 1300}})
+	ok.bp.GraniteTime = 1790000000 + 1_000_000
 	mustOK(t, ok)
 	late := makeSynth(t, synthOpts{compression: "zlib", calldata: true, nFrames: 2, frameBlocks: []uint64{1000, 1301}})
+	late.bp.GraniteTime = 1790000000 + 1_000_000
 	_, err := late.verify()
 	wantCode(t, err, CodeChannelTimedOut, nil)
 }
@@ -362,7 +366,7 @@ func TestSynthEachStateProofGapIsNamed(t *testing.T) {
 
 func TestKindVerifyRefusesAMislabelledContainerAndAnUnreadableLeg(t *testing.T) {
 	set := filepath.Join("testdata", SetName)
-	pinsRaw, err := ReadFile(set, "pins/main.json")
+	pinsRaw, err := readPublishedPins(set, "pins/main.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -478,7 +482,7 @@ func TestBodyBoundsMaxBlobsMaxDepositsAndLeafSizeAreNamed(t *testing.T) {
 
 func TestKindVerifyRefusesGarbageMissingSepoliaPinsHeaderNumberSpineGapAndABlobCountOverTheClamp(t *testing.T) {
 	set := filepath.Join("testdata", SetName)
-	pinsRaw, _ := ReadFile(set, "pins/main.json")
+	pinsRaw, _ := readPublishedPins(set, "pins/main.json")
 	pins, err := finality.ParsePinsOverride(pinsRaw)
 	if err != nil {
 		t.Fatal(err)

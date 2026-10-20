@@ -73,7 +73,7 @@ type synth struct {
 }
 
 func newPins() *Pins {
-	return &Pins{ChainID: 84532, L1ChainID: ethl1.SepoliaChainID, SystemConfig: testSysConfig, BatchInbox: testInbox, SeqWindowSize: 3600, ChannelTimeout: 300,
+	return &Pins{ChainID: 84532, L1ChainID: ethl1.SepoliaChainID, SystemConfig: testSysConfig, BatchInbox: testInbox, SeqWindowSize: 3600, ChannelTimeout: 300, GraniteTime: 1723478400, ChannelTimeoutGranite: 50,
 		MaxRLPBytesPerChannel: 100_000_000, DenimTime: 1792605600, MaxBlobs: 32, L2GenesisTime: 1695768288, L2BlockTime: 2,
 		KZGSetupSHA256:         "f8e44a31ebf0a6d0734dcb301b0716e2c77f3ae18ed0cab0870fbcc2ca55616f",
 		SystemConfigImplHashes: map[[32]byte]bool{[32]byte(testImplCode): true}}

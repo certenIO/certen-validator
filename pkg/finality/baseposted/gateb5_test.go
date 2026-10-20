@@ -21,7 +21,7 @@ type postedWire struct {
 func loadPostedWire(t *testing.T) postedWire {
 	t.Helper()
 	set := filepath.Join("testdata", SetName)
-	pinsRaw, _ := ReadFile(set, "pins/main.json")
+	pinsRaw, _ := readPublishedPins(set, "pins/main.json")
 	pins, err := finality.ParsePinsOverride(pinsRaw)
 	if err != nil {
 		t.Fatal(err)

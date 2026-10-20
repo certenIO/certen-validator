@@ -122,7 +122,7 @@ func TestEveryVectorVerdictIsTheHandWrittenOneAndEveryStateIsRegistered(t *testi
 		if err := json.Unmarshal(c.Expect, &e); err != nil {
 			t.Fatal(err)
 		}
-		got, err := c.Run(setDir)
+		got, err := c.RunSupplied(setDir, PublishedSetPinSupply)
 		if err != nil {
 			t.Fatalf("%s: %v", id, err)
 		}
@@ -186,7 +186,7 @@ func TestTheRegisteredKindJudgesTheLiveEvidenceThroughTheFramework(t *testing.T)
 	if got := reg.Provers(uint64(Chain)); len(got) != 1 || got[0].(finality.Ceilinged).Ceiling() != finality.LevelL1Posted {
 		t.Fatalf("provers %v", got)
 	}
-	pinsRaw, _ := ReadFile(setDir, "pins/main.json")
+	pinsRaw, _ := readPublishedPins(setDir, "pins/main.json")
 	pins, err := finality.ParsePinsOverride(pinsRaw)
 	if err != nil {
 		t.Fatal(err)
