@@ -149,13 +149,10 @@ func LoadPins(p *finality.Pins) (*Pins, error) {
 		"wallet_execute_transactions_with_gas_refunder": &out.Sel.WalletTxsRef,
 	} {
 		sb, ok := hexN(j.ConfirmPath.Selectors[name], 4)
-		if !ok {
+		if !ok || bytes.Equal(sb, []byte{0, 0, 0, 0}) { // a zero selector is also refused: it is what a call without a selector reads as
 			return nil, PinMismatch("confirm_path.selectors." + name)
 		}
 		copy(dst[:], sb)
-		if *dst == ([4]byte{}) {
-			return nil, PinMismatch("confirm_path.selectors." + name)
-		}
 	}
 	for name, dst := range map[string]*common.Hash{"assertion_confirmed": &out.Topic.Confirmed, "assertion_force_confirmed": &out.Topic.ForceConfirmed} {
 		tb, ok := hexN(j.ConfirmPath.Topics[name], 32)

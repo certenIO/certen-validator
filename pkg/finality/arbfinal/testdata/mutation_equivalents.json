@@ -1,0 +1,106 @@
+[
+ {
+  "file": "confirm.go",
+  "function": "proveLeaf",
+  "operator": "guard_off",
+  "original": "if err := db.Put(crypto.Keccak256(n), n); err != nil",
+  "mutated": "if err := db.Put(crypto.Keccak256(n), n); false",
+  "reason": "memorydb.Put fails only on a closed database; the database is created here and never closed"
+ },
+ {
+  "file": "confirm.go",
+  "function": "proveLeaf",
+  "operator": "guard_off",
+  "original": "if err != nil",
+  "mutated": "if false",
+  "reason": "rlp.EncodeToBytes of a uint64 cannot fail"
+ },
+ {
+  "file": "confirm.go",
+  "function": "proveLeaf",
+  "operator": "guard_off",
+  "original": "if err != nil || v == nil",
+  "mutated": "if false",
+  "reason": "v is nil exactly when VerifyProof failed or proved the key absent; nil then compares unequal to every non-empty carried leaf, and an empty carried leaf cannot decode as a transaction or receipt, which classifyConfirmation refuses as l1_tx_proof_invalid anyway: the verdict is identical"
+ },
+ {
+  "file": "confirm.go",
+  "function": "proveLeaf",
+  "operator": "logic_swap",
+  "original": "err != nil || v == nil",
+  "mutated": "err != nil && v == nil",
+  "reason": "v is nil exactly when VerifyProof failed or proved the key absent; nil then compares unequal to every non-empty carried leaf, and an empty carried leaf cannot decode as a transaction or receipt, which classifyConfirmation refuses as l1_tx_proof_invalid anyway: the verdict is identical"
+ },
+ {
+  "file": "confirm.go",
+  "function": "mustType",
+  "operator": "guard_off",
+  "original": "if err != nil",
+  "mutated": "if false",
+  "reason": "the argument is a constant ABI type name; abi.NewType cannot fail for it (and the package would panic at start-up in any case)"
+ },
+ {
+  "file": "confirm.go",
+  "function": "decodeWalletCalls",
+  "operator": "cmp_boundary",
+  "original": "len(input) < 4",
+  "mutated": "len(input) <= 4",
+  "reason": "an input of exactly four bytes carries no arguments: Unpack fails and ok is false either way; the shorter inputs and the guard itself are killed by TestDecodeWalletCallsRefusesAnInputShorterThanASelector"
+ },
+ {
+  "file": "confirm.go",
+  "function": "decodeWalletCalls",
+  "operator": "guard_off",
+  "original": "if err != nil",
+  "mutated": "if false",
+  "reason": "after a failed Unpack vals is nil, and Pack(nil...) fails on the argument count, returning ok=false through the canonical re-encode check below"
+ },
+ {
+  "file": "verify.go",
+  "function": "Kind.Verify",
+  "operator": "guard_off",
+  "original": "if !found",
+  "mutated": "if false",
+  "reason": "unreachable: Covers has read and walked every header of the spine and BlockAt has found confBlock on it, so headerNumbered cannot miss"
+ },
+ {
+  "file": "verify.go",
+  "function": "headerNumbered",
+  "operator": "guard_off",
+  "original": "if err != nil",
+  "mutated": "if false",
+  "reason": "unreachable: every spine header was already read positionally by Covers; a header that did not read would only be skipped and then not found"
+ },
+ {
+  "file": "verify.go",
+  "function": "identityAt",
+  "operator": "int_literal",
+  "original": "word[12:]",
+  "mutated": "word[11:]",
+  "reason": "common.BytesToAddress keeps the last 20 bytes of its argument, so word[11:] (21 bytes) yields the same address; the 12 high bytes are judged separately by bytes.Equal(word[:12], zeros)"
+ },
+ {
+  "file": "verify.go",
+  "function": "verifyL2Spine",
+  "operator": "guard_off",
+  "original": "if leg.HeaderRLP != nil && !bytes.Equal(last, leg.HeaderRLP)",
+  "mutated": "if false",
+  "reason": "keccak256(leg.HeaderRLP) = leg.Hash was checked in Verify and the last header of the spine hashes to the same value, so the bytes are equal by collision resistance; the byte comparison restates the spec (O3b) and is unreachable"
+ },
+ {
+  "file": "verify.go",
+  "function": "verifyL2Spine",
+  "operator": "cmp_flip",
+  "original": "leg.HeaderRLP != nil",
+  "mutated": "leg.HeaderRLP == nil",
+  "reason": "keccak256(leg.HeaderRLP) = leg.Hash was checked in Verify and the last header of the spine hashes to the same value, so the bytes are equal by collision resistance; the byte comparison restates the spec (O3b) and is unreachable"
+ },
+ {
+  "file": "verify.go",
+  "function": "verifyL2Spine",
+  "operator": "bool_call",
+  "original": "if leg.HeaderRLP != nil && !bytes.Equal(last, leg.HeaderRLP) { return 0, finality.BlockMismatch(\"spineLastHead…",
+  "mutated": "if leg.HeaderRLP != nil && !true { return 0, finality.BlockMismatch(\"spineLastHead…",
+  "reason": "keccak256(leg.HeaderRLP) = leg.Hash was checked in Verify and the last header of the spine hashes to the same value, so the bytes are equal by collision resistance; the byte comparison restates the spec (O3b) and is unreachable"
+ }
+]

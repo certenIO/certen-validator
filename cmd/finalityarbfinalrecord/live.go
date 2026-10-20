@@ -208,18 +208,10 @@ func liveAttempt(ctx context.Context, attempt int, deadline time.Time, pins *fin
 		writeJSON(out, "measure.json", map[string]any{
 			"evidence_bytes": len(add.Evidence), "wall_seconds_from_first_build_call": buildSecs, "verify_ms": verifyMs,
 			"l2_spine_headers": gap + 1, "state_block": v.Fields["s_number"], "conf_block": v.Fields["k_number"],
-			"verdict": string(finality.NewState("finalized", flat(v.Fields)...).Canonical()), "captured_utc": time.Now().UTC().Format(time.RFC3339),
+			"verdict": string((&finality.StateError{Code: "finalized", Fields: v.Fields}).Canonical()), "captured_utc": time.Now().UTC().Format(time.RFC3339),
 		})
 		logf("DONE: evidence %d bytes, verify %.1f ms", len(add.Evidence), verifyMs)
 		return true, nil
 	}
 	return false, fmt.Errorf("deadline before the evidence could be attested")
-}
-
-func flat(m map[string]any) []any {
-	var kv []any
-	for k, v := range m {
-		kv = append(kv, k, v)
-	}
-	return kv
 }
