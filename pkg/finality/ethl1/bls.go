@@ -16,38 +16,46 @@ const blsDST = "BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_POP_"
 // domainSyncCommittee is DOMAIN_SYNC_COMMITTEE = 0x07000000.
 var domainSyncCommittee = [4]byte{0x07, 0, 0, 0}
 
-// committee is a sync committee with its root and lazily decompressed keys.
+// committee is a sync committee with its root and lazily decompressed keys. Committee keys are authenticated by
+// hash_tree_root against the pin; only the keys of PARTICIPATING seats are ever decoded and validated, exactly as
+// FastAggregateVerify(participant_pubkeys, ...) does in the consensus specification.
 type committee struct {
-	raw  []byte // 24,624 bytes
-	root [32]byte
-	keys []bls12381.G1Affine
-	err  error
-	done bool
+	raw   []byte // 24,624 bytes
+	root  [32]byte
+	keys  []bls12381.G1Affine
+	state []uint8 // 0 undecoded, 1 valid, 2 invalid
+	errs  map[int]error
 }
 
 func newCommittee(raw []byte) *committee {
-	return &committee{raw: raw, root: hashTreeRootSyncCommittee(raw)}
+	return &committee{raw: raw, root: hashTreeRootSyncCommittee(raw), keys: make([]bls12381.G1Affine, SyncCommitteeSize), state: make([]uint8, SyncCommitteeSize)}
 }
 
-// decode decompresses the 512 keys once. G1Affine.SetBytes performs the on-curve and subgroup checks; the identity is
-// refused here. A key the committee holds twice is decoded twice and summed once per set bit.
-func (c *committee) decode() error {
-	if c.done {
-		return c.err
+// key decompresses seat i once. G1Affine.SetBytes performs the on-curve and subgroup checks; the identity is refused here
+// (KeyValidate). A key the committee holds twice is decoded twice and summed once per set bit.
+func (c *committee) key(i int) (*bls12381.G1Affine, error) {
+	switch c.state[i] {
+	case 1:
+		return &c.keys[i], nil
+	case 2:
+		return nil, c.errs[i]
 	}
-	c.done = true
-	c.keys = make([]bls12381.G1Affine, SyncCommitteeSize)
-	for i := 0; i < SyncCommitteeSize; i++ {
-		if _, err := c.keys[i].SetBytes(c.raw[i*48 : i*48+48]); err != nil {
-			c.err = err
-			return err
-		}
-		if c.keys[i].IsInfinity() {
-			c.err = errors.New("identity public key")
-			return c.err
-		}
+	if _, err := c.keys[i].SetBytes(c.raw[i*48 : i*48+48]); err != nil {
+		return c.fail(i, err)
 	}
-	return nil
+	if c.keys[i].IsInfinity() {
+		return c.fail(i, errors.New("identity public key"))
+	}
+	c.state[i] = 1
+	return &c.keys[i], nil
+}
+
+func (c *committee) fail(i int, err error) (*bls12381.G1Affine, error) {
+	if c.errs == nil {
+		c.errs = map[int]error{}
+	}
+	c.state[i], c.errs[i] = 2, err
+	return nil, err
 }
 
 // computeDomain is compute_domain(DOMAIN_SYNC_COMMITTEE, fork_version, genesis_validators_root).
@@ -76,17 +84,18 @@ func fastAggregateVerify(c *committee, agg syncAggregate, msg [32]byte) error {
 	if sig.IsInfinity() {
 		return errors.New("identity signature")
 	}
-	if err := c.decode(); err != nil {
-		return err
-	}
 	var sum bls12381.G1Jac
 	n := 0
 	for i := 0; i < SyncCommitteeSize; i++ {
 		if !agg.bit(i) {
 			continue
 		}
+		k, err := c.key(i)
+		if err != nil {
+			return err
+		}
 		var j bls12381.G1Jac
-		j.FromAffine(&c.keys[i])
+		j.FromAffine(k)
 		sum.AddAssign(&j)
 		n++
 	}

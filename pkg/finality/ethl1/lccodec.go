@@ -33,8 +33,9 @@ func EncodeLC(lc LC) []byte {
 }
 
 // DecodeLC is the strict inverse of EncodeLC: no trailing byte, every length within the buffer, the link count bounded by
-// maxLinks before anything is allocated, and encode(decode(x)) == x. It returns the number of bytes consumed through the
-// *Fault of the same name as the evidence-malformed state when the container is not well formed.
+// maxLinks before anything is allocated, and encode(decode(x)) == x. A container that is not well formed is returned as a
+// *Fault (finality_evidence_malformed, or finality_evidence_too_large for a link count over maxLinks); the pins carry the bound
+// (Pins.MaxLinks, see Pins.DecodeLC).
 func DecodeLC(b []byte, maxLinks int) (LC, error) {
 	var lc LC
 	pos := 0

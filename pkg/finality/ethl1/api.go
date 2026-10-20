@@ -2,15 +2,18 @@
 
 package ethl1
 
-import "fmt"
-
-// HashTreeRootSyncCommittee is hash_tree_root(SyncCommittee) of its 24,624-byte SSZ encoding.
-func HashTreeRootSyncCommittee(b []byte) [32]byte {
+// HashTreeRootSyncCommittee is hash_tree_root(SyncCommittee) of its 24,624-byte SSZ encoding. Any other length is a
+// finality_evidence_malformed fault; the function never panics.
+func HashTreeRootSyncCommittee(b []byte) ([32]byte, error) {
 	if len(b) != SyncCommitteeBytes {
-		panic(fmt.Sprintf("ethl1: SyncCommittee is %d bytes, got %d", SyncCommitteeBytes, len(b)))
+		return [32]byte{}, EvidenceMalformed("sync_committee", 0, "length", len(b), SyncCommitteeBytes)
 	}
-	return hashTreeRootSyncCommittee(b)
+	return hashTreeRootSyncCommittee(b), nil
 }
+
+// DecodeLC decodes the LC part of an evidence container under the link bound of these pins (Pins.MaxLinks), so a caller cannot
+// decode with a bound other than the one VerifyFinalizedHead enforces.
+func (p Pins) DecodeLC(b []byte) (LC, error) { return DecodeLC(b, p.MaxLinks) }
 
 // HashTreeRootBeaconBlockHeader is hash_tree_root(BeaconBlockHeader) of its 112-byte SSZ encoding.
 func HashTreeRootBeaconBlockHeader(b []byte) ([32]byte, error) {

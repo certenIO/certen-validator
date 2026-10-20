@@ -2,26 +2,46 @@
 
 package ethl1
 
-import (
-	"encoding/binary"
+// rules is the seam through which the mutation tests turn ONE check of the verifier off (or move the signing-domain epoch)
+// and require the vector that exists for that check to change verdict. The only implementation in this package is specRules,
+// which skips nothing and implements the specification; the wrong variants live in the test files and nowhere else.
+type rules interface {
+	skip(check string) bool
+	// domainEpoch is the epoch whose fork version signs an update: epoch(saturating_sub(signature_slot, 1)).
+	domainEpoch(attestedSlot, signatureSlot uint64) uint64
+}
+
+// Names of the checks a mutation test may switch off.
+const (
+	chkFloor                 = "participation_floor"
+	chkFinalityBranch        = "finality_branch"
+	chkNextBranch            = "next_committee_branch"
+	chkNextMismatch          = "next_committee_mismatch"
+	chkPeriodRuleNextKnown   = "period_rule_next_known"
+	chkPeriodRuleNextUnknown = "period_rule_next_unknown"
+	chkLedgerFirstLearn      = "ledger_first_learn"
+	chkLedgerRotation        = "ledger_rotation"
+	chkLedgerFinalSigner     = "ledger_final_signer"
+	chkWindow                = "window"
+	chkFinalNotFinality      = "final_not_finality"
+	chkExecBranch            = "exec_branch"
 )
 
-// quirks are deliberately wrong variants of the verifier. The exported API never sets them; the mutation tests set one
-// at a time and require the matching adversarial vector to change verdict, which proves the vector exercises the rule.
-type quirks struct {
-	dropFloor           bool // accept any update with at least one participant (the Altair validate-only rule)
-	attestedEpochDomain bool // take the signing-domain fork version from the attested header's epoch (go-ethereum beacon/light)
-	skipLedgerLearned   bool // do not hold learned and final-signing committees to their ledger entries
-	skipWindow          bool // do not apply the weak-subjectivity window rule
-	skipFinalityBranch  bool
-	skipNextBranch      bool
+type specRules struct{}
+
+func (specRules) skip(string) bool { return false }
+func (specRules) domainEpoch(_, signatureSlot uint64) uint64 {
+	if signatureSlot == 0 {
+		return 0
+	}
+	return epochOf(signatureSlot - 1)
 }
 
 // VerifyFinalizedHead is spec section 5.2 steps 1-4: it establishes, from the pins and the LC part alone, a finalized
 // beacon head and its finalized execution block hash. It returns a *Fault for every other outcome and never a weaker
 // answer. current_slot is each update's own signature_slot; process_light_client_store_force_update is never called.
 func VerifyFinalizedHead(p Pins, lc LC) (FinalizedHead, error) {
-	h, f := verifyFinalizedHead(p, lc, quirks{})
+	h, f := verifyFinalizedHead(p, lc, specRules{})
 	if f != nil {
 		return FinalizedHead{}, f
 	}
@@ -36,14 +56,6 @@ func CheckNetwork(p Pins, chainID uint64) error {
 	return nil
 }
 
-// Electra-layout minimum sizes by SSZ arithmetic (spec section 3.2 e): every Electra blob is longer than its Gloas twin.
-const (
-	electraMinUpdate          = 26872
-	electraMinBootstrap       = 25648
-	electraMinFinalityUpdate  = 2056
-	electraFirstOffsetMinimum = 4
-)
-
 type walkStore struct {
 	finSlot   uint64
 	cur       *committee
@@ -53,14 +65,17 @@ type walkStore struct {
 
 type walker struct {
 	p Pins
-	q quirks
+	r rules
 	s walkStore
 
 	anchor Anchor
 	gvr    [32]byte
 }
 
-func verifyFinalizedHead(p Pins, lc LC, q quirks) (FinalizedHead, *Fault) {
+func verifyFinalizedHead(p Pins, lc LC, r rules) (FinalizedHead, *Fault) {
+	if err := CheckNetwork(p, SepoliaChainID); err != nil {
+		return FinalizedHead{}, err.(*Fault)
+	}
 	// Step 1: profile, bounds, shapes, forks.
 	if lc.Profile != ProfileLC {
 		return FinalizedHead{}, EvidenceMalformed("profile", 0, "unsupported_profile", len(lc.Profile), len(ProfileLC))
@@ -71,7 +86,7 @@ func verifyFinalizedHead(p Pins, lc LC, q quirks) (FinalizedHead, *Fault) {
 	if lc.AnchorKind != 1 && lc.AnchorKind != 2 {
 		return FinalizedHead{}, EvidenceMalformed("anchor_kind", 0, "unknown_kind", int(lc.AnchorKind), 2)
 	}
-	w := &walker{p: p, q: q, gvr: p.Network.GenesisValidatorsRoot}
+	w := &walker{p: p, r: r, gvr: p.Network.GenesisValidatorsRoot}
 
 	var boot *bootstrapObj
 	var committeeRaw []byte
@@ -84,30 +99,31 @@ func verifyFinalizedHead(p Pins, lc LC, q quirks) (FinalizedHead, *Fault) {
 		}
 		committeeRaw = lc.AnchorBody.SSZ
 	} else {
-		if f := w.checkLayout("anchor_body", 0, lc.AnchorBody, LightClientBootstrapSize, electraMinBootstrap); f != nil {
+		bo, f := w.parseBootstrap(lc.AnchorBody)
+		if f != nil {
 			return FinalizedHead{}, f
 		}
-		b := decodeBootstrap(lc.AnchorBody.SSZ)
-		if f := w.checkForkOfSlot(b.Header.Beacon.Slot, LayoutGloas); f != nil {
+		if f := w.checkForkOfSlot(bo.Header.Beacon.Slot, bo.Shape); f != nil {
 			return FinalizedHead{}, f
 		}
-		boot = &b
+		boot = &bo
 	}
 	links := make([]updateObj, len(lc.Links))
 	for i, lb := range lc.Links {
-		if f := w.checkLayout("link", i, lb, LightClientUpdateSize, electraMinUpdate); f != nil {
+		u, f := w.parseUpdate(i, lb)
+		if f != nil {
 			return FinalizedHead{}, f
 		}
-		links[i] = decodeUpdate(lb.SSZ)
-		if f := w.checkForkOfSlot(links[i].Attested.Beacon.Slot, LayoutGloas); f != nil {
+		if f := w.checkForkOfSlot(u.Attested.Beacon.Slot, u.Shape); f != nil {
 			return FinalizedHead{}, f
 		}
+		links[i] = u
 	}
-	if f := w.checkLayout("final_update", 0, lc.FinalUpdate, LightClientFinalityUpdateSize, electraMinFinalityUpdate); f != nil {
+	final, f := w.parseFinalityUpdate(lc.FinalUpdate)
+	if f != nil {
 		return FinalizedHead{}, f
 	}
-	final := decodeFinalityUpdate(lc.FinalUpdate.SSZ)
-	if f := w.checkForkOfSlot(final.Attested.Beacon.Slot, LayoutGloas); f != nil {
+	if f := w.checkForkOfSlot(final.Attested.Beacon.Slot, final.Shape); f != nil {
 		return FinalizedHead{}, f
 	}
 
@@ -149,7 +165,7 @@ func verifyFinalizedHead(p Pins, lc LC, q quirks) (FinalizedHead, *Fault) {
 			return FinalizedHead{}, PinMismatch(lc.AnchorPeriod, *a.BlockRoot, root)
 		}
 		c := newCommittee(boot.Committee)
-		if !IsValidNormalizedMerkleBranch(c.root, boot.CommitteeBranch, gindexCurrentCommitteeGlo, boot.Header.Beacon.StateRoot) {
+		if !IsValidNormalizedMerkleBranch(c.root, boot.CommitteeBranch, gindicesOf(boot.Shape).current, boot.Header.Beacon.StateRoot) {
 			return FinalizedHead{}, BootstrapInvalid("committee_branch", slot)
 		}
 		if c.root != a.CommitteeRoot {
@@ -180,30 +196,56 @@ func verifyFinalizedHead(p Pins, lc LC, q quirks) (FinalizedHead, *Fault) {
 	}, nil
 }
 
-// checkLayout validates the layout byte and the blob length. A Gloas blob must have exactly want bytes. An Electra blob is
-// recognised (its minimum size and first offset are checked, its attested slot read) and refused as finality_fork_unsupported
-// until the electra layout is implemented; that is a named state with the spec's field list, not a skipped check.
-func (w *walker) checkLayout(part string, index int, lb LB, want, electraMin int) *Fault {
+// layoutLength validates the layout byte of a carried object and, for the fixed-size Gloas layout, its exact length; the
+// electra layout is variable-size and is checked by its decoder (minimum size, offsets). A wrong layout byte cannot select a
+// different parse that succeeds: every electra blob is longer than its Gloas twin (spec 3.2 e).
+func layoutByte(part string, index int, lb LB) *Fault {
 	switch lb.Layout {
-	case LayoutGloas:
-		if len(lb.SSZ) != want {
-			return EvidenceMalformed(part, index, "length", len(lb.SSZ), want)
-		}
+	case LayoutGloas, LayoutElectra:
 		return nil
-	case LayoutElectra:
-		if len(lb.SSZ) < electraMin {
-			return EvidenceMalformed(part, index, "length", len(lb.SSZ), electraMin)
-		}
-		off := int(binary.LittleEndian.Uint32(lb.SSZ[0:4]))
-		if off < electraFirstOffsetMinimum || off+8 > len(lb.SSZ) {
-			return EvidenceMalformed(part, index, "offset", off, len(lb.SSZ))
-		}
-		slot := binary.LittleEndian.Uint64(lb.SSZ[off : off+8])
-		return ForkUnsupported(slot, epochOf(slot), LayoutElectra.String())
 	case LayoutNone:
 		return EvidenceMalformed(part, index, "layout_byte_zero", 0, 1)
 	}
 	return EvidenceMalformed(part, index, "layout_byte_unknown", int(lb.Layout), 2)
+}
+
+func (w *walker) parseBootstrap(lb LB) (bootstrapObj, *Fault) {
+	if f := layoutByte("anchor_body", 0, lb); f != nil {
+		return bootstrapObj{}, f
+	}
+	if lb.Layout == LayoutElectra {
+		return decodeElectraBootstrap(lb.SSZ)
+	}
+	if len(lb.SSZ) != LightClientBootstrapSize {
+		return bootstrapObj{}, EvidenceMalformed("anchor_body", 0, "length", len(lb.SSZ), LightClientBootstrapSize)
+	}
+	return decodeBootstrap(lb.SSZ), nil
+}
+
+func (w *walker) parseUpdate(index int, lb LB) (updateObj, *Fault) {
+	if f := layoutByte("link", index, lb); f != nil {
+		return updateObj{}, f
+	}
+	if lb.Layout == LayoutElectra {
+		return decodeElectraUpdate(lb.SSZ, index)
+	}
+	if len(lb.SSZ) != LightClientUpdateSize {
+		return updateObj{}, EvidenceMalformed("link", index, "length", len(lb.SSZ), LightClientUpdateSize)
+	}
+	return decodeUpdate(lb.SSZ), nil
+}
+
+func (w *walker) parseFinalityUpdate(lb LB) (updateObj, *Fault) {
+	if f := layoutByte("final_update", 0, lb); f != nil {
+		return updateObj{}, f
+	}
+	if lb.Layout == LayoutElectra {
+		return decodeElectraFinalityUpdate(lb.SSZ)
+	}
+	if len(lb.SSZ) != LightClientFinalityUpdateSize {
+		return updateObj{}, EvidenceMalformed("final_update", 0, "length", len(lb.SSZ), LightClientFinalityUpdateSize)
+	}
+	return decodeFinalityUpdate(lb.SSZ), nil
 }
 
 // checkForkOfSlot requires the fork at the slot's epoch to carry the layout the object was parsed by (spec 3.2 b).
@@ -215,14 +257,23 @@ func (w *walker) checkForkOfSlot(slot uint64, layout Layout) *Fault {
 	return nil
 }
 
-// headerValid is is_valid_light_client_header for a Gloas-shaped header, keyed on the fork of the header's own slot: the
-// Gloas gindex 2856 from the Gloas fork, and the Deneb gindex 812 (over a zero-extended branch, as upgrade_lc_header_to_gloas
-// builds it) for an Electra or Fulu header. A fork with no layout has no rule here and is finality_fork_unsupported.
+// headerValid is is_valid_light_client_header keyed on the fork of the header's OWN slot (spec 3.2 c). An electra-shaped
+// header is hashed as ExecutionPayloadHeader and its 4-node branch is checked at gindex 25 of the body, valid only in a fork of
+// the electra layout. A Gloas-shaped header is checked at gindex 2856 from the Gloas fork on, and at the Deneb gindex 812 over a
+// zero-extended branch (as upgrade_lc_header_to_gloas builds it) for an Electra or Fulu header carried forward. A fork with no
+// layout, and any shape/fork combination the specification has no rule for, is finality_fork_unsupported.
 func (w *walker) headerValid(h lcHeader) (bool, *Fault) {
 	slot := h.Beacon.Slot
 	f, ok := w.p.Network.forkAt(epochOf(slot))
 	if !ok {
-		return false, ForkUnsupported(slot, epochOf(slot), LayoutGloas.String())
+		return false, ForkUnsupported(slot, epochOf(slot), h.Shape.String())
+	}
+	if h.Shape == LayoutElectra {
+		if f.Layout != LayoutElectra {
+			return false, ForkUnsupported(slot, epochOf(slot), h.Shape.String())
+		}
+		depth := floorLog2(gindexExecPayloadInBody)
+		return isValidMerkleBranch(executionHeaderRoot(h.Exec), h.Branch, depth, gindexExecPayloadInBody%(uint64(1)<<uint(depth)), h.Beacon.BodyRoot), nil
 	}
 	var g uint64
 	switch f.Layout {
@@ -231,7 +282,7 @@ func (w *walker) headerValid(h lcHeader) (bool, *Fault) {
 	case LayoutElectra:
 		g = gindexExecHashDeneb
 	default:
-		return false, ForkUnsupported(slot, epochOf(slot), LayoutGloas.String())
+		return false, ForkUnsupported(slot, epochOf(slot), h.Shape.String())
 	}
 	return IsValidNormalizedMerkleBranch(h.ExecHash, h.Branch, g, h.Beacon.BodyRoot), nil
 }
@@ -250,34 +301,33 @@ func (w *walker) update(idx int, u *updateObj, isFinal bool) *Fault {
 	as, fs, ss := u.Attested.Beacon.Slot, u.Finalized.Beacon.Slot, u.SignatureSlot
 	sigPeriod := periodOf(ss)
 	li := func(check string) *Fault { return LinkInvalid(idx, check, as, ss, sigPeriod) }
+	gi := gindicesOf(u.Shape)
 
 	// participation: 3n >= 2*512 (342) on every update, the final one included.
 	n := u.Aggregate.count()
-	if w.q.dropFloor {
-		if n < 1 {
-			return ParticipationInsufficient(idx, n, 1, SyncCommitteeSize)
-		}
-	} else if n*3 < SyncCommitteeSize*2 || n < w.p.MinParticipants {
+	if !w.r.skip(chkFloor) && (n*3 < SyncCommitteeSize*2 || n < w.p.MinParticipants) {
 		return ParticipationInsufficient(idx, n, MinParticipantsFloor, SyncCommitteeSize)
 	}
 
-	if ok, f := w.headerValid(u.Attested); f != nil {
-		return f
-	} else if !ok {
-		return li("attested_header_exec_branch")
+	if !w.r.skip(chkExecBranch) {
+		if ok, f := w.headerValid(u.Attested); f != nil {
+			return f
+		} else if !ok {
+			return li("attested_header_exec_branch")
+		}
 	}
 	if !(ss > as && as >= fs) { // current_slot >= signature_slot holds by construction (current_slot := signature_slot)
 		return li("slot_order")
 	}
 	storePeriod := periodOf(w.s.finSlot)
 	if w.s.next != nil {
-		if sigPeriod != storePeriod && sigPeriod != storePeriod+1 {
+		if !w.r.skip(chkPeriodRuleNextKnown) && sigPeriod != storePeriod && sigPeriod != storePeriod+1 {
 			if isFinal {
 				return PeriodGap(sigPeriod, storePeriod)
 			}
 			return li("period_skip")
 		}
-	} else if sigPeriod != storePeriod {
+	} else if !w.r.skip(chkPeriodRuleNextUnknown) && sigPeriod != storePeriod {
 		if isFinal {
 			return PeriodGap(sigPeriod, storePeriod)
 		}
@@ -294,20 +344,27 @@ func (w *walker) update(idx int, u *updateObj, isFinal bool) *Fault {
 	if branchAllZero(u.FinalityBranch) {
 		return li("not_finality")
 	}
+	// A final update must establish a finalized execution head: a finalized slot of 0 (the empty finalized header, whose zero
+	// root a zero branch of the right shape can prove) establishes none, and is refused explicitly.
+	if isFinal && fs == 0 && !w.r.skip(chkFinalNotFinality) {
+		return li("not_finality")
+	}
 	var finalizedRoot [32]byte
 	if fs == 0 {
 		if !u.Finalized.isEmpty() {
 			return li("finality_branch")
 		}
 	} else {
-		if ok, f := w.headerValid(u.Finalized); f != nil {
-			return f
-		} else if !ok {
-			return li("finalized_header_exec_branch")
+		if !w.r.skip(chkExecBranch) {
+			if ok, f := w.headerValid(u.Finalized); f != nil {
+				return f
+			} else if !ok {
+				return li("finalized_header_exec_branch")
+			}
 		}
 		finalizedRoot = hashTreeRootBeaconHeader(u.Finalized.Beacon)
 	}
-	if !w.q.skipFinalityBranch && !IsValidNormalizedMerkleBranch(finalizedRoot, u.FinalityBranch, gindexFinalizedRootGloas, u.Attested.Beacon.StateRoot) {
+	if !w.r.skip(chkFinalityBranch) && !IsValidNormalizedMerkleBranch(finalizedRoot, u.FinalityBranch, gi.finalized, u.Attested.Beacon.StateRoot) {
 		return li("finality_branch")
 	}
 
@@ -318,10 +375,10 @@ func (w *walker) update(idx int, u *updateObj, isFinal bool) *Fault {
 			return li("not_sync_committee_update")
 		}
 		learned = newCommittee(u.NextCommittee)
-		if attestedPeriod == storePeriod && w.s.next != nil && w.s.next.root != learned.root {
+		if !w.r.skip(chkNextMismatch) && attestedPeriod == storePeriod && w.s.next != nil && w.s.next.root != learned.root {
 			return li("next_committee_mismatch")
 		}
-		if !w.q.skipNextBranch && !IsValidNormalizedMerkleBranch(learned.root, u.NextBranch, gindexNextCommitteeGloas, u.Attested.Beacon.StateRoot) {
+		if !w.r.skip(chkNextBranch) && !IsValidNormalizedMerkleBranch(learned.root, u.NextBranch, gi.next, u.Attested.Beacon.StateRoot) {
 			return li("next_committee_branch")
 		}
 	}
@@ -331,41 +388,29 @@ func (w *walker) update(idx int, u *updateObj, isFinal bool) *Fault {
 	if sigPeriod != storePeriod {
 		signing = w.s.next
 	}
-	if isFinal && !w.q.skipLedgerLearned {
+	if isFinal && !w.r.skip(chkLedgerFinalSigner) {
 		if f := w.enforce(sigPeriod, signing.root); f != nil {
 			return f
 		}
 	}
-	var version [4]byte
-	var versionEpoch uint64
-	if w.q.attestedEpochDomain {
-		versionEpoch = epochOf(as)
-	} else {
-		var base uint64
-		if ss > 0 {
-			base = ss - 1
-		}
-		versionEpoch = epochOf(base)
-	}
-	fk, ok := w.p.Network.forkAt(versionEpoch)
+	fk, ok := w.p.Network.forkAt(w.r.domainEpoch(as, ss))
 	if !ok {
-		return ForkUnsupported(ss, epochOf(ss), LayoutGloas.String())
+		return ForkUnsupported(ss, epochOf(ss), u.Shape.String())
 	}
-	version = fk.Version
+	version := fk.Version
 	domain := computeDomain(version, w.gvr)
 	msg := signingRoot(hashTreeRootBeaconHeader(u.Attested.Beacon), domain)
 	if err := fastAggregateVerify(signing, u.Aggregate, msg); err != nil {
 		return SignatureInvalid(idx, ss, version, n)
 	}
 
-	// weak-subjectivity window (spec 5.2 step 3): the finalized epoch of this update may lie at most wsp_epochs past the epoch
-	// 256*period at which the signing committee's period (its ledger label, "period labels") begins; for the anchor that is the
+	// weak-subjectivity window (spec 5.2 step 3, r2 F10): the finalized epoch of this update may lie at most wsp_epochs past
+	// the epoch 256*period at which the signing committee's period (its ledger label) begins; for the anchor that is the
 	// "previous epoch = 256*period" of step 2. Measured on the live chain: the finalized epochs of consecutive best updates
-	// are up to 338 and 402 epochs apart (periods 1388-1389 and 1389-final), so a step-to-step reading of the rule refuses
-	// genuine chains; see the RB11-C1A check-in (FINDING: window rule reading).
+	// are up to 338 and 402 epochs apart, so a step-to-step reading refuses genuine chains (RB11-C1A finding F1).
 	prevEpoch := EpochsPerPeriod * sigPeriod
 	newEpoch := epochOf(fs)
-	if !w.q.skipWindow && newEpoch > prevEpoch && newEpoch-prevEpoch > w.anchor.WSPEpochs {
+	if !w.r.skip(chkWindow) && newEpoch > prevEpoch && newEpoch-prevEpoch > w.anchor.WSPEpochs {
 		return PinWindow(prevEpoch, newEpoch, w.anchor.WSPEpochs)
 	}
 	if isFinal {
@@ -382,14 +427,14 @@ func (w *walker) update(idx int, u *updateObj, isFinal bool) *Fault {
 		if finalizedPeriod != storePeriod {
 			return li("finalized_period")
 		}
-		if !w.q.skipLedgerLearned {
+		if !w.r.skip(chkLedgerFirstLearn) {
 			if f := w.enforce(attestedPeriod+1, learned.root); f != nil {
 				return f
 			}
 		}
 		w.s.next = learned
 	} else if finalizedPeriod == storePeriod+1 {
-		if !w.q.skipLedgerLearned {
+		if !w.r.skip(chkLedgerRotation) {
 			if f := w.enforce(attestedPeriod+1, learned.root); f != nil {
 				return f
 			}

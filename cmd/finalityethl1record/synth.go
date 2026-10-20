@@ -165,7 +165,7 @@ func (k synthKeys) final(s synthSpec) []byte {
 func (g *gen) synthetic() {
 	k := newSynthKeys()
 	committee := k.committee512()
-	root := ethl1.HashTreeRootSyncCommittee(committee)
+	root := sszCommitteeRoot(committee)
 	gvr := sum("synthetic-gvr")
 	gvrHex := hx(gvr[:])
 	rootHex := hx(root[:])

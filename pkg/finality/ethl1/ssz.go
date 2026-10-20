@@ -136,11 +136,15 @@ func IsValidNormalizedMerkleBranch(leaf [32]byte, branch [][32]byte, gindex uint
 	return isValidMerkleBranch(leaf, branch[numExtra:], depth, index, root)
 }
 
-// lcHeader is a decoded Gloas-layout LightClientHeader.
+// lcHeader is a decoded LightClientHeader of either layout. Shape is the layout it was parsed by. For the Gloas shape
+// ExecHash is the execution_block_hash field and Branch has 11 nodes; for the Electra shape ExecHash is
+// execution.block_hash, Exec holds the whole SSZ ExecutionPayloadHeader (584 fixed bytes then extra_data) and Branch has 4.
 type lcHeader struct {
+	Shape    Layout
 	Beacon   beaconHeader
 	ExecHash [32]byte
 	Branch   [][32]byte
+	Exec     []byte
 }
 
 func decodeBranch(b []byte, n int) [][32]byte {
@@ -153,6 +157,7 @@ func decodeBranch(b []byte, n int) [][32]byte {
 
 func decodeLCHeader(b []byte) lcHeader {
 	var h lcHeader
+	h.Shape = LayoutGloas
 	h.Beacon = decodeBeaconHeader(b[:BeaconBlockHeaderSize])
 	copy(h.ExecHash[:], b[BeaconBlockHeaderSize:BeaconBlockHeaderSize+32])
 	h.Branch = decodeBranch(b[BeaconBlockHeaderSize+32:LightClientHeaderSize], GloasExecutionBranchLen)
@@ -168,6 +173,9 @@ func (h lcHeader) isEmpty() bool {
 		if n != zero {
 			return false
 		}
+	}
+	if h.Shape == LayoutElectra && (len(h.Exec) != electraExecFixed || !allZero(h.Exec)) {
+		return false
 	}
 	return true
 }
@@ -197,6 +205,7 @@ func (s syncAggregate) bit(i int) bool { return s.Bits[i/8]>>(uint(i)%8)&1 == 1 
 
 // bootstrapObj is a decoded Gloas LightClientBootstrap.
 type bootstrapObj struct {
+	Shape           Layout
 	Header          lcHeader
 	Committee       []byte // 24,624 bytes, aliasing the input
 	CommitteeBranch [][32]byte
@@ -204,6 +213,7 @@ type bootstrapObj struct {
 
 func decodeBootstrap(b []byte) bootstrapObj {
 	var o bootstrapObj
+	o.Shape = LayoutGloas
 	o.Header = decodeLCHeader(b[:LightClientHeaderSize])
 	o.Committee = b[LightClientHeaderSize : LightClientHeaderSize+SyncCommitteeBytes]
 	o.CommitteeBranch = decodeBranch(b[LightClientHeaderSize+SyncCommitteeBytes:], gloasCommitteeBranchLen)
@@ -212,6 +222,7 @@ func decodeBootstrap(b []byte) bootstrapObj {
 
 // updateObj is a decoded Gloas LightClientUpdate or LightClientFinalityUpdate (no next committee).
 type updateObj struct {
+	Shape            Layout
 	Attested         lcHeader
 	NextCommittee    []byte // nil for a finality update
 	NextBranch       [][32]byte
@@ -224,6 +235,7 @@ type updateObj struct {
 
 func decodeUpdate(b []byte) updateObj {
 	var u updateObj
+	u.Shape = LayoutGloas
 	o := 0
 	u.Attested = decodeLCHeader(b[o : o+LightClientHeaderSize])
 	o += LightClientHeaderSize
@@ -244,6 +256,7 @@ func decodeUpdate(b []byte) updateObj {
 
 func decodeFinalityUpdate(b []byte) updateObj {
 	var u updateObj
+	u.Shape = LayoutGloas
 	o := 0
 	u.Attested = decodeLCHeader(b[o : o+LightClientHeaderSize])
 	o += LightClientHeaderSize

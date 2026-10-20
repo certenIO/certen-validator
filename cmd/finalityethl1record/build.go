@@ -691,7 +691,13 @@ func (g *gen) flush() error {
 
 // ---- small RLP and SSZ helpers (generator side)
 
-func sszCommitteeRoot(b []byte) [32]byte { return ethl1.HashTreeRootSyncCommittee(b) }
+func sszCommitteeRoot(b []byte) [32]byte {
+	r, err := ethl1.HashTreeRootSyncCommittee(b)
+	if err != nil {
+		panic(err)
+	}
+	return r
+}
 
 func keccakB(b []byte) [32]byte { var out [32]byte; copy(out[:], keccak(b)); return out }
 
