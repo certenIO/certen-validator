@@ -6,10 +6,10 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
-	"io"
 
-	"github.com/andybalholm/brotli"
 	"github.com/ethereum/go-ethereum/rlp"
+
+	"github.com/certen/independant-validator/pkg/finality/strictbrotli"
 )
 
 // This file is the Nitro batch payload decoder the verifier replays (annex A6.3 steps 4-6): blobs -> RLP payload -> brotli ->
@@ -89,17 +89,10 @@ func decodeBlobs(blobs [][]byte) ([]byte, error) {
 	return payload, nil
 }
 
-// uncompress is brotli decompression capped at max bytes: it reports exceeded when the stream would produce more.
+// uncompress is brotli decompression capped at max bytes: it reports exceeded when the stream would produce more. A stream that is
+// incomplete, empty or followed by extra bytes is an error (package strictbrotli: the library alone would return a prefix).
 func uncompress(in []byte, max int) (out []byte, exceeded bool, err error) {
-	rd := brotli.NewReader(bytes.NewReader(in))
-	out, err = io.ReadAll(io.LimitReader(rd, int64(max)+1))
-	if err != nil {
-		return nil, false, err
-	}
-	if len(out) > max {
-		return nil, true, nil
-	}
-	return out, false, nil
+	return strictbrotli.Decompress(in, max)
 }
 
 // segment is one decoded batch segment.
