@@ -361,3 +361,24 @@ func (l *L2JSONRPC) Block(ctx context.Context, number uint64) (L2BlockData, erro
 	}
 	return out, nil
 }
+
+// HeaderByNumber reads one block header of the chain the BlockURLs serve (the L2 for a Base provider), re-encoded positionally.
+func (s *JSONRPCSource) HeaderByNumber(ctx context.Context, number uint64) (raw []byte, hash [32]byte, ts uint64, err error) {
+	r, err := s.first(ctx, s.BlockURLs, "eth_getBlockByNumber", fmt.Sprintf("0x%x", number), false)
+	if err != nil {
+		return nil, hash, 0, err
+	}
+	var m map[string]any
+	if err := json.Unmarshal(r, &m); err != nil {
+		return nil, hash, 0, err
+	}
+	raw, err = headerFromBlock(m)
+	if err != nil {
+		return nil, hash, 0, err
+	}
+	hash = [32]byte(crypto.Keccak256Hash(raw))
+	if want, _ := m["hash"].(string); "0x"+hex.EncodeToString(hash[:]) != strings.ToLower(want) {
+		return nil, hash, 0, fmt.Errorf("block %d: the re-encoded header does not hash to the provider's block hash", number)
+	}
+	return raw, hash, bigOf(m["timestamp"].(string)).Uint64(), nil
+}

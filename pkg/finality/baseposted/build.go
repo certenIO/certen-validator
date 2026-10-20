@@ -367,3 +367,78 @@ func (v *txView) parse(raw []byte) error {
 	v.data = t.Data()
 	return nil
 }
+
+// ChannelInfo describes one complete channel found in the captured frames: its id, the L1 blocks that carry its frames and the
+// timestamps of the L2 blocks its batches cover.
+type ChannelInfo struct {
+	ID         [16]byte
+	L1Blocks   []uint64
+	Timestamps []uint64
+}
+
+// Channels lists the complete channels in the capture store, in capture order.
+func (b *Builder) Channels(ctx context.Context) ([]ChannelInfo, error) {
+	bp, err := ParsePins(b.Pins)
+	if err != nil {
+		return nil, err
+	}
+	txs, err := b.load(ctx, bp)
+	if err != nil {
+		return nil, err
+	}
+	byCh := map[[16]byte][]capturedTx{}
+	var order [][16]byte
+	for _, t := range txs {
+		seen := map[[16]byte]bool{}
+		for _, f := range t.frames {
+			if !seen[f.ID] {
+				seen[f.ID] = true
+				if _, ok := byCh[f.ID]; !ok {
+					order = append(order, f.ID)
+				}
+				byCh[f.ID] = append(byCh[f.ID], t)
+			}
+		}
+	}
+	var out []ChannelInfo
+	for _, id := range order {
+		var stream []byte
+		ok := true
+		n := 0
+		for _, t := range byCh[id] {
+			for _, f := range t.frames {
+				if f.ID != id {
+					continue
+				}
+				if uint64(f.Number) != uint64(n) {
+					ok = false
+				}
+				n++
+				stream = append(stream, f.Data...)
+				if f.IsLast {
+					n = -1 << 30
+				}
+			}
+		}
+		if !ok || n >= 0 {
+			continue
+		}
+		raw, err := decompress(stream, bp.MaxRLPBytesPerChannel)
+		if err != nil {
+			continue
+		}
+		batches, err := decodeBatches(raw, spanParams{GenesisTime: bp.L2GenesisTime, BlockTime: bp.L2BlockTime, ChainID: bp.ChainID})
+		if err != nil {
+			continue
+		}
+		ci := ChannelInfo{ID: id}
+		for _, t := range byCh[id] {
+			ci.L1Blocks = append(ci.L1Blocks, t.key.L1Block)
+		}
+		for _, bt := range batches {
+			ci.Timestamps = append(ci.Timestamps, bt.Timestamp)
+		}
+		out = append(out, ci)
+	}
+	return out, nil
+}

@@ -178,3 +178,12 @@ func stateOf(err error) error {
 	}
 	return err
 }
+
+// EthL1Pins is the L1 head verifier's view of the framework pins (used by the vector generator).
+func EthL1Pins(p *finality.Pins) ethl1.Pins {
+	e, err := p.Sepolia()
+	if err != nil {
+		return ethl1.Pins{}
+	}
+	return ethl1Pins(e)
+}

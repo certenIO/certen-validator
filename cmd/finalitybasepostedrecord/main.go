@@ -35,6 +35,16 @@ func main() {
 			fmt.Fprintln(os.Stderr, "watch:", err)
 			os.Exit(1)
 		}
+	case "build":
+		fs := flag.NewFlagSet("build", flag.ExitOnError)
+		capDir := fs.String("cap", "", "capture directory")
+		raw := fs.String("raw", "", "finalityethl1record raw directory")
+		out := fs.String("out", "", "output set directory")
+		fs.Parse(os.Args[2:])
+		if err := buildSet(*capDir, *raw, *out); err != nil {
+			fmt.Fprintln(os.Stderr, "build:", err)
+			os.Exit(1)
+		}
 	default:
 		fmt.Fprintln(os.Stderr, "unknown command", os.Args[1])
 		os.Exit(2)
