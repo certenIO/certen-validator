@@ -1,0 +1,11 @@
+{
+ "format": "certen-finality-lcssz-case/1",
+ "id": "lcssz_fin_off_2048_len_2056",
+ "description": "the reviewer's shape (D3): FinalityUpdateSlots accepts it, FinalizedExec sliced fu[2292:2056] and panicked",
+ "len": 2056,
+ "att_off": 400,
+ "fin_off": 2048,
+ "exec_hash": "",
+ "exec_number": 0,
+ "expect": "finalized_header_too_short"
+}

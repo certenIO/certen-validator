@@ -1,0 +1,11 @@
+{
+ "format": "certen-finality-lcssz-case/1",
+ "id": "lcssz_one_byte_short",
+ "description": "finalized header one byte short of the fixed part",
+ "len": 2056,
+ "att_off": 400,
+ "fin_off": 1229,
+ "exec_hash": "",
+ "exec_number": 0,
+ "expect": "finalized_header_too_short"
+}

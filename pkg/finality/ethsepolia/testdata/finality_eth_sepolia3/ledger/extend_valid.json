@@ -1,0 +1,10 @@
+{
+ "format": "certen-finality-ethsepolia-ledger-case/1",
+ "id": "extend_valid",
+ "description": "control: five appended entries 1387..1391 without a block_root extend the base",
+ "op": "extend",
+ "pins": "pins/base_1386.json",
+ "extension": "pins/extend_valid.pins.json",
+ "links_dir": "raw/links",
+ "expect_canonical": "{\"code\":\"verified\",\"fields\":{\"anchors\":\"14\",\"pins_source\":\"extension:8d914fe42892062ac24e5da9e8b06814950da3820df14f6b31490e895fcf9fe5\"}}"
+}

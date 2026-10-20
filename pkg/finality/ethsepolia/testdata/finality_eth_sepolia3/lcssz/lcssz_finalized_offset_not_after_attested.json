@@ -1,0 +1,11 @@
+{
+ "format": "certen-finality-lcssz-case/1",
+ "id": "lcssz_finalized_offset_not_after_attested",
+ "description": "finalized offset equal to the attested offset",
+ "len": 2056,
+ "att_off": 400,
+ "fin_off": 400,
+ "exec_hash": "",
+ "exec_number": 0,
+ "expect": "invalid"
+}

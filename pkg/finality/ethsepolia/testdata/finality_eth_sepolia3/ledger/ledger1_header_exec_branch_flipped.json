@@ -1,0 +1,20 @@
+{
+ "format": "certen-finality-ethsepolia-ledger-case/1",
+ "id": "ledger1_header_exec_branch_flipped",
+ "description": "one byte of the bootstrap header's execution branch flipped, link_sha256 recomputed (D1)",
+ "op": "verify_ledger",
+ "pins": "pins/embedded.json",
+ "links_dir": "raw/links",
+ "links_only": [
+  1378
+ ],
+ "link_patch": [
+  {
+   "period": 1378,
+   "offset": 24946,
+   "xor": 1,
+   "relink": true
+  }
+ ],
+ "expect_canonical": "{\"code\":\"finality_ledger_extension_invalid\",\"fields\":{\"inner\":\"finality_bootstrap_invalid\",\"period\":\"1378\",\"reason\":\"root_pin_unverifiable\"}}"
+}

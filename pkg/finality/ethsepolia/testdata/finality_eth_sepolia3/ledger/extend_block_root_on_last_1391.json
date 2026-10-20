@@ -1,0 +1,17 @@
+{
+ "format": "certen-finality-ethsepolia-ledger-case/1",
+ "id": "extend_block_root_on_last_1391",
+ "description": "an extension whose LAST appended entry carries a block_root: returned a Pins before (D2)",
+ "op": "extend",
+ "pins": "pins/base_1386.json",
+ "extension": "pins/extend_valid.pins.json",
+ "links_dir": "raw/links",
+ "anchor_patch": [
+  {
+   "period": 1391,
+   "field": "block_root",
+   "value": "0x00000000000000000000000000000000000000000000000000000000000000ab"
+  }
+ ],
+ "expect_canonical": "{\"code\":\"finality_ledger_extension_invalid\",\"fields\":{\"period\":\"1391\",\"reason\":\"block_root_on_appended_entry\"}}"
+}

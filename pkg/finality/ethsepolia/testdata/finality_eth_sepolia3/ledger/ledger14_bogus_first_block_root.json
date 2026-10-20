@@ -1,0 +1,16 @@
+{
+ "format": "certen-finality-ethsepolia-ledger-case/1",
+ "id": "ledger14_bogus_first_block_root",
+ "description": "the root pin of the 14-entry ledger is bogus: named at the root pin (was link_refused at 1379)",
+ "op": "verify_ledger",
+ "pins": "pins/vector_main.json",
+ "links_dir": "raw/links",
+ "anchor_patch": [
+  {
+   "period": 1378,
+   "field": "block_root",
+   "value": "0x5f71d7f650f9252b48749b5f062c0c234e01afd69f364ab600e2b6051494b20e"
+  }
+ ],
+ "expect_canonical": "{\"code\":\"finality_ledger_extension_invalid\",\"fields\":{\"inner\":\"finality_pin_mismatch\",\"period\":\"1378\",\"reason\":\"root_pin_unverifiable\"}}"
+}

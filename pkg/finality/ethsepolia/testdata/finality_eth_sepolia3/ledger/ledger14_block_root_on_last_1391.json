@@ -1,0 +1,16 @@
+{
+ "format": "certen-finality-ethsepolia-ledger-case/1",
+ "id": "ledger14_block_root_on_last_1391",
+ "description": "a block_root on the last appended entry: never derived or compared before (D2)",
+ "op": "verify_ledger",
+ "pins": "pins/vector_main.json",
+ "links_dir": "raw/links",
+ "anchor_patch": [
+  {
+   "period": 1391,
+   "field": "block_root",
+   "value": "0x00000000000000000000000000000000000000000000000000000000000000ab"
+  }
+ ],
+ "expect_canonical": "{\"code\":\"finality_ledger_extension_invalid\",\"fields\":{\"period\":\"1391\",\"reason\":\"block_root_on_appended_entry\"}}"
+}

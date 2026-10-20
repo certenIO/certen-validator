@@ -1,0 +1,9 @@
+{
+ "format": "certen-finality-ethsepolia-ledger-case/1",
+ "id": "ledger14_valid",
+ "description": "control: the 14-entry vector ledger re-derives from its root pin",
+ "op": "verify_ledger",
+ "pins": "pins/vector_main.json",
+ "links_dir": "raw/links",
+ "expect_canonical": "{\"code\":\"verified\",\"fields\":{\"anchors\":\"14\"}}"
+}
