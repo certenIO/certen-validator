@@ -110,7 +110,7 @@ type buildWorld struct {
 	leg     Leg
 	ref     finality.BlockRef
 	hdrs    *mapHeaders
-	store   *MemStore
+	store   *editStore
 	l2txs   [][]byte
 	blocks  map[uint64][32]byte // L1 block number -> hash, for the frame blocks
 	top     uint64
@@ -148,7 +148,7 @@ func newBuildWorld(t *testing.T, evFile, legFile string) *buildWorld {
 		t.Fatal(err)
 	}
 	w := &buildWorld{pins: pins, body: body, ev: ev, leg: leg, ref: finality.BlockRef{Chain: uint64(Chain), Number: num, Hash: hash, HeaderRLP: hdr},
-		hdrs: &mapHeaders{by: map[[32]byte]hdrRec{}, fail: map[[32]byte]bool{}, numbers: map[[32]byte]uint64{}}, store: NewMemStore(), blocks: map[uint64][32]byte{}}
+		hdrs: &mapHeaders{by: map[[32]byte]hdrRec{}, fail: map[[32]byte]bool{}, numbers: map[[32]byte]uint64{}}, store: newEditStore(), blocks: map[uint64][32]byte{}}
 	byNum := map[uint64]finality.HeaderFields{}
 	rawByNum := map[uint64][]byte{}
 	for _, raw := range body.L1Spine {
@@ -302,7 +302,7 @@ func TestTheBuilderListsTheCompleteChannelsOfTheCapturedRows(t *testing.T) {
 	// two channels of one capture are listed in capture order: add the second evidence's rows
 	wb := newBuildWorld(t, "evidence/valid_b.bin", "legs/b.json")
 	both := NewMemStore()
-	for _, src := range []*MemStore{w.store, wb.store} {
+	for _, src := range []*editStore{w.store, wb.store} {
 		for k, v := range src.rows {
 			if err := both.Put(context.Background(), k, v); err != nil {
 				t.Fatal(err)
@@ -377,7 +377,7 @@ func TestTheBuilderNamesWhyEvidenceCannotBeBuiltYetOrAtAll(t *testing.T) {
 	}
 
 	// refusals, each a named state and none a weaker answer
-	fail := func(name string, mod func(b *Builder, store *MemStore), code string, fields map[string]string) {
+	fail := func(name string, mod func(b *Builder, store *editStore), code string, fields map[string]string) {
 		t.Helper()
 		ww := newBuildWorld(t, "evidence/valid_a.bin", "legs/a.json")
 		b := ww.builder()
@@ -388,7 +388,7 @@ func TestTheBuilderNamesWhyEvidenceCannotBeBuiltYetOrAtAll(t *testing.T) {
 		}
 		wantCode(t, err, code, fields)
 	}
-	fail("lc source down", func(b *Builder, _ *MemStore) { b.LC = fixedLC{err: errors.New("lodestar down")} }, "finality_source_unavailable", map[string]string{"reason": "lc"})
+	fail("lc source down", func(b *Builder, _ *editStore) { b.LC = fixedLC{err: errors.New("lodestar down")} }, "finality_source_unavailable", map[string]string{"reason": "lc"})
 	bad := w.body.LC
 	bad.FinalUpdate.SSZ = append([]byte(nil), bad.FinalUpdate.SSZ...)
 	bad.FinalUpdate.SSZ[40] ^= 1
@@ -400,8 +400,8 @@ func TestTheBuilderNamesWhyEvidenceCannotBeBuiltYetOrAtAll(t *testing.T) {
 	if innerCode == "" {
 		t.Fatalf("test assumption: a flipped final update is a fault, got %v", innerErr)
 	}
-	fail("lc refused", func(b *Builder, _ *MemStore) { b.LC = fixedLC{lc: bad} }, CodeL1FinalityUnproven, map[string]string{"reason": LCRefused, "inner": innerCode})
-	fail("head header unreadable", func(b *Builder, _ *MemStore) {
+	fail("lc refused", func(b *Builder, _ *editStore) { b.LC = fixedLC{lc: bad} }, CodeL1FinalityUnproven, map[string]string{"reason": LCRefused, "inner": innerCode})
+	fail("head header unreadable", func(b *Builder, _ *editStore) {
 		b.Headers = &mapHeaders{by: w.hdrs.by, fail: map[[32]byte]bool{w.headHsh: true}}
 	}, "finality_source_unavailable", map[string]string{"reason": "l1_header"})
 	var below [32]byte
@@ -410,13 +410,13 @@ func TestTheBuilderNamesWhyEvidenceCannotBeBuiltYetOrAtAll(t *testing.T) {
 			below = h
 		}
 	}
-	fail("a spine header unreadable", func(b *Builder, _ *MemStore) {
+	fail("a spine header unreadable", func(b *Builder, _ *editStore) {
 		b.Headers = &mapHeaders{by: w.hdrs.by, fail: map[[32]byte]bool{below: true}}
 	}, "finality_source_unavailable", map[string]string{"reason": "l1_header"})
-	fail("a spine header of another number", func(b *Builder, _ *MemStore) {
+	fail("a spine header of another number", func(b *Builder, _ *editStore) {
 		b.Headers = &mapHeaders{by: w.hdrs.by, fail: w.hdrs.fail, numbers: map[[32]byte]uint64{below: 7}}
 	}, "finality_source_unavailable", map[string]string{"reason": "l1_header"})
-	fail("a captured block that is not on the finalized chain", func(b *Builder, store *MemStore) {
+	fail("a captured block that is not on the finalized chain", func(b *Builder, store *editStore) {
 		// a snapshot first: a map changed while it is ranged over may show the new keys again
 		old := make(map[CaptureKey][]byte, len(store.rows))
 		for k, v := range store.rows {
@@ -428,10 +428,10 @@ func TestTheBuilderNamesWhyEvidenceCannotBeBuiltYetOrAtAll(t *testing.T) {
 			store.rows[k] = v
 		}
 	}, "l1_proof_window_unavailable", map[string]string{"l1_block": "11954001"})
-	fail("l2 block unreadable", func(b *Builder, _ *MemStore) { b.L2 = fixedL2{err: errors.New("down")} }, "l2_header_unavailable", map[string]string{"block": strconv.FormatUint(l2.Number, 10)})
+	fail("l2 block unreadable", func(b *Builder, _ *editStore) { b.L2 = fixedL2{err: errors.New("down")} }, "l2_header_unavailable", map[string]string{"block": strconv.FormatUint(l2.Number, 10)})
 	// a first L2 transaction that is no deposit gives a body with no deposits, which the verifier refuses on its own terms
-	fail("no deposit first", func(b *Builder, _ *MemStore) { b.L2 = fixedL2{txs: [][]byte{{0x02, 0xc0}}} }, CodeBatchBindingMismatch, map[string]string{"field": "l1_info_deposit"})
-	fail("an empty first transaction", func(b *Builder, _ *MemStore) { b.L2 = fixedL2{txs: [][]byte{{}}} }, CodeBatchBindingMismatch, map[string]string{"field": "l1_info_deposit"})
+	fail("no deposit first", func(b *Builder, _ *editStore) { b.L2 = fixedL2{txs: [][]byte{{0x02, 0xc0}}} }, CodeBatchBindingMismatch, map[string]string{"field": "l1_info_deposit"})
+	fail("an empty first transaction", func(b *Builder, _ *editStore) { b.L2 = fixedL2{txs: [][]byte{{}}} }, CodeBatchBindingMismatch, map[string]string{"field": "l1_info_deposit"})
 	// deposits are the leading 0x7e transactions only: a deposit after a user transaction is not one of the block's
 	if len(w.body.Deposits) != 1 {
 		t.Fatalf("test assumption: the live block has one deposit, got %d", len(w.body.Deposits))
@@ -442,7 +442,7 @@ func TestTheBuilderNamesWhyEvidenceCannotBeBuiltYetOrAtAll(t *testing.T) {
 		t.Fatalf("%v %v %v", ad, p, err)
 	}
 	// rows the builder reads at the end of the build
-	rowOf := func(store *MemStore, item string) CaptureKey {
+	rowOf := func(store *editStore, item string) CaptureKey {
 		for k := range store.rows {
 			if k.Item == item {
 				return k
@@ -451,7 +451,7 @@ func TestTheBuilderNamesWhyEvidenceCannotBeBuiltYetOrAtAll(t *testing.T) {
 		t.Fatalf("no row %s", item)
 		return CaptureKey{}
 	}
-	failText := func(name string, mod func(store *MemStore), want string) {
+	failText := func(name string, mod func(store *editStore), want string) {
 		t.Helper()
 		ww := newBuildWorld(t, "evidence/valid_a.bin", "legs/a.json")
 		mod(ww.store)
@@ -460,7 +460,7 @@ func TestTheBuilderNamesWhyEvidenceCannotBeBuiltYetOrAtAll(t *testing.T) {
 			t.Fatalf("%s: %v %v %v, want an error with %q", name, ad, p, err, want)
 		}
 	}
-	failText("transaction nodes row missing", func(store *MemStore) { delete(store.rows, rowOf(store, ItemTxNodes(w.body.Frames[0].TxIndex))) }, "txnodes/")
-	failText("inbox row vanished", func(store *MemStore) { delete(store.rows, rowOf(store, ItemTx(w.body.Frames[0].TxIndex))) }, "tx/")
+	failText("transaction nodes row missing", func(store *editStore) { delete(store.rows, rowOf(store, ItemTxNodes(w.body.Frames[0].TxIndex))) }, "txnodes/")
+	failText("inbox row vanished", func(store *editStore) { delete(store.rows, rowOf(store, ItemTx(w.body.Frames[0].TxIndex))) }, "tx/")
 	_ = binary.BigEndian
 }

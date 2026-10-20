@@ -103,7 +103,7 @@ func rowsOf(t *testing.T, st *MemStore) int {
 	t.Helper()
 	n := 0
 	for _, item := range []string{ItemHeader, ItemInbox, ItemSysCfg, ItemTx(1), ItemTxNodes(1), ItemBlob(1, 0)} {
-		ks, err := st.Blocks(context.Background(), 84532, item)
+		ks, err := finality.CaptureKeysOfItem(context.Background(), st, 84532, item)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -254,7 +254,7 @@ func TestMemStoreListsOnlyTheChainAndItemAscendingByBlockThenHashAndCopiesWhatIt
 	put(84532, 20, 2, "inbox")
 	put(84532, 15, 1, "hdr") // another item
 	put(1, 12, 1, "inbox")   // another chain
-	ks, err := st.Blocks(ctx, 84532, "inbox")
+	ks, err := finality.CaptureKeysOfItem(ctx, st, 84532, "inbox")
 	if err != nil {
 		t.Fatal(err)
 	}

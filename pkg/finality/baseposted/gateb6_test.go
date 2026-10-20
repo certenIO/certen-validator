@@ -10,6 +10,7 @@ import (
 
 	"github.com/certen/independant-validator/pkg/finality"
 	"github.com/certen/independant-validator/pkg/finality/ethl1"
+	"github.com/certen/independant-validator/pkg/finality/l1adapt"
 )
 
 func baseSection(t *testing.T) map[string]any {
@@ -209,7 +210,7 @@ func common20Bytes(b []byte) string {
 
 func TestStateOfKeepsTheCodeAndFieldsOfAnL1FaultAndPassesOtherErrorsThrough(t *testing.T) {
 	f := ethl1.BlockNotCovered(7, 9)
-	err := stateOf(f)
+	err := l1adapt.State(f)
 	se, ok := finality.AsNamed(err)
 	if !ok || se.Code != f.Code || len(se.Fields) != len(f.Fields) {
 		t.Fatalf("%v", err)
@@ -220,7 +221,7 @@ func TestStateOfKeepsTheCodeAndFieldsOfAnL1FaultAndPassesOtherErrorsThrough(t *t
 		}
 	}
 	other := errors.New("not a fault")
-	if got := stateOf(other); got != other {
+	if got := l1adapt.State(other); got != other {
 		t.Fatalf("%v", got)
 	}
 }

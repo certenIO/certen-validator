@@ -23,16 +23,16 @@ func pinsOf(t *testing.T) *finality.Pins {
 
 // hookStore is a capture store whose reads can be made to fail or lie, per row.
 type hookStore struct {
-	*MemStore
+	CaptureStore
 	blocksErr error
 	get       func(k CaptureKey) (data []byte, ok bool, err error, handled bool)
 }
 
-func (h hookStore) Blocks(ctx context.Context, chain uint64, item string) ([]CaptureKey, error) {
+func (h hookStore) ListByRange(ctx context.Context, chain, from, to uint64, itemPrefix string) ([]CaptureKey, error) {
 	if h.blocksErr != nil {
 		return nil, h.blocksErr
 	}
-	return h.MemStore.Blocks(ctx, chain, item)
+	return h.CaptureStore.ListByRange(ctx, chain, from, to, itemPrefix)
 }
 
 func (h hookStore) Get(ctx context.Context, k CaptureKey) ([]byte, bool, error) {
@@ -41,12 +41,12 @@ func (h hookStore) Get(ctx context.Context, k CaptureKey) ([]byte, bool, error) 
 			return d, ok, err
 		}
 	}
-	return h.MemStore.Get(ctx, k)
+	return h.CaptureStore.Get(ctx, k)
 }
 
 // putSynth stores the rows of a synthetic calldata world the way the Capturer would: per L1 block the inbox list and the
 // transactions (the builder reads nothing else of a calldata block here).
-func putSynth(t *testing.T, st *MemStore, s *synth) {
+func putSynth(t *testing.T, st CaptureStore, s *synth) {
 	t.Helper()
 	hashOf := map[uint64][32]byte{}
 	for _, c := range s.covered {
@@ -150,7 +150,7 @@ func TestTheBuilderLoadRefusesARowThatIsGoneUnreadableOrNotWhatItShouldBe(t *tes
 		}}, ""},
 	} {
 		h := c.h
-		h.MemStore = w.store
+		h.CaptureStore = w.store
 		_, err := (&Builder{Store: h}).load(context.Background(), bp)
 		if err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: %v, want an error with %q", c.name, err, c.want)
@@ -163,7 +163,7 @@ func TestTheBuilderLoadRefusesARowThatIsGoneUnreadableOrNotWhatItShouldBe(t *tes
 	bw = append(bw, 0, 2, 0, 0)
 	bw = append(bw, bad...)
 	bw = append(bw, make([]byte, 96)...)
-	h := hookStore{MemStore: w.store, get: func(k CaptureKey) ([]byte, bool, error, bool) {
+	h := hookStore{CaptureStore: w.store, get: func(k CaptureKey) ([]byte, bool, error, bool) {
 		return bw, true, nil, isItem(k, ItemBlob(tx0, 0))
 	}}
 	txs, err := (&Builder{Store: h}).load(context.Background(), bp)
@@ -197,7 +197,7 @@ func TestTheBuilderLoadRefusesARowThatIsGoneUnreadableOrNotWhatItShouldBe(t *tes
 func TestTheBuilderFindsAndListsOnlyCompleteDecodableChannelsInCaptureOrder(t *testing.T) {
 	ctx := context.Background()
 	bp := newPins()
-	st := NewMemStore()
+	st := newEditStore()
 	// channel one: complete, decodable; channel two: another complete one at a later block
 	one := makeSynth(t, synthOpts{compression: "zlib", calldata: true, nFrames: 2, frameBlocks: []uint64{1000, 1000}, channelLabel: "one", batchTs: 1790000000})
 	two := makeSynth(t, synthOpts{compression: "zlib", calldata: true, nFrames: 1, frameBlocks: []uint64{1200}, channelLabel: "two", batchTs: 1790000100, epochNum: 1190})

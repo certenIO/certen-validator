@@ -125,7 +125,7 @@ func TestTheBuilderPassesTheCoveredBoundaryAndRefusesWhatItCannotReadOrTrust(t *
 	// rows the builder reads while it assembles the body
 	rowErr := func(match func(k CaptureKey) bool, data []byte, ok bool, err error) *Builder {
 		bb := w.builder()
-		bb.Store = hookStore{MemStore: w.store, get: func(k CaptureKey) ([]byte, bool, error, bool) { return data, ok, err, match(k) }}
+		bb.Store = hookStore{CaptureStore: w.store, get: func(k CaptureKey) ([]byte, bool, error, bool) { return data, ok, err, match(k) }}
 		return bb
 	}
 	isNodes := func(k CaptureKey) bool { return strings.HasPrefix(k.Item, "txnodes/") }
@@ -220,7 +220,7 @@ func TestTheBuilderListsChannelsFrameByFrameWhenOneTransactionCarriesSeveralAndS
 		t.Fatal("a complete channel of two frames in one transaction")
 	}
 	// the store's own failures reach the caller
-	_, err := (&Builder{Pins: pinsOf(t), Store: hookStore{MemStore: NewMemStore(), blocksErr: errors.New("db down")}}).Channels(context.Background())
+	_, err := (&Builder{Pins: pinsOf(t), Store: hookStore{CaptureStore: NewMemStore(), blocksErr: errors.New("db down")}}).Channels(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "db down") {
 		t.Fatalf("%v", err)
 	}
@@ -240,7 +240,7 @@ func TestMemStoreOrdersManyRowsOfOneBlockByHash(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	ks, _ := st.Blocks(ctx, 1, "x")
+	ks, _ := finality.CaptureKeysOfItem(ctx, st, 1, "x")
 	if len(ks) != 65 {
 		t.Fatalf("%d", len(ks))
 	}
@@ -257,7 +257,7 @@ func TestCapturerRefusesAHeaderThatIsNoHeaderABlobTheKZGLibraryRefusesAndATransa
 	ctx := context.Background()
 	var recorded []*finality.StateError
 	rec := func(_ uint64, s *finality.StateError) { recorded = append(recorded, s) }
-	empty := func(st *MemStore) int { n, _ := st.Blocks(ctx, 84532, ItemHeader); return len(n) }
+	empty := func(st *MemStore) int { n, _ := finality.CaptureKeysOfItem(ctx, st, 84532, ItemHeader); return len(n) }
 
 	// a header that is not RLP is the framework's named refusal, not the hash mismatch
 	badHdr := blk
