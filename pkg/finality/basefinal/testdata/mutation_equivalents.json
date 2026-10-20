@@ -102,5 +102,173 @@
     "original": "reg[4:12]",
     "mutated": "*",
     "reason": "binary.BigEndian.Uint64 reads only the first eight bytes of its argument, so reg[4:13] gives the same number."
+  },
+  {
+    "file": "build.go",
+    "function": "Builder.facts",
+    "operator": "int_literal",
+    "original": "code[tl+84+24 : tl+84+32]",
+    "mutated": "*",
+    "reason": "binary.BigEndian.Uint64 reads only the first eight bytes of its argument, so a slice that ends one or two bytes later gives the same number (len(code) >= tl+2+ArgsBaseLen is checked before, so the longer slice is valid)."
+  },
+  {
+    "file": "build.go",
+    "function": "Builder.build",
+    "operator": "guard_off",
+    "original": "if err != nil",
+    "mutated": "*",
+    "reason": "The guard after DecodeGameCapture: a row that does not decode leaves c zero, and the next statement asks the L1 source for the block with the zero hash, which no source has; that fails and the loop continues, exactly as the guard's continue does."
+  },
+  {
+    "file": "build.go",
+    "function": "Builder.covering",
+    "operator": "guard_off",
+    "original": "if idx+1 >= count",
+    "mutated": "*",
+    "reason": "Dead branch: it is reached only with leg > f.L2Seq at idx = count-1, i.e. at the newest game, and leg > newest.L2Seq has been answered (no_covering_game) before the scan starts."
+  },
+  {
+    "file": "build.go",
+    "function": "Builder.covering",
+    "operator": "arith",
+    "original": "idx+1",
+    "mutated": "*",
+    "reason": "Dead branch (see the entry for `if idx+1 >= count`): the newest game cannot be below the leg here."
+  },
+  {
+    "file": "build.go",
+    "function": "Builder.covering",
+    "operator": "int_literal",
+    "original": "idx+1 >= count",
+    "mutated": "*",
+    "reason": "Dead branch (see the entry for `if idx+1 >= count`) for `idx+0 >= count`; at idx+0 the condition is idx >= count, never true for a loaded index."
+  },
+  {
+    "file": "build.go",
+    "function": "Builder.covering",
+    "operator": "cmp_boundary",
+    "original": "idx+1 >= count",
+    "mutated": "*",
+    "reason": "Dead branch (see the entry for `if idx+1 >= count`)."
+  },
+  {
+    "file": "build.go",
+    "function": "Builder.unresolved",
+    "operator": "cmp_boundary",
+    "original": "lay.ArgsBaseLen > 0",
+    "mutated": "*",
+    "reason": "ArgsBaseLen of a layout the pins parser accepted is positive, and unresolved is only reached after build parsed the same pins; the zero layout of pinsLayout (pins that do not parse) cannot occur here, so `>= 0` and `> 0` agree."
+  },
+  {
+    "file": "build.go",
+    "function": "Builder.unresolved",
+    "operator": "int_literal",
+    "original": "lay.ArgsBaseLen > 0",
+    "mutated": "*",
+    "reason": "The pinned ArgsBaseLen is 136, so `> 1` and `> 0` agree."
+  },
+  {
+    "file": "build.go",
+    "function": "Builder.unresolved",
+    "operator": "int_literal",
+    "original": "g.Code[tl+116:tl+136]",
+    "mutated": "*",
+    "reason": "copy(pa[:], g.Code[tl+116:tl+137]) copies at most len(pa) = 20 bytes, the same as the 20-byte slice."
+  },
+  {
+    "file": "build.go",
+    "function": "Builder.unresolved",
+    "operator": "cmp_boundary",
+    "original": "remaining < 0",
+    "mutated": "*",
+    "reason": "At remaining == 0 the clamp assigns 0, the value it already has."
+  },
+  {
+    "file": "capture.go",
+    "function": "MemStore.Rows",
+    "operator": "cmp_boundary",
+    "original": "out[i].L1Block > out[j].L1Block",
+    "mutated": "*",
+    "reason": "Rows of equal block have no specified order; `>=` and `>` differ only for equal blocks, and the callers take every row."
+  },
+  {
+    "file": "capture.go",
+    "function": "DirStore.Rows",
+    "operator": "cmp_boundary",
+    "original": "out[i].L1Block > out[j].L1Block",
+    "mutated": "*",
+    "reason": "Rows of equal block have no specified order; `>=` and `>` differ only for equal blocks, and the callers take every row."
+  },
+  {
+    "file": "capture.go",
+    "function": "CaptureGame",
+    "operator": "int_literal",
+    "original": "args[20:52]",
+    "mutated": "*",
+    "reason": "copy(rootClaim[:], args[20:53]) copies at most len(rootClaim) = 32 bytes, the same as the 32-byte slice."
+  },
+  {
+    "file": "pins.go",
+    "function": "sortedImplHashes",
+    "operator": "cmp_boundary",
+    "original": "string(out[i][:]) < string(out[j][:])",
+    "mutated": "*",
+    "reason": "The hashes are the distinct keys of a map and sort.Slice compares two different indices, so `<=` and `<` give the same order."
+  },
+  {
+    "file": "verify.go",
+    "function": "judge",
+    "operator": "logic_swap",
+    "original": "!a.exists || !ok",
+    "mutated": "*",
+    "reason": "An absent account has a zero code hash, which no pinned row is keyed by, and a pinned-hash miss leaves a zero row whose Role is empty, so the third disjunct `row.Role != role` refuses it with the same identity state."
+  },
+  {
+    "file": "verify.go",
+    "function": "judge",
+    "operator": "guard_off",
+    "original": "if err != nil",
+    "mutated": "*",
+    "reason": "The guard after rd.account(body.GameProxy): on an error account returns the zero acctRead (exists=false) and the next statement `!ga.exists || ...` returns the identical l1_state_proof_invalid{which:account}."
+  },
+  {
+    "file": "verify.go",
+    "function": "judge",
+    "operator": "logic_swap",
+    "original": "!gia.exists || !pinned",
+    "mutated": "*",
+    "reason": "A missing account or an unpinned hash leaves the zero row, whose Role is not game_impl, so the following disjunct `row.Role != RoleGameImpl` returns the same identity state."
+  },
+  {
+    "file": "verify.go",
+    "function": "judge",
+    "operator": "int_literal",
+    "original": "w0[14]",
+    "mutated": "*",
+    "reason": "g.Initialized is decoded and never read by any decision or reported field (finding recorded in the check-in)."
+  },
+  {
+    "file": "verify.go",
+    "function": "judge",
+    "operator": "int_literal",
+    "original": "rr[28:32]",
+    "mutated": "*",
+    "reason": "g.RespectedGameType is decoded and never read by any decision or reported field (finding recorded in the check-in); Uint32 reads the first four bytes of its argument."
+  },
+  {
+    "file": "verify.go",
+    "function": "judge",
+    "operator": "cmp_boundary",
+    "original": "A.Timestamp <= g.ResolvedAt",
+    "mutated": "*",
+    "reason": "At equality the second disjunct A.Timestamp-ResolvedAt <= delay holds (delay >= 0), so the same game_within_delay is returned."
+  },
+  {
+    "file": "verify.go",
+    "function": "judge",
+    "operator": "cmp_boundary",
+    "original": "l2seq < start",
+    "mutated": "*",
+    "reason": "At l2seq == start the total is 0, which matches no pinned pair, and the same interval_pair refusal with total 0 is returned."
   }
 ]
