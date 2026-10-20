@@ -274,6 +274,11 @@ func DecodeEpochRecord(result json.RawMessage) (rec recJSON, cert certJSON, comm
 	return
 }
 
+// maxRoaringValues bounds how many values one bitmap may decode to. The bytes come from an RPC endpoint that is not trusted and a
+// run container expands four bytes into up to 65536 values, so without a bound a response of a few hundred kilobytes could ask for
+// gigabytes. A signer set is at most one 16-bit container.
+const maxRoaringValues = 1 << 16
+
 // DecodeRoaring reads a portable Roaring bitmap (cookie 12346 or 12347; array, bitmap and run containers) into ascending
 // values. It is used by the builder only: the evidence carries explicit signer index lists.
 func DecodeRoaring(b []byte) ([]uint32, error) {
@@ -336,6 +341,12 @@ func DecodeRoaring(b []byte) ([]uint32, error) {
 				start := uint32(binary.LittleEndian.Uint16(b[off:]))
 				length := uint32(binary.LittleEndian.Uint16(b[off+2:]))
 				off += 4
+				if start+length > 0xffff {
+					return nil, errors.New("roaring: run leaves its container")
+				}
+				if len(out)+int(length)+1 > maxRoaringValues {
+					return nil, errors.New("roaring: too many values")
+				}
 				for v := start; v <= start+length; v++ {
 					out = append(out, hi|v)
 				}
@@ -348,6 +359,9 @@ func DecodeRoaring(b []byte) ([]uint32, error) {
 				word := binary.LittleEndian.Uint64(b[off+8*w:])
 				for bit := 0; bit < 64; bit++ {
 					if word&(1<<bit) != 0 {
+						if len(out) >= maxRoaringValues {
+							return nil, errors.New("roaring: too many values")
+						}
 						out = append(out, hi|uint32(w*64+bit))
 					}
 				}
@@ -356,6 +370,9 @@ func DecodeRoaring(b []byte) ([]uint32, error) {
 		default:
 			if len(b) < off+2*cards[i] {
 				return nil, errors.New("roaring: short array container")
+			}
+			if len(out)+cards[i] > maxRoaringValues {
+				return nil, errors.New("roaring: too many values")
 			}
 			for j := 0; j < cards[i]; j++ {
 				out = append(out, hi|uint32(binary.LittleEndian.Uint16(b[off:])))

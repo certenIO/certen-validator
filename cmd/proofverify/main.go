@@ -52,6 +52,7 @@ import (
 	"github.com/certen/independant-validator/pkg/database"
 	"github.com/certen/independant-validator/pkg/execution"
 	"github.com/certen/independant-validator/pkg/finality"
+	"github.com/certen/independant-validator/pkg/finality/adiri"
 	"github.com/certen/independant-validator/pkg/finality/allkinds"
 	certenproof "github.com/certen/independant-validator/pkg/proof"
 	proofv2 "github.com/certen/independant-validator/pkg/proof/v2"
@@ -112,6 +113,12 @@ func main() {
 	pins, pinsErr := finality.EmbeddedPins()
 	if pinsErr != nil {
 		fmt.Fprintln(os.Stderr, pinsErr)
+		os.Exit(exitFailed)
+	}
+	// The Adiri genesis link is embedded and hash-pinned by those pins: it binds the pinned committee chain to the incarnation's
+	// genesis block. It is checked once here, at load, never per proof.
+	if linkErr := adiri.CheckEmbeddedGenesisLink(pins); linkErr != nil {
+		fmt.Fprintln(os.Stderr, linkErr)
 		os.Exit(exitFailed)
 	}
 	// Every implemented finality verifier kind is registered (explicitly, no init()), so --offline and --finality judge every

@@ -5,6 +5,7 @@ package adiri
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -135,7 +136,8 @@ func decode0x(s string) ([]byte, error) {
 	if len(s) < 2 || s[:2] != "0x" {
 		return nil, fmt.Errorf("missing 0x prefix")
 	}
-	return common.FromHex(s), nil
+	// strict: an odd number of digits or a character that is not a hex digit is an error, never silently padded or truncated
+	return hex.DecodeString(s[2:])
 }
 
 // ParsePins reads the adiri section of the pins file. A missing section is finality_pin_unknown; a malformed one is
@@ -171,8 +173,8 @@ func ParsePins(p *finality.Pins) (*Params, error) {
 		return nil, finality.PinsCorrupt(finality.PinsBadValue, "key", "adiri.genesis_committee")
 	}
 	for i, h := range j.GenesisCommittee {
-		k := common.FromHex("0x" + h)
-		if len(k) != KeyBytes {
+		k, err := hex.DecodeString(h)
+		if err != nil || len(k) != KeyBytes {
 			return nil, finality.PinsCorrupt(finality.PinsBadValue, "key", "adiri.genesis_committee", "index", uint64(i))
 		}
 		par.GenesisCommittee = append(par.GenesisCommittee, k)

@@ -35,6 +35,7 @@ import (
 	"github.com/certen/independant-validator/pkg/execution"
 	"github.com/certen/independant-validator/pkg/execution/contracts"
 	"github.com/certen/independant-validator/pkg/finality"
+	"github.com/certen/independant-validator/pkg/finality/adiri"
 	finruntime "github.com/certen/independant-validator/pkg/finality/runtime"
 	"github.com/certen/independant-validator/pkg/firestore"
 	"github.com/certen/independant-validator/pkg/intent"
@@ -2336,6 +2337,11 @@ func startValidator(
 		})
 		if ferr != nil {
 			return nil, nil, fmt.Errorf("finality wiring: %w", ferr)
+		}
+		// The Adiri genesis link is embedded and hash-pinned by the pins the runtime built under; it is checked once here, at startup,
+		// never per proof.
+		if ferr := adiri.CheckEmbeddedGenesisLink(finalityWire.Pins); ferr != nil {
+			return nil, nil, fmt.Errorf("finality pins: %w", ferr)
 		}
 		if _, ferr := finality.Launch(context.Background(), finalityOn, finalityRepo, finalityRepo, finalityWire.Registry, finalityWire.Pins,
 			finalityWire.Upgrader); ferr != nil {

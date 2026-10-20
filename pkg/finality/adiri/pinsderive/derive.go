@@ -6,14 +6,11 @@ package pinsderive
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 
 	"github.com/mr-tron/base58"
 	"gopkg.in/yaml.v3"
 
-	"github.com/certen/independant-validator/pkg/finality"
 	"github.com/certen/independant-validator/pkg/finality/adiri"
 )
 
@@ -52,80 +49,13 @@ func CommitteeFromYAML(raw []byte) ([][]byte, error) {
 	return keys, nil
 }
 
-// SplitHeaders splits a concatenation of raw RLP headers (the genesis link file) into headers.
-func SplitHeaders(file []byte) ([][]byte, error) {
-	var out [][]byte
-	rest := file
-	for len(rest) > 0 {
-		n, err := rlpListLen(rest)
-		if err != nil {
-			return nil, fmt.Errorf("header %d: %v", len(out), err)
-		}
-		out = append(out, rest[:n])
-		rest = rest[n:]
-	}
-	return out, nil
-}
+// SplitHeaders splits a concatenation of raw RLP headers (the genesis link file) into headers (implemented in package adiri,
+// which checks the link at load).
+func SplitHeaders(file []byte) ([][]byte, error) { return adiri.SplitHeaders(file) }
 
-func rlpListLen(b []byte) (int, error) {
-	if len(b) == 0 || b[0] < 0xc0 {
-		return 0, fmt.Errorf("not an RLP list")
-	}
-	if b[0] <= 0xf7 {
-		n := 1 + int(b[0]-0xc0)
-		if n > len(b) {
-			return 0, fmt.Errorf("truncated")
-		}
-		return n, nil
-	}
-	l := int(b[0] - 0xf7)
-	if len(b) < 1+l {
-		return 0, fmt.Errorf("truncated")
-	}
-	n := 0
-	for _, c := range b[1 : 1+l] {
-		n = n<<8 | int(c)
-	}
-	if n+1+l > len(b) {
-		return 0, fmt.Errorf("truncated")
-	}
-	return 1 + l + n, nil
-}
-
-// VerifyGenesisLink checks the pinned genesis link: the file hashes to wantSHA and holds the headers of blocks 1..epoch0.Number
-// (290 headers, 176,758 B) as a parentHash chain whose first header has parentHash = the genesis block hash and number 1 and
-// whose last is epoch0 (number and hash). The genesis block itself is recomputed from tn_genesis by package genesis. It returns
-// the number of headers. This is what binds the committee chain to this incarnation's genesis block (annex A7 step 3).
+// VerifyGenesisLink checks the pinned genesis link (implemented in package adiri, where the embedded link is checked at load).
 func VerifyGenesisLink(file []byte, wantSHA string, genesisHash [32]byte, epoch0 adiri.NumHash) (int, error) {
-	sum := sha256.Sum256(file)
-	if hex.EncodeToString(sum[:]) != wantSHA {
-		return 0, fmt.Errorf("genesis link sha256 %x, want %s", sum, wantSHA)
-	}
-	hs, err := SplitHeaders(file)
-	if err != nil {
-		return 0, err
-	}
-	if len(hs) == 0 {
-		return 0, fmt.Errorf("the genesis link is empty")
-	}
-	var prev finality.HeaderFields
-	for i, raw := range hs {
-		h, err := finality.ReadHeader(raw)
-		if err != nil {
-			return 0, fmt.Errorf("header %d: %v", i, err)
-		}
-		if i == 0 && (h.ParentHash != genesisHash || h.Number != 1) {
-			return 0, fmt.Errorf("the first header is %d with parent %x, want block 1 with the genesis hash %x", h.Number, h.ParentHash, genesisHash)
-		}
-		if i > 0 && (h.ParentHash != prev.Hash || h.Number != prev.Number+1) {
-			return 0, fmt.Errorf("header %d does not link to header %d", h.Number, prev.Number)
-		}
-		prev = h
-	}
-	if prev.Number != epoch0.Number || prev.Hash != epoch0.Hash {
-		return 0, fmt.Errorf("the link ends at %d %x, want epoch0_final_state %d %x", prev.Number, prev.Hash, epoch0.Number, epoch0.Hash)
-	}
-	return len(hs), nil
+	return adiri.VerifyGenesisLink(file, wantSHA, genesisHash, epoch0)
 }
 
 // RawEqual reports byte equality (test helper kept here so the tests need no extra import).

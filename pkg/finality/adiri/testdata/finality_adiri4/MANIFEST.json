@@ -1,0 +1,9 @@
+{
+ "files": {
+  "README.md": "59df46427ed6a0432ce4636179ed2a91572748b875a8bb9ee70e7ebd7202285e",
+  "evidence/syn-rotation.bin": "031d6a75c0e15f03c5af206fe4ef690ef18288f35e2ea2b461e5a13d261af9c3",
+  "genesis_link.json": "29840831c024e34ba4dd428e0f3683e36878040fb99d66a49819f94f4881dc3d",
+  "link/genesis_link_1_290.bin": "6ccf8d955bbb92278e5cecfc9b580d2e4946dfee234a64eb582e33bd3452cbbd",
+  "vectors.json": "f96f5aa64cdd7c1bd99eb8dc025dcb80b7729dbf0a2819487ed7e749a95e08f8"
+ }
+}

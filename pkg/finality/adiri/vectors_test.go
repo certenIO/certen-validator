@@ -18,12 +18,15 @@ import (
 
 // vectorDir is the current set. finality_adiri1 and finality_adiri2 (published before the framework typed every reason and rendered
 // byte values as 0x-hex) stay byte-identical and are SUPERSEDED by finality_adiri3 (testdata/SUPERSEDED.md).
-const vectorDir = "testdata/finality_adiri3"
+const (
+	vectorDir  = "testdata/finality_adiri3"
+	vectorDir4 = "testdata/finality_adiri4"
+)
 
 var (
 	supersededDirs = []string{"testdata/finality_adiri1", "testdata/finality_adiri2"}
-	vectorDirs     = []string{vectorDir}
-	manifestDirs   = []string{"testdata/finality_adiri1", "testdata/finality_adiri2", vectorDir}
+	vectorDirs     = []string{vectorDir, vectorDir4}
+	manifestDirs   = []string{"testdata/finality_adiri1", "testdata/finality_adiri2", vectorDir, vectorDir4}
 )
 
 type vEdit struct {

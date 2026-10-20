@@ -221,7 +221,7 @@ func verifySpine(res *ChainResult, spine [][]byte, leg finality.BlockRef) (linkR
 	for i, raw := range spine {
 		h, err := finality.ReadHeader(raw)
 		if err != nil {
-			return out, LinkBroken(LinkHeaderDecode, F.Number, leg.Number, F.Number-uint64(i), "index", uint64(i))
+			return out, LinkBroken(LinkHeaderDecode, F.Number, leg.Number, numberAt(F.Number, i), "index", uint64(i))
 		}
 		if i == 0 {
 			if h.Hash != F.Hash || h.Number != F.Number {
@@ -230,10 +230,11 @@ func verifySpine(res *ChainResult, spine [][]byte, leg finality.BlockRef) (linkR
 			out.consensusRootMatches = consensusRootOf(raw) == res.FinalConsensus.Hash
 		} else {
 			if h.Hash != prev.ParentHash {
-				return out, HeaderChainBroken(prev.Number-1, prev.ParentHash, h.Hash, ReasonParentHash)
+				return out, HeaderChainBroken(numberBelow(prev.Number), prev.ParentHash, h.Hash, ReasonParentHash)
 			}
-			if h.Number+1 != prev.Number {
-				return out, HeaderChainBroken(prev.Number-1, prev.ParentHash, h.Hash, ReasonNumberGap)
+			// wrap-free: a header after number 0 has no number below it, and h.Number+1 must not wrap to prev.Number
+			if prev.Number == 0 || h.Number != prev.Number-1 {
+				return out, HeaderChainBroken(numberBelow(prev.Number), prev.ParentHash, h.Hash, ReasonNumberGap)
 			}
 		}
 		prev = h
@@ -250,6 +251,21 @@ func verifySpine(res *ChainResult, spine [][]byte, leg finality.BlockRef) (linkR
 		return out, finality.BlockMismatch("spineLastHeader", common.Bytes2Hex(crypto.Keccak256(leg.HeaderRLP)), common.Bytes2Hex(crypto.Keccak256(last)))
 	}
 	return out, nil
+}
+
+// numberAt is top - i, saturating at 0 (it only labels a refusal and must not wrap); numberBelow is n - 1, saturating at 0.
+func numberAt(top uint64, i int) uint64 {
+	if uint64(i) > top {
+		return 0
+	}
+	return top - uint64(i)
+}
+
+func numberBelow(n uint64) uint64 {
+	if n == 0 {
+		return 0
+	}
+	return n - 1
 }
 
 // verifySlot: linkKind 2, only when N < F.number. keccak256(finalHeader) = F.hash; the EIP-2935 account (codeHash = pin) and
