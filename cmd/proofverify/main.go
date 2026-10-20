@@ -51,6 +51,7 @@ import (
 	chained_proof "github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/working-proof_do_not_edit"
 	"github.com/certen/independant-validator/pkg/database"
 	"github.com/certen/independant-validator/pkg/execution"
+	"github.com/certen/independant-validator/pkg/finality"
 	certenproof "github.com/certen/independant-validator/pkg/proof"
 	proofv2 "github.com/certen/independant-validator/pkg/proof/v2"
 	gnarklogger "github.com/consensys/gnark/logger"
@@ -89,6 +90,10 @@ func main() {
 		incarnation = flag.String("incarnation", "", "with --l5: the Accumulate incarnation you trust (hex32, docs/l4/"+
 			"INCARNATION_ANCHOR.md; derive it with cmd/incarnation). Without it, which Accumulate chain a V8.2 anchor's "+
 			"committed validator set belongs to rests on the anchor alone")
+		finalityOn = flag.Bool("finality", false, "also verify the proof's staged finality (S7): its bundle's L6 settlement and the "+
+			"finality addenda stored for it (certen:finality:v1), reporting the level reached")
+		finalityFile = flag.String("finality-file", "", "verify the finality section of a portable proof v2 document (or a JSON list of "+
+			"addenda) offline, with no database")
 		incEvidence = flag.String("incarnation-evidence", "", "with --governance: the incarnation's genesis evidence (JSON, "+
 			"cmd/incarnation), from which a v3 intent certificate's proof v2 is verified, walking the Directory's major "+
 			"blocks stored in the database from that genesis")
@@ -98,6 +103,14 @@ func main() {
 	// The Groth16 verifier's debug lines are not part of a verdict.
 	gnarklogger.Disable()
 
+	if *finalityFile != "" {
+		if *proofID != "" || *outcome || *outcomeFile != "" || *l5 || *govern || *finalityOn {
+			fmt.Fprintln(os.Stderr, "--finality-file verifies a file on its own: no --proof-id, --finality, --outcome, --outcome-file, --l5 or --governance")
+			os.Exit(exitUsage)
+		}
+		cutNetwork()
+		os.Exit(reportFinalityFile(os.Stdout, *finalityFile, finality.Default, finality.NewPins()))
+	}
 	if *outcomeFile != "" {
 		if *proofID != "" || *outcome || *l5 || *govern {
 			fmt.Fprintln(os.Stderr, "--outcome-file verifies a file on its own: no --proof-id, --outcome, --l5 or --governance")
@@ -113,8 +126,9 @@ func main() {
 		os.Exit(reportOutcomeFile(context.Background(), os.Stdout, *outcomeFile, *online))
 	}
 	if *proofID == "" || *dsn == "" {
-		fmt.Fprintln(os.Stderr, "usage: proofverify --proof-id <uuid> --db <dsn> [--offline] [--governance] [--l5] [--outcome] "+
+		fmt.Fprintln(os.Stderr, "usage: proofverify --proof-id <uuid> --db <dsn> [--offline] [--governance] [--l5] [--outcome] [--finality] "+
 			"[--online-rpc <url> --offline=false] [-v]")
+		fmt.Fprintln(os.Stderr, "       proofverify --finality-file <portable-document.json>")
 		fmt.Fprintln(os.Stderr, "       proofverify --outcome-file <evidence.json> [--online-rpc <url> --offline=false]")
 		os.Exit(exitUsage)
 	}
@@ -238,6 +252,9 @@ func main() {
 		if *outcome {
 			code = worseExit(code, reportOutcome(ctx, os.Stdout, store, id, *online))
 		}
+		if *finalityOn {
+			code = worseExit(code, reportFinality(ctx, os.Stdout, db, id, finality.Default, finality.NewPins()))
+		}
 		os.Exit(code)
 
 	case errors.Is(err, certenproof.ErrSummaryOnly), errors.Is(err, certenproof.ErrNoStoredProof):
@@ -252,6 +269,10 @@ func main() {
 		if *outcome {
 			// The recorded outcome rests on its own evidence, not on L1-L4's, so it is checked all the same.
 			code = worseExit(code, reportOutcome(ctx, os.Stdout, store, id, *online))
+		}
+		if *finalityOn {
+			// Finality rests on the settlement's own evidence, not on L1-L4's, so it is checked all the same.
+			code = worseExit(code, reportFinality(ctx, os.Stdout, db, id, finality.Default, finality.NewPins()))
 		}
 		os.Exit(code)
 
