@@ -280,7 +280,7 @@ func TestPayloadHeaderBytesAndBounds(t *testing.T) {
 		{"das", append([]byte{headerDAS}, good[1:]...), payloadOffL1},
 		{"das tree", append([]byte{headerDASTree}, good[1:]...), payloadOffL1},
 		{"dacert", append([]byte{headerDACert}, good[1:]...), payloadOffL1},
-		{"zeroheavy is not decoded", append([]byte{headerZeroheavy}, good[1:]...), payloadUnknownHeader},
+		{"zeroheavy layer over a stream that is not a payload", append([]byte{headerZeroheavy}, good[1:]...), payloadUnknownHeader},
 		{"unknown byte", append([]byte{0x05}, good[1:]...), payloadUnknownHeader},
 		{"empty", nil, payloadUndecodable},
 		{"not brotli", append([]byte{headerBrotli}, bytes.Repeat([]byte{0xff}, 40)...), payloadUndecodable},
@@ -378,7 +378,6 @@ func TestCalldataBatchIsJudgedLikeABlobBatch(t *testing.T) {
 	}{
 		{headerDAS, want("l1_batch_data_off_l1", "batch", uint64(55), "header_byte", uint8(headerDAS))},
 		{headerDASTree, want("l1_batch_data_off_l1", "batch", uint64(55), "header_byte", uint8(headerDASTree))},
-		{headerZeroheavy, want("l1_batch_header_unknown", "batch", uint64(55), "byte", uint8(headerZeroheavy))},
 	} {
 		c := calldataEvidence(txs, append([]byte{tc.flag}, data[1:]...), 55, h40, common.Hash{})
 		if _, err := runState(t, c, nil, nil); canon(err) != tc.want {

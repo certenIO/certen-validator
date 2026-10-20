@@ -3,7 +3,6 @@
 package arbposted
 
 import (
-	"bytes"
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -63,9 +62,11 @@ func headerNonce(raw []byte) (uint64, bool) {
 
 // verifyDelayed proves the delayed-origin transactions of a block (annex A6.5): the delayed message hashes into
 // delayedInboxAccs[k] from delayedInboxAccs[k-1] (both proven under stateRoot_S, slot 6); this batch consumed it (k lies in
-// [afterDelayedMessagesRead - delayedSegments, afterDelayedMessagesRead)); and each 0x64 deposit transaction of the block is
-// the one the message derives (request id k, sender, recipient, value). Delayed message kinds other than the ETH
-// deposit have no derivation here and stay the named state l1_posted_delayed_origin_unproven, never a weaker level.
+// [afterDelayedMessagesRead - delayedSegments, afterDelayedMessagesRead)); and the block's transactions other than the internal
+// 0x6a and the execution-derived retry 0x68 are, byte for byte and in order, what Nitro derives from the message (derive.go: ETH
+// deposit, submit retryable, L2 message with unsigned / contract / signed / batch contents, L2 funded by L1). A message kind with
+// no derivation (end of block, rollup event, batch posting report) stays the named state l1_posted_delayed_origin_unproven, never
+// a weaker level.
 func verifyDelayed(arb *arbPins, root common.Hash, bridge *ethproof.AccountState, e Evidence, res payloadResult, types []uint64, nonce uint64) (uint64, error) {
 	d := e.Delayed
 	if d == nil {
@@ -90,22 +91,18 @@ func verifyDelayed(arb *arbPins, root common.Hash, bridge *ethproof.AccountState
 	if crypto.Keccak256Hash(prev[:], mh[:]) != accK {
 		return 0, delayedUnproven(types, nonce, "k", d.K, "message_kind", d.MsgKind)
 	}
+	want, ok := deriveDelayed(arb.ChainID, *d)
+	if !ok {
+		return 0, delayedUnproven(types, nonce, "k", d.K, "message_kind", d.MsgKind)
+	}
+	var got [][]byte
 	for _, tx := range e.BlockTxs {
-		t := ethproof.TxType(tx)
-		if !isDelayedOriginType(t) {
-			continue
+		if t := ethproof.TxType(tx); t != txInternal && t != txRetry {
+			got = append(got, tx)
 		}
-		if t != txDeposit || d.MsgKind != msgKindEthDeposit || len(d.Data) != 52 {
-			return 0, delayedUnproven(types, nonce, "k", d.K, "message_kind", d.MsgKind)
-		}
-		var dep depositTx
-		if err := rlp.DecodeBytes(tx[1:], &dep); err != nil || dep.Value == nil {
-			return 0, delayedUnproven(types, nonce, "k", d.K, "message_kind", d.MsgKind)
-		}
-		if dep.RequestID != w32(d.K) || dep.From != common.Address(d.Sender) || !bytes.Equal(dep.To[:], d.Data[:20]) ||
-			dep.Value.Cmp(new(big.Int).SetBytes(d.Data[20:52])) != 0 {
-			return 0, delayedUnproven(types, nonce, "k", d.K, "message_kind", d.MsgKind)
-		}
+	}
+	if !sameTxs(got, want) {
+		return 0, delayedUnproven(types, nonce, "k", d.K, "message_kind", d.MsgKind)
 	}
 	return d.K, nil
 }

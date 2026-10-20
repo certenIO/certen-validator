@@ -15,7 +15,8 @@ import (
 	"github.com/certen/independant-validator/pkg/finality"
 )
 
-const vectorDir = "testdata/finality_arb_posted1"
+// vectorDir is the set the helpers read; the set-2 test points it at its own directory for its duration.
+var vectorDir = "testdata/finality_arb_posted1"
 
 type vecLeg struct {
 	Chain     string `json:"chain"`
@@ -73,7 +74,7 @@ func loadManifest(t testing.TB) (cases []string, files map[string]string) {
 	if err := json.Unmarshal(raw, &m); err != nil {
 		t.Fatal(err)
 	}
-	if m.Format != "certen-finality-manifest/1" || m.Set != "finality_arb_posted1" {
+	if m.Format != "certen-finality-manifest/1" || m.Set != filepath.Base(vectorDir) {
 		t.Fatalf("manifest format %q set %q", m.Format, m.Set)
 	}
 	for p, want := range m.Files {
@@ -141,10 +142,23 @@ func TestPublishedVectorsFinalityArbPosted1(t *testing.T) {
 			t.Fatalf("%s: pins: %v", id, err)
 		}
 		v, verr := New().Verify(pins, refOf(t, c.Leg), evidenceOf(t, c))
-		if got := verdictCanon(v, verr); got != c.Expect {
-			t.Errorf("%s:\n got  %s\n want %s", id, got, c.Expect)
+		want := c.Expect
+		if w, ok := supersededInSet2[id]; ok {
+			want = w
+		}
+		if got := verdictCanon(v, verr); got != want {
+			t.Errorf("%s:\n got  %s\n want %s", id, got, want)
 		}
 	}
+}
+
+// supersededInSet2 are the two cases of finality_arb_posted1 whose recorded expectation described a verifier that did not decode the
+// zero-heavy layer (flag 0x20 over bytes that are not a zero-heavy payload gave byte 32). Nitro decodes that layer once, so the same
+// bytes now decode to garbage whose first byte (77) is not the Brotli header: the verdict is l1_batch_header_unknown{byte:77}. The
+// set is not edited; testdata/finality_arb_posted1/SUPERSEDED.md records the change and finality_arb_posted2 carries the cases.
+var supersededInSet2 = map[string]string{
+	"adv_synth_calldata_flag_zeroheavy": `{"code":"l1_batch_header_unknown","fields":{"batch":"77","byte":"77"}}`,
+	"adv_synth_blob_payload_zeroheavy":  `{"code":"l1_batch_header_unknown","fields":{"batch":"77","byte":"77"}}`,
 }
 
 // The valid vector also passes the registry's whole path: container header against the addendum and the leg, then the kind.

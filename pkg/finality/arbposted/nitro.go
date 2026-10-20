@@ -197,6 +197,24 @@ func decodePayload(payload []byte, maxUncompressed, maxSegments int) payloadResu
 	case headerDAS, headerDASTree, headerDACert:
 		res.status = payloadOffL1
 		return res
+	case headerZeroheavy:
+		// Nitro decodes the zero-heavy layer once (limit 101% of the batch bound + 64) and then reads the result as an ordinary
+		// payload: it must begin with the Brotli header byte, nothing else is decoded after it.
+		dec, big := zeroheavyDecode(payload[1:], maxUncompressed+maxUncompressed/100+64)
+		if big {
+			res.status, res.exceededUncompressed = payloadTooLarge, true
+			return res
+		}
+		if len(dec) == 0 {
+			res.status = payloadUndecodable
+			return res
+		}
+		res.headerByte = dec[0]
+		if dec[0] != headerBrotli {
+			res.status = payloadUnknownHeader
+			return res
+		}
+		payload = dec
 	default:
 		res.status = payloadUnknownHeader
 		return res

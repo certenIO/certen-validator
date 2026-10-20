@@ -65,6 +65,7 @@ type builder struct {
 	pinsRaw map[string][]byte
 	pinsObj map[string]*finality.Pins
 	reg     *finality.Registry
+	set     string // the vector set name; setName when empty
 }
 
 func hx(b []byte) string { return "0x" + hex.EncodeToString(b) }
@@ -677,7 +678,11 @@ func (b *builder) flush(rawDir string) error {
 		s := sha256.Sum256(b.files[p])
 		files[p] = hex.EncodeToString(s[:])
 	}
-	man := map[string]any{"format": formatMan, "set": setName, "files": files, "cases": b.cases}
+	set := b.set
+	if set == "" {
+		set = setName
+	}
+	man := map[string]any{"format": formatMan, "set": set, "files": files, "cases": b.cases}
 	mj, err := json.MarshalIndent(man, "", " ")
 	if err != nil {
 		return err
