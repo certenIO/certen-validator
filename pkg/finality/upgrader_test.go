@@ -26,17 +26,30 @@ type memStore struct {
 
 func newMemStore() *memStore { return &memStore{chains: map[string][]Addendum{}} }
 
-func (m *memStore) Append(_ context.Context, a Addendum) error {
+func (m *memStore) Append(_ context.Context, req AppendRequest) (Addendum, error) {
+	id := ProofIDString(req.ProofID)
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	m.calls++
-	id := ProofIDString(a.ProofID)
-	c := m.chains[id]
-	if a.Seq != uint64(len(c))+1 {
-		return NewState(CodeAppendConflict, "proof_id", id, "seq", a.Seq)
+	m.mu.Unlock()
+	for {
+		// the chain is read under the lock and judged outside it (a Kind may be slow or hung); if the chain moved meanwhile the
+		// plan is made again, as the database does when it loses the race
+		m.mu.Lock()
+		seen := append([]Addendum(nil), m.chains[id]...)
+		m.mu.Unlock()
+		a, _, err := PlanAppend(req, seen)
+		if err != nil {
+			return Addendum{}, err
+		}
+		m.mu.Lock()
+		if len(m.chains[id]) != len(seen) {
+			m.mu.Unlock()
+			continue
+		}
+		m.chains[id] = append(m.chains[id], a)
+		m.mu.Unlock()
+		return a, nil
 	}
-	m.chains[id] = append(c, a)
-	return nil
 }
 
 func (m *memStore) Chain(_ context.Context, id string) ([]Addendum, error) {
@@ -398,10 +411,12 @@ func TestUpgraderLoserOfAnAppendRaceReadsTheWinnersChainNextPass(t *testing.T) {
 	racing := &racingStore{memStore: f.store, winner: winner}
 	f.u.store = racing
 	rep := f.u.RunOnce(context.Background())
-	if rep.Conflict != 1 || rep.Appended != 0 {
+	// the winner took l1_posted: the loser reports the conflict for that level, and appends finalized at the NEXT seq
+	if rep.Conflict != 1 || rep.Appended != 1 {
 		t.Fatalf("%+v", rep)
 	}
-	if chain, _ := f.store.Chain(context.Background(), legID); len(chain) != 1 || chain[0].OwnHash != winner.OwnHash {
+	chain, _ := f.store.Chain(context.Background(), legID)
+	if len(chain) != 2 || chain[0].OwnHash != winner.OwnHash || chain[1].Level != LevelFinalized || chain[1].PrevHash != winner.OwnHash || VerifyChain(f.d0(), chain) != nil {
 		t.Fatalf("chain %+v", chain)
 	}
 }
@@ -412,12 +427,12 @@ type racingStore struct {
 	raced  bool
 }
 
-func (r *racingStore) Append(ctx context.Context, a Addendum) error {
+func (r *racingStore) Append(ctx context.Context, req AppendRequest) (Addendum, error) {
 	if !r.raced {
 		r.raced = true
-		r.memStore.chains[ProofIDString(a.ProofID)] = []Addendum{r.winner}
+		r.memStore.chains[ProofIDString(req.ProofID)] = []Addendum{r.winner}
 	}
-	return r.memStore.Append(ctx, a)
+	return r.memStore.Append(ctx, req)
 }
 
 // ---- it never blocks settlement, attestation or write-back ----

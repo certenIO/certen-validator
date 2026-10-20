@@ -1,0 +1,31 @@
+{
+  "format": "certen-finality-vectors/1",
+  "id": "valid_leg_47604755",
+  "description": "live: a resolved DEFENDER_WINS 0.2.0 game (TEE proof, slow path) past its delay as of finalized L1 block A, an intermediate-root anchor and the L2 spine down to the leg block",
+  "pins": "pins/main.json",
+  "leg": "legs/leg_47604755.json",
+  "evidence": "evidence/valid_leg_47604755.bin",
+  "expect": {
+    "fields": {
+      "a_hash": "0xfdfe5367fa172b57c2574be93dc20c4fbcd113c2ac9601cd1d4b8cdd3d2fcba0",
+      "a_number": "11954148",
+      "a_timestamp": "1792485444",
+      "created_at": "1790980536",
+      "expected_resolution": "1791412536",
+      "finalization_path": "slow",
+      "game": "0x3b91948aafcc00cf76aecd837169e4cee0389815",
+      "game_type": "621",
+      "game_version": "0.2.0",
+      "l1_finalized_slot": "11396000",
+      "l1_participants": "511",
+      "output_root_block": "47604773",
+      "output_root_index": "17",
+      "proof_count": "1",
+      "proof_system": "tee",
+      "resolved_at": "1791412824",
+      "root_kind": "intermediate",
+      "status": "2"
+    },
+    "result": "ok"
+  }
+}

@@ -2323,7 +2323,7 @@ func startValidator(
 			return nil, nil, fmt.Errorf("finality pins: %w", ferr)
 		}
 		if _, ferr := finality.Launch(context.Background(), finalityOn, finalityRepo, finalityRepo, finality.Default, finalityPins,
-			finality.UpgraderConfig{Logf: log.Printf}); ferr != nil {
+			finality.UpgraderConfig{Logf: log.Printf, Status: database.NewFinalityStatusRepository(dbClient)}); ferr != nil {
 			return nil, nil, fmt.Errorf("finality upgrader: %w", ferr)
 		}
 	}

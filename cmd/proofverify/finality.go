@@ -10,9 +10,16 @@ import (
 	"io"
 	"os"
 
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/google/uuid"
 
 	"github.com/certen/independant-validator/pkg/database"
+	"github.com/certen/independant-validator/pkg/ethproof"
+	"github.com/certen/independant-validator/pkg/execution"
 	"github.com/certen/independant-validator/pkg/finality"
 )
 
@@ -23,8 +30,11 @@ import (
 // and never read from the file; then the chain of addenda (sequence, previous-hash links, own hashes under that D0, each
 // level at most once and in any order, every (chain, level, kind) a row of the table) and the carried leg member are checked,
 // then each addendum's evidence by its registered verifier. The report names every level - verified, pending or not
-// applicable - and the level reached. The file path (--finality-file) reads and strictly parses the carried leg and addenda
-// but holds no Settlement, so it judges nothing until it is given one (RB11-B2B): it reports finality_included_unavailable.
+// applicable - and the level reached. The file path (--finality-file) reads and strictly parses the carried leg and addenda;
+// the portable document carries no Settlement, so a Settlement SOURCE is named beside it: --outcome-file (an exported outcome
+// evidence file: the block that holds the recorded outcome, proven offline into its header) or --proof-id with --db (the
+// stored bundle's L6 execution proof). With a Settlement the leg is judged exactly as on the database path; without one the
+// file judges nothing and says so by name (finality_included_unavailable, summary-only).
 // Exit codes are the tool's own:
 //
 //	0  verified     the chain verifies and every addendum verifies to exactly its level (a level not yet reached is
@@ -62,10 +72,14 @@ func reportFinality(ctx context.Context, w io.Writer, db *sql.DB, id uuid.UUID, 
 	return printReport(w, rep, id.String())
 }
 
-// reportFinalityFile reads the `finality` member (certen-finality-addenda/1) of a portable proof v2 document file with no
-// database. A verifier needs the leg's Settlement to recompute D0 (V2_SPEC_S7 2.6), and the portable document does not carry
-// one: until the Settlement source is wired (RB11-B2B) no level is judged and none is claimed, and the report says so by name.
-func reportFinalityFile(w io.Writer, path string, reg *finality.Registry, pins *finality.Pins) int {
+// reportFinalityFile reads the `finality` member (certen-finality-addenda/1) of a portable proof v2 document file. With a
+// Settlement (leg != nil) the leg is judged against it exactly as the database path judges a stored leg: the Settlement is
+// verified (level 1, derived), D0 is the LegBinding of its block and never read from the file, the carried `leg` member must
+// equal that block (finality_chain_broken{leg_binding}), the chain of addenda is recomputed under D0 and each addendum is
+// judged by its registered Kind; the report names every level and the headline. Without a Settlement the portable document
+// holds nothing to recompute D0 from: no level is judged and none is claimed, and the report says so by name
+// (finality_included_unavailable, summary-only).
+func reportFinalityFile(w io.Writer, path string, reg *finality.Registry, pins *finality.Pins, leg *legSettlement) int {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		fmt.Fprintf(w, "FAILED (finality)  %s\n  %v\n", path, err)
@@ -87,10 +101,94 @@ func reportFinalityFile(w io.Writer, path string, reg *finality.Registry, pins *
 		fmt.Fprintf(w, "FAILED (finality)  %s\n  %v\n", path, err)
 		return exitFailed
 	}
-	st := finality.IncludedUnavailable(finality.IncludedSettlementNotJudged, "chain", section.Leg.Chain)
-	fmt.Fprintf(w, "SUMMARY-ONLY (finality)  %s\n  %v\n  S7  carried leg: chain %d block %d %s; %d addenda are not judged\n", path, st, section.Leg.Chain,
-		section.Leg.BlockNumber, section.Leg.BlockHash, len(section.Addenda))
-	return exitSummaryOnly
+	if leg == nil {
+		st := finality.IncludedUnavailable(finality.IncludedSettlementNotJudged, "chain", section.Leg.Chain)
+		fmt.Fprintf(w, "SUMMARY-ONLY (finality)  %s\n  %v\n  S7  carried leg: chain %d block %d %s; %d addenda are not judged "+
+			"(name the Settlement: --outcome-file, or --proof-id with --db)\n", path, st, section.Leg.Chain,
+			section.Leg.BlockNumber, section.Leg.BlockHash, len(section.Addenda))
+		return exitSummaryOnly
+	}
+	carried, err := section.Leg.Ref()
+	if err != nil {
+		fmt.Fprintf(w, "FAILED (finality)  %s\n  %v\n", path, err)
+		return exitFailed
+	}
+	fmt.Fprintf(w, "  S7  Settlement source: %s\n", leg.source)
+	rep := reg.Verify(leg.chain, leg.s, carried, section.Addenda, pins)
+	return printReport(w, rep, path)
+}
+
+// legSettlement is the Settlement a file path is judged against, with the chain it settled on and where it came from.
+type legSettlement struct {
+	chain  uint64
+	s      *ethproof.Settlement
+	source string
+}
+
+// settlementFromOutcomeFile reads an exported outcome evidence file (execution.OutcomeEvidence) and returns the Settlement of the
+// block that holds the recorded outcome: its header, the recording transaction and its receipt, each proven into that header by
+// ethproof (the same checks finality level 1 runs). Nothing in the file is trusted: DeriveIncluded verifies the Settlement.
+func settlementFromOutcomeFile(path string) (*legSettlement, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	ev := new(execution.OutcomeEvidence)
+	if err := json.Unmarshal(raw, ev); err != nil {
+		return nil, fmt.Errorf("the outcome evidence does not decode: %w", err)
+	}
+	if ev.ChainID <= 0 {
+		return nil, fmt.Errorf("the outcome evidence names chain %d", ev.ChainID)
+	}
+	inc := ev.Record.Inclusion
+	var hdr types.Header
+	if err := rlp.DecodeBytes(inc.Header, &hdr); err != nil {
+		return nil, fmt.Errorf("the outcome evidence header does not decode: %w", err)
+	}
+	proof := func(value []byte, nodes []hexutil.Bytes, root common.Hash) *ethproof.InclusionProof {
+		p := &ethproof.InclusionProof{LeafHash: [32]byte(crypto.Keccak256Hash(value)), LeafIndex: inc.Index, ExpectedRoot: [32]byte(root), LeafValue: value}
+		for _, n := range nodes {
+			p.ProofNodes = append(p.ProofNodes, []byte(n))
+			p.ProofHashes = append(p.ProofHashes, [32]byte(crypto.Keccak256Hash(n)))
+		}
+		return p
+	}
+	// the file STATES which block and transaction hold the recorded outcome: the header and the transaction bytes must be those,
+	// or the Settlement would be the proof of some other block that merely verifies by itself
+	if got, want := crypto.Keccak256Hash(inc.Header), common.HexToHash(ev.Record.BlockHash); got != want {
+		return nil, fmt.Errorf("the outcome evidence header hashes to %s, the record names block %s", got.Hex(), want.Hex())
+	}
+	if hdr.Number == nil || hdr.Number.Uint64() != ev.Record.BlockNumber {
+		return nil, fmt.Errorf("the outcome evidence header is not block %d", ev.Record.BlockNumber)
+	}
+	if got, want := crypto.Keccak256Hash(inc.Transaction), common.HexToHash(ev.Record.Tx); got != want {
+		return nil, fmt.Errorf("the outcome evidence transaction hashes to %s, the record names %s", got.Hex(), want.Hex())
+	}
+	s := &ethproof.Settlement{
+		BlockHash: crypto.Keccak256Hash(inc.Header), Header: inc.Header, TxHash: crypto.Keccak256Hash(inc.Transaction),
+		Tx:      proof(inc.Transaction, inc.TransactionProof, hdr.TxHash),
+		Receipt: proof(inc.Receipt, inc.ReceiptProof, hdr.ReceiptHash),
+	}
+	return &legSettlement{chain: uint64(ev.ChainID), s: s, source: "outcome evidence " + path}, nil
+}
+
+// settlementFromDB loads the stored bundle's L6 execution proof of a proof id (the same leg the database path judges).
+func settlementFromDB(ctx context.Context, dsn, proofID string) (*legSettlement, error) {
+	db, err := sql.Open("postgres", dsn)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	repo := database.NewFinalityAddendaRepository(database.NewClientFromDB(db))
+	ref, err := repo.LegRef(ctx, proofID)
+	if err != nil {
+		return nil, err
+	}
+	st, err := repo.LegSettlement(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	return &legSettlement{chain: ref.Chain, s: st.Included, source: "the bundle of proof " + proofID}, nil
 }
 
 // printReport writes one leg's per-statement S7 verdicts and returns the leg's exit code.

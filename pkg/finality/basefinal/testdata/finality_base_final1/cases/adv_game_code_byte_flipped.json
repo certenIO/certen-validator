@@ -1,0 +1,19 @@
+{
+  "format": "certen-finality-vectors/1",
+  "id": "adv_game_code_byte_flipped",
+  "description": "a byte of the carried game code flipped: it is no longer the code of the proven account",
+  "pins": "pins/main.json",
+  "leg": "legs/leg_47604755.json",
+  "evidence": "evidence/valid_leg_47604755.bin",
+  "splice": {
+    "offset": 35434,
+    "delete": 1,
+    "insert": "0xd5"
+  },
+  "expect": {
+    "code": "l1_state_proof_invalid",
+    "fields": {
+      "which": "account"
+    }
+  }
+}

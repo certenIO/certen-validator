@@ -1,0 +1,22 @@
+{
+ "format": "finality_arb_force1/1",
+ "name": "owner_force_confirm_2025_10_13",
+ "note": "the real owner force-confirmation of the Arbitrum Sepolia BoLD Rollup (tx 0x350518a9...cc16 in Sepolia block 9404699, 2025-10-13): the block is far outside any L1 spine, so it is judged at the classifier level (spec 5.7 O4): the transaction and receipt are MPT-proven under the block header roots with the carried nodes, the receipt holds AssertionConfirmed and AssertionForceConfirmed logs of the Rollup, tx.to is the owner path, not the Rollup",
+ "k": {
+  "number": 9404699,
+  "hash": "0xe317978f892d6df681c2f37ccc92d6a68278d74f51737ee7fffd11a9761575c8",
+  "transactions_root": "0xf13cdec6eba994ce94760d40d24e7edb476522a220a720b61c38927b5d34ab12",
+  "receipts_root": "0xeede22c355bb5b92e83f82fce8e6f026ece72584c042bbff5211f4799975e338"
+ },
+ "tx_index": 89,
+ "tx_hash": "0x350518a98c5a0bee841046809ef90bab1ea849082de18c714d02c845033fcc16",
+ "files": {
+  "tx": "tx.bin",
+  "receipt": "receipt.bin",
+  "nodes": "nodes.bin (u32be count, then u32be length + node)",
+  "header": "header.bin (raw block header RLP)"
+ },
+ "assertion": "topic1 of the Rollup AssertionConfirmed log of the receipt",
+ "pins": "embedded",
+ "expect": "{\"code\":\"confirmed_by_owner_force\",\"fields\":{\"l1_block\":\"9404699\",\"path\":\"force\",\"tx\":\"0x350518a98c5a0bee841046809ef90bab1ea849082de18c714d02c845033fcc16\"}}"
+}

@@ -1,0 +1,21 @@
+{
+  "format": "certen-finality-vectors/1",
+  "id": "adv_output_root_index_above_n",
+  "description": "an index above the 20 intermediate roots is a bound, not a root",
+  "pins": "pins/main.json",
+  "leg": "legs/leg_47604755.json",
+  "evidence": "evidence/valid_leg_47604755.bin",
+  "splice": {
+    "offset": 36013,
+    "delete": 1,
+    "insert": "0x15"
+  },
+  "expect": {
+    "code": "finality_evidence_too_large",
+    "fields": {
+      "count": "21",
+      "limit": "20",
+      "part": "outputRootIndex"
+    }
+  }
+}

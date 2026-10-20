@@ -138,6 +138,9 @@ func TestEveryExpectedStateConformsToTheRegistry(t *testing.T) {
 		{"committee_chain_broken", "check"}, {"committee_chain_broken", "reason"}, {"finality_link_broken", "check"}, {"finality_header_chain_broken", "reason"},
 	} {
 		for _, m := range reg.States[c.code].Enums[c.field] {
+			if c.code == "finality_header_chain_broken" && l1l2HeaderChainReasons[m] {
+				continue // the union set (RB11-INT1): hash, number and rlp belong to the spines l1 and l2 and are pinned by the ethl1 and basefinal vectors
+			}
 			if !pinned[c.code+"/"+c.field+"/"+m] {
 				t.Errorf("no vector pins %s.%s = %s", c.code, c.field, m)
 			}
@@ -168,7 +171,13 @@ func TestTheTypedReasonConstantsAreExactlyTheRegistrysClosedSets(t *testing.T) {
 		string(adiri.ReasonLargerThanExpected), string(adiri.ReasonSetMismatch), string(adiri.ReasonNotSubset), string(adiri.ReasonBelowTwoThirds),
 		string(adiri.ReasonBelowMinCommitteeSize), string(adiri.ReasonEncoding), string(adiri.ReasonIdentity), string(adiri.ReasonSubgroup), string(adiri.ReasonPairing),
 	}, reg.States["committee_chain_broken"].Enums["reason"])
-	same("finality_header_chain_broken.reason", []string{string(adiri.ReasonParentHash), string(adiri.ReasonNumberGap)}, reg.States["finality_header_chain_broken"].Enums["reason"])
+	var adiriHeaderReasons []string
+	for _, m := range reg.States["finality_header_chain_broken"].Enums["reason"] {
+		if !l1l2HeaderChainReasons[m] {
+			adiriHeaderReasons = append(adiriHeaderReasons, m)
+		}
+	}
+	same("finality_header_chain_broken.reason (the adiri spine of the union set)", []string{string(adiri.ReasonParentHash), string(adiri.ReasonNumberGap)}, adiriHeaderReasons)
 	same("finality_source_unavailable.reason", []string{string(adiri.SourceEpochRecord), string(adiri.SourceHeaders), string(adiri.SourceEpochRecordsFail), string(adiri.SourceHistoryProof)},
 		reg.States["finality_source_unavailable"].Enums["reason"])
 	same("committee_chain_broken.check", []string{adiri.CheckCommitteeIncompatible, adiri.CheckDuplicateKey, adiri.CheckBelowQuorum, adiri.CheckSignerIndexInvalid, adiri.CheckPublicKeyInvalid, adiri.CheckSignatureInvalid},
@@ -412,3 +421,7 @@ func TestAdiri3ReissuesTheSupersededSetsChangingOnlyTheirExpectations(t *testing
 		t.Fatalf("finality_adiri3 holds %d vectors, the superseded sets plus the %d added ones %d", len(cur.Vectors), len(extra), n)
 	}
 }
+
+// finality_header_chain_broken.reason is one closed set for every spine (states.json notes, RB11-INT1): these three tokens are
+// raised for the spines l1 and l2 by pkg/finality/ethl1 and pkg/finality/basefinal; the adiri spine raises the other two.
+var l1l2HeaderChainReasons = map[string]bool{"hash": true, "number": true, "rlp": true}

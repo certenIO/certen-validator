@@ -52,6 +52,7 @@ import (
 	"github.com/certen/independant-validator/pkg/database"
 	"github.com/certen/independant-validator/pkg/execution"
 	"github.com/certen/independant-validator/pkg/finality"
+	"github.com/certen/independant-validator/pkg/finality/allkinds"
 	certenproof "github.com/certen/independant-validator/pkg/proof"
 	proofv2 "github.com/certen/independant-validator/pkg/proof/v2"
 	gnarklogger "github.com/consensys/gnark/logger"
@@ -92,9 +93,10 @@ func main() {
 			"committed validator set belongs to rests on the anchor alone")
 		finalityOn = flag.Bool("finality", false, "also verify the proof's staged finality (S7): its bundle's L6 settlement and the "+
 			"finality addenda stored for it (certen:finality:v1), reporting the level reached")
-		finalityFile = flag.String("finality-file", "", "read and strictly parse the finality section of a portable proof v2 document "+
-			"(carried leg and addenda) offline, with no database; it reports the carried leg and judges no level until it is "+
-			"given the leg's Settlement, from which D0 is recomputed (use --finality for the judged report)")
+		finalityFile = flag.String("finality-file", "", "read the finality section of a portable proof v2 document (carried leg and "+
+			"addenda) offline and judge it against the leg's Settlement, from which D0 is recomputed: name the Settlement with "+
+			"--outcome-file <exported outcome evidence> or with --proof-id and --db (the stored bundle); with no Settlement the "+
+			"file judges no level and says so (finality_included_unavailable)")
 		pinsSelfcheck = flag.Bool("pins-selfcheck", false, "re-derive the whole embedded Sepolia ledger of the finality pins from its root pin: every "+
 			"entry from its predecessor by the light-client link beside the file (pkg/finality/pins-links), judged by the same verifier as a proof; "+
 			"offline, no database (V2_SPEC_S7 4.3, SO3)")
@@ -112,6 +114,12 @@ func main() {
 		fmt.Fprintln(os.Stderr, pinsErr)
 		os.Exit(exitFailed)
 	}
+	// Every implemented finality verifier kind is registered (explicitly, no init()), so --offline and --finality judge every
+	// level of every chain from files and the embedded pins. The provers need live sources and stay unregistered here.
+	if err := allkinds.Register(finality.Default); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(exitFailed)
+	}
 
 	if *pinsSelfcheck {
 		if *proofID != "" || *outcome || *outcomeFile != "" || *l5 || *govern || *finalityOn || *finalityFile != "" {
@@ -122,12 +130,37 @@ func main() {
 		os.Exit(reportPinsSelfcheck(os.Stdout, os.Stderr, pins))
 	}
 	if *finalityFile != "" {
-		if *proofID != "" || *outcome || *outcomeFile != "" || *l5 || *govern || *finalityOn {
-			fmt.Fprintln(os.Stderr, "--finality-file verifies a file on its own: no --proof-id, --finality, --outcome, --outcome-file, --l5 or --governance")
+		// the Settlement source of the file: an exported outcome evidence file, or a stored proof's bundle (--proof-id with --db)
+		if *outcome || *l5 || *govern || *finalityOn || (*outcomeFile != "" && *proofID != "") {
+			fmt.Fprintln(os.Stderr, "--finality-file verifies a file against ONE Settlement source: --outcome-file <evidence.json> or --proof-id with --db; "+
+				"not --finality, --outcome, --l5 or --governance")
 			os.Exit(exitUsage)
 		}
+		var leg *legSettlement
+		switch {
+		case *outcomeFile != "":
+			var lerr error
+			if leg, lerr = settlementFromOutcomeFile(*outcomeFile); lerr != nil {
+				fmt.Fprintf(os.Stdout, "FAILED (finality)  %s\n  the Settlement source %s does not decode: %v\n", *finalityFile, *outcomeFile, lerr)
+				os.Exit(exitFailed)
+			}
+		case *proofID != "":
+			if *dsn == "" {
+				fmt.Fprintln(os.Stderr, "--finality-file with --proof-id needs --db (the stored bundle is the Settlement source)")
+				os.Exit(exitUsage)
+			}
+			var lerr error
+			if leg, lerr = settlementFromDB(context.Background(), *dsn, *proofID); lerr != nil {
+				if n, ok := finality.AsNamed(lerr); ok {
+					fmt.Fprintf(os.Stdout, "SUMMARY-ONLY (finality)  %s\n  %v\n  The proof carries no settlement evidence to recompute D0 from.\n", *finalityFile, n)
+					os.Exit(exitSummaryOnly)
+				}
+				fmt.Fprintf(os.Stdout, "FAILED (finality)  %s\n  the Settlement source (proof %s) cannot be read: %v\n", *finalityFile, *proofID, lerr)
+				os.Exit(exitFailed)
+			}
+		}
 		cutNetwork()
-		os.Exit(reportFinalityFile(os.Stdout, *finalityFile, finality.Default, pins))
+		os.Exit(reportFinalityFile(os.Stdout, *finalityFile, finality.Default, pins, leg))
 	}
 	if *outcomeFile != "" {
 		if *proofID != "" || *outcome || *l5 || *govern {

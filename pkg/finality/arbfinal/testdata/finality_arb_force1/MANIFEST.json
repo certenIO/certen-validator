@@ -1,0 +1,11 @@
+{
+ "files": {
+  "README.md": "4c212bfe35eac7287c63891bdcc59281c436fde2843a73756f8e44feff885b63",
+  "fixture.json": "e6f93b3079e2055d9a8fc214fdda04f56952dd0e2a7bdbd231273c43d297f884",
+  "header.bin": "465cbfc88982d3a8a3d84df15bcef32e9a267d3727c76ad30f77ff81ee73a527",
+  "nodes.bin": "3cd99b0dd615cf1acc26ed69e42119cf5fdb02440c1932ebc3b28f312ac26304",
+  "receipt.bin": "33364733d67f64900ed299c22273dee03529865d3189473c9c29e4d30c6bc9f1",
+  "tx.bin": "49e4cfcf4528c7e4cbafde4b3dca1b791647f2ee451d2e0e87c84cef011333cf"
+ },
+ "format": "finality_arb_force1/manifest/1"
+}
