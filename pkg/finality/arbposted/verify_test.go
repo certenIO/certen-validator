@@ -119,6 +119,8 @@ var (
 var (
 	implWordOverride *common.Hash
 	absentProve      []common.Address
+	// skipProve names storage slots whose proof nodes are left out of the evidence
+	skipProve []common.Hash
 )
 
 type synthState struct {
@@ -178,6 +180,13 @@ func newSynthState(t *testing.T, acc map[uint64]common.Hash, delayed map[uint64]
 		all = append(all, c.nodes...)
 	}
 	for _, s := range slots {
+		skip := false
+		for _, k := range skipProve {
+			skip = skip || k == s
+		}
+		if skip {
+			continue
+		}
 		var c collector
 		if err := st.Prove(crypto.Keccak256(s[:]), &c); err != nil {
 			t.Fatal(err)
