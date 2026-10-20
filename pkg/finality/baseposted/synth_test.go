@@ -42,16 +42,18 @@ func testKey(label string) *ecdsa.PrivateKey {
 }
 
 type synthOpts struct {
-	compression string // "zlib" or "brotli"
-	calldata    bool   // frames in tx.input (type-2 tx) instead of blobs
-	nFrames     int    // channel split into this many frames (>=1)
-	span        bool   // a span batch instead of a singular batch
-	batchTs     uint64
-	frameBlocks []uint64 // L1 block of each frame transaction (len nFrames); default all 1000
-	epochNum    uint64
-	batcher     *ecdsa.PrivateKey // signs the frame txs
-	chainBatch  *ecdsa.PrivateKey // the batcher recorded in the SystemConfig (default: the signing key)
-	toInbox     bool
+	compression      string // "zlib" or "brotli"
+	calldata         bool   // frames in tx.input (type-2 tx) instead of blobs
+	nFrames          int    // channel split into this many frames (>=1)
+	span             bool   // a span batch instead of a singular batch
+	batchTs          uint64
+	frameBlocks      []uint64 // L1 block of each frame transaction (len nFrames); default all 1000
+	epochNum         uint64
+	batcher          *ecdsa.PrivateKey // signs the frame txs
+	chainBatch       *ecdsa.PrivateKey // the batcher recorded in the SystemConfig (default: the signing key)
+	toInbox          bool
+	dirtyBatcherHash bool // the recorded batcherHash has a non-zero byte above its 20-byte address
+	omitImpl         bool // the implementation account is absent from the state
 }
 
 type synth struct {
@@ -177,6 +179,9 @@ func makeSynth(t *testing.T, o synthOpts) *synth {
 		byBlock[b] = append(byBlock[b], i)
 	}
 	batcherHash := common.BytesToHash(crypto.PubkeyToAddress(o.chainBatch.PublicKey).Bytes())
+	if o.dirtyBatcherHash {
+		batcherHash[0] = 1
+	}
 	for _, blk := range order {
 		var raws [][]byte
 		for _, i := range byBlock[blk] {
@@ -209,7 +214,9 @@ func makeSynth(t *testing.T, o synthOpts) *synth {
 		sc, _ := rlp.EncodeToBytes(&types.StateAccount{Nonce: 1, Balance: uint256.NewInt(0), Root: storageRoot, CodeHash: crypto.Keccak256([]byte("proxy"))})
 		im, _ := rlp.EncodeToBytes(&types.StateAccount{Nonce: 1, Balance: uint256.NewInt(0), Root: types.EmptyRootHash, CodeHash: testImplCode[:]})
 		accTrie.Update(crypto.Keccak256(testSysConfig[:]), sc)
-		accTrie.Update(crypto.Keccak256(testImpl[:]), im)
+		if !o.omitImpl {
+			accTrie.Update(crypto.Keccak256(testImpl[:]), im)
+		}
 		stateRoot := accTrie.Hash()
 		var nodes [][]byte
 		collect := func(tr *trie.Trie, key []byte) {

@@ -6,6 +6,11 @@ import (
 	"bytes"
 	"compress/zlib"
 	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/crypto"
@@ -306,4 +311,118 @@ func TestBodyCodecRoundTripAndStrictness(t *testing.T) {
 	bad[off], bad[off+1], bad[off+2], bad[off+3] = 0, 0, 1, 1 // 257 frames
 	_, err = DecodeBody(bad, finality.DefaultLimits(), ep, 32)
 	wantCode(t, err, finality.CodeEvidenceTooLarge, map[string]string{"part": "frameTxs", "count": "257", "limit": "256"})
+}
+
+func dropNodesContaining(nodes [][]byte, needle []byte) [][]byte {
+	var out [][]byte
+	for _, n := range nodes {
+		if !bytes.Contains(n, needle) {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+func TestSynthEachStateProofGapIsNamed(t *testing.T) {
+	// the storage leaf holding the implementation address removed: the EIP-1967 slot cannot be proven
+	s := makeSynth(t, synthOpts{compression: "zlib", calldata: true})
+	n0 := len(s.body.Nodes)
+	s.body.Nodes = dropNodesContaining(s.body.Nodes, testImpl.Bytes())
+	if len(s.body.Nodes) >= n0 {
+		t.Fatal("the implementation storage leaf was not found")
+	}
+	_, err := s.verify()
+	wantCode(t, err, CodeL1StateProofInvalid, map[string]string{"which": "slot"})
+
+	// the storage leaf holding the batcher removed: the batcherHash slot cannot be proven
+	s = makeSynth(t, synthOpts{compression: "zlib", calldata: true})
+	n0 = len(s.body.Nodes)
+	s.body.Nodes = dropNodesContaining(s.body.Nodes, crypto.PubkeyToAddress(testKey("batcher").PublicKey).Bytes())
+	if len(s.body.Nodes) >= n0 {
+		t.Fatal("the batcher storage leaf was not found")
+	}
+	_, err = s.verify()
+	wantCode(t, err, CodeL1StateProofInvalid, map[string]string{"which": "slot"})
+
+	// the implementation account absent from the state: its code hash cannot be proven
+	s = makeSynth(t, synthOpts{compression: "zlib", calldata: true, omitImpl: true})
+	_, err = s.verify()
+	wantCode(t, err, CodeL1StateProofInvalid, map[string]string{"which": "account"})
+
+	// a batcherHash that is not a plain address (a non-zero byte above the 20) never matches a sender
+	s = makeSynth(t, synthOpts{compression: "zlib", calldata: true, dirtyBatcherHash: true})
+	_, err = s.verify()
+	wantCode(t, err, CodeBatcherSender, nil)
+}
+
+func TestKindVerifyRefusesAMislabelledContainerAndAnUnreadableLeg(t *testing.T) {
+	set := filepath.Join("testdata", SetName)
+	pinsRaw, err := ReadFile(set, "pins/main.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pins, err := finality.ParsePinsOverride(pinsRaw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legRaw, _ := ReadFile(set, "legs/a.json")
+	var leg Leg
+	if err := json.Unmarshal(legRaw, &leg); err != nil {
+		t.Fatal(err)
+	}
+	num, _ := strconv.ParseUint(leg.Number, 10, 64)
+	hdr, _ := hex.DecodeString(strings.TrimPrefix(leg.Header, "0x"))
+	hb, _ := hex.DecodeString(strings.TrimPrefix(leg.Hash, "0x"))
+	var hash [32]byte
+	copy(hash[:], hb)
+	ev, err := ReadFile(set, "evidence/valid_a.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := finality.BlockRef{Chain: 84532, Number: num, Hash: hash, HeaderRLP: hdr}
+	if _, err := (Kind{}).Verify(pins, ref, ev); err != nil {
+		t.Fatalf("the base case must verify: %v", err)
+	}
+	c, err := finality.DecodeContainer(ev, finality.DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	reenc := func(mod func(*finality.Container)) []byte {
+		cc := c
+		mod(&cc)
+		out, err := cc.Encode()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	_, err = Kind{}.Verify(pins, ref, reenc(func(x *finality.Container) { x.Header.Kind = "arb-sepolia/l1_posted/v1" }))
+	wantCode(t, err, finality.CodeEvidenceUnrecognised, nil)
+	_, err = Kind{}.Verify(pins, ref, reenc(func(x *finality.Container) { x.Header.Chain = 421614 }))
+	wantCode(t, err, finality.CodeEvidenceMalformed, map[string]string{"part": "header.chain"})
+	_, err = Kind{}.Verify(pins, ref, reenc(func(x *finality.Container) { x.Header.Level = finality.LevelFinalized }))
+	wantCode(t, err, finality.CodeEvidenceMalformed, map[string]string{"part": "header.chain"})
+	_, err = Kind{}.Verify(pins, ref, reenc(func(x *finality.Container) { x.Header.BlockHash[0] ^= 1 }))
+	wantCode(t, err, finality.CodeBlockMismatch, map[string]string{"field": "blockHash"})
+	_, err = Kind{}.Verify(pins, ref, reenc(func(x *finality.Container) { x.Header.BlockNumber++ }))
+	wantCode(t, err, finality.CodeBlockMismatch, map[string]string{"field": "blockNumber"})
+	// no header handed over
+	noHdr := ref
+	noHdr.HeaderRLP = nil
+	_, err = Kind{}.Verify(pins, noHdr, ev)
+	wantCode(t, err, finality.CodeEvidenceMalformed, map[string]string{"part": "leg.header"})
+	// a header that is not the one the block hash names (the container and the leg agree on the hash)
+	bad := ref
+	bad.Hash[0] ^= 1
+	_, err = Kind{}.Verify(pins, bad, reenc(func(x *finality.Container) { x.Header.BlockHash[0] ^= 1 }))
+	wantCode(t, err, finality.CodeBlockMismatch, map[string]string{"field": "blockHash"})
+	// a header that is not RLP at all
+	junk := ref
+	junk.HeaderRLP = []byte{1, 2, 3}
+	_, err = Kind{}.Verify(pins, junk, ev)
+	wantCode(t, err, finality.CodeEvidenceMalformed, map[string]string{"part": "header"})
+	// the pins carry no base_sepolia section / no Sepolia ledger entry
+	empty, _ := finality.ParsePinsOverride([]byte(`{"format":"certen-finality-pins/1","onchain_commitment":null,"published_utc":"2026-10-20T00:00:00Z"}` + "\n"))
+	_, err = Kind{}.Verify(empty, ref, ev)
+	wantCode(t, err, finality.CodePinUnknown, map[string]string{"kind": "base_sepolia"})
 }
