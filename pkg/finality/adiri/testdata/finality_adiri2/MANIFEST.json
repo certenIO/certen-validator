@@ -1,9 +1,10 @@
 {
  "files": {
+  "evidence/syn2-kind2.bin": "9044e02873375a83b8eefe23b691d3c51e5bbbf55a73964d1843ea035334f3ad",
   "evidence/syn2-spine-4.bin": "2563da2c05430af6abb9629dc433269518caebcfc326b3e947f102526a294496",
   "evidence/syn2-spine-number-gap.bin": "78259eaebc06f1780f4d0a327d4daae4c0b6b2318e10de79b4a9bd41ceb3abe2",
   "evidence/syn2-two-thirds-boundary.bin": "e067b1b3c212775979fd438e7ceadb58261410609001ee078beebb4f604fad8c",
-  "vectors.json": "c883398ac712019ad852069a58a71faa02716fd6336e988c27b76da67b217313"
+  "vectors.json": "cb1357b7832c5c8041ad3281e9e414e4483fa867f07720928161e237c3a66435"
  },
  "format": "finality_adiri2/manifest/1"
 }

@@ -4,6 +4,9 @@ package main
 
 import (
 	"encoding/hex"
+
+	"github.com/ethereum/go-ethereum/crypto"
+
 	"os"
 	"path/filepath"
 
@@ -83,6 +86,25 @@ func writeSet2(out string) error {
 		last.Edits = diffEdits(base.evidence, raw)
 		last.Expect = canon("finality_evidence_malformed", "part", "body", "reason", "trailing bytes", "got_len", uint64(1), "want_len", uint64(0))
 	}
+
+	addEdit("syn2-duplicate-signer", "signers [0,0,1,2,3]: an index may not repeat (it would count one key twice)", baseVec, base.evidence,
+		func(q *parsed) { q.cf.Records[0].Signers = []uint8{0, 0, 1, 2, 3} }, base.leg,
+		canon("committee_chain_broken", "epoch", uint64(0), "check", "signer_index_invalid", "index", uint64(1), "signer", uint64(0), "committee_size", uint64(5)))
+
+	// linkKind 2: the seal header must be F
+	k2 := buildSynth(kp, []epochSpec{{committee: g5, next: g5, signers: seq(0, 5)}}, &kind2{}, 24)
+	k2Vec := vec{Name: "syn2-kind2", Group: "synthetic", Note: "the valid linkKind 2 base of the seal-header guard vector", Leg: k2.leg, Pins: k2.pins, Evidence: "syn2-kind2.bin",
+		Expect: canon("finalized", "epoch", uint64(0), "chain_len", uint64(1), "committee_size", uint64(5), "signers", uint64(5), "final_number", uint64(1003), "final_hash", fHashOf(k2),
+			"distance", uint64(3), "link_kind", uint64(2), "consensus_root_matches", true, "committee_shrunk", []string{})}
+	ev[k2Vec.Name] = k2.evidence
+	vs = append(vs, k2Vec)
+	var otherHeaderHash [32]byte
+	addEdit("syn2-kind2-final-header-not-the-seal", "the final header differs from F in its last byte: it hashes to another block", k2Vec, k2.evidence,
+		func(q *parsed) {
+			q.body.FinalHeader[len(q.body.FinalHeader)-1] ^= 1
+			otherHeaderHash = [32]byte(crypto.Keccak256Hash(q.body.FinalHeader))
+		}, k2.leg, "")
+	vs[len(vs)-1].Expect = canon("finality_link_broken", "from", uint64(1003), "to", uint64(1000), "at", uint64(1003), "check", "tip_not_final_state", "want_hash", fHashOf(k2), "got_hash", otherHeaderHash)
 
 	if err := os.MkdirAll(filepath.Join(out, "evidence"), 0o755); err != nil {
 		return err

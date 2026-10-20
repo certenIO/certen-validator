@@ -450,3 +450,56 @@ func TestParsePinsRefusesWhatItCannotUse(t *testing.T) {
 		t.Fatalf("the embedded pins do not parse: %v", err)
 	}
 }
+
+// Verify judges the container header itself when it is called directly (the dispatcher normally has), and the CFA1 refuses an
+// empty table and a chain without records.
+func TestVerifyJudgesTheContainerHeaderAndTheCFA1Counts(t *testing.T) {
+	f := loadVectors(t)
+	var v vVec
+	for _, x := range f.Vectors {
+		if x.Name == "live-500749-epoch600" {
+			v = x
+		}
+	}
+	ev, pins, leg := evidenceOf(t, f, v), pinsOf(t, v), legOf(t, v)
+	// header layout: "CFE1"(0..4) STR kind (4..26) chain u64 (26..34) level (34) number u64 (35..43) hash (43..75)
+	cases := []struct {
+		name string
+		at   int
+		val  byte
+		code string
+	}{
+		{"kind version", 25, '2', finality.CodeEvidenceUnrecognised},
+		{"chain id", 33, 0xe2, adiri.CodePinMismatch},
+		{"level l1_posted", 34, 2, finality.CodeEvidenceMalformed},
+		{"level included", 34, 1, finality.CodeEvidenceMalformed},
+		{"block number", 42, 0xff, finality.CodeBlockMismatch},
+		{"block hash", 74, 0xff, finality.CodeBlockMismatch},
+	}
+	for _, c := range cases {
+		m := append([]byte(nil), ev...)
+		m[c.at] = c.val
+		_, err := adiri.NewVerifier().Verify(pins, leg, m)
+		s, ok := finality.AsNamed(err)
+		if !ok || s.Code != c.code {
+			t.Errorf("%s: %v", c.name, err)
+		}
+	}
+	c, b, _, _, _ := liveParts(t, "live-500749-epoch600")
+	_ = c
+	lim := finality.DefaultLimits()
+	emptyTable := append([]byte(nil), b.CFA1...)
+	emptyTable[6] = 0
+	if _, err := adiri.DecodeCFA1(emptyTable, lim); err == nil || !strings.Contains(err.Error(), "a committee table is empty") {
+		t.Errorf("empty table: %v", err)
+	}
+	noRecords := append([]byte(nil), b.CFA1...)
+	off := 6
+	for i := 0; i < 2; i++ {
+		off += 1 + int(noRecords[off])*96
+	}
+	noRecords = append(noRecords[:off], 0, 0, 0, 0)
+	if _, err := adiri.DecodeCFA1(noRecords, lim); err == nil || !strings.Contains(err.Error(), "at least record 0 is required") {
+		t.Errorf("no records: %v", err)
+	}
+}
