@@ -545,3 +545,69 @@ func TestEveryByteOfTheEvidenceMatters(t *testing.T) {
 		t.Errorf("%d flips verified; only the signature_slot low byte may", verified)
 	}
 }
+
+// TestEveryByteOfTheChainMatters is the same sweep over the two-link kind-1 evidence: a stride across the whole container plus
+// the sync-aggregate, signature, finality-branch and next-committee-branch bytes of every update. Only the signature_slot
+// bytes of an update may flip and still verify.
+func TestEveryByteOfTheChainMatters(t *testing.T) {
+	c := cases(t)["valid_k1_short"]
+	pins := loadPins(t, c.Pins)
+	raw, err := os.ReadFile(filepath.Join(vectorDir, c.LC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := len(raw)
+	header := 4 + len(ProfileLC) + 1 + 8 + 32
+	countOff := header + 1 + 4 + SyncCommitteeBytes
+	updData := func(i int) int { return countOff + 4 + i*(1+4+LightClientUpdateSize) + 5 }
+	finData := countOff + 4 + 2*(1+4+LightClientUpdateSize) + 5
+	allowed := func(pos int) bool {
+		for i := 0; i < 2; i++ {
+			if pos >= updData(i)+26416 && pos < updData(i)+26424 {
+				return true
+			}
+		}
+		return pos >= finData+1440 && pos < finData+1448
+	}
+	posSet := map[int]bool{}
+	for p := 0; p < n; p += 331 {
+		posSet[p] = true
+	}
+	for i := 0; i < 2; i++ {
+		d := updData(i)
+		for _, r := range [][2]int{{26256, 26272}, {26320, 26336}, {25968, 25976}, {25120, 25128}, {0, 8}, {25472, 25480}} {
+			for p := d + r[0]; p < d+r[1]; p++ {
+				posSet[p] = true
+			}
+		}
+	}
+	for p := finData + 1280; p < finData+1296; p++ {
+		posSet[p] = true
+	}
+	for p := finData + 1344; p < finData+1360; p++ {
+		posSet[p] = true
+	}
+	positions := make([]int, 0, len(posSet))
+	for p := range posSet {
+		positions = append(positions, p)
+	}
+	sort.Ints(positions)
+	for _, pos := range positions {
+		mut := append([]byte(nil), raw...)
+		mut[pos] ^= 0x01
+		lc, err := DecodeLC(mut, pins.MaxLinks)
+		if err == nil {
+			_, err = VerifyFinalizedHead(pins, lc)
+		}
+		if err == nil {
+			if !allowed(pos) {
+				t.Errorf("flipping bit 0 of byte %d (of %d) still verifies", pos, n)
+			}
+			continue
+		}
+		if _, isFault := err.(*Fault); !isFault {
+			t.Errorf("byte %d: error is not a Fault: %v", pos, err)
+		}
+	}
+	t.Logf("swept %d positions of %d bytes", len(positions), n)
+}
