@@ -411,8 +411,8 @@ func TestFaultCanonicalJSON(t *testing.T) {
 	if !strings.Contains(string(g.CanonicalJSON()), `"attested_slot":"18446744073709551615"`) || !strings.Contains(string(g.CanonicalJSON()), `"check":"x\"<y>"`) {
 		t.Fatalf("u64 or escaping: %s", g.CanonicalJSON())
 	}
-	if len(AllCodes()) != 15 {
-		t.Fatalf("expected the 15 L1-head codes of spec section 7, have %d", len(AllCodes()))
+	if len(AllCodes()) != 16 {
+		t.Fatalf("expected the 16 L1-head codes of spec section 7, have %d", len(AllCodes()))
 	}
 }
 

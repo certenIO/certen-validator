@@ -45,6 +45,7 @@ const (
 	CodeLedgerBehind        = "finality_ledger_behind"
 	CodeHeaderChainBroken   = "finality_header_chain_broken"
 	CodeEvidenceTooLarge    = "finality_evidence_too_large"
+	CodeL1FinalityUnproven  = "l1_finality_unproven"
 )
 
 // AllCodes lists every code this package can return, in the order of spec section 7.
@@ -52,7 +53,7 @@ func AllCodes() []string {
 	return []string{
 		CodeNetworkMismatch, CodeForkUnsupported, CodePinUnknown, CodePinMismatch, CodePinWindow, CodeBootstrapInvalid,
 		CodeLinkInvalid, CodeParticipationInsuff, CodeSignatureInvalid, CodePeriodGap, CodeBlockNotCovered,
-		CodeLedgerBehind, CodeHeaderChainBroken, CodeEvidenceMalformed, CodeEvidenceTooLarge,
+		CodeLedgerBehind, CodeHeaderChainBroken, CodeEvidenceMalformed, CodeEvidenceTooLarge, CodeL1FinalityUnproven,
 	}
 }
 
@@ -139,6 +140,11 @@ func HeaderChainBroken(spine string, atNumber uint64, wantHash, gotHash [32]byte
 // EvidenceTooLarge: a count exceeds its bound; the number is reported, nothing is truncated.
 func EvidenceTooLarge(part string, count, limit int) *Fault {
 	return fault(CodeEvidenceTooLarge, "part", part, "count", count, "limit", limit)
+}
+
+// L1FinalityUnproven is the wrapper a rollup kind returns when its LC part is refused: reason is the inner code.
+func L1FinalityUnproven(innerCode string) *Fault {
+	return fault(CodeL1FinalityUnproven, "reason", innerCode)
 }
 
 // Canonical renders the fields as strings: every integer as a decimal string, byte arrays as 0x-prefixed lower-case hex.

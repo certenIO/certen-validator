@@ -33,6 +33,7 @@ func TestFaultFieldNamesMatchSpec(t *testing.T) {
 		{LedgerBehind(1, 2), "finality_ledger_behind", "ledger_head_period,needed_period", false},
 		{HeaderChainBroken("l1", 1, z32, z32, "hash"), "finality_header_chain_broken", "at_number,got_hash,reason,spine,want_hash", false},
 		{EvidenceTooLarge("p", 1, 2), "finality_evidence_too_large", "count,limit,part", false},
+		{L1FinalityUnproven("finality_pin_window"), "l1_finality_unproven", "reason", false},
 	}
 	seen := map[string]bool{}
 	for _, c := range cases {
