@@ -3,6 +3,7 @@
 package basefinal
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"fmt"
@@ -85,18 +86,19 @@ func (d DirStore) Put(_ context.Context, chain, l1Block uint64, l1Hash [32]byte,
 		return err
 	}
 	p := d.path(chain, l1Block, l1Hash, item)
-	if old, err := os.ReadFile(p); err == nil {
-		if string(old) != string(data) {
-			return fmt.Errorf("capture rows are insert-only: %s already holds other bytes", filepath.Base(p))
-		}
-		return nil
-	}
 	var w finality.Writer
 	w.STR(item)
 	w.U64(chain)
 	w.U64(l1Block)
 	w.B32(l1Hash)
 	w.LP(data)
+	// the file holds the encoded row: the same row again is a no-op, any other bytes under the key are refused
+	if old, err := os.ReadFile(p); err == nil {
+		if !bytes.Equal(old, w.Bytes()) {
+			return fmt.Errorf("capture rows are insert-only: %s already holds other bytes", filepath.Base(p))
+		}
+		return nil
+	}
 	return os.WriteFile(p, w.Bytes(), 0o644)
 }
 
