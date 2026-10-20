@@ -447,3 +447,12 @@ func (b *Builder) Channels(ctx context.Context) ([]ChannelInfo, error) {
 	}
 	return out, nil
 }
+
+var (
+	_ finality.Prover    = (*Builder)(nil)
+	_ finality.Ceilinged = (*Builder)(nil)
+	_ finality.Kind      = Kind{}
+)
+
+// RegisterProver adds a configured Builder to the registry (explicit; there is no init()).
+func RegisterProver(reg *finality.Registry, b *Builder) error { return reg.RegisterProver(b) }

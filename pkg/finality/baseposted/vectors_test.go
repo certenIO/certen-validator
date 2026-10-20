@@ -4,10 +4,12 @@ package baseposted
 
 import (
 	"bytes"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -166,4 +168,44 @@ func TestEveryVectorVerdictIsTheHandWrittenOneAndEveryStateIsRegistered(t *testi
 		t.Fatalf("%d accepting cases", okCases)
 	}
 	_ = finality.CodePending
+}
+
+// The kind is reached the way the framework reaches it: through the registry's JudgeAddendum, which first checks the container
+// header against the addendum and the leg.
+func TestTheRegisteredKindJudgesTheLiveEvidenceThroughTheFramework(t *testing.T) {
+	reg := finality.NewRegistry()
+	if err := Register(reg); err != nil {
+		t.Fatal(err)
+	}
+	if err := Register(reg); err == nil {
+		t.Fatal("a second verifier for the same kind must be refused")
+	}
+	if err := RegisterProver(reg, &Builder{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := reg.Provers(uint64(Chain)); len(got) != 1 || got[0].(finality.Ceilinged).Ceiling() != finality.LevelL1Posted {
+		t.Fatalf("provers %v", got)
+	}
+	pinsRaw, _ := ReadFile(setDir, "pins/main.json")
+	pins, err := finality.ParsePinsOverride(pinsRaw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legRaw, _ := ReadFile(setDir, "legs/a.json")
+	var leg Leg
+	_ = json.Unmarshal(legRaw, &leg)
+	num, _ := strconv.ParseUint(leg.Number, 10, 64)
+	hdr, _ := hex.DecodeString(strings.TrimPrefix(leg.Header, "0x"))
+	hb, _ := hex.DecodeString(strings.TrimPrefix(leg.Hash, "0x"))
+	var hash [32]byte
+	copy(hash[:], hb)
+	ev, _ := ReadFile(setDir, "evidence/valid_a.bin")
+	ref := finality.BlockRef{Chain: uint64(Chain), Number: num, Hash: hash, HeaderRLP: hdr}
+	v, err := reg.JudgeAddendum(ref, finality.Addendum{Level: finality.LevelL1Posted, Chain: uint64(Chain), Kind: KindName, Evidence: ev}, pins)
+	if err != nil || v.Level != finality.LevelL1Posted || v.Fields["batch_type"] != uint64(0) {
+		t.Fatalf("%+v %v", v, err)
+	}
+	// the same evidence stored at the finalized level is refused by the framework before the kind is asked
+	_, err = reg.JudgeAddendum(ref, finality.Addendum{Level: finality.LevelFinalized, Chain: uint64(Chain), Kind: KindName, Evidence: ev}, pins)
+	wantCode(t, err, finality.CodeEvidenceMalformed, map[string]string{"part": "header.level"})
 }
