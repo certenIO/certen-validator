@@ -303,3 +303,9 @@ func Decode(body []byte, b Bounds) (Evidence, error) {
 	}
 	return e, nil
 }
+
+// DefaultBounds are the decoder bounds of the shipped pins: the section 8.2 generic limits, the Sepolia pins' link and spine
+// bounds and the Arbitrum blob bound.
+func DefaultBounds() Bounds {
+	return Bounds{Limits: finality.DefaultLimits(), MaxLinks: 64, MaxSpineHeaders: 16384, MaxBlobs: 16}
+}
