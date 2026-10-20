@@ -1,0 +1,20 @@
+{
+  "format": "certen-finality-vectors/1",
+  "id": "adv_state_block_below_the_l1_spine",
+  "description": "stateBlock names a block under the carried L1 spine",
+  "pins": "pins/main.json",
+  "leg": "legs/leg_47604755.json",
+  "evidence": "evidence/valid_leg_47604755.bin",
+  "splice": {
+    "offset": 35109,
+    "delete": 1,
+    "insert": "0xe3"
+  },
+  "expect": {
+    "code": "finality_block_not_covered",
+    "fields": {
+      "block_number": "11954147",
+      "finalized_exec_number": "11954160"
+    }
+  }
+}

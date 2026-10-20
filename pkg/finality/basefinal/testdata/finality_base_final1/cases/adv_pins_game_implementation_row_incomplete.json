@@ -1,0 +1,17 @@
+{
+  "format": "certen-finality-vectors/1",
+  "id": "adv_pins_game_implementation_row_incomplete",
+  "description": "the 0.2.0 row lacks its interval pairs: an incomplete row is treated as absent",
+  "pins": "pins/adv_pins_game_implementation_row_incomplete.json",
+  "leg": "legs/leg_47604755.json",
+  "evidence": "evidence/valid_leg_47604755.bin",
+  "expect": {
+    "code": "contract_identity_unproven",
+    "fields": {
+      "address": "0xd702aae6221f36dfe7e8ebc4315d64344a9db4cb",
+      "code_hash": "0xf7f8a640ea3ffadf55e9f425a039e879471a1cda9988e92e2c96d423e08869c7",
+      "judged_at": "11954148",
+      "role": "game_impl"
+    }
+  }
+}
