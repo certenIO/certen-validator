@@ -1,0 +1,17 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "adv_attested_slot_in_fulu_era",
+ "kind": "head",
+ "description": "gloas layout whose attested slot lies in the Fulu epochs",
+ "pins": "pins/main.json",
+ "lc": "lc/adv_attested_slot_in_fulu_era.bin",
+ "expect": {
+  "code": "finality_fork_unsupported",
+  "fields": {
+   "epoch": "352812",
+   "layout": "gloas",
+   "slot": "11290000"
+  },
+  "result": "fault"
+ }
+}

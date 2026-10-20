@@ -1,0 +1,17 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "electra_link_real_fulu_update",
+ "kind": "head",
+ "description": "the real period-1378 Fulu update (electra layout) as a link",
+ "pins": "pins/main.json",
+ "lc": "lc/electra_link_real_fulu_update.bin",
+ "expect": {
+  "code": "finality_fork_unsupported",
+  "fields": {
+   "epoch": "352818",
+   "layout": "electra",
+   "slot": "11290176"
+  },
+  "result": "fault"
+ }
+}

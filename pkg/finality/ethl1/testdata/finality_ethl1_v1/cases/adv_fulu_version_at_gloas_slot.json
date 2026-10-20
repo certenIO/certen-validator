@@ -1,0 +1,18 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "adv_fulu_version_at_gloas_slot",
+ "kind": "head",
+ "description": "pins carry the Fulu version for the Gloas fork: the domain is wrong",
+ "pins": "pins/fulu_version_at_gloas.json",
+ "lc": "lc/adv_fulu_version_at_gloas_slot.bin",
+ "expect": {
+  "code": "finality_signature_invalid",
+  "fields": {
+   "fork_version": "0x90000075",
+   "index": "0",
+   "participants": "511",
+   "signature_slot": "11394241"
+  },
+  "result": "fault"
+ }
+}

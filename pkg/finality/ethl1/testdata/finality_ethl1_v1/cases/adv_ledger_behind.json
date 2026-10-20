@@ -1,0 +1,16 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "adv_ledger_behind",
+ "kind": "head",
+ "description": "anchor period beyond the ledger's head",
+ "pins": "pins/ledger_behind.json",
+ "lc": "lc/adv_ledger_behind.bin",
+ "expect": {
+  "code": "finality_ledger_behind",
+  "fields": {
+   "ledger_head_period": "1389",
+   "needed_period": "1390"
+  },
+  "result": "fault"
+ }
+}

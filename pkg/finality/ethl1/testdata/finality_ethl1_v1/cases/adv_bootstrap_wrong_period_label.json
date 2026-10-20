@@ -1,0 +1,17 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "adv_bootstrap_wrong_period_label",
+ "kind": "head",
+ "description": "kind-2 anchor labelled with the previous period (ledger entry of P-1 has no block_root)",
+ "pins": "pins/main.json",
+ "lc": "lc/adv_bootstrap_wrong_period_label.bin",
+ "expect": {
+  "code": "finality_pin_unknown",
+  "fields": {
+   "kind": "2",
+   "period": "1389",
+   "root": "0xb19e2dccb8c6c7b1482f0c8446972e996bf6276d1bf5a1e5fc2fdbef4279fee0"
+  },
+  "result": "fault"
+ }
+}
