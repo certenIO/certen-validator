@@ -98,11 +98,11 @@ func classifyConfirmation(arb *Pins, kb ethl1.L1Block, kHeader finality.HeaderFi
 		return out, ConfirmedByOwnerForce(PathForce, txHash, kb.Number)
 	}
 	input := tx.Data()
-	var sel [4]byte
-	if len(input) >= 4 {
-		copy(sel[:], input[:4])
-	}
+	sel, hasSel := selectorOf(input)
 	if tx.To() != nil && *tx.To() == arb.Rollup {
+		if !hasSel {
+			return out, ConfirmationUnproven(ConfirmIndirect, txHash, kb.Number)
+		}
 		switch sel {
 		case arb.Sel.Confirm:
 			out.Route = RouteDirect
@@ -123,11 +123,10 @@ func classifyConfirmation(arb *Pins, kb ethl1.L1Block, kHeader finality.HeaderFi
 	}
 	var found bool
 	for _, c := range calls {
-		if c.Dest != arb.Rollup || len(c.Data) < 4 {
+		cs, hasCS := selectorOf(c.Data)
+		if c.Dest != arb.Rollup || !hasCS {
 			continue
 		}
-		var cs [4]byte
-		copy(cs[:], c.Data[:4])
 		switch cs {
 		case arb.Sel.Confirm:
 			found = true
@@ -153,6 +152,15 @@ func classifyConfirmation(arb *Pins, kb ethl1.L1Block, kHeader finality.HeaderFi
 	}
 	out.Route = RouteWallet
 	return out, nil
+}
+
+// selectorOf is the first four bytes of calldata; ok is false when there are fewer (no selector).
+func selectorOf(b []byte) (sel [4]byte, ok bool) {
+	if len(b) < 4 {
+		return sel, false
+	}
+	copy(sel[:], b[:4])
+	return sel, true
 }
 
 func (p *Pins) isWalletSelector(sel [4]byte) bool {

@@ -51,6 +51,13 @@ func synthetic2(g *gen) {
 	legN.Number++
 	g.add("adv_leg_number_is_not_the_header_number", "adversarial", "the leg's number is not the number inside its (hash-consistent) header", legN, "synth.json", V.Pins, mustContainer(legN, V.Evidence),
 		st(finality.CodeBlockMismatch, "field", "settlementHeaderNumber", "want", legN.Number, "got", V.Leg.Number))
+	noHdr := V.Leg
+	noHdr.HeaderRLP = nil
+	g.add("adv_leg_without_header", "adversarial", "the leg carries no raw header", noHdr, "synth.json", V.Pins, V.Container,
+		st(finality.CodeEvidenceMalformed, "part", "header", "reason", finality.ReasonHeaderNotRLPList, "got_len", uint64(0), "want_len", uint64(0)))
+	garbage := edit(V, func(e *arbfinal.Evidence) { e.L2Spine[1] = []byte{0x01} })
+	A("adv_l2_spine_header_is_not_rlp", "an interior l2Spine entry that is not an RLP header", garbage,
+		st(finality.CodeEvidenceMalformed, "part", "header", "reason", finality.ReasonHeaderNotRLPList, "got_len", uint64(1), "want_len", uint64(0)))
 	noL1 := editPins(V.Pins, nil, "eth_sepolia")
 	g.synthPins("adv_pins_without_eth_sepolia_section", "the pins file has no eth_sepolia section: the L1 head cannot be judged", "synth_no_eth_sepolia.json", noL1, V,
 		st(finality.CodePinUnknown, "chain", uint64(11155111), "kind", "eth_sepolia"))

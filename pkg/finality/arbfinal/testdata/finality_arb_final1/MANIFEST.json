@@ -44,6 +44,7 @@
   "evidence/adv_proof_missing_node_slot.bin": "acc9350bbd9b39bd50b59bedb2ba0cfbe44e5dbd063fe9f6a2d79cfd6c089aa6",
   "evidence/adv_proof_missing_user_account.bin": "e1a0bf05621219a941af50e1d3e927b986838048034d8d130a8fe1baf50c9523",
   "evidence/adv_proof_missing_user_slot.bin": "8137c6abd4a9a947b73e883e542fb5bc144f09dc57a2cf1ded9263cdeec696aa",
+  "evidence/adv_real_l2_spine_leg_dropped.bin": "cb54caa1a88438b2a88e84e8845e6c792d7b9f46736b0801b92dcc5fd6350076",
   "evidence/adv_rollup_account_absent.bin": "d913f04387f9f996b488df677dc36c962addd2e11bbe047a88775ecefb391e07",
   "evidence/adv_status_no_assertion.bin": "8288ba936f358024a120c4fde268b8b01eb1fcb321f4f546e59cacbbbd43eddf",
   "evidence/adv_status_pending.bin": "cb53591d284c1129a1dcfb2f4d0e0f31977e416c3a012d8ee5a879d05e0830d6",
@@ -51,6 +52,7 @@
   "evidence/adv_user_implementation_slot_altered_under_k.bin": "41af596a880ed1b49ed6eb493ad8c77c8ca8d854b7f6acde5bc7c1112c4960d2",
   "evidence/adv_user_logic_not_pinned_under_k.bin": "e2f9b13b1c469726dc4e10941edf52fc0610b8ef868f42c8b7ac79cca17dde86",
   "evidence/adv_user_logic_not_pinned_under_s.bin": "e6192499ea94a6afaf070b1e896a56fcda5efac7e59a838fdcdb32a1d0cb517a",
+  "evidence/real_valid.bin": "3c65d2f9f1d493f3761d8eed284e1d27ce1ddab5f081e8fa6f03c3b89c82cc54",
   "evidence/synth_valid_direct.bin": "4a41b60dc8b72a83eabfdecc898f58585dbdb4160c68f2b7e1a474598a073251",
   "evidence/synth_valid_direct_fast_confirmer_irrelevant.bin": "ab0f03e71f920e2f693a30e50beeac1e75ccb9cfdb987b7c512cef13514cc32d",
   "evidence/synth_valid_first_post_bold_block.bin": "1f6b44aed8b474164c42bcf47a7feb404ddcc9155674c78e1a435992df4e9f14",
@@ -63,13 +65,14 @@
   "evidence/synth_valid_wallet_execute_transaction_with_gas_refunder.bin": "790e0c2b3be9159efbc7a40f22063c804a8f5c523553e06b9a56dd5b3a838ddc",
   "evidence/synth_valid_wallet_execute_transactions.bin": "4afe3433d4c490d435076ae352a954e926ef9ca95103573d0a19060144f58ff4",
   "evidence/synth_valid_wallet_execute_transactions_with_gas_refunder.bin": "8eee8033387e07084a2f9dcb7b1d6f64f42e88a3cedeb80d61851081c831a385",
+  "pins/real.json": "b156c2715021466510410a01b5dd6f52c5ff4bc930e2fac0c5aa0679e8a9d978",
   "pins/synth.json": "fe0df7f7287639bd109be157e8d82465ff5cbb116b2af05bd3aa10003cd1b023",
   "pins/synth_anchor_other_root.json": "df098f0eb24bbc0ae84cb7c3463e7522a8f3fdaf5d8c1c6d4d17c781e79b8a18",
   "pins/synth_layout_unknown.json": "5cec67dea2f8947bed3505cc1b48ca7c864d0d09ed97e199611b2200b126cdd0",
   "pins/synth_max_header_chain_2.json": "01fdd28e4e8a750be814f234eaefd28cab0df905401058b47c5ffd38a212fe57",
   "pins/synth_no_arb_sepolia.json": "d15261ab048ab99f4340bbfc5a275c64e9c3ebb9053a92d1e06d82b34a1a8758",
   "pins/synth_no_eth_sepolia.json": "15752b467368eccd0f952e81ceb224f530d5d2d9b8960a004b277d951688b618",
-  "vectors.json": "be59d5f4f03162e5c7fc320c37d5b233d340fb4da26181bfcafa7766f0a31adc"
+  "vectors.json": "2b40f3fc904ed4e78c79237d8167d606db5281be1f42db02d668011c87dc3228"
  },
  "format": "finality_arb_final1/manifest/1"
 }
