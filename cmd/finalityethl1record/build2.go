@@ -358,6 +358,47 @@ func (g *gen) v2extras(c v2in) error {
 	g.head("adv_electra_link_finality_branch_forged", "one node of the Fulu link's 7-node finality_branch flipped", "main", chainWith(func(b []byte) []byte { return flip(b, 24824+4*32) }),
 		ethl1.CodeLinkInvalid, li("finality_branch"))
 
+	// ---- decode strictness at the link and bootstrap level (the final-update level is above)
+	gloasSlot := uint64(353024 * 32)
+	linkMal := func(reason string) map[string]string {
+		return map[string]string{"part": "link", "reason": reason, "index": "0"}
+	}
+	g.head("adv_electra_link_attested_offset_lie", "Fulu link: first container offset 25217 instead of 25216", "main", chainWith(func(b []byte) []byte { return put32(b, 0, 25217) }),
+		ethl1.CodeEvidenceMalformed, linkMal("attested_offset"))
+	g.head("adv_electra_link_finalized_offset_out_of_range", "Fulu link: finalized offset beyond the blob", "main", chainWith(func(b []byte) []byte { return put32(b, 24820, uint32(len(b)+10)) }),
+		ethl1.CodeEvidenceMalformed, linkMal("finalized_offset"))
+	g.head("adv_electra_link_execution_offset_lie", "Fulu link: attested header's execution offset 245 instead of 244", "main", chainWith(func(b []byte) []byte { return put32(b, updFixed+112, 245) }),
+		ethl1.CodeEvidenceMalformed, linkMal("execution_offset"))
+	g.head("adv_electra_link_extra_data_offset_lie", "Fulu link: attested execution.extra_data offset 588 instead of 584", "main", chainWith(func(b []byte) []byte { return put32(b, updFixed+hdrExec+execExtra, 588) }),
+		ethl1.CodeEvidenceMalformed, linkMal("extra_data_offset"))
+	g.head("adv_electra_link_truncated", "Fulu link with 100 bytes cut: below the 26,872-byte electra minimum", "main", chainWith(func(b []byte) []byte { return b[:len(b)-100] }),
+		ethl1.CodeEvidenceMalformed, map[string]string{"part": "link", "reason": "length", "index": "0", "want_len": "26872"})
+	g.head("adv_electra_link_overlong_tail", "Fulu link with 40 bytes appended: the finalized header would carry more than 32 bytes of extra_data", "main",
+		chainWith(func(b []byte) []byte { return append(b, bytes.Repeat([]byte{0xab}, 40)...) }), ethl1.CodeEvidenceMalformed, linkMal("header_length"))
+	g.head("adv_electra_link_forged_attested_exec_field", "Fulu link: attested execution.fee_recipient byte flipped", "main", chainWith(func(b []byte) []byte { return flip(b, updFixed+hdrExec+execFee+3) }),
+		ethl1.CodeLinkInvalid, li("attested_header_exec_branch"))
+	g.head("adv_electra_link_forged_finalized_exec_field", "Fulu link: finalized execution.gas_used byte flipped", "main", chainWith(func(b []byte) []byte { return flip(b, finOff+hdrExec+execGas) }),
+		ethl1.CodeLinkInvalid, li("finalized_header_exec_branch"))
+	g.head("adv_electra_link_attested_slot_in_gloas_era", "electra-shaped link whose attested slot lies in the Gloas era", "main", chainWith(func(b []byte) []byte { return put64(b, updFixed, gloasSlot+10) }),
+		ethl1.CodeForkUnsupported, map[string]string{"slot": u64s(gloasSlot + 10), "epoch": u64s(353024), "layout": "electra"})
+	bmal := func(reason string) map[string]string {
+		return map[string]string{"part": "anchor_body", "reason": reason}
+	}
+	g.head("adv_electra_bootstrap_header_offset_lie", "Fulu bootstrap: header offset 24821 instead of 24820", "main", k2e(put32(boot2, 0, 24821), nil, el(fu1378)), ethl1.CodeEvidenceMalformed, bmal("header_offset"))
+	g.head("adv_electra_bootstrap_truncated", "Fulu bootstrap with 100 bytes cut: below the 25,648-byte electra minimum", "main", k2e(boot2[:len(boot2)-100], nil, el(fu1378)),
+		ethl1.CodeEvidenceMalformed, map[string]string{"part": "anchor_body", "reason": "length", "want_len": "25648"})
+	g.head("adv_electra_bootstrap_execution_offset_lie", "Fulu bootstrap: header's execution offset 245 instead of 244", "main", k2e(put32(boot2, bootHdr+112, 245), nil, el(fu1378)),
+		ethl1.CodeEvidenceMalformed, bmal("execution_offset"))
+	g.head("adv_electra_bootstrap_extra_data_offset_lie", "Fulu bootstrap: execution.extra_data offset 588 instead of 584", "main", k2e(put32(boot2, bootHdr+hdrExec+execExtra, 588), nil, el(fu1378)),
+		ethl1.CodeEvidenceMalformed, bmal("extra_data_offset"))
+	g.head("adv_electra_bootstrap_overlong_tail", "Fulu bootstrap with 40 bytes appended", "main", k2e(append(cp(boot2), bytes.Repeat([]byte{0xab}, 40)...), nil, el(fu1378)),
+		ethl1.CodeEvidenceMalformed, bmal("header_length"))
+	{
+		lc := k1e(nil, el(fu1378))
+		lc.AnchorBody.Layout = ethl1.LayoutElectra
+		g.head("adv_electra_anchor_body_layout_byte_electra", "kind-1 committee body carrying layout byte 1", "main", lc, ethl1.CodeEvidenceMalformed, map[string]string{"part": "anchor_body", "reason": "layout_byte_not_zero"})
+	}
+
 	// ---- the ledger rule on every learned period of the 11-link Gloas chain (V-C1A gap P): shared LC, one altered entry each
 	chainLC := c.k1(1379, c.linkRange(1379, c.P-1), c.fu)
 	for q := uint64(1380); q <= c.P; q++ {

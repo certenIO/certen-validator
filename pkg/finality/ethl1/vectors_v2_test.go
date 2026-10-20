@@ -36,6 +36,11 @@ var requiredV2HeadCases = []string{
 	"adv_electra_bootstrap_forged_exec_field", "adv_electra_bootstrap_committee_branch_forged", "adv_electra_bootstrap_committee_swapped", "adv_electra_ledger_1378_committee_wrong",
 	"adv_electra_chain_learned_not_ledger", "adv_electra_link_signature_flipped", "adv_electra_link_next_committee_branch_forged", "adv_electra_link_next_committee_forged",
 	"adv_electra_link_participation_341", "adv_electra_link_finality_branch_forged",
+	// decode strictness at the link and bootstrap level
+	"adv_electra_link_attested_offset_lie", "adv_electra_link_finalized_offset_out_of_range", "adv_electra_link_execution_offset_lie", "adv_electra_link_extra_data_offset_lie",
+	"adv_electra_link_truncated", "adv_electra_link_overlong_tail", "adv_electra_link_forged_attested_exec_field", "adv_electra_link_forged_finalized_exec_field",
+	"adv_electra_link_attested_slot_in_gloas_era", "adv_electra_bootstrap_header_offset_lie", "adv_electra_bootstrap_truncated", "adv_electra_bootstrap_execution_offset_lie",
+	"adv_electra_bootstrap_extra_data_offset_lie", "adv_electra_bootstrap_overlong_tail", "adv_electra_anchor_body_layout_byte_electra",
 	// V-C1A defects
 	"synth_valid_link_then_final", "adv_synth_next_committee_mismatch", "adv_synth_final_period_gap_next_known", "adv_synth_link_period_skip_next_known",
 	"synth_valid_nonparticipating_invalid_key", "adv_synth_participating_invalid_key", "adv_synth_final_finalized_slot_zero", "adv_pins_network_mismatch",
@@ -125,7 +130,8 @@ func TestV2MutationChecks(t *testing.T) {
 		{"skip the signature-period rule with next known (V-C1A H), link", offSet(chkPeriodRuleNextKnown), []string{"adv_synth_link_period_skip_next_known"}},
 		{"skip the final-update finalized-slot-zero refusal", offSet(chkFinalNotFinality), []string{"adv_synth_final_finalized_slot_zero"}},
 		{"skip the execution-branch rule of both layouts", offSet(chkExecBranch), []string{"adv_electra_forged_attested_exec_field", "adv_electra_forged_finalized_exec_field",
-			"adv_electra_forged_attested_exec_branch_node", "adv_electra_forged_finalized_exec_branch_node", "adv_forged_attested_exec_hash"}},
+			"adv_electra_forged_attested_exec_branch_node", "adv_electra_forged_finalized_exec_branch_node", "adv_forged_attested_exec_hash",
+			"adv_electra_link_forged_attested_exec_field", "adv_electra_link_forged_finalized_exec_field"}},
 		{"skip the finality branch (electra gindex 169)", offSet(chkFinalityBranch), []string{"adv_electra_forged_finality_branch_node"}},
 		{"skip the next-committee branch (electra gindex 87)", offSet(chkNextBranch), []string{"adv_electra_link_next_committee_branch_forged", "adv_electra_link_next_committee_forged"}},
 		{"drop the 342 floor on a Fulu link", offSet(chkFloor), []string{"adv_electra_link_participation_341"}},
@@ -306,5 +312,38 @@ func TestHashTreeRootSyncCommitteeNeverPanics(t *testing.T) {
 	}
 	if _, err := HashTreeRootSyncCommittee(nil); err == nil {
 		t.Error("nil accepted")
+	}
+}
+
+// TestElectraEmptyHeaderIsTheGenuineEmptyEncoding: LightClientHeader() of the electra shape (the finalized header of an update with
+// finalized slot 0) encodes with a non-zero extra_data offset; it is empty, and a header with any execution field set, a non-empty
+// extra_data, a beacon field or a branch node set is not.
+func TestElectraEmptyHeaderIsTheGenuineEmptyEncoding(t *testing.T) {
+	enc := make([]byte, electraHeaderMin)
+	binary.LittleEndian.PutUint32(enc[BeaconBlockHeaderSize:], electraHeaderFixed)
+	binary.LittleEndian.PutUint32(enc[electraHeaderFixed+electraExecExtraOffAt:], electraExecFixed)
+	h, f := decodeElectraHeader(enc, "t", 0)
+	if f != nil {
+		t.Fatal(f)
+	}
+	if !h.isEmpty() {
+		t.Fatal("the SSZ encoding of the empty electra LightClientHeader is not recognised as empty")
+	}
+	for name, mut := range map[string]func([]byte) []byte{
+		"beacon slot":     func(b []byte) []byte { b[0] = 1; return b },
+		"branch node":     func(b []byte) []byte { b[116+5] = 1; return b },
+		"fee recipient":   func(b []byte) []byte { b[electraHeaderFixed+40] = 1; return b },
+		"base fee":        func(b []byte) []byte { b[electraHeaderFixed+electraExecFixed-60] = 1; return b },
+		"excess blob gas": func(b []byte) []byte { b[electraHeaderFixed+electraExecFixed-1] = 1; return b },
+		"non-empty extra": func(b []byte) []byte { return append(b, 0) },
+		"first exec byte": func(b []byte) []byte { b[electraHeaderFixed] = 1; return b },
+	} {
+		m, f := decodeElectraHeader(mut(append([]byte(nil), enc...)), "t", 0)
+		if f != nil {
+			t.Fatalf("%s: %v", name, f)
+		}
+		if m.isEmpty() {
+			t.Errorf("%s: a non-empty header is recognised as empty", name)
+		}
 	}
 }

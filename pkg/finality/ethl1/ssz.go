@@ -174,7 +174,9 @@ func (h lcHeader) isEmpty() bool {
 			return false
 		}
 	}
-	if h.Shape == LayoutElectra && (len(h.Exec) != electraExecFixed || !allZero(h.Exec)) {
+	// LightClientHeader() has every execution field zero and an empty extra_data; its SSZ still carries the extra_data offset (584), so the
+	// offset bytes are not part of the comparison (consensus-specs compares decoded values)
+	if h.Shape == LayoutElectra && (len(h.Exec) != electraExecFixed || !allZero(h.Exec[:electraExecExtraOffAt]) || !allZero(h.Exec[electraExecExtraOffAt+4:])) {
 		return false
 	}
 	return true

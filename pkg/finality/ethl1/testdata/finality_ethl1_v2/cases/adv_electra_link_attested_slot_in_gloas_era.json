@@ -1,0 +1,17 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "adv_electra_link_attested_slot_in_gloas_era",
+ "kind": "head",
+ "description": "electra-shaped link whose attested slot lies in the Gloas era",
+ "pins": "pins/main.json",
+ "lc": "lc/adv_electra_link_attested_slot_in_gloas_era.bin",
+ "expect": {
+  "code": "finality_fork_unsupported",
+  "fields": {
+   "epoch": "353024",
+   "layout": "electra",
+   "slot": "11296778"
+  },
+  "result": "fault"
+ }
+}

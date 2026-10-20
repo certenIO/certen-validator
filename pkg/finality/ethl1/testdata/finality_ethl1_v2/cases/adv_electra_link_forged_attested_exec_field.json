@@ -1,0 +1,19 @@
+{
+ "format": "certen-finality-ethl1-case/1",
+ "id": "adv_electra_link_forged_attested_exec_field",
+ "kind": "head",
+ "description": "Fulu link: attested execution.fee_recipient byte flipped",
+ "pins": "pins/main.json",
+ "lc": "lc/adv_electra_link_forged_attested_exec_field.bin",
+ "expect": {
+  "code": "finality_link_invalid",
+  "fields": {
+   "attested_slot": "11290176",
+   "check": "attested_header_exec_branch",
+   "index": "0",
+   "period": "1378",
+   "signature_slot": "11290178"
+  },
+  "result": "fault"
+ }
+}
