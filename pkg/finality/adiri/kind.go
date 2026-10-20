@@ -265,7 +265,7 @@ func verifySlot(par *Params, res *ChainResult, body *Body, leg finality.BlockRef
 	slot := common.BigToHash(new(big.Int).SetUint64(leg.Number % EIP2935Window))
 	sr, err := ethproof.VerifyStorage(common.Hash(h.StateRoot), par.EIP2935Address, body.Nodes, slot, body.Nodes)
 	if err != nil {
-		return out, LinkBroken(LinkProofInvalid, F.Number, leg.Number, leg.Number, "cause", err.Error())
+		return out, LinkBroken(LinkProofInvalid, F.Number, leg.Number, leg.Number)
 	}
 	if !sr.Account.Exists || sr.Account.CodeHash != common.Hash(par.EIP2935CodeHash) {
 		return out, LinkBroken(LinkCodeHashMismatch, F.Number, leg.Number, leg.Number, "want", par.EIP2935CodeHash, "got", [32]byte(sr.Account.CodeHash))
