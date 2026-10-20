@@ -108,7 +108,7 @@ func DelayedMessageHash(d Delayed) [32]byte {
 }
 
 // Verify judges the whole CFE1 container of one leg block (spec 5.6). The order of the checks is the order of annex A6.3
-// (the first failing check names the state): pins and pre-BoLD, block transactions root, L1 finality, Bridge identity, the
+// (the first failing check names the state): the BlockRef's binding to the container and to its own header, pins and pre-BoLD, block transactions root, L1 finality, Bridge identity, the
 // accumulator, the blobs, the payload decode and the match.
 func (k *Kind) Verify(p *finality.Pins, b finality.BlockRef, evidence []byte) (finality.Verdict, error) {
 	c, err := finality.DecodeContainer(evidence, finality.DefaultLimits())
@@ -117,6 +117,13 @@ func (k *Kind) Verify(p *finality.Pins, b finality.BlockRef, evidence []byte) (f
 	}
 	if c.Header.Kind != KindName || c.Header.Chain != finality.ChainArbitrumSepolia || c.Header.Level != finality.LevelL1Posted {
 		return finality.Verdict{}, finality.EvidenceUnrecognised(c.Header.Kind, "")
+	}
+	// The container is about the block the caller asks about (the order and the states of arbfinal and baseposted).
+	if c.Header.BlockNumber != b.Number {
+		return finality.Verdict{}, finality.BlockMismatch("blockNumber", b.Number, c.Header.BlockNumber)
+	}
+	if c.Header.BlockHash != b.Hash {
+		return finality.Verdict{}, finality.BlockMismatch("blockHash", b.Hash, c.Header.BlockHash)
 	}
 	arb, err := loadArbPins(p)
 	if err != nil {
@@ -136,6 +143,13 @@ func (k *Kind) Verify(p *finality.Pins, b finality.BlockRef, evidence []byte) (f
 	hdr, err := finality.ReadHeader(b.HeaderRLP)
 	if err != nil {
 		return finality.Verdict{}, err
+	}
+	// The header the transactions root is read from is the block's own: its hash is the BlockRef's hash and its number the BlockRef's number.
+	if hdr.Hash != b.Hash {
+		return finality.Verdict{}, finality.BlockMismatch("blockHash", b.Hash, hdr.Hash)
+	}
+	if hdr.Number != b.Number {
+		return finality.Verdict{}, finality.BlockMismatch("blockNumber", b.Number, hdr.Number)
 	}
 	if hdr.Number <= arb.BoldGenesisL2Block {
 		return finality.Verdict{}, finality.NewState(CodePreBold, "n", hdr.Number, "bold_genesis_l2_block", arb.BoldGenesisL2Block)

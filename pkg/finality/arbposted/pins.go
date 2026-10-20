@@ -112,6 +112,26 @@ func loadArbPins(p *finality.Pins) (*arbPins, error) {
 	if a.MaxUncompressedBatch <= 0 {
 		return nil, PinMismatch("max_uncompressed_batch")
 	}
+	// The three numeric pins whose value 0 is a possible value are judged by presence: an absent (or null) key decodes as 0 and must not
+	// switch the pre-BoLD guard or a storage slot silently to 0.
+	var present struct {
+		BoldGenesisL2Block *uint64 `json:"bold_genesis_l2_block"`
+		Layout             struct {
+			AccArraySlot        *uint64 `json:"acc_array_slot"`
+			DelayedAccArraySlot *uint64 `json:"delayed_acc_array_slot"`
+		} `json:"layout"`
+	}
+	if err := json.Unmarshal(raw, &present); err != nil {
+		return nil, PinMismatch("section")
+	}
+	switch {
+	case present.BoldGenesisL2Block == nil:
+		return nil, PinMismatch("bold_genesis_l2_block")
+	case present.Layout.AccArraySlot == nil:
+		return nil, PinMismatch("layout.acc_array_slot")
+	case present.Layout.DelayedAccArraySlot == nil:
+		return nil, PinMismatch("layout.delayed_acc_array_slot")
+	}
 	return &a, nil
 }
 
