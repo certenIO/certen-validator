@@ -11,7 +11,7 @@ import (
 // result; it fails the test unless the decoded branch is then all zero.
 func zeroFinalityBranch(t *testing.T, index int, lb LB) (LB, updateObj) {
 	t.Helper()
-	w := &walker{}
+	w := &walker{pr: mainnetPreset()}
 	u, f := w.parseUpdate(index, lb)
 	if f != nil {
 		t.Fatalf("link %d does not parse: %v", index, f)

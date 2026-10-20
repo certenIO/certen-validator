@@ -16,11 +16,11 @@ type mutRules struct {
 }
 
 func (m mutRules) skip(c string) bool { return m.off[c] }
-func (m mutRules) domainEpoch(as, ss uint64) uint64 {
+func (m mutRules) domainEpoch(pr preset, as, ss uint64) uint64 {
 	if m.domainFromAttested {
-		return epochOf(as)
+		return pr.epochOf(as)
 	}
-	return specRules{}.domainEpoch(as, ss)
+	return specRules{}.domainEpoch(pr, as, ss)
 }
 
 func offSet(checks ...string) mutRules {
@@ -91,10 +91,10 @@ func TestProductionRulesSkipNothing(t *testing.T) {
 			t.Errorf("production rules skip %s", c)
 		}
 	}
-	if got := (specRules{}).domainEpoch(999999, 32*10+1); got != 10 {
+	if got := (specRules{}).domainEpoch(mainnetPreset(), 999999, 32*10+1); got != 10 {
 		t.Errorf("domain epoch of signature_slot 321 = %d, want 10", got)
 	}
-	if got := (specRules{}).domainEpoch(0, 0); got != 0 {
+	if got := (specRules{}).domainEpoch(mainnetPreset(), 0, 0); got != 0 {
 		t.Errorf("domain epoch of signature_slot 0 = %d, want 0", got)
 	}
 }

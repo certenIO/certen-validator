@@ -88,8 +88,13 @@ func hashTreeRootPubkey(pk []byte) [32]byte {
 // hashTreeRootSyncCommittee is hash_tree_root(SyncCommittee) of its 24,624-byte SSZ: the root of the 512-pubkey vector
 // mixed with the root of aggregate_pubkey.
 func hashTreeRootSyncCommittee(b []byte) [32]byte {
-	level := make([][32]byte, SyncCommitteeSize)
-	for i := 0; i < SyncCommitteeSize; i++ {
+	return hashTreeRootSyncCommitteeN(b, SyncCommitteeSize)
+}
+
+// hashTreeRootSyncCommitteeN is the same for a committee of n seats (n a power of two): n*48+48 bytes.
+func hashTreeRootSyncCommitteeN(b []byte, n int) [32]byte {
+	level := make([][32]byte, n)
+	for i := 0; i < n; i++ {
 		level[i] = hashTreeRootPubkey(b[i*48 : i*48+48])
 	}
 	for len(level) > 1 {
@@ -99,7 +104,7 @@ func hashTreeRootSyncCommittee(b []byte) [32]byte {
 		}
 		level = next
 	}
-	agg := hashTreeRootPubkey(b[SyncCommitteeSize*48 : SyncCommitteeBytes])
+	agg := hashTreeRootPubkey(b[n*48 : n*48+48])
 	return sha2(level[0][:], agg[:])
 }
 
@@ -182,16 +187,17 @@ func (h lcHeader) isEmpty() bool {
 	return true
 }
 
-// syncAggregate is the decoded SyncAggregate.
+// syncAggregate is the decoded SyncAggregate: Bits has committeeSize/8 bytes.
 type syncAggregate struct {
-	Bits      [SyncCommitteeSize / 8]byte
+	Bits      []byte
 	Signature [96]byte
 }
 
-func decodeSyncAggregate(b []byte) syncAggregate {
+func decodeSyncAggregate(b []byte, pr preset) syncAggregate {
 	var s syncAggregate
-	copy(s.Bits[:], b[:SyncCommitteeSize/8])
-	copy(s.Signature[:], b[SyncCommitteeSize/8:syncAggregateSize])
+	nb := pr.committeeSize / 8
+	s.Bits = append([]byte(nil), b[:nb]...)
+	copy(s.Signature[:], b[nb:nb+96])
 	return s
 }
 
@@ -205,24 +211,24 @@ func (s syncAggregate) count() int {
 
 func (s syncAggregate) bit(i int) bool { return s.Bits[i/8]>>(uint(i)%8)&1 == 1 }
 
-// bootstrapObj is a decoded Gloas LightClientBootstrap.
+// bootstrapObj is a decoded LightClientBootstrap.
 type bootstrapObj struct {
 	Shape           Layout
 	Header          lcHeader
-	Committee       []byte // 24,624 bytes, aliasing the input
+	Committee       []byte // committeeBytes, aliasing the input
 	CommitteeBranch [][32]byte
 }
 
-func decodeBootstrap(b []byte) bootstrapObj {
+func decodeBootstrap(b []byte, pr preset) bootstrapObj {
 	var o bootstrapObj
 	o.Shape = LayoutGloas
 	o.Header = decodeLCHeader(b[:LightClientHeaderSize])
-	o.Committee = b[LightClientHeaderSize : LightClientHeaderSize+SyncCommitteeBytes]
-	o.CommitteeBranch = decodeBranch(b[LightClientHeaderSize+SyncCommitteeBytes:], gloasCommitteeBranchLen)
+	o.Committee = b[LightClientHeaderSize : LightClientHeaderSize+pr.committeeBytes()]
+	o.CommitteeBranch = decodeBranch(b[LightClientHeaderSize+pr.committeeBytes():], gloasCommitteeBranchLen)
 	return o
 }
 
-// updateObj is a decoded Gloas LightClientUpdate or LightClientFinalityUpdate (no next committee).
+// updateObj is a decoded LightClientUpdate or LightClientFinalityUpdate (no next committee).
 type updateObj struct {
 	Shape            Layout
 	Attested         lcHeader
@@ -235,28 +241,28 @@ type updateObj struct {
 	hasNextContainer bool
 }
 
-func decodeUpdate(b []byte) updateObj {
+func decodeUpdate(b []byte, pr preset) updateObj {
 	var u updateObj
 	u.Shape = LayoutGloas
 	o := 0
 	u.Attested = decodeLCHeader(b[o : o+LightClientHeaderSize])
 	o += LightClientHeaderSize
-	u.NextCommittee = b[o : o+SyncCommitteeBytes]
-	o += SyncCommitteeBytes
+	u.NextCommittee = b[o : o+pr.committeeBytes()]
+	o += pr.committeeBytes()
 	u.NextBranch = decodeBranch(b[o:], gloasCommitteeBranchLen)
 	o += 32 * gloasCommitteeBranchLen
 	u.Finalized = decodeLCHeader(b[o : o+LightClientHeaderSize])
 	o += LightClientHeaderSize
 	u.FinalityBranch = decodeBranch(b[o:], gloasFinalityBranchLen)
 	o += 32 * gloasFinalityBranchLen
-	u.Aggregate = decodeSyncAggregate(b[o : o+syncAggregateSize])
-	o += syncAggregateSize
+	u.Aggregate = decodeSyncAggregate(b[o:o+pr.aggregateBytes()], pr)
+	o += pr.aggregateBytes()
 	u.SignatureSlot = binary.LittleEndian.Uint64(b[o : o+8])
 	u.hasNextContainer = true
 	return u
 }
 
-func decodeFinalityUpdate(b []byte) updateObj {
+func decodeFinalityUpdate(b []byte, pr preset) updateObj {
 	var u updateObj
 	u.Shape = LayoutGloas
 	o := 0
@@ -266,8 +272,8 @@ func decodeFinalityUpdate(b []byte) updateObj {
 	o += LightClientHeaderSize
 	u.FinalityBranch = decodeBranch(b[o:], gloasFinalityBranchLen)
 	o += 32 * gloasFinalityBranchLen
-	u.Aggregate = decodeSyncAggregate(b[o : o+syncAggregateSize])
-	o += syncAggregateSize
+	u.Aggregate = decodeSyncAggregate(b[o:o+pr.aggregateBytes()], pr)
+	o += pr.aggregateBytes()
 	u.SignatureSlot = binary.LittleEndian.Uint64(b[o : o+8])
 	return u
 }
@@ -289,6 +295,3 @@ func branchAllZero(br [][32]byte) bool {
 	}
 	return true
 }
-
-func epochOf(slot uint64) uint64  { return slot / SlotsPerEpoch }
-func periodOf(slot uint64) uint64 { return epochOf(slot) / EpochsPerPeriod }

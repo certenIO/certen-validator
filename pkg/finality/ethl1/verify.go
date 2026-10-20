@@ -8,7 +8,7 @@ package ethl1
 type rules interface {
 	skip(check string) bool
 	// domainEpoch is the epoch whose fork version signs an update: epoch(saturating_sub(signature_slot, 1)).
-	domainEpoch(attestedSlot, signatureSlot uint64) uint64
+	domainEpoch(pr preset, attestedSlot, signatureSlot uint64) uint64
 }
 
 // Names of the checks a mutation test may switch off.
@@ -30,11 +30,11 @@ const (
 type specRules struct{}
 
 func (specRules) skip(string) bool { return false }
-func (specRules) domainEpoch(_, signatureSlot uint64) uint64 {
+func (specRules) domainEpoch(pr preset, _, signatureSlot uint64) uint64 {
 	if signatureSlot == 0 {
 		return 0
 	}
-	return epochOf(signatureSlot - 1)
+	return pr.epochOf(signatureSlot - 1)
 }
 
 // VerifyFinalizedHead is spec section 5.2 steps 1-4: it establishes, from the pins and the LC part alone, a finalized
@@ -64,12 +64,17 @@ type walkStore struct {
 }
 
 type walker struct {
-	p Pins
-	r rules
-	s walkStore
+	p  Pins
+	r  rules
+	pr preset
+	s  walkStore
 
 	anchor Anchor
 	gvr    [32]byte
+}
+
+func newWalker(p Pins, r rules, pr preset) *walker {
+	return &walker{p: p, r: r, pr: pr, gvr: p.Network.GenesisValidatorsRoot}
 }
 
 func verifyFinalizedHead(p Pins, lc LC, r rules) (FinalizedHead, *Fault) {
@@ -86,7 +91,7 @@ func verifyFinalizedHead(p Pins, lc LC, r rules) (FinalizedHead, *Fault) {
 	if lc.AnchorKind != 1 && lc.AnchorKind != 2 {
 		return FinalizedHead{}, EvidenceMalformed("anchor_kind", 0, "unknown_kind", int(lc.AnchorKind), 2)
 	}
-	w := &walker{p: p, r: r, gvr: p.Network.GenesisValidatorsRoot}
+	w := newWalker(p, r, mainnetPreset())
 
 	var boot *bootstrapObj
 	var committeeRaw []byte
@@ -94,8 +99,8 @@ func verifyFinalizedHead(p Pins, lc LC, r rules) (FinalizedHead, *Fault) {
 		if lc.AnchorBody.Layout != LayoutNone {
 			return FinalizedHead{}, EvidenceMalformed("anchor_body", 0, "layout_byte_not_zero", int(lc.AnchorBody.Layout), 0)
 		}
-		if len(lc.AnchorBody.SSZ) != SyncCommitteeBytes {
-			return FinalizedHead{}, EvidenceMalformed("anchor_body", 0, "length", len(lc.AnchorBody.SSZ), SyncCommitteeBytes)
+		if len(lc.AnchorBody.SSZ) != w.pr.committeeBytes() {
+			return FinalizedHead{}, EvidenceMalformed("anchor_body", 0, "length", len(lc.AnchorBody.SSZ), w.pr.committeeBytes())
 		}
 		committeeRaw = lc.AnchorBody.SSZ
 	} else {
@@ -128,50 +133,8 @@ func verifyFinalizedHead(p Pins, lc LC, r rules) (FinalizedHead, *Fault) {
 	}
 
 	// Step 2: the anchor.
-	a, ok := p.anchorFor(lc.AnchorPeriod)
-	if !ok {
-		if head, any := p.ledgerHead(); any && lc.AnchorPeriod > head {
-			return FinalizedHead{}, LedgerBehind(lc.AnchorPeriod, head)
-		}
-		return FinalizedHead{}, PinUnknown(lc.AnchorKind, lc.AnchorPeriod, lc.AnchorRoot)
-	}
-	w.anchor = a
-	if lc.AnchorKind == 1 {
-		c := newCommittee(committeeRaw)
-		if c.root != a.CommitteeRoot {
-			return FinalizedHead{}, PinMismatch(lc.AnchorPeriod, a.CommitteeRoot, c.root)
-		}
-		if lc.AnchorRoot != a.CommitteeRoot {
-			return FinalizedHead{}, PinMismatch(lc.AnchorPeriod, a.CommitteeRoot, lc.AnchorRoot)
-		}
-		w.s = walkStore{finSlot: lc.AnchorPeriod * EpochsPerPeriod * SlotsPerEpoch, cur: c, curPeriod: lc.AnchorPeriod}
-	} else {
-		if a.BlockRoot == nil {
-			return FinalizedHead{}, PinUnknown(lc.AnchorKind, lc.AnchorPeriod, lc.AnchorRoot)
-		}
-		if lc.AnchorRoot != *a.BlockRoot {
-			return FinalizedHead{}, PinMismatch(lc.AnchorPeriod, *a.BlockRoot, lc.AnchorRoot)
-		}
-		slot := boot.Header.Beacon.Slot
-		if periodOf(slot) != lc.AnchorPeriod {
-			return FinalizedHead{}, BootstrapInvalid("anchor_period", slot)
-		}
-		if ok, f := w.headerValid(boot.Header); f != nil {
-			return FinalizedHead{}, f
-		} else if !ok {
-			return FinalizedHead{}, BootstrapInvalid("header_exec_branch", slot)
-		}
-		if root := hashTreeRootBeaconHeader(boot.Header.Beacon); root != *a.BlockRoot {
-			return FinalizedHead{}, PinMismatch(lc.AnchorPeriod, *a.BlockRoot, root)
-		}
-		c := newCommittee(boot.Committee)
-		if !IsValidNormalizedMerkleBranch(c.root, boot.CommitteeBranch, gindicesOf(boot.Shape).current, boot.Header.Beacon.StateRoot) {
-			return FinalizedHead{}, BootstrapInvalid("committee_branch", slot)
-		}
-		if c.root != a.CommitteeRoot {
-			return FinalizedHead{}, PinMismatch(lc.AnchorPeriod, a.CommitteeRoot, c.root)
-		}
-		w.s = walkStore{finSlot: slot, cur: c, curPeriod: lc.AnchorPeriod}
+	if f := w.anchorStore(lc, boot, committeeRaw); f != nil {
+		return FinalizedHead{}, f
 	}
 
 	// Step 3: every link, then the final update.
@@ -188,12 +151,64 @@ func verifyFinalizedHead(p Pins, lc LC, r rules) (FinalizedHead, *Fault) {
 	// Step 4: the result.
 	return FinalizedHead{
 		Slot:           final.Finalized.Beacon.Slot,
-		Epoch:          epochOf(final.Finalized.Beacon.Slot),
+		Epoch:          w.pr.epochOf(final.Finalized.Beacon.Slot),
 		BeaconRoot:     hashTreeRootBeaconHeader(final.Finalized.Beacon),
 		ExecHash:       final.Finalized.ExecHash,
 		Participants:   final.Aggregate.count(),
-		PeriodsCrossed: periodOf(final.SignatureSlot) - lc.AnchorPeriod,
+		PeriodsCrossed: w.pr.periodOf(final.SignatureSlot) - lc.AnchorPeriod,
 	}, nil
+}
+
+// anchorStore is spec 5.2 step 2: it finds the ledger entry of the anchor period, checks the committee (kind 1) or the bootstrap (kind 2)
+// against it and initialises the light-client store (the anchor committee as current, the finalized slot, no next committee).
+func (w *walker) anchorStore(lc LC, boot *bootstrapObj, committeeRaw []byte) *Fault {
+	p := w.p
+	a, ok := p.anchorFor(lc.AnchorPeriod)
+	if !ok {
+		if head, any := p.ledgerHead(); any && lc.AnchorPeriod > head {
+			return LedgerBehind(lc.AnchorPeriod, head)
+		}
+		return PinUnknown(lc.AnchorKind, lc.AnchorPeriod, lc.AnchorRoot)
+	}
+	w.anchor = a
+	if lc.AnchorKind == 1 {
+		c := newCommittee(committeeRaw, w.pr.committeeSize)
+		if c.root != a.CommitteeRoot {
+			return PinMismatch(lc.AnchorPeriod, a.CommitteeRoot, c.root)
+		}
+		if lc.AnchorRoot != a.CommitteeRoot {
+			return PinMismatch(lc.AnchorPeriod, a.CommitteeRoot, lc.AnchorRoot)
+		}
+		w.s = walkStore{finSlot: lc.AnchorPeriod * w.pr.epochsPerPeriod * w.pr.slotsPerEpoch, cur: c, curPeriod: lc.AnchorPeriod}
+		return nil
+	}
+	if a.BlockRoot == nil {
+		return PinUnknown(lc.AnchorKind, lc.AnchorPeriod, lc.AnchorRoot)
+	}
+	if lc.AnchorRoot != *a.BlockRoot {
+		return PinMismatch(lc.AnchorPeriod, *a.BlockRoot, lc.AnchorRoot)
+	}
+	slot := boot.Header.Beacon.Slot
+	if w.pr.periodOf(slot) != lc.AnchorPeriod {
+		return BootstrapInvalid("anchor_period", slot)
+	}
+	if ok, f := w.headerValid(boot.Header); f != nil {
+		return f
+	} else if !ok {
+		return BootstrapInvalid("header_exec_branch", slot)
+	}
+	if root := hashTreeRootBeaconHeader(boot.Header.Beacon); root != *a.BlockRoot {
+		return PinMismatch(lc.AnchorPeriod, *a.BlockRoot, root)
+	}
+	c := newCommittee(boot.Committee, w.pr.committeeSize)
+	if !IsValidNormalizedMerkleBranch(c.root, boot.CommitteeBranch, gindicesOf(boot.Shape).current, boot.Header.Beacon.StateRoot) {
+		return BootstrapInvalid("committee_branch", slot)
+	}
+	if c.root != a.CommitteeRoot {
+		return PinMismatch(lc.AnchorPeriod, a.CommitteeRoot, c.root)
+	}
+	w.s = walkStore{finSlot: slot, cur: c, curPeriod: lc.AnchorPeriod}
+	return nil
 }
 
 // layoutLength validates the layout byte of a carried object and, for the fixed-size Gloas layout, its exact length; the
@@ -214,12 +229,12 @@ func (w *walker) parseBootstrap(lb LB) (bootstrapObj, *Fault) {
 		return bootstrapObj{}, f
 	}
 	if lb.Layout == LayoutElectra {
-		return decodeElectraBootstrap(lb.SSZ)
+		return decodeElectraBootstrap(lb.SSZ, w.pr)
 	}
-	if len(lb.SSZ) != LightClientBootstrapSize {
-		return bootstrapObj{}, EvidenceMalformed("anchor_body", 0, "length", len(lb.SSZ), LightClientBootstrapSize)
+	if len(lb.SSZ) != w.pr.gloasBootstrapSize() {
+		return bootstrapObj{}, EvidenceMalformed("anchor_body", 0, "length", len(lb.SSZ), w.pr.gloasBootstrapSize())
 	}
-	return decodeBootstrap(lb.SSZ), nil
+	return decodeBootstrap(lb.SSZ, w.pr), nil
 }
 
 func (w *walker) parseUpdate(index int, lb LB) (updateObj, *Fault) {
@@ -227,12 +242,12 @@ func (w *walker) parseUpdate(index int, lb LB) (updateObj, *Fault) {
 		return updateObj{}, f
 	}
 	if lb.Layout == LayoutElectra {
-		return decodeElectraUpdate(lb.SSZ, index)
+		return decodeElectraUpdate(lb.SSZ, index, w.pr)
 	}
-	if len(lb.SSZ) != LightClientUpdateSize {
-		return updateObj{}, EvidenceMalformed("link", index, "length", len(lb.SSZ), LightClientUpdateSize)
+	if len(lb.SSZ) != w.pr.gloasUpdateSize() {
+		return updateObj{}, EvidenceMalformed("link", index, "length", len(lb.SSZ), w.pr.gloasUpdateSize())
 	}
-	return decodeUpdate(lb.SSZ), nil
+	return decodeUpdate(lb.SSZ, w.pr), nil
 }
 
 func (w *walker) parseFinalityUpdate(lb LB) (updateObj, *Fault) {
@@ -240,19 +255,19 @@ func (w *walker) parseFinalityUpdate(lb LB) (updateObj, *Fault) {
 		return updateObj{}, f
 	}
 	if lb.Layout == LayoutElectra {
-		return decodeElectraFinalityUpdate(lb.SSZ)
+		return decodeElectraFinalityUpdate(lb.SSZ, w.pr)
 	}
-	if len(lb.SSZ) != LightClientFinalityUpdateSize {
-		return updateObj{}, EvidenceMalformed("final_update", 0, "length", len(lb.SSZ), LightClientFinalityUpdateSize)
+	if len(lb.SSZ) != w.pr.gloasFinalityUpdateSize() {
+		return updateObj{}, EvidenceMalformed("final_update", 0, "length", len(lb.SSZ), w.pr.gloasFinalityUpdateSize())
 	}
-	return decodeFinalityUpdate(lb.SSZ), nil
+	return decodeFinalityUpdate(lb.SSZ, w.pr), nil
 }
 
 // checkForkOfSlot requires the fork at the slot's epoch to carry the layout the object was parsed by (spec 3.2 b).
 func (w *walker) checkForkOfSlot(slot uint64, layout Layout) *Fault {
-	f, ok := w.p.Network.forkAt(epochOf(slot))
+	f, ok := w.p.Network.forkAt(w.pr.epochOf(slot))
 	if !ok || f.Layout != layout {
-		return ForkUnsupported(slot, epochOf(slot), layout.String())
+		return ForkUnsupported(slot, w.pr.epochOf(slot), layout.String())
 	}
 	return nil
 }
@@ -264,13 +279,13 @@ func (w *walker) checkForkOfSlot(slot uint64, layout Layout) *Fault {
 // layout, and any shape/fork combination the specification has no rule for, is finality_fork_unsupported.
 func (w *walker) headerValid(h lcHeader) (bool, *Fault) {
 	slot := h.Beacon.Slot
-	f, ok := w.p.Network.forkAt(epochOf(slot))
+	f, ok := w.p.Network.forkAt(w.pr.epochOf(slot))
 	if !ok {
-		return false, ForkUnsupported(slot, epochOf(slot), h.Shape.String())
+		return false, ForkUnsupported(slot, w.pr.epochOf(slot), h.Shape.String())
 	}
 	if h.Shape == LayoutElectra {
 		if f.Layout != LayoutElectra {
-			return false, ForkUnsupported(slot, epochOf(slot), h.Shape.String())
+			return false, ForkUnsupported(slot, w.pr.epochOf(slot), h.Shape.String())
 		}
 		depth := floorLog2(gindexExecPayloadInBody)
 		return isValidMerkleBranch(executionHeaderRoot(h.Exec), h.Branch, depth, gindexExecPayloadInBody%(uint64(1)<<uint(depth)), h.Beacon.BodyRoot), nil
@@ -282,7 +297,7 @@ func (w *walker) headerValid(h lcHeader) (bool, *Fault) {
 	case LayoutElectra:
 		g = gindexExecHashDeneb
 	default:
-		return false, ForkUnsupported(slot, epochOf(slot), h.Shape.String())
+		return false, ForkUnsupported(slot, w.pr.epochOf(slot), h.Shape.String())
 	}
 	return IsValidNormalizedMerkleBranch(h.ExecHash, h.Branch, g, h.Beacon.BodyRoot), nil
 }
@@ -299,14 +314,14 @@ func (w *walker) enforce(label uint64, root [32]byte) *Fault {
 // current_slot := the update's own signature_slot. idx is the link's index; the final update has idx == len(links).
 func (w *walker) update(idx int, u *updateObj, isFinal bool) *Fault {
 	as, fs, ss := u.Attested.Beacon.Slot, u.Finalized.Beacon.Slot, u.SignatureSlot
-	sigPeriod := periodOf(ss)
+	sigPeriod := w.pr.periodOf(ss)
 	li := func(check string) *Fault { return LinkInvalid(idx, check, as, ss, sigPeriod) }
 	gi := gindicesOf(u.Shape)
 
 	// participation: 3n >= 2*512 (342) on every update, the final one included.
 	n := u.Aggregate.count()
-	if !w.r.skip(chkFloor) && (n*3 < SyncCommitteeSize*2 || n < w.p.MinParticipants) {
-		return ParticipationInsufficient(idx, n, MinParticipantsFloor, SyncCommitteeSize)
+	if !w.r.skip(chkFloor) && (n*3 < w.pr.committeeSize*2 || n < w.p.MinParticipants) {
+		return ParticipationInsufficient(idx, n, w.pr.floor(), w.pr.committeeSize)
 	}
 
 	if !w.r.skip(chkExecBranch) {
@@ -319,7 +334,7 @@ func (w *walker) update(idx int, u *updateObj, isFinal bool) *Fault {
 	if !(ss > as && as >= fs) { // current_slot >= signature_slot holds by construction (current_slot := signature_slot)
 		return li("slot_order")
 	}
-	storePeriod := periodOf(w.s.finSlot)
+	storePeriod := w.pr.periodOf(w.s.finSlot)
 	if w.s.next != nil {
 		if !w.r.skip(chkPeriodRuleNextKnown) && sigPeriod != storePeriod && sigPeriod != storePeriod+1 {
 			if isFinal {
@@ -333,7 +348,7 @@ func (w *walker) update(idx int, u *updateObj, isFinal bool) *Fault {
 		}
 		return li("period_skip")
 	}
-	attestedPeriod := periodOf(as)
+	attestedPeriod := w.pr.periodOf(as)
 	isSyncUpdate := !isFinal && !branchAllZero(u.NextBranch)
 	hasNextCommittee := w.s.next == nil && isSyncUpdate && attestedPeriod == storePeriod
 	if !(as > w.s.finSlot || hasNextCommittee) {
@@ -374,7 +389,7 @@ func (w *walker) update(idx int, u *updateObj, isFinal bool) *Fault {
 		if !isSyncUpdate {
 			return li("not_sync_committee_update")
 		}
-		learned = newCommittee(u.NextCommittee)
+		learned = newCommittee(u.NextCommittee, w.pr.committeeSize)
 		if !w.r.skip(chkNextMismatch) && attestedPeriod == storePeriod && w.s.next != nil && w.s.next.root != learned.root {
 			return li("next_committee_mismatch")
 		}
@@ -399,9 +414,9 @@ func (w *walker) update(idx int, u *updateObj, isFinal bool) *Fault {
 			return f
 		}
 	}
-	fk, ok := w.p.Network.forkAt(w.r.domainEpoch(as, ss))
+	fk, ok := w.p.Network.forkAt(w.r.domainEpoch(w.pr, as, ss))
 	if !ok {
-		return ForkUnsupported(ss, epochOf(ss), u.Shape.String())
+		return ForkUnsupported(ss, w.pr.epochOf(ss), u.Shape.String())
 	}
 	version := fk.Version
 	domain := computeDomain(version, w.gvr)
@@ -414,8 +429,8 @@ func (w *walker) update(idx int, u *updateObj, isFinal bool) *Fault {
 	// the epoch 256*period at which the signing committee's period (its ledger label) begins; for the anchor that is the
 	// "previous epoch = 256*period" of step 2. Measured on the live chain: the finalized epochs of consecutive best updates
 	// are up to 338 and 402 epochs apart, so a step-to-step reading refuses genuine chains (RB11-C1A finding F1).
-	prevEpoch := EpochsPerPeriod * sigPeriod
-	newEpoch := epochOf(fs)
+	prevEpoch := w.pr.epochsPerPeriod * sigPeriod
+	newEpoch := w.pr.epochOf(fs)
 	if !w.r.skip(chkWindow) && newEpoch > prevEpoch && newEpoch-prevEpoch > w.anchor.WSPEpochs {
 		return PinWindow(prevEpoch, newEpoch, w.anchor.WSPEpochs)
 	}
@@ -424,11 +439,11 @@ func (w *walker) update(idx int, u *updateObj, isFinal bool) *Fault {
 	}
 
 	// process_light_client_update's apply condition, then apply_light_client_update.
-	updateHasFinalizedNext := w.s.next == nil && periodOf(fs) == attestedPeriod
+	updateHasFinalizedNext := w.s.next == nil && w.pr.periodOf(fs) == attestedPeriod
 	if !(fs > w.s.finSlot || updateHasFinalizedNext) {
 		return li("not_applied")
 	}
-	finalizedPeriod := periodOf(fs)
+	finalizedPeriod := w.pr.periodOf(fs)
 	if w.s.next == nil {
 		if finalizedPeriod != storePeriod {
 			return li("finalized_period")

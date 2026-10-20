@@ -62,7 +62,7 @@ func committeeOf(pk [48]byte) *committee {
 		copy(raw[i*48:], pk[:])
 	}
 	copy(raw[SyncCommitteeSize*48:], pk[:])
-	return newCommittee(raw)
+	return newCommittee(raw, SyncCommitteeSize)
 }
 
 // signAll returns sk * H(msg) as a compressed signature, the aggregate signature of seats whose keys are all sk*G1.
@@ -84,6 +84,7 @@ func TestOffSubgroupAndIdentityPointsAreRefused(t *testing.T) {
 	good := g1.Bytes()
 	var msg [32]byte
 	var all syncAggregate
+	all.Bits = make([]byte, SyncCommitteeSize/8)
 	for i := range all.Bits {
 		all.Bits[i] = 0xff
 	}
@@ -149,10 +150,11 @@ func TestOnlyParticipatingKeysAreDecoded(t *testing.T) {
 	for i := 0; i < 48; i++ {
 		raw[5*48+i] = 0xff // seat 5: not a valid compressed key
 	}
-	c := newCommittee(raw)
+	c := newCommittee(raw, SyncCommitteeSize)
 	var msg [32]byte
 	msg[0] = 7
 	var agg syncAggregate
+	agg.Bits = make([]byte, SyncCommitteeSize/8)
 	agg.Bits[0] = 0b00001111 // seats 0-3
 	agg.Signature = signAll(t, 1, msg, 4)
 	if err := fastAggregateVerify(c, agg, msg); err != nil {
