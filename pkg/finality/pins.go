@@ -120,6 +120,7 @@ type Pins struct {
 
 	sum    [32]byte
 	source string
+	raw    []byte // the bytes this Pins was parsed from (Extend compares non-ledger content against them)
 }
 
 type pinsFile struct {
@@ -206,7 +207,7 @@ func parsePins(raw []byte, sum [32]byte, source string) (*Pins, error) {
 	if f.PublishedUTC == "" {
 		return nil, PinsCorrupt(PinsPublishedUTCEmpty)
 	}
-	p := &Pins{Format: f.Format, PublishedUTC: f.PublishedUTC, OnchainCommitment: f.OnchainCommitment, EthSepolia: f.EthSepolia, Shared: f.Shared, sum: sum, source: source}
+	p := &Pins{Format: f.Format, PublishedUTC: f.PublishedUTC, OnchainCommitment: f.OnchainCommitment, EthSepolia: f.EthSepolia, Shared: f.Shared, sum: sum, source: source, raw: append([]byte(nil), raw...)}
 	for name, r := range map[string]json.RawMessage{"base_sepolia": f.BaseSepolia, "arb_sepolia": f.ArbSepolia, "adiri": f.Adiri} {
 		if len(r) > 0 && string(r) != "null" {
 			if p.Sections == nil {

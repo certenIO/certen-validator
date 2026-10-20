@@ -18,6 +18,7 @@ import (
 // reasonTypes maps each typed reason set of state.go to the state code whose `reason` it closes.
 var reasonTypes = map[string]string{
 	"EvidenceReason":       CodeEvidenceMalformed,
+	"LedgerReason":         CodeLedgerExtensionBad,
 	"AddendumReason":       CodeAddendumMalformed,
 	"PinsReason":           CodePinsCorrupt,
 	"IncludedReason":       CodeIncludedUnavailable,
