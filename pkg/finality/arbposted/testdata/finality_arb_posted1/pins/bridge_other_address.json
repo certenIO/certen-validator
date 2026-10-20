@@ -1,0 +1,102 @@
+{
+  "arb_sepolia": {
+    "bold_genesis_assertion": "0x940486661b708c53f29a6333667cb740969cbee0d9554b139b14567ba549d723",
+    "bold_genesis_l2_block": 105880604,
+    "bridge": "0x0000000000000000000000000000000000000001",
+    "chain_id": 421614,
+    "layout": {
+      "acc_array_slot": 7,
+      "assertions_slot": 117,
+      "delayed_acc_array_slot": 6,
+      "name": "nitro-contracts-v3.1.0"
+    },
+    "logic_pins": {
+      "0x3bd9637547d75e5b4539449e14c759b86b9d37a7c1f2b47a1524f857e4ff1a0c": "bridge_impl",
+      "0xdd93a7606e6067aaae8ad5afa28b943a8272809eb72face4e2bb3bf4d0609445": "rollup_admin_logic",
+      "0xeadf786edd4819d0262d9679d43b878d7005408a822aa0c43cf79bd0043c09a3": "rollup_user_logic"
+    },
+    "max_blobs": 16,
+    "max_header_chain": 32768,
+    "max_segments": 102400,
+    "max_uncompressed_batch": 16777216,
+    "parent_chain_id": 11155111,
+    "rollup": "0x042B2E6C5E99d4c521bd49beeD5E99651D9B0Cf4"
+  },
+  "eth_sepolia": {
+    "anchors": [
+      {
+        "block_root": "0xdde21372c9a422b8d2bf1eec56e4d7ba740957b2022607c90be947f45b586103",
+        "committee_root": "0xe0a6ede4f641fa171bd6cdca25356f98b48039fbe01454685ea4b234ace4fac9",
+        "derived_by": [
+          "lodestar-bootstrap (finalityethl1record method; vector pin, not an independent derivation)"
+        ],
+        "link_sha256": "4f4455a776be397f6d9920992e4fd1192a0da078a0210cdf3d74adaeb39d1aeb",
+        "period": 1391,
+        "wsp_epochs": 279
+      }
+    ],
+    "chain_id": 11155111,
+    "epochs_per_period": 256,
+    "forks": [
+      {
+        "epoch": 0,
+        "layout": null,
+        "name": "genesis",
+        "version": "0x90000069"
+      },
+      {
+        "epoch": 50,
+        "layout": null,
+        "name": "altair",
+        "version": "0x90000070"
+      },
+      {
+        "epoch": 100,
+        "layout": null,
+        "name": "bellatrix",
+        "version": "0x90000071"
+      },
+      {
+        "epoch": 56832,
+        "layout": null,
+        "name": "capella",
+        "version": "0x90000072"
+      },
+      {
+        "epoch": 132608,
+        "layout": null,
+        "name": "deneb",
+        "version": "0x90000073"
+      },
+      {
+        "epoch": 222464,
+        "layout": "electra",
+        "name": "electra",
+        "version": "0x90000074"
+      },
+      {
+        "epoch": 272640,
+        "layout": "electra",
+        "name": "fulu",
+        "version": "0x90000075"
+      },
+      {
+        "epoch": 353024,
+        "layout": "gloas",
+        "name": "gloas",
+        "version": "0x90000076"
+      }
+    ],
+    "genesis_time": 1655733600,
+    "genesis_validators_root": "0xd8ea171f3c94aea21ebc42a1ed61052acf3f9209c00e4efbaaddac09ed9b8078",
+    "kzg_setup_sha256": "f8e44a31ebf0a6d0734dcb301b0716e2c77f3ae18ed0cab0870fbcc2ca55616f",
+    "max_links": 64,
+    "max_spine_headers": 16384,
+    "min_participants": 342,
+    "spec": "consensus-specs v1.7.0-beta.4 aa16bb4c",
+    "sync_committee_size": 512
+  },
+  "format": "certen-finality-pins/1",
+  "onchain_commitment": null,
+  "published_utc": "2026-10-20T02:35:00Z"
+}

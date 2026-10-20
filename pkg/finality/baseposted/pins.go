@@ -35,7 +35,8 @@ type Pins struct {
 	MaxBlobs               int
 	L2GenesisTime          uint64
 	L2BlockTime            uint64
-	KZGSetupSHA256         string
+	KZGSetupSHA256         string            // from Pins.KZGSetupPin: the shared section, or the legacy base_sepolia copy of a published pins file
+	KZGSetupKey            string            // the pins key KZGSetupSHA256 was read from, for pins_corrupt reports
 	SystemConfigImplHashes map[[32]byte]bool // impl_pins rows with role syscfg_impl
 }
 
@@ -81,7 +82,7 @@ func ParsePins(p *finality.Pins) (*Pins, error) {
 	bad := func(key string) error { return finality.PinsCorrupt(finality.PinsBadValue, "key", "base_sepolia."+key) }
 	out := &Pins{ChainID: r.ChainID, L1ChainID: r.L1ChainID, SeqWindowSize: r.SeqWindowSize, ChannelTimeout: r.ChannelTimeout,
 		MaxRLPBytesPerChannel: r.MaxRLPBytesPerChannel, IsthmusTime: r.IsthmusTime, DenimTime: r.DenimTime, MaxBlobs: r.MaxBlobs, L2GenesisTime: r.L2GenesisTime, L2BlockTime: r.L2BlockTime,
-		KZGSetupSHA256: r.KZGSetupSHA256, SystemConfigImplHashes: map[[32]byte]bool{}}
+		SystemConfigImplHashes: map[[32]byte]bool{}}
 	if r.ChainID != uint64(Chain) {
 		return nil, bad("chain_id")
 	}
@@ -107,8 +108,12 @@ func ParsePins(p *finality.Pins) (*Pins, error) {
 	if r.MaxBlobs <= 0 {
 		return nil, bad("max_blobs")
 	}
-	if k, ok := unhex("0x"+r.KZGSetupSHA256, 32); !ok || len(k) != 32 {
-		return nil, bad("kzg_setup_sha256")
+	var kerr error
+	if out.KZGSetupSHA256, out.KZGSetupKey, kerr = p.KZGSetupPin("base_sepolia.kzg_setup_sha256", r.KZGSetupSHA256); kerr != nil {
+		return nil, kerr
+	}
+	if k, ok := unhex("0x"+out.KZGSetupSHA256, 32); !ok || len(k) != 32 {
+		return nil, finality.PinsCorrupt(finality.PinsBadValue, "key", out.KZGSetupKey)
 	}
 	for ch, row := range r.ImplPins {
 		h, ok := unhex(ch, 32)

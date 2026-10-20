@@ -279,7 +279,7 @@ func verifyChannel(bp *Pins, body Body, covered []ethl1.L1Block, l2 finality.Hea
 				}
 				if kz == nil {
 					if kz, err = kzgsetup.Load(bp.KZGSetupSHA256); err != nil {
-						return finality.Verdict{}, finality.PinsCorrupt(finality.PinsBadValue, "key", "base_sepolia.kzg_setup_sha256")
+						return finality.Verdict{}, finality.PinsCorrupt(finality.PinsBadValue, "key", bp.KZGSetupKey)
 					}
 				}
 				if err := kz.VerifyBlob(bl.Raw, bl.Commitment, bl.Proof); err != nil {

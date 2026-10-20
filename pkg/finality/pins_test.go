@@ -80,10 +80,19 @@ func TestTheInitialPinsHoldExactlyTheSepoliaNetworkSectionOfSection42(t *testing
 	if _, err := e.AnchorFor(1000); err == nil || stateOf(t, err).Code != CodePinUnknown {
 		t.Fatalf("an empty ledger gave an anchor: %v", err)
 	}
-	// RB11-D2: the KZG setup hash is a pin now - verified 2026-10-20 byte-for-byte against consensus-specs v1.7.0-beta.4
-	// presets/mainnet/trusted_setups/trusted_setup_4096.json (V2_SPEC_S7 11 item 9) - and lives only in the base_sepolia section
-	if bytes.Count(EmbeddedPinsBytes(), []byte("kzg_setup_sha256")) != 1 || !bytes.Contains(EmbeddedPinsBytes(), []byte("f8e44a31ebf0a6d0734dcb301b0716e2c77f3ae18ed0cab0870fbcc2ca55616f")) {
+	// The KZG setup hash is a pin since it was compared with the Ethereum ceremony output at the pinned tag (V2_SPEC_S7 11.9:
+	// the raw sha256 of presets/mainnet/trusted_setups/trusted_setup_4096.json at consensus-specs v1.7.0-beta.4 equals it,
+	// verified by RB11-D2 and again by RB11-E2). RB11-INT1: it lives ONCE, in the top-level `shared` section; neither chain
+	// section of the embedded file carries a copy.
+	const kzg = "f8e44a31ebf0a6d0734dcb301b0716e2c77f3ae18ed0cab0870fbcc2ca55616f"
+	if bytes.Count(EmbeddedPinsBytes(), []byte("kzg_setup_sha256")) != 1 || bytes.Count(EmbeddedPinsBytes(), []byte(kzg)) != 1 {
 		t.Fatal("the verified KZG setup hash must be pinned exactly once")
+	}
+	if p.Shared == nil || p.Shared.KZGSetupSHA256 != kzg || e.KZGSetupSHA256 != "" {
+		t.Fatalf("the KZG pin is not (only) in the shared section: %+v / %q", p.Shared, e.KZGSetupSHA256)
+	}
+	if v, k, err := p.KZGSetupPin("base_sepolia.kzg_setup_sha256", ""); err != nil || v != kzg || k != KZGSetupSharedKey {
+		t.Fatalf("%q %q %v", v, k, err)
 	}
 }
 
@@ -162,4 +171,67 @@ func onlyChainSections(s map[string]json.RawMessage) bool {
 		}
 	}
 	return true
+}
+
+// RB11-INT1 (F13b): the KZG setup pin is read through Pins.KZGSetupPin. Published pins files (the vector sets finality_base_posted1
+// and finality_arb_posted1) carry it in a chain section; the embedded file carries it in `shared`.
+func TestKZGSetupPinIsReadFromTheSharedSectionOrTheLegacyCopyAndRefusesAConflict(t *testing.T) {
+	const kzg = "f8e44a31ebf0a6d0734dcb301b0716e2c77f3ae18ed0cab0870fbcc2ca55616f"
+	other := strings.Repeat("22", 32)
+	mk := func(shared string) *Pins {
+		raw := `{"format": "certen-finality-pins/1", "onchain_commitment": null, "published_utc": "2026-10-20T02:35:00Z"` + shared + "}\n"
+		p, err := ParsePinsOverride([]byte(raw))
+		if err != nil {
+			t.Fatalf("%s: %v", raw, err)
+		}
+		return p
+	}
+	shared := mk(`, "shared": {"kzg_setup_sha256": "` + kzg + `"}`)
+	none := mk("")
+	const legacy = "base_sepolia.kzg_setup_sha256"
+	for name, c := range map[string]struct {
+		p                  *Pins
+		legacy             string
+		wantVal, wantKey   string
+		wantCode, wantKey2 string
+	}{
+		"shared only":                 {shared, "", kzg, KZGSetupSharedKey, "", ""},
+		"shared and equal legacy":     {shared, kzg, kzg, KZGSetupSharedKey, "", ""},
+		"legacy only":                 {none, kzg, kzg, legacy, "", ""},
+		"legacy only, another value":  {none, other, other, legacy, "", ""},
+		"shared and different legacy": {shared, other, "", legacy, CodePinsCorrupt, legacy},
+		"neither":                     {none, "", "", KZGSetupSharedKey, CodePinsCorrupt, KZGSetupSharedKey},
+		"no pins at all":              {nil, kzg, "", KZGSetupSharedKey, CodePinUnknown, ""},
+	} {
+		v, k, err := c.p.KZGSetupPin(legacy, c.legacy)
+		if c.wantCode == "" {
+			if err != nil || v != c.wantVal || k != c.wantKey {
+				t.Errorf("%s: %q %q %v", name, v, k, err)
+			}
+			continue
+		}
+		if err == nil || stateOf(t, err).Code != c.wantCode || v != "" || k != c.wantKey {
+			t.Errorf("%s: %q %q %v", name, v, k, err)
+		}
+		if c.wantKey2 != "" {
+			if got := stateOf(t, err).Fields["key"]; got != c.wantKey2 {
+				t.Errorf("%s: the report names key %q, want %q", name, got, c.wantKey2)
+			}
+		}
+	}
+	// the shared section is strict: its value must be 64 lower-case hex, and it has no other key
+	for name, raw := range map[string]string{
+		"uppercase":   `, "shared": {"kzg_setup_sha256": "` + strings.ToUpper(kzg) + `"}`,
+		"0x prefixed": `, "shared": {"kzg_setup_sha256": "0x` + kzg + `"}`,
+		"short":       `, "shared": {"kzg_setup_sha256": "abcd"}`,
+		"empty":       `, "shared": {"kzg_setup_sha256": ""}`,
+		"absent":      `, "shared": {}`,
+		"unknown key": `, "shared": {"kzg_setup_sha256": "` + kzg + `", "zzz": 1}`,
+		"unsorted":    `, "shared": {"zzz": 1, "kzg_setup_sha256": "` + kzg + `"}`,
+	} {
+		full := `{"format": "certen-finality-pins/1", "onchain_commitment": null, "published_utc": "2026-10-20T02:35:00Z"` + raw + "}\n"
+		if _, err := ParsePinsOverride([]byte(full)); err == nil || stateOf(t, err).Code != CodePinsCorrupt {
+			t.Errorf("shared section %s loaded or gave the wrong state: %v", name, err)
+		}
+	}
 }

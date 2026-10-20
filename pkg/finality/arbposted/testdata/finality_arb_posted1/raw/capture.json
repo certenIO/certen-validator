@@ -1,0 +1,11 @@
+{
+ "batch": 883753,
+ "bootstrap_block_root": "0xdde21372c9a422b8d2bf1eec56e4d7ba740957b2022607c90be947f45b586103",
+ "captured_utc": "2026-10-20T08:24:31Z",
+ "finalized_exec_hash": "0xa95450b65d38e64504baf6b5dd220a4056b9ad71c738651bbd4edc12b3da82d8",
+ "l1_event_block": 11953990,
+ "l1_rpc": "https://ethereum-sepolia-rpc.publicnode.com",
+ "l2_rpc": "https://sepolia-rollup.arbitrum.io/rpc",
+ "lodestar": "https://lodestar-sepolia.chainsafe.io",
+ "message_index": 1
+}

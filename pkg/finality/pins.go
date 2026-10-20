@@ -18,7 +18,7 @@ const PinsFormat = "certen-finality-pins/1"
 
 // PinsSHA256 is the SHA-256 of the embedded pins file. A verifier refuses to start (finality_pins_corrupt) if the embedded
 // bytes hash otherwise; CI job finality-pins-sync compares this constant and the file across the three repositories.
-const PinsSHA256 = "4cdc77e317d22080a42748628605824617f1a1568869a5fe3fdb3753742130a7"
+const PinsSHA256 = "78a58181eb15d99b9a583f28baa2ae7e9cc228ad166764e9b857573b6985573c"
 
 //go:embed pins/finality-pins.json
 var embeddedPins []byte
@@ -49,17 +49,55 @@ type AnchorPin struct {
 
 // EthSepoliaPins is the Sepolia network section of 4.2.
 type EthSepoliaPins struct {
-	ChainID               uint64      `json:"chain_id"`
-	GenesisValidatorsRoot string      `json:"genesis_validators_root"`
-	GenesisTime           uint64      `json:"genesis_time"`
-	Forks                 []ForkPin   `json:"forks"`
-	Spec                  string      `json:"spec"`
-	SyncCommitteeSize     int         `json:"sync_committee_size"`
-	MinParticipants       int         `json:"min_participants"`
-	EpochsPerPeriod       uint64      `json:"epochs_per_period"`
-	MaxLinks              int         `json:"max_links"`
-	MaxSpineHeaders       int         `json:"max_spine_headers"`
-	Anchors               []AnchorPin `json:"anchors"`
+	ChainID               uint64 `json:"chain_id"`
+	GenesisValidatorsRoot string `json:"genesis_validators_root"`
+	GenesisTime           uint64 `json:"genesis_time"`
+	// KZGSetupSHA256 is the LEGACY location of the KZG setup pin (pins files published with finality_arb_posted1). The embedded file
+	// carries the pin only in `shared`; read it through Pins.KZGSetupPin, never from this field.
+	KZGSetupSHA256    string      `json:"kzg_setup_sha256"`
+	Forks             []ForkPin   `json:"forks"`
+	Spec              string      `json:"spec"`
+	SyncCommitteeSize int         `json:"sync_committee_size"`
+	MinParticipants   int         `json:"min_participants"`
+	EpochsPerPeriod   uint64      `json:"epochs_per_period"`
+	MaxLinks          int         `json:"max_links"`
+	MaxSpineHeaders   int         `json:"max_spine_headers"`
+	Anchors           []AnchorPin `json:"anchors"`
+}
+
+// SharedPins is the top-level `shared` section of the pins file: values more than one chain kind reads, held once so the kinds
+// cannot diverge (RB11-INT1, decision F13b). Unknown keys inside it are refused like everywhere else.
+type SharedPins struct {
+	// KZGSetupSHA256 is the SHA-256 (64 lower-case hex, no prefix) of the EIP-4844 trusted setup file the blob kinds load: the
+	// consensus-specs v1.7.0-beta.4 trusted_setup_4096.json, verified byte for byte (V2_SPEC_S7 11 item 9).
+	KZGSetupSHA256 string `json:"kzg_setup_sha256"`
+}
+
+// KZGSetupSharedKey is the pins key a missing, malformed or conflicting KZG setup pin is reported under.
+const KZGSetupSharedKey = "shared.kzg_setup_sha256"
+
+// KZGSetupPin returns the pinned SHA-256 of the KZG ceremony setup and the pins key it was read from.
+//
+// The pin lives in the `shared` section (the embedded file carries it nowhere else). Pins files published before that section
+// existed carry a copy in the chain section of the kind that used it (finality_base_posted1: base_sepolia.kzg_setup_sha256;
+// finality_arb_posted1: eth_sepolia.kzg_setup_sha256) and a published vector set is never edited, so legacyKey/legacyValue name that
+// copy. It is read when the file has no `shared` section; when the file has both and they differ the file is
+// finality_pins_corrupt (never "the shared one wins"); when it has neither the pin is missing: finality_pins_corrupt{bad_value}
+// under KZGSetupSharedKey.
+func (p *Pins) KZGSetupPin(legacyKey, legacyValue string) (value, key string, err error) {
+	if p == nil {
+		return "", KZGSetupSharedKey, NewState(CodePinUnknown, "kind", "kzg_setup_sha256")
+	}
+	if p.Shared != nil {
+		if legacyValue != "" && legacyValue != p.Shared.KZGSetupSHA256 {
+			return "", legacyKey, PinsCorrupt(PinsBadValue, "key", legacyKey)
+		}
+		return p.Shared.KZGSetupSHA256, KZGSetupSharedKey, nil
+	}
+	if legacyValue != "" {
+		return legacyValue, legacyKey, nil
+	}
+	return "", KZGSetupSharedKey, PinsCorrupt(PinsBadValue, "key", KZGSetupSharedKey)
 }
 
 // OnchainCommitment is the optional on-chain commitment of the file hash (D3).
@@ -78,6 +116,7 @@ type Pins struct {
 	OnchainCommitment *OnchainCommitment
 	EthSepolia        *EthSepoliaPins
 	Sections          map[string]json.RawMessage // base_sepolia, arb_sepolia, adiri: raw, parsed by their chain packages
+	Shared            *SharedPins                // pins more than one chain kind reads (the KZG ceremony setup)
 
 	sum    [32]byte
 	source string
@@ -91,6 +130,7 @@ type pinsFile struct {
 	BaseSepolia       json.RawMessage    `json:"base_sepolia"`
 	ArbSepolia        json.RawMessage    `json:"arb_sepolia"`
 	Adiri             json.RawMessage    `json:"adiri"`
+	Shared            *SharedPins        `json:"shared"`
 }
 
 // SHA256 is the hash of the raw bytes this Pins was loaded from.
@@ -166,7 +206,7 @@ func parsePins(raw []byte, sum [32]byte, source string) (*Pins, error) {
 	if f.PublishedUTC == "" {
 		return nil, PinsCorrupt(PinsPublishedUTCEmpty)
 	}
-	p := &Pins{Format: f.Format, PublishedUTC: f.PublishedUTC, OnchainCommitment: f.OnchainCommitment, EthSepolia: f.EthSepolia, sum: sum, source: source}
+	p := &Pins{Format: f.Format, PublishedUTC: f.PublishedUTC, OnchainCommitment: f.OnchainCommitment, EthSepolia: f.EthSepolia, Shared: f.Shared, sum: sum, source: source}
 	for name, r := range map[string]json.RawMessage{"base_sepolia": f.BaseSepolia, "arb_sepolia": f.ArbSepolia, "adiri": f.Adiri} {
 		if len(r) > 0 && string(r) != "null" {
 			if p.Sections == nil {
@@ -179,6 +219,9 @@ func parsePins(raw []byte, sum [32]byte, source string) (*Pins, error) {
 		if err := p.EthSepolia.validate(); err != nil {
 			return nil, err
 		}
+	}
+	if p.Shared != nil && !hexN(p.Shared.KZGSetupSHA256, 32, false) {
+		return nil, PinsCorrupt(PinsBadValue, "key", KZGSetupSharedKey)
 	}
 	return p, nil
 }
@@ -209,6 +252,9 @@ func (e *EthSepoliaPins) validate() error {
 	}
 	if !hexN(e.GenesisValidatorsRoot, 32, true) {
 		return PinsCorrupt(PinsGenesisRootMalformed)
+	}
+	if e.KZGSetupSHA256 != "" && !hexN(e.KZGSetupSHA256, 32, false) {
+		return PinsCorrupt(PinsBadValue, "key", "kzg_setup_sha256")
 	}
 	for _, b := range []struct {
 		key string

@@ -129,6 +129,7 @@ const (
 	ReasonLinkKind2AtSeal          EvidenceReason = "link_kind_2_at_seal"
 	ReasonLinkKindUnknown          EvidenceReason = "link_kind_unknown"
 	ReasonSpineEmpty               EvidenceReason = "spine_empty"
+	ReasonBadEnumValue             EvidenceReason = "bad_enum_value"
 )
 
 // AddendumReason is the reason of finality_addendum_malformed (the JSON form of an addendum, a section and a proof id).
