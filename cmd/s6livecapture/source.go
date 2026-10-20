@@ -184,10 +184,15 @@ func (s *source) heads(ctx context.Context) ([]uint64, error) {
 		go func(p *provider) {
 			defer wg.Done()
 			h, err := p.eth.HeaderByNumber(ctx, nil)
+			failed := err != nil || h == nil || h.Number == nil
+			note := ""
+			if failed { // formatted and redacted before the lock: the other providers do not wait for it
+				note = ethproof.BoundProviderText(fmt.Sprintf("%s: %v", p.host, err))
+			}
 			mu.Lock()
 			defer mu.Unlock()
-			if err != nil || h == nil || h.Number == nil {
-				notes = append(notes, ethproof.BoundProviderText(fmt.Sprintf("%s: %v", p.host, err)))
+			if failed {
+				notes = append(notes, note)
 				return
 			}
 			out = append(out, h.Number.Uint64())

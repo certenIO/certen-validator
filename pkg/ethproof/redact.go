@@ -3,6 +3,8 @@
 package ethproof
 
 import (
+	"strings"
+
 	"github.com/certen/independant-validator/pkg/ethrpc"
 )
 
@@ -40,11 +42,23 @@ const MaxReplayProviderFailures = 64
 // where no URL or registered literal straddles the cut; that prefix is redacted; and when the result is longer than
 // MaxReplayTextBytes it is ended at a token boundary (a UTF-8 character boundary at the least) and followed by a space and
 // the visible suffix "…(truncated N bytes)", N the bytes not shown, the whole of it at most MaxReplayTextBytes long. Text
-// within both bounds is returned as RedactEndpoints returns it, and bounding is idempotent.
+// within both bounds is returned as RedactEndpoints returns it, and bounding is stable under a second application (see FIXED
+// POINT in ethrpc.RedactText for exactly what is guaranteed). The text holds no NUL byte (withoutNUL).
 func BoundProviderText(s string) string {
 	return boundProviderTextTo(s, MaxReplayTextBytes)
 }
 
 func boundProviderTextTo(s string, max int) string {
-	return ethrpc.BoundRedacted(s, max)
+	return ethrpc.BoundRedacted(withoutNUL(s), max)
+}
+
+// withoutNUL is s without its NUL bytes (RB10-B17, V-R10B8 D5): PostgreSQL rejects the escape \u0000 in a jsonb document, so
+// evidence that held one could not be stored at all, and a registered key split by NULs would otherwise not be a literal
+// to the redactor and would be joined by whatever later removed them. They are removed BEFORE the text is redacted. The N of
+// the truncation suffix counts the bytes of the text without them.
+func withoutNUL(s string) string {
+	if strings.IndexByte(s, 0) < 0 {
+		return s
+	}
+	return strings.ReplaceAll(s, "\x00", "")
 }

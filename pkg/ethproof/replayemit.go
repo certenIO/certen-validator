@@ -22,9 +22,15 @@ import (
 
 // storedFormLen is the length of the text form PostgreSQL's jsonb writes for the compact JSON raw: the form
 // chained_proof_layers.layer_json is read back in, and so the form a layer-6 member's replayGuard document reaches
-// DecodeReplayGuardEvidence in. jsonb prints one space after every ':' and every ',' that is outside a string, and nothing
-// else of a document of this kind changes. It is computed by expanding raw outside its strings, one byte at a time, without
-// building the expanded document.
+// DecodeReplayGuardEvidence in. jsonb prints one space after every ':' and every ',' that is outside a string; that is all
+// it adds. It also SHORTENS some text inside strings, which storedFormLen does not measure: the Go encoder writes < > & and
+// U+2028/U+2029 as six-byte escapes and an invalid UTF-8 byte as the six-byte escape of U+FFFD, and PostgreSQL writes the
+// characters themselves (one byte for each of < > &, three for the others). So for the documents this type marshals (it has no
+// float or number that jsonb rewrites) the stored form is never longer than
+// storedFormLen says: the guard over-measures, the safe direction (measured by V-R10B8 on PostgreSQL 16: a text with 50 < and
+// 50 & is 1707 bytes measured and 707 stored, U+2028 549 and 537, invalid UTF-8 569 and 551). For text without those
+// characters the length is exact. A NUL byte in a string is refused by PostgreSQL altogether (BoundProviderText removes
+// them). It is computed by expanding raw outside its strings, one byte at a time, without building the expanded document.
 func storedFormLen(raw []byte) int {
 	n, inString, escaped := len(raw), false, false
 	for _, c := range raw {
