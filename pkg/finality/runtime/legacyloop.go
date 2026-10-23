@@ -150,7 +150,11 @@ func (l *LegacyHeaderLoop) Tick(ctx context.Context) (scanErr error) {
 	due := !l.scanned || now.Sub(l.lastScan) >= l.rescan()
 	l.mu.Unlock()
 	if due {
-		if scanErr = l.scan(ctx); scanErr == nil {
+		scanErr = l.scan(ctx)
+		if ctx.Err() == nil {
+			metrics.SetFinalityLegacyScan(l.ChainID, scanErr != nil)
+		}
+		if scanErr == nil {
 			l.mu.Lock()
 			l.scanned, l.lastScan = true, now
 			l.mu.Unlock()

@@ -699,3 +699,55 @@ func TestRTWireLegacyHeaderRegistrationProblemsAreNamedAndNeverFatal(t *testing.
 		t.Fatalf("a second registration was not refused for every chain: %v", again)
 	}
 }
+
+// A scan that cannot list the legs is visible: the health block says scan_failing (the counts of the legs already known stay), and it
+// clears when a scan succeeds. A failing lister is therefore not a 0/0/0/0 that looks like "no legacy legs".
+func TestLegacyLoopReportsAFailingScanToTheHealthBlockAndTheGauge(t *testing.T) {
+	r := newRig(t)
+	r.loop.ChainID = 421614
+	health := func() map[string]any {
+		return metrics.FinalityHealth()["chains"].(map[string]any)["421614"].(map[string]any)["legacy_headers"].(map[string]any)
+	}
+	r.lister.err = errors.New("dial tcp 10.0.0.9:5432: connection refused")
+	if err := r.loop.Tick(context.Background()); err == nil {
+		t.Fatal("the failed scan was not returned")
+	}
+	h := health()
+	if h["scan_failing"] != true || h[LegacyPending] != 0 || h[LegacyReconstructed] != 0 {
+		t.Fatalf("health after a failing scan = %v", h)
+	}
+	r.lister.err = nil
+	r.tick(t)
+	h = health()
+	if h["scan_failing"] != false || h[LegacyReconstructed] != 4 {
+		t.Fatalf("health after a good scan = %v", h)
+	}
+}
+
+func TestRTWireReportsAnUnwiredLegacyHeaderLoopToTheHealthBlock(t *testing.T) {
+	rtProviderEnv(t)
+	cfg, err := ConfigFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := Env{Config: cfg, Store: finality.NewMemCaptureStore()}
+	w := &Wiring{}
+	unwired := wireLegacy(w, finality.NewRegistry(), env, Deps{Legacy: &lgLister{}}, loopClock{}, func(string, ...any) {}, finality.NewMemoryBudget(0), []uint64{99998})
+	if len(unwired) != 1 {
+		t.Fatalf("unwired %v", unwired)
+	}
+	h := metrics.FinalityHealth()["chains"].(map[string]any)["99998"].(map[string]any)["legacy_headers"].(map[string]any)
+	if h["unwired"] != "no_profile" {
+		t.Fatalf("health = %v", h)
+	}
+	// and a registration refusal has its own token
+	reg := finality.NewRegistry()
+	if _, err := Wire(cfg, Deps{Registry: reg, Store: finality.NewMemCaptureStore(), Legacy: &lgLister{}, Logf: func(string, ...any) {}}); err != nil {
+		t.Fatal(err)
+	}
+	wireLegacy(&Wiring{}, reg, env, Deps{Legacy: &lgLister{}}, loopClock{}, func(string, ...any) {}, finality.NewMemoryBudget(0), []uint64{finality.ChainBaseSepolia})
+	h = metrics.FinalityHealth()["chains"].(map[string]any)["84532"].(map[string]any)["legacy_headers"].(map[string]any)
+	if h["unwired"] != "registration_refused" {
+		t.Fatalf("health = %v", h)
+	}
+}

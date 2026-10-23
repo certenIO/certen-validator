@@ -23,6 +23,7 @@ import (
 	"github.com/certen/independant-validator/pkg/finality/ethl1"
 	"github.com/certen/independant-validator/pkg/finality/ethsepolia"
 	"github.com/certen/independant-validator/pkg/finality/legacyhdr"
+	"github.com/certen/independant-validator/pkg/metrics"
 )
 
 // LCFeed is the light-client source the wiring needs: the L1-finality part of the evidence and the beacon head slot it observed.
@@ -75,7 +76,8 @@ type Wiring struct {
 	// Disabled maps each chain that will not build to its named finality_upgrader_disabled state.
 	Disabled map[uint64]*finality.StateError
 	Config   Config
-	// LegacyLoops are the registered legacy-header reconstruction loops (one per chain), exposed for the health endpoint and the tests.
+	// LegacyLoops are the registered legacy-header reconstruction loops (one per chain). Their counts, the state of their last scan and the
+	// chains that could not be wired reach /health/detailed and the scrape through pkg/metrics (SetFinalityLegacy*), not through this field.
 	LegacyLoops []*LegacyHeaderLoop
 	// LegacyUnwired maps each chain whose legacy-header loop could not be registered to its named finality_upgrader_disabled state.
 	// The validator keeps running without that loop; a registration problem is never fatal for a consensus node.
@@ -352,6 +354,7 @@ func wireLegacy(w *Wiring, reg *finality.Registry, env Env, d Deps, clock loopCl
 		profile, err := reg.Profile(chain)
 		if err != nil {
 			unwired[chain] = disabledState(chain, "legacy-header", "unwired", "no legacy-header reconstruction for chain "+fmt.Sprint(chain)+" by this validator ("+ethrpc.RedactText(err.Error())+"); its legacy legs stay finality_included_unavailable{no_block_header}")
+			metrics.SetFinalityLegacyUnwired(chain, "no_profile")
 			continue
 		}
 		var targets []finality.Level
@@ -364,8 +367,10 @@ func wireLegacy(w *Wiring, reg *finality.Registry, env Env, d Deps, clock loopCl
 			Logf: logf, Clock: clock}
 		if err := reg.RegisterCapturer(loop); err != nil {
 			unwired[chain] = disabledState(chain, "legacy-header", "unwired", "no legacy-header reconstruction for chain "+fmt.Sprint(chain)+" by this validator ("+ethrpc.RedactText(err.Error())+"); its legacy legs stay finality_included_unavailable{no_block_header}")
+			metrics.SetFinalityLegacyUnwired(chain, "registration_refused")
 			continue
 		}
+		metrics.SetFinalityLegacyUnwired(chain, "")
 		w.LegacyLoops = append(w.LegacyLoops, loop)
 	}
 	return unwired

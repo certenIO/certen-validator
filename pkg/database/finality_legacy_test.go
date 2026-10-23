@@ -14,6 +14,7 @@ import (
 	"github.com/certen/independant-validator/pkg/finality"
 	"github.com/certen/independant-validator/pkg/finality/finalitytest"
 	"github.com/certen/independant-validator/pkg/finality/legacyhdr"
+	"github.com/certen/independant-validator/pkg/finality/legacyhdr/isolationtest"
 )
 
 // RB12-LEGACY-191: the leg source serves the 191 legacy legs (stored execution proof without block_header_rlp) from the header
@@ -293,4 +294,10 @@ func TestFinalityLegacyLegsListsOnlyTheLegacyLegsOfTheChain(t *testing.T) {
 	if _, _, err := repo.LegacyLegs(cancelled, 84532, "", 10); err == nil {
 		t.Fatal("a cancelled context listed legs")
 	}
+}
+
+// The same isolation proof against the production store (PostgreSQL): legacy rows beside production rows on chains of their own
+// (so the expectations are exact in a database the other tests share).
+func TestLegacyRowsDoNotChangeWhatAnyProductionReaderSeesInTheDatabase(t *testing.T) {
+	isolationtest.Check(t, captureStore(), isolationtest.Chains{L2A: 900000084, L2B: 900000421, L1: 900011155})
 }
