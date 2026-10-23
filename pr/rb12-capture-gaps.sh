@@ -70,7 +70,8 @@ SQL
 STATE_CTE="
 WITH g AS (SELECT chain, l1_block AS f, split_part(item, '/', 2)::bigint AS t FROM proof_finality_capture WHERE item LIKE 'gap/%'),
      b AS (SELECT DISTINCT chain, generate_series(f, t) AS blk FROM g),
-     fl AS (SELECT DISTINCT chain, l1_block AS blk FROM proof_finality_capture WHERE item LIKE 'gapfill/%'),
+     fl AS (SELECT DISTINCT chain, l1_block AS blk FROM proof_finality_capture WHERE item LIKE 'gapfill/%'
+            UNION SELECT chain, generate_series(l1_block, split_part(item, '/', 2)::bigint) FROM proof_finality_capture WHERE item LIKE 'gapscan/%'),
      en AS (SELECT chain, l1_block AS blk, max(split_part(item, '/', 3)) AS kind FROM proof_finality_capture WHERE item LIKE 'gapend/%' GROUP BY 1, 2),
      s AS (SELECT b.chain, b.blk, COALESCE(en.kind, 'open') AS state FROM b LEFT JOIN fl USING (chain, blk) LEFT JOIN en USING (chain, blk) WHERE fl.blk IS NULL),
      i AS (SELECT chain, blk, state, blk - row_number() OVER (PARTITION BY chain, state ORDER BY blk) AS grp FROM s)"
@@ -116,7 +117,8 @@ echo "   positions and counts only: window, its blocks, filled, proven unavailab
 sql <<'SQL'
 WITH w AS (SELECT chain, l1_block AS f, split_part(item, '/', 2)::bigint AS t FROM proof_finality_capture WHERE item LIKE 'gap/%/capture_prefix'),
      b AS (SELECT chain, f, t, generate_series(f, t) AS blk FROM w),
-     fl AS (SELECT DISTINCT chain, l1_block AS blk FROM proof_finality_capture WHERE item LIKE 'gapfill/%'),
+     fl AS (SELECT DISTINCT chain, l1_block AS blk FROM proof_finality_capture WHERE item LIKE 'gapfill/%'
+            UNION SELECT chain, generate_series(l1_block, split_part(item, '/', 2)::bigint) FROM proof_finality_capture WHERE item LIKE 'gapscan/%'),
      en AS (SELECT chain, l1_block AS blk, max(split_part(item, '/', 3)) AS kind FROM proof_finality_capture WHERE item LIKE 'gapend/%' GROUP BY 1, 2)
 SELECT b.chain, b.f AS window_from, b.t AS window_to, count(*) AS blocks,
        count(*) FILTER (WHERE fl.blk IS NOT NULL) AS filled,

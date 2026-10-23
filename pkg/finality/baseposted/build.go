@@ -501,6 +501,9 @@ func (b *Builder) search(ctx context.Context, bp *Pins, l2 finality.HeaderFields
 			return sr, gs
 		}
 		if known && cov.Last >= windowCompleteMargin && end <= cov.Last-windowCompleteMargin {
+			if err := authentic(); err != nil { // the verdict is as determinate as the origin it was derived from
+				return sr, err
+			}
 			return sr, st(CodeWindowNoChannel, "chain", uint64(Chain), "kind", KindName, "from", origin, "to", end, "covered_to", cov.Last)
 		}
 	}

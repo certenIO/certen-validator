@@ -196,3 +196,21 @@ func TestRB12PrefixACompleteWindowWithoutAChannelIsNamedNotPendingAndARecentOneS
 		}
 	}
 }
+
+// V-ARCHIVE-2 V2-1: the determinate verdict of a window INSIDE the scanned region is derived from the same origin, so it needs the same
+// authentication as the verdicts below it.
+func TestRB12PrefixALyingL2AnswerCannotMakeAWindowInsideTheScannedRegionDeterminate(t *testing.T) {
+	st := rbStore(t, rbFirstBlock, 1000, true)
+	last := uint64(rbFirstBlock + 5*999)
+	edge := last - 96 - 3600 // a window starting here is complete; one starting 500 blocks later is not
+	s, truth := rbLeg(t, edge+500)
+	_, liar := rbLeg(t, edge)
+	_, pend, err := rbBuilder(t, st, liar).Build(context.Background(), s, haveIncludedOnly, finality.LevelL1Posted)
+	if se, _ := finality.AsNamed(err); pend != nil || se == nil || se.Code != "l2_block_content_mismatch" {
+		t.Fatalf("a lying answer must not yield l1_posted_not_found: pend=%v err=%v", pend, err)
+	}
+	_, pend, err = rbBuilder(t, st, truth).Build(context.Background(), s, haveIncludedOnly, finality.LevelL1Posted)
+	if err != nil || pend == nil || pend.Reason != "l1_posted_unproven" {
+		t.Fatalf("the truthful answer is the plain pending: pend=%v err=%v", pend, err)
+	}
+}

@@ -207,3 +207,58 @@ func (c *countingBeacon) Sidecars(ctx context.Context, slot uint64, wanted [][32
 	c.calls++
 	return c.inner.Sidecars(ctx, slot, wanted)
 }
+
+// V-ARCHIVE-2 V2-3(b): an eth_getLogs answer that omits an event is caught by the accumulator chain where a neighbour is known.
+func TestRB12ArbPrefixScanRefusesALogAnswerThatBreaksTheAccumulatorChain(t *testing.T) {
+	ctx := context.Background()
+	// 1. inside the range: batches 77 and 79 are not consecutive (78 was omitted)
+	sc := newScenario(t, LocTxInput, 0)
+	second := sc.l1.logs[0]
+	second.Topics = append([][32]byte(nil), second.Topics...)
+	second.Topics[1] = u256(79)
+	second.BlockNumber = 996
+	sc.l1.logs = append(sc.l1.logs, second)
+	st := NewMemStore()
+	requestPrefix(t, st, 990, 999)
+	if err := prefixCapturer(sc, st, 400, nil).scanPrefix(ctx, &Report{}); err == nil {
+		t.Fatal("a missing batch inside the range is refused")
+	}
+	if ks, _ := st.ListByRange(ctx, ChainArbitrumSepolia, 0, finality.MaxCaptureBlock, "batch/"); len(ks) != 0 {
+		t.Fatalf("nothing of a refused answer is stored: %v", ks)
+	}
+	if ks, _ := st.ListByRange(ctx, ChainArbitrumSepolia, 0, finality.MaxCaptureBlock, finality.GapScanPrefix); len(ks) != 0 {
+		t.Fatalf("and the range is not marked: %v", ks)
+	}
+	// 2. at the edges: the stored neighbours must join the first and the last event
+	for _, edge := range []string{"previous", "next"} {
+		sc2 := newScenario(t, LocTxInput, 0)
+		st2 := NewMemStore()
+		requestPrefix(t, st2, 990, 999)
+		n := sc2.rec.N - 1
+		nb := BatchRecord{N: n, L1Block: 900, L1Hash: [32]byte{9}, BeforeAcc: [32]byte{1}, AfterAcc: [32]byte{2}, DelayedAcc: [32]byte{3}}
+		if edge == "next" {
+			n, nb.N = sc2.rec.N+1, sc2.rec.N+1
+			nb.BeforeAcc = [32]byte{0xee} // not the afterAcc of batch 77
+		}
+		if err := st2.Put(ctx, Key{Chain: ChainArbitrumSepolia, L1Block: 900, L1Hash: nb.L1Hash, Item: ItemBatch(n)}, nb.Encode()); err != nil {
+			t.Fatal(err)
+		}
+		if err := prefixCapturer(sc2, st2, 400, nil).scanPrefix(ctx, &Report{}); err == nil {
+			t.Fatalf("the %s stored batch does not join: the range is refused", edge)
+		}
+		if ks, _ := st2.ListByRange(ctx, ChainArbitrumSepolia, 0, finality.MaxCaptureBlock, finality.GapScanPrefix); len(ks) != 0 {
+			t.Fatalf("%s: %v", edge, ks)
+		}
+	}
+	// 3. a consistent neighbour passes
+	sc3 := newScenario(t, LocTxInput, 0)
+	st3 := NewMemStore()
+	requestPrefix(t, st3, 990, 999)
+	prev := BatchRecord{N: 76, L1Block: 900, L1Hash: [32]byte{9}, BeforeAcc: [32]byte{1}, AfterAcc: sc3.rec.BeforeAcc, DelayedAcc: [32]byte{3}}
+	if err := st3.Put(ctx, Key{Chain: ChainArbitrumSepolia, L1Block: 900, L1Hash: prev.L1Hash, Item: ItemBatch(76)}, prev.Encode()); err != nil {
+		t.Fatal(err)
+	}
+	if err := prefixCapturer(sc3, st3, 400, nil).scanPrefix(ctx, &Report{}); err != nil {
+		t.Fatalf("batch 77 follows the stored batch 76: %v", err)
+	}
+}

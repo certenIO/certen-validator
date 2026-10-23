@@ -134,11 +134,22 @@ func (c *Capturer) scanPrefixRange(ctx context.Context, a, b uint64, rep *Report
 		}
 		return logs[i].LogIndex < logs[j].LogIndex
 	})
-	var fresh []uint64
-	for _, lg := range logs {
+	recs := make([]BatchRecord, len(logs))
+	for i, lg := range logs {
 		if lg.BlockNumber < a || lg.BlockNumber > b {
 			return fmt.Errorf("the provider answered a log of block %d for the range %d-%d; the range is read again", lg.BlockNumber, a, b)
 		}
+		rec, err := ParseBatchDelivered(lg)
+		if err != nil {
+			return fmt.Errorf("batch event at block %d: %w", lg.BlockNumber, err)
+		}
+		recs[i] = rec
+	}
+	if err := c.checkContiguity(ctx, recs); err != nil {
+		return fmt.Errorf("logs of L1 blocks %d-%d: %w", a, b, err)
+	}
+	var fresh []uint64
+	for _, lg := range logs {
 		n, err := c.captureBatch(ctx, lg, rep)
 		if err != nil {
 			return fmt.Errorf("batch event at block %d: %w", lg.BlockNumber, err)

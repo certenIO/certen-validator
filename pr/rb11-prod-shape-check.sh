@@ -871,8 +871,8 @@ else rec FAIL C11 "status pinsSha256 query" "query answers" "failed: $(errline)"
 # its end row; a claim row (gapclaim/<chunk>) is one per chunk and period. The union of the requested windows is bounded by
 # CERTEN_FINALITY_PREFIX_MAX_BLOCKS (default 100000).
 if out=$(sqlro <<'SQL'
-WITH w AS (SELECT l1_block AS f, split_part(item, '/', 2)::bigint AS t FROM proof_finality_capture WHERE chain IN (84532, 421614) AND item LIKE 'gap/%/capture_prefix'),
-     u AS (SELECT count(DISTINCT g) AS n FROM (SELECT generate_series(f, t) AS g FROM w WHERE t >= f) x)
+WITH w AS (SELECT chain, l1_block AS f, split_part(item, '/', 2)::bigint AS t FROM proof_finality_capture WHERE chain IN (84532, 421614) AND item LIKE 'gap/%/capture_prefix'),
+     u AS (SELECT count(DISTINCT (chain, g)) AS n FROM (SELECT chain, generate_series(f, t) AS g FROM w WHERE t >= f) x)
 SELECT (SELECT count(*) FROM w),
        (SELECT count(*) FROM w WHERE t < f),
        (SELECT n FROM u),

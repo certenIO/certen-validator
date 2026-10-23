@@ -60,6 +60,14 @@ func TestRB12CaptureGapsScriptRunsItsPrefixStatementsAgainstTheRealTable(t *test
 	if err := store.Put(ctx, finality.CaptureKey{Chain: chain, L1Block: from, L1Hash: [32]byte{1}, Item: "gapclaim/7000000"}, []byte("CGCL1-test")); err != nil {
 		t.Fatal(err)
 	}
+	// an Arbitrum window of 1000 blocks whose first 400 were scanned (a gapscan row closes a range without a fill per block)
+	const arb = uint64(421614)
+	if err := finality.RecordGap(ctx, store, arb, 8_000_000, 8_000_999, finality.GapCapturePrefix); err != nil {
+		t.Fatal(err)
+	}
+	if err := finality.RecordGapScan(ctx, store, arb, 8_000_000, 8_000_399); err != nil {
+		t.Fatal(err)
+	}
 	url, err := testdb.PackageURL("database")
 	if err != nil {
 		t.Fatal(err)
@@ -82,6 +90,13 @@ func TestRB12CaptureGapsScriptRunsItsPrefixStatementsAgainstTheRealTable(t *test
 	}
 	if !strings.Contains(text, "capture_prefix") || !strings.Contains(strings.ReplaceAll(text, " ", ""), "84532|7000000|7000009|10|4|1|5") {
 		t.Fatalf("the prefix window is reported with its filled / gone / open counts (4 / 1 / 5):\n%s", text)
+	}
+	compact := strings.ReplaceAll(text, " ", "")
+	if !strings.Contains(compact, "421614|8000000|8000999|1000|400|0|600") || !strings.Contains(compact, "421614|open|8000400|8000999|600") {
+		t.Fatalf("scanned blocks are closed in the windows table (400 filled, 600 open) and in the open runs:\n%s", text)
+	}
+	if !strings.Contains(text, "gapscan") {
+		t.Fatalf("the scan rows are reported:\n%s", text)
 	}
 	if !strings.Contains(text, "gapclaim") || !strings.Contains(text, "gapslot") {
 		t.Fatalf("the claim and slot rows are reported:\n%s", text)
