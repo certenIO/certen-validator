@@ -1214,7 +1214,8 @@ func codeOf(err error) string {
 
 // ---- the enable flags ----
 
-// EnvEnabled switches the upgrader. Unset means ON; a value that is not a switch refuses startup by name.
+// EnvEnabled switches the upgrader. Unset means ON; a value that is not a switch is refused by name (*envvar.Refusal) and the validator announces
+// finality_upgrader_disabled{reason=switch_invalid}: the switch is not guessed on or off, and the validator keeps running.
 const EnvEnabled = "CERTEN_FINALITY_UPGRADER_ENABLED"
 
 // Enabled reads EnvEnabled (default on).
@@ -1231,7 +1232,8 @@ func ChainSwitchState(chain uint64) *StateError {
 }
 
 // DisabledChainsFromEnv reads every profiled chain's switch (default on). A value that is not a switch is an error naming the
-// variable, so startup is refused rather than the chain silently left on or off.
+// variable (*envvar.Refusal), so the start is refused by name (finality_upgrader_disabled{reason=switch_invalid}) rather than the chain silently
+// left on or off.
 func DisabledChainsFromEnv(chains []uint64) (map[uint64]bool, error) {
 	off := map[uint64]bool{}
 	for _, c := range chains {

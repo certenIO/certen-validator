@@ -10,8 +10,13 @@ All four live chains are wired: Ethereum Sepolia (`eth-sepolia/finalized/v1`, `p
 (`l1_posted`, `finalized`), Arbitrum Sepolia (`l1_posted`, `finalized`) and Adiri (`finalized`).
 
 The feature is **ON by default**. Every new variable below is optional; with none of them set the validator runs the public-provider
-defaults. A malformed value refuses startup by name (`pkg/envvar`: the variable, its value and what it wants), exactly like the
-existing switches, so a typo is caught at the first boot and never left to a silent default.
+defaults. A malformed value never stops the validator (RB12-GO-INT F14): it is neither fatal nor silently replaced by a default. The finality
+runtime stays off as the named state `finality_upgrader_disabled{reason,...}` (log line, `certen_finality_upgrader_disabled_total{chain="0",env}`,
+`certen_finality_upgrader_enabled 0`, `upgrader_disabled_reason` in `/health/detailed`) until the setting is corrected and the process restarted;
+consensus, attestation and settlement are not affected. The reasons are a closed set: `config_invalid` (a provider-list entry), `switch_invalid`,
+`setting_invalid` (a number or duration), `pins_invalid`, `wiring_failed`, `launch_failed`, `start_panicked`. The state names the variable (and the
+position and class of a refused provider entry, or the stage of a wiring failure) and never the value, which may hold a credential; every refused
+setting is also logged by name so one restart corrects them all.
 
 ## 1. Environment variables
 
@@ -19,7 +24,7 @@ existing switches, so a typo is caught at the first boot and never left to a sil
 
 | Variable | Default | Meaning / when missing |
 |---|---|---|
-| `CERTEN_FINALITY_UPGRADER_ENABLED` | `true` | Global switch. `false` logs `[FINALITY] upgrader DISABLED: finality_upgrader_disabled{effect=...,env="CERTEN_FINALITY_UPGRADER_ENABLED",value="false"}` and counts `certen_finality_upgrader_disabled_total{chain="0",env=...}`; nothing is appended or captured by this validator; proofs stay at the level they were stored at. A value that is not a boolean refuses startup. |
+| `CERTEN_FINALITY_UPGRADER_ENABLED` | `true` | Global switch. `false` logs `[FINALITY] upgrader DISABLED: finality_upgrader_disabled{effect=...,env="CERTEN_FINALITY_UPGRADER_ENABLED",value="false"}` and counts `certen_finality_upgrader_disabled_total{chain="0",env=...}`; nothing is appended or captured by this validator; proofs stay at the level they were stored at. A value that is not a boolean is `finality_upgrader_disabled{reason="switch_invalid",variable}` (the switch is not guessed on or off). |
 | `CERTEN_FINALITY_CHAIN_<id>_ENABLED` | `true` | Per-chain switch for `11155111`, `84532`, `421614`, `2017`. `false` announces `finality_upgrader_disabled{env="CERTEN_FINALITY_CHAIN_<id>_ENABLED",value="false"}` once at launch for that chain, skips its legs and does not start its capture loops. |
 
 ### 1.2 Per-chain provider variables the wiring REUSES (existing, `pkg/ethrpc`)
@@ -44,10 +49,10 @@ a chain the validator already settles on.
 | `CERTEN_FINALITY_LC_URLS` | `https://lodestar-sepolia.chainsafe.io` | Ordered Lodestar-compatible light-client endpoints (bootstrap, updates, finality_update). **OD3**: put CERTEN's own node first, e.g. `http://certen-sepolia-beacon:9596,https://lodestar-sepolia.chainsafe.io`. Endpoints are availability only, never evidence: the verifier judges every byte they serve. All failing is `finality_lc_unavailable{endpoints=<scheme://host labels>}`. |
 | `CERTEN_FINALITY_BEACON_URLS` | `https://ethereum-sepolia-beacon-api.publicnode.com`, `https://lodestar-sepolia.chainsafe.io` | Beacon blob API bases (`/eth/v1/beacon/blobs/{slot}`) for the Base and Arbitrum batch blobs. A miss is `l1_blob_unavailable`. |
 | `CERTEN_FINALITY_ADIRI_PUBLIC_URLS` | `https://rpc.telcoin.network` | Public Adiri endpoints for `tn_epochRecord` / `tn_getCurrentEpoch` / `eth_getBlockByNumber`. Epoch records are self-authenticating, so any one endpoint suffices (no provider agreement). The own-node list of 1.2 is appended. |
-| `CERTEN_FINALITY_PINS_FILE` | unset (the embedded, hash-checked pins) | Explicit override path to a pins file. Parsed without an expected hash; the startup line then reports `pins_source=override:<sha256>`. Embedded bytes that do not hash to `finality.PinsSHA256` refuse startup (`finality_pins_corrupt`). |
+| `CERTEN_FINALITY_PINS_FILE` | unset (the embedded, hash-checked pins) | Explicit override path to a pins file. Parsed without an expected hash; the startup line then reports `pins_source=override:<sha256>`. Embedded bytes that do not hash to `finality.PinsSHA256`, or an override file that cannot be read or parsed, are `finality_upgrader_disabled{reason="pins_invalid",stage}`. |
 | `CERTEN_FINALITY_RATE_LIMIT_RPS` | `5` | Requests per second **per provider host** (token bucket; the limiter is shared by every finality client, so one public host is never asked faster than this by the whole validator). Minimum 0.1. |
 | `CERTEN_FINALITY_RATE_BURST` | `5` | Bucket size per host. |
-| `CERTEN_FINALITY_MAX_BATCH` | `40` | Largest JSON-RPC batch sent to a provider; larger batches are split and re-joined in order (Arbitrum's public RPC answers 429 to 100-request batches). Values above 100 refuse startup (public providers answer 429 to 100-request batches; 40 is the measured safe size). |
+| `CERTEN_FINALITY_MAX_BATCH` | `40` | Largest JSON-RPC batch sent to a provider; larger batches are split and re-joined in order (Arbitrum's public RPC answers 429 to 100-request batches). Values above 100 are `finality_upgrader_disabled{reason="setting_invalid",variable}` (public providers answer 429 to 100-request batches; 40 is the measured safe size). |
 | `CERTEN_FINALITY_BACKOFF_RETRIES` | `5` | Retries after an HTTP 429 or 503 (Retry-After honoured, else 500 ms doubling). Each backoff increments `certen_finality_provider_throttled_total{provider_host}`. |
 | `CERTEN_FINALITY_BACKOFF_MAX_SECONDS` | `60` | Longest single backoff. |
 | `CERTEN_FINALITY_CAPTURE_INTERVAL_SECONDS` | `12` | Wait between ticks of a capture loop (floor 1 s: no loop spins). |
