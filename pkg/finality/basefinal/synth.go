@@ -295,6 +295,11 @@ func BuildSynth(p *Pins, s SynthSpec) (*SynthOut, error) {
 		pair = *s.Pair
 	}
 	n := uint64(row.NIntermediate)
+	if uint64(s.K) > n {
+		// outputRootIndex K names the K-th of the game's n intermediate roots (1-based; 0 is the root claim): past n there is none to put
+		// the claim in, which used to index the root list out of range
+		return nil, fmt.Errorf("outputRootIndex %d exceeds the %d intermediate roots of the pinned game_impl %s", s.K, n, version)
+	}
 	total, interval := pair[0], pair[1]
 	outBlock := s.OutBlock
 	if outBlock == 0 {

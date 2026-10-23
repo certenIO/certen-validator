@@ -24,6 +24,7 @@ import (
 	"github.com/certen/independant-validator/pkg/ethproof"
 	"github.com/certen/independant-validator/pkg/finality"
 	"github.com/certen/independant-validator/pkg/finality/arbfinal"
+	"github.com/certen/independant-validator/pkg/finality/arbfinal/synthworld"
 	"github.com/certen/independant-validator/pkg/finality/arbposted"
 	"github.com/certen/independant-validator/pkg/finality/basefinal"
 	"github.com/certen/independant-validator/pkg/finality/baseposted"
@@ -237,7 +238,8 @@ func e2eLegs(t *testing.T) []e2eLeg {
 			if v.Group != "live" || v.Evidence == "" {
 				t.Fatalf("real_valid is %+v", v)
 			}
-			p, err := finality.ParsePinsOverride(readFileT(t, filepath.Join(dir, "pins", v.Pins)))
+			// the set was published before the wallet pins (RB12-E1RAISE) and is not edited: the harness adds them to the stored pins file
+			p, err := finality.ParsePinsOverride(synthworld.WithWalletPins(readFileT(t, filepath.Join(dir, "pins", v.Pins))))
 			if err != nil {
 				t.Fatal(err)
 			}
