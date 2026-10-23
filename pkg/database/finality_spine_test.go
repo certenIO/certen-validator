@@ -176,7 +176,7 @@ func TestSepoliaSpineChunksResumeAcrossProcessesThroughTheRealCaptureTable(t *te
 	}
 	var n, badHash, badItem, badPrefix, notBoundary int
 	if err := testDB.QueryRow(`SELECT count(*), count(*) FILTER (WHERE octet_length(l1_hash) <> 32), count(*) FILTER (WHERE item !~ '^spine/n[0-9]+$'),
-		count(*) FILTER (WHERE get_byte(bytes, 0) < 192), count(*) FILTER (WHERE item = 'spine/n40' AND l1_block % 40 <> 39)
+		count(*) FILTER (WHERE get_byte(bytes, 0) < 192), count(*) FILTER (WHERE l1_block % 40 <> 39)
 		FROM proof_finality_capture WHERE chain = 11155111 AND item LIKE 'spine/%' AND l1_block BETWEEN $1 AND $2`, ref.Number, ref.Number+uint64(len(body.Spine))).
 		Scan(&n, &badHash, &badItem, &badPrefix, &notBoundary); err != nil {
 		t.Fatal(err)

@@ -853,7 +853,7 @@ if out=$(sqlro <<SQL
 SELECT count(*),
   count(*) FILTER (WHERE octet_length(l1_hash)<>32),
   count(*) FILTER (WHERE item !~ '^spine/n[0-9]{1,2}$' OR (CASE WHEN item ~ '^spine/n[0-9]{1,2}$' THEN substring(item from 8)::int END) NOT BETWEEN 1 AND 40),
-  count(*) FILTER (WHERE item = 'spine/n40' AND l1_block % 40 <> 39),
+  count(*) FILTER (WHERE l1_block % 40 <> 39),
   count(*) FILTER (WHERE get_byte(bytes,0) < 192),
   count(*) FILTER (WHERE item ~ '^spine/n[0-9]{1,2}$' AND (octet_length(bytes) < 400*substring(item from 8)::int OR octet_length(bytes) > 2048*substring(item from 8)::int)),
   COALESCE(min(l1_block),0), COALESCE(max(l1_block),0)
@@ -867,7 +867,7 @@ EOF
     rec WARN SP1 "Sepolia spine chunk rows (proof_finality_capture, chain 11155111, item spine/n<1..40>) are 32-byte-hash rows of whole header windows" "rows to examine" "none yet (expected until the spine fix is deployed and a Sepolia leg has been attempted)"
   else
     [ "$((sp_hash + sp_item + sp_bound + sp_list + sp_size))" -eq 0 ] && st=PASS || st=FAIL
-    rec $st SP1 "Sepolia spine chunk rows are 32-byte-hash rows of whole header windows: item spine/n<1..40>, a full window ends at a block = 39 mod 40, the bytes are one RLP list of 400..2048 bytes per header" "0 violations in $sp_n rows (blocks $sp_lo..$sp_hi)" "bad hash length $sp_hash; bad item $sp_item; full window off the boundary $sp_bound; not an RLP list $sp_list; implausible size $sp_size"
+    rec $st SP1 "Sepolia spine chunk rows are 32-byte-hash rows of whole header windows: item spine/n<1..40>, every row, a window cut at a leg block too, ends at a block = 39 mod 40, the bytes are one RLP list of 400..2048 bytes per header" "0 violations in $sp_n rows (blocks $sp_lo..$sp_hi)" "bad hash length $sp_hash; bad item $sp_item; row off the window boundary $sp_bound; not an RLP list $sp_list; implausible size $sp_size"
   fi
 else rec FAIL SP1 "spine rows query" "query answers" "failed: $(errline)"; fi
 
