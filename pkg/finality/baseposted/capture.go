@@ -120,6 +120,11 @@ func (c *Capturer) CaptureBlock(ctx context.Context, number uint64) (bool, error
 	if hdr.Hash != blk.Hash {
 		return false, errors.New("baseposted: the re-encoded header does not hash to the block hash")
 	}
+	// The header must be the header of the height that was ASKED for: the source names a block by the requested height while the header is
+	// the provider's own, so a valid block of another height would otherwise be stored (and a gap filled) under the wrong number.
+	if hdr.Number != number || blk.Number != number {
+		return false, fmt.Errorf("baseposted: the block served for height %d carries a header of height %d (nothing stored)", number, hdr.Number)
+	}
 	if len(blk.TxTo) != len(blk.TxRaw) || len(blk.TxHasTo) != len(blk.TxRaw) || len(blk.TxBlobHash) != len(blk.TxRaw) {
 		return false, errors.New("baseposted: the block's transaction columns differ in length")
 	}

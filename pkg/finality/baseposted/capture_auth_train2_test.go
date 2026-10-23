@@ -278,3 +278,62 @@ func TestRB12GOINTSynthstateSlotsAreTheProductionSlots(t *testing.T) {
 		t.Fatal("the synthetic state uses other storage slots than the verifier")
 	}
 }
+
+// heightL1 serves one self-consistent block under whatever height it is asked, the way BeaconHTTP-free JSONRPCSource.Block names a block
+// by the height that was REQUESTED while its header is the provider's own.
+type heightL1 struct {
+	inner *fakeL1
+}
+
+func (h *heightL1) Head(ctx context.Context) (uint64, error) { return h.inner.Head(ctx) }
+func (h *heightL1) Block(_ context.Context, n uint64) (L1BlockData, error) {
+	b := h.inner.blk
+	b.Number = n // the requested height, as live.go does; HeaderRLP and Hash stay the provider's
+	return b, nil
+}
+func (h *heightL1) Proof(ctx context.Context, a [20]byte, s [][32]byte, n uint64) (StateProof, error) {
+	return h.inner.Proof(ctx, a, s, n)
+}
+
+// RB12-GO-INT N1 (V-T2-2): the header's own number must be the height that was asked for. A provider that serves a valid block of another
+// height (a self-consistent header, its transactions, a state proof under its root) would otherwise be captured under the REQUESTED height
+// and the backfill would fill that height under the other block's hash. Nothing is stored and the gap stays open.
+func TestRB12GOINTABlockWhoseHeaderIsAnotherHeightIsRefusedAndStoresNothing(t *testing.T) {
+	for _, withInbox := range []bool{true, false} {
+		name := "a block with an inbox transaction"
+		if !withInbox {
+			name = "a block claimed empty"
+		}
+		t.Run(name, func(t *testing.T) {
+			var blk L1BlockData
+			if withInbox {
+				blk = calldataBlock(t, 1001, common.Hash(testProvable().st.Root), "batcher") // the header says 1001
+			} else {
+				blk = emptyBlockAt(1001)
+			}
+			l1 := &heightL1{inner: &fakeL1{blk: blk}}
+			c, st := authCapturer(blk, l1, nil)
+			ok, err := c.CaptureBlock(context.Background(), 1000) // asked for 1000
+			if ok || err == nil {
+				t.Fatalf("a block whose header says 1001 was captured as height 1000: (%v, %v)", ok, err)
+			}
+			if ks, _ := finality.CaptureKeysOfItem(context.Background(), st, 84532, ItemHeader); len(ks) != 0 {
+				t.Fatal("rows were stored for a block of another height")
+			}
+			// through the backfill's capture: no hash comes back to be filled under, and the class is a capture failure
+			c2, st2 := authCapturer(blk, l1, nil)
+			_, inbox, err := CapturerOf(c2).CaptureBlockHash(context.Background(), 1000)
+			if err == nil || inbox {
+				t.Fatalf("through the backfill: (inbox %v, %v)", inbox, err)
+			}
+			if ks, _ := finality.CaptureKeysOfItem(context.Background(), st2, 84532, ItemHeader); len(ks) != 0 {
+				t.Fatal("the backfill stored rows of a block of another height")
+			}
+			// the right height is still captured
+			c3, _ := authCapturer(blk, &heightL1{inner: &fakeL1{blk: blk}}, nil)
+			if _, err := c3.CaptureBlock(context.Background(), 1001); err != nil {
+				t.Fatalf("the block of its own height must capture: %v", err)
+			}
+		})
+	}
+}
