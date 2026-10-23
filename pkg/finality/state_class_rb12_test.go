@@ -76,3 +76,52 @@ func TestRB12F17TheMemoryCodeConstantIsInTheTable(t *testing.T) {
 		t.Fatalf("%s: (%q, %v)", CodeMemoryBudget, c, ok)
 	}
 }
+
+// D1 (V-T2): some states are environment only for some values of one of their fields (l1_capture_gap: an OPEN gap heals, a terminal one
+// never does). The rule is a table too, and it names EVERY value of the field the registry names, no more, no fewer.
+func TestRB12F17EveryValueOfAFieldWithAClassRuleHasAClass(t *testing.T) {
+	reg := loadRegistry(t)
+	rules := FieldClassRules()
+	if len(rules) == 0 {
+		t.Fatal("no field rule: l1_capture_gap is environment only while the gap is open")
+	}
+	for code, rule := range rules {
+		spec, ok := reg.States[code]
+		if !ok {
+			t.Errorf("the rule names %s, which is not registered", code)
+			continue
+		}
+		if base, _ := ClassOfState(code); base != ClassEnvironment {
+			t.Errorf("%s: a field rule refines an environment state; its base class is %q", code, base)
+		}
+		enum := spec.Enums[rule.Field]
+		if len(enum) == 0 {
+			t.Errorf("%s: the registry names no closed set for %s", code, rule.Field)
+		}
+		for _, v := range enum {
+			if _, ok := rule.Classes[v]; !ok {
+				t.Errorf("%s: %s=%s has no class", code, rule.Field, v)
+			}
+		}
+		for v := range rule.Classes {
+			found := false
+			for _, e := range enum {
+				found = found || e == v
+			}
+			if !found {
+				t.Errorf("%s: the rule classifies %s=%s, which the registry does not name", code, rule.Field, v)
+			}
+		}
+	}
+	gs := func(v string) *StateError { return NewState("l1_capture_gap", "gap_state", v) }
+	if ClassOfStateError(gs("open")) != ClassEnvironment || ClassOfStateError(gs("unavailable_proven")) != ClassFailure ||
+		ClassOfStateError(gs("retention_expired")) != ClassFailure {
+		t.Fatal("open is environment, the two terminal gap states are failures")
+	}
+	if ClassOfStateError(NewState("l1_capture_gap")) != ClassFailure || ClassOfStateError(gs("invented")) != ClassFailure {
+		t.Fatal("a gap whose state is missing or unknown is not known to heal: failure")
+	}
+	if ClassOfStateError(nil) != ClassFailure || ClassOfStateError(NewState("finality_memory_budget_exceeded")) != ClassEnvironment {
+		t.Fatal("nil is a failure; a code without a field rule is classed by its code")
+	}
+}

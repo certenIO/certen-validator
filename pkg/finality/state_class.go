@@ -2,6 +2,8 @@
 
 package finality
 
+import "fmt"
+
 // RB12-GO-INT F17. What a refused build means for the retry schedule of a leg is decided by this ONE table (code -> class), and a test
 // (state_class_rb12_test.go) fails when a code of testdata/finality/states.json has no row here or a row names a code that is not
 // registered: whoever registers a state classifies it. Train 3 adds index_inconsistent to the registry and one row here.
@@ -143,3 +145,59 @@ func StateClasses() map[string]StateClass {
 	}
 	return out
 }
+
+// FieldClassRule refines the class of a state whose class depends on one field of it (RB12-GO-INT D1): l1_capture_gap is a fact about the
+// capture store ONLY while the gap is open - the backfill closes it, so the leg is asked again at the bounded poll; a terminal gap
+// (unavailable_proven: the providers proved the data unavailable; retention_expired: it is past retention) never heals, no fill can come,
+// and polling it every PendingRetry for ever is a load without an end: it backs off like the failure it is. Classes names EVERY value of
+// the field that the registry names (a test reads states.json); a value the rule does not know is a failure.
+type FieldClassRule struct {
+	Field   string
+	Classes map[string]StateClass
+}
+
+var fieldClassRules = map[string]FieldClassRule{
+	"l1_capture_gap": {Field: "gap_state", Classes: map[string]StateClass{
+		"open":               ClassEnvironment,
+		"unavailable_proven": ClassFailure,
+		"retention_expired":  ClassFailure,
+	}},
+}
+
+// FieldClassRules returns a copy of the field rules (for the conformance test and for review).
+func FieldClassRules() map[string]FieldClassRule {
+	out := make(map[string]FieldClassRule, len(fieldClassRules))
+	for code, r := range fieldClassRules {
+		c := FieldClassRule{Field: r.Field, Classes: make(map[string]StateClass, len(r.Classes))}
+		for k, v := range r.Classes {
+			c.Classes[k] = v
+		}
+		out[code] = c
+	}
+	return out
+}
+
+// ClassOfStateError is the retry class of a returned state: the class of its code, refined by its field rule when it has one. A state
+// without the field, or with a value the rule does not name, is not known to heal and is a failure; so is nil.
+func ClassOfStateError(st *StateError) StateClass {
+	if st == nil {
+		return ClassFailure
+	}
+	base, _ := ClassOfState(st.Code)
+	rule, ok := fieldClassRules[st.Code]
+	if !ok {
+		return base
+	}
+	v, has := st.Fields[rule.Field]
+	if !has {
+		return ClassFailure
+	}
+	c, ok := rule.Classes[fmt.Sprint(v)]
+	if !ok {
+		return ClassFailure
+	}
+	return c
+}
+
+// IsEnvironment reports whether a returned state is held by the environment (ClassOfStateError is ClassEnvironment).
+func IsEnvironment(st *StateError) bool { return ClassOfStateError(st) == ClassEnvironment }
