@@ -24,6 +24,7 @@ import (
 
 	"github.com/certen/independant-validator/pkg/finality"
 	"github.com/certen/independant-validator/pkg/finality/arbfinal"
+	sw "github.com/certen/independant-validator/pkg/finality/arbfinal/synthworld"
 )
 
 type vLeg struct {
@@ -54,6 +55,9 @@ type vec struct {
 var mismatches []string
 
 type gen struct {
+	// legacy is set while the generator writes a set published BEFORE the wallet pins (finality_arb_final1, finality_arb_final2): the
+	// pins files such a set stores carry no wallet keys (so the set regenerates byte for byte), while its vectors are judged with them.
+	legacy   bool
 	evidence map[string][]byte
 	pins     map[string][]byte
 	vecs     []vec
@@ -102,14 +106,25 @@ func (g *gen) add(name, group, note string, leg finality.BlockRef, pinsName stri
 	if pinsName == "embedded" {
 		pins, err = finality.EmbeddedPins()
 	} else {
-		g.pins[pinsName] = pinsRaw
+		stored := pinsRaw
+		if g.legacy {
+			stored = sw.WithoutWalletPins(pinsRaw)
+			pinsRaw = sw.WithWalletPins(stored)
+		}
+		g.pins[pinsName] = stored
 		pins, err = finality.ParsePinsOverride(pinsRaw)
 	}
 	if err != nil {
 		panic(fmt.Sprintf("%s: pins: %v", name, err))
 	}
 	v, verr := arbfinal.New().Verify(pins, leg, evidence)
-	if got := outcome(v, verr); got != expect {
+	got := outcome(v, verr)
+	if g.legacy && supersededByWalletProof[name] {
+		// The set is published and its literal stays; the verdict now is the unproven-callee state (RB11-E1-RAISE, SUPERSEDED.md).
+		if !isIndirect(verr) {
+			mismatches = append(mismatches, fmt.Sprintf("%s: a vector superseded by the wallet proof must answer confirmation_path_unproven{indirect}, got %s", name, got))
+		}
+	} else if got != expect {
 		mismatches = append(mismatches, fmt.Sprintf("%s:\n got:  %s\n want: %s", name, got, expect))
 	}
 	e := vec{Name: name, Group: group, Note: note, Pins: pinsName, Expect: expect,
@@ -211,7 +226,15 @@ func main() {
 	out := flag.String("out", "pkg/finality/arbfinal/testdata/finality_arb_final1", "output directory")
 	live := flag.String("live", "", "directory written by cmd/finalityarbfinalrecord (adds the real vectors)")
 	set2 := flag.String("set2", "", "write the second set (finality_arb_final2) to this directory instead")
+	set3 := flag.String("set3", "", "write the third set (finality_arb_final3) to this directory instead")
 	flag.Parse()
+	if *set3 != "" {
+		if err := generate3(*set3); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	if *set2 != "" {
 		if err := generate2(*set2); err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -230,6 +253,7 @@ func main() {
 func generate(out, live string) error {
 	mismatches = nil
 	g := newGen()
+	g.legacy = true
 	synthetic(g)
 	synthetic2(g)
 	if live != "" {
@@ -245,3 +269,31 @@ func generate(out, live string) error {
 
 var _ = bytes.Equal
 var _ = common.Hash{}
+
+// supersededByWalletProof are the vectors of the published sets 1 and 2 whose recorded expectation took the wallet route on the
+// calldata alone; their verdict now is confirmation_path_unproven{indirect} (testdata/finality_arb_final{1,2}/SUPERSEDED.md). The
+// generator keeps writing their original literal (the sets are never edited) and checks the verdict now is the unproven-callee state.
+var supersededByWalletProof = map[string]bool{
+	"synth_valid_wallet_execute_transaction":                    true,
+	"synth_valid_wallet_execute_transactions":                   true,
+	"synth_valid_wallet_execute_transaction_with_gas_refunder":  true,
+	"synth_valid_wallet_execute_transactions_with_gas_refunder": true,
+	"adv_conf_wallet_call_targets_other_contract":               true,
+	"adv_conf_wallet_call_other_selector":                       true,
+	"adv_conf_wallet_fast_call":                                 true,
+	"adv_conf_wallet_force_call":                                true,
+	"adv_conf_wallet_fast_confirmer_nonzero":                    true,
+	"synth_valid_wallet_call_is_the_bare_selector":              true,
+	"adv_conf_wallet_call_data_three_bytes":                     true,
+	"adv_conf_wallet_fast_confirmer_slot_unproven":              true,
+	"synth_valid_wallet_route_callee_code_is_not_examined":      true,
+}
+
+func isIndirect(err error) bool {
+	s, ok := finality.AsNamed(err)
+	if !ok || s.Code != arbfinal.CodeConfirmationUnproof {
+		return false
+	}
+	r, _ := s.Fields["reason"].(arbfinal.ConfirmReason)
+	return r == arbfinal.ConfirmIndirect
+}

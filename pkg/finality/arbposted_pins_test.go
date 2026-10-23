@@ -69,7 +69,10 @@ func TestEmbeddedPinsCarryTheArbSepoliaSection(t *testing.T) {
 	}
 	if sec.LogicPins["0x3bd9637547d75e5b4539449e14c759b86b9d37a7c1f2b47a1524f857e4ff1a0c"] != "bridge_impl" ||
 		sec.LogicPins["0xdd93a7606e6067aaae8ad5afa28b943a8272809eb72face4e2bb3bf4d0609445"] != "rollup_admin_logic" ||
-		sec.LogicPins["0xeadf786edd4819d0262d9679d43b878d7005408a822aa0c43cf79bd0043c09a3"] != "rollup_user_logic" || len(sec.LogicPins) != 3 {
+		sec.LogicPins["0xeadf786edd4819d0262d9679d43b878d7005408a822aa0c43cf79bd0043c09a3"] != "rollup_user_logic" ||
+		// the ValidatorWallet identity of the wallet route (RB12-E1RAISE): the exact proxy and template runtime codes
+		sec.LogicPins["0x8736329b580cfc0c0c39ee6700515e0bc51652afb614640db9e34a5d784933e8"] != "validator_wallet_proxy" ||
+		sec.LogicPins["0x41aae8a0f910daa7a04450a94f864df487c0226c75e1809298c297d7f9e2f33a"] != "validator_wallet_logic" || len(sec.LogicPins) != 5 {
 		t.Fatalf("logic pins %v", sec.LogicPins)
 	}
 }

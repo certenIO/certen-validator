@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
 
 	"github.com/certen/independant-validator/pkg/finality"
 	"github.com/certen/independant-validator/pkg/finality/ethl1"
@@ -34,11 +35,19 @@ type layoutPins struct {
 type proxySlots struct {
 	AdminLogic string `json:"admin_logic"`
 	UserLogic  string `json:"user_logic"`
+	// WalletImpl is the EIP-1967 implementation slot of a ValidatorWallet proxy (an OpenZeppelin TransparentUpgradeableProxy).
+	WalletImpl string `json:"wallet_impl"`
 }
 
+// confirmPathPins is the confirm_path object. ValidatorWalletImpl lives here, not beside it at the top of the section, because the
+// section is shared with the l1_posted kind (pkg/finality/arbposted), whose decoder refuses unknown top-level keys but accepts
+// confirm_path and proxy_slots as opaque: the wallet pins must load there too (RB11-B2B2b found this class of defect once).
 type confirmPathPins struct {
 	Selectors map[string]string `json:"selectors"`
 	Topics    map[string]string `json:"topics"`
+	// ValidatorWalletImpl is the address of the one ValidatorWallet implementation (template) the wallet route accepts (V2_SPEC_S7
+	// 5.7 O4, wallet identity): the template() of the Arbitrum Sepolia ValidatorWalletCreator.
+	ValidatorWalletImpl string `json:"validator_wallet_impl"`
 }
 
 // pinsJSON is the arb_sepolia section. Fields owned by the l1_posted kind are accepted and ignored.
@@ -70,6 +79,9 @@ type Pins struct {
 	LogicPins          map[common.Hash]string
 	Sel                selectors
 	Topic              topics
+	// WalletImpl and WalletImplSlot are the pinned ValidatorWallet implementation and the slot of a wallet proxy that must hold it.
+	WalletImpl     common.Address
+	WalletImplSlot common.Hash
 }
 
 type selectors struct {
@@ -136,12 +148,37 @@ func LoadPins(p *finality.Pins) (*Pins, error) {
 		return nil, PinMismatch("proxy_slots.user_logic")
 	}
 	out.UserSlot = common.BytesToHash(b)
+	if b, ok = hexN(j.ProxySlots.WalletImpl, 32); !ok {
+		return nil, PinMismatch("proxy_slots.wallet_impl")
+	}
+	out.WalletImplSlot = common.BytesToHash(b)
+	if b, ok = hexN(j.ConfirmPath.ValidatorWalletImpl, 20); !ok || bytes.Equal(b, make([]byte, 20)) {
+		return nil, PinMismatch("confirm_path.validator_wallet_impl")
+	}
+	out.WalletImpl = common.BytesToAddress(b)
 	for k, v := range j.LogicPins {
 		kb, ok := hexN(k, 32)
 		if !ok {
 			return nil, PinMismatch("logic_pins")
 		}
 		out.LogicPins[common.BytesToHash(kb)] = v
+	}
+	// The wallet route needs both identities pinned: a pins file without either could never prove a wallet, and a role pinned on a
+	// code hash that an account without code, or an absent account, also has would prove one. Absent or unusable is pin_mismatch.
+	for _, role := range []string{RoleWalletProxy, RoleWalletLogic} {
+		found := false
+		for h, r := range out.LogicPins {
+			if r != role {
+				continue
+			}
+			if h == (common.Hash{}) || h == types.EmptyCodeHash {
+				return nil, PinMismatch("logic_pins." + role)
+			}
+			found = true
+		}
+		if !found {
+			return nil, PinMismatch("logic_pins." + role)
+		}
 	}
 	for name, dst := range map[string]*[4]byte{
 		"confirm_assertion": &out.Sel.Confirm, "force_confirm_assertion": &out.Sel.Force, "fast_confirm_assertion": &out.Sel.Fast,

@@ -108,6 +108,10 @@ type Parts struct {
 	NoFastProof  bool     // leave out the proof of the anyTrustFastConfirmer slot
 	TxCreate     bool     // the confirmation transaction is a contract creation (no To); TxInput is then its init code
 	LogDataBytes int      // the data length of the default AssertionConfirmed log (0: 64); a larger log makes the receipt leaf larger
+
+	// Wallet, when non-nil, adds the ValidatorWallet identity accounts and proofs of the confirmation transaction's callee to the state
+	// at K (RB11-E1-RAISE). Nil builds none: finality_arb_final1 and finality_arb_final2 carry no wallet proof.
+	Wallet *WalletState
 }
 
 // confIndex is the position of the confirmation transaction in K's block.
@@ -251,7 +255,7 @@ func word(a common.Address) common.Hash { var h common.Hash; copy(h[12:], a[:]);
 
 func u64w(v uint64) common.Hash { var h common.Hash; binary.BigEndian.PutUint64(h[24:], v); return h }
 
-func (p Parts) rollupState(admin, user common.Hash, adminWord, userWord *common.Hash, assertion [32]byte, absentRollup bool, omit []string) (common.Hash, [][]byte) {
+func (p Parts) rollupState(admin, user common.Hash, adminWord, userWord *common.Hash, assertion [32]byte, absentRollup bool, omit []string, wb *walletBuild) (common.Hash, [][]byte) {
 	aw, uw := word(AdminLogic), word(UserLogic)
 	if adminWord != nil {
 		aw = *adminWord
@@ -318,6 +322,13 @@ func (p Parts) rollupState(admin, user common.Hash, adminWord, userWord *common.
 			if a != AdminLogic && a != UserLogic {
 				absent = append(absent, a)
 			}
+		}
+	}
+	if wb != nil {
+		accts = append(accts, wb.accts...)
+		absent = append(absent, wb.absent...)
+		for a := range wb.skip {
+			skipAcc[a] = true
 		}
 	}
 	return stateOf(accts, absent, skipAcc)
@@ -513,19 +524,22 @@ func Assemble(p Parts) *World {
 	assertion := arbfinal.AssertionHash(p.Parent, after, p.SeqAcc)
 	w.Assertion = assertion
 
-	// States at S and K.
+	// The confirmation transaction's callee, which the wallet accounts of the states are built for.
+	to := Rollup
+	if p.TxTo != nil {
+		to = *p.TxTo
+	}
+
+	// States at S and K. The wallet accounts go to K's state (the verifier reads K) or, with AtS, to S's; when S == K there is one state.
 	S, K := p.F-p.SBack, p.F-p.SBack-p.KBack
-	rootS, nodesS := p.rollupState(p.AdminCodeS, p.UserCodeS, p.AdminWordS, p.UserWordS, assertion, p.RollupAbsent, p.OmitS)
-	rootK, nodesK := p.rollupState(p.AdminCodeK, p.UserCodeK, p.AdminWordK, p.UserWordK, assertion, false, p.OmitK)
+	wbS, wbK := p.Wallet.builds(to, S == K)
+	rootS, nodesS := p.rollupState(p.AdminCodeS, p.UserCodeS, p.AdminWordS, p.UserWordS, assertion, p.RollupAbsent, p.OmitS, wbS)
+	rootK, nodesK := p.rollupState(p.AdminCodeK, p.UserCodeK, p.AdminWordK, p.UserWordK, assertion, false, p.OmitK, wbK)
 	if S == K {
 		rootK, nodesK = rootS, nodesS
 	}
 
 	// The confirmation transaction and receipt in K's block.
-	to := Rollup
-	if p.TxTo != nil {
-		to = *p.TxTo
-	}
 	input := p.TxInput
 	if input == nil {
 		input = append(append([]byte(nil), SelConfirm[:]...), bytes.Repeat([]byte{0x11}, 160)...)

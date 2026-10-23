@@ -6,11 +6,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -88,6 +90,24 @@ func buildState(assertion, parent [32]byte, cfg arbfinal.ParentConfig, status ui
 	return st
 }
 
+// addAccount puts an account with the given code hash and storage into the state and recomputes the root.
+func (s *stateT) addAccount(addr common.Address, code common.Hash, storage map[common.Hash]common.Hash) {
+	sto := trie.NewEmpty(nil)
+	for k, v := range storage {
+		if err := sto.Update(crypto.Keccak256(k[:]), trimmed(v)); err != nil {
+			panic(err)
+		}
+	}
+	if len(storage) > 0 {
+		s.storage[addr] = sto
+	}
+	enc, _ := rlp.EncodeToBytes([]any{uint64(1), big.NewInt(0), sto.Hash(), code.Bytes()})
+	if err := s.acct.Update(crypto.Keccak256(addr[:]), enc); err != nil {
+		panic(err)
+	}
+	s.root = s.acct.Hash()
+}
+
 func (s *stateT) proof(addr common.Address, slots []common.Hash) *StateProof {
 	var c collector
 	if err := s.acct.Prove(crypto.Keccak256(addr[:]), &c); err != nil {
@@ -95,6 +115,9 @@ func (s *stateT) proof(addr common.Address, slots []common.Hash) *StateProof {
 	}
 	out := &StateProof{Account: c.nodes, Storage: map[common.Hash][][]byte{}}
 	for _, sl := range slots {
+		if s.storage[addr] == nil {
+			continue // an absent or storage-less account: eth_getProof answers the account proof and empty storage proofs
+		}
 		var sc collector
 		if err := s.storage[addr].Prove(crypto.Keccak256(sl[:]), &sc); err != nil {
 			panic(err)
@@ -111,8 +134,14 @@ type fakeL1 struct {
 	blocks   map[uint64]*L1Block
 	states   map[uint64]*stateT
 	proofErr map[uint64]error
-	logsErr  error
-	calls    int
+	// proofErrAddr fails eth_getProof for one address (at any block); proofAddrs records every address asked, in order.
+	proofErrAddr map[common.Address]error
+	// proofCorrupt serves a proof that does not verify for one address: "account" alters the first node of its account proof, "slot" the
+	// first node of each of its storage proofs.
+	proofCorrupt map[common.Address]string
+	proofAddrs   []common.Address
+	logsErr      error
+	calls        int
 }
 
 func (f *fakeL1) Providers() []string                  { return []string{"https://l1.example"} }
@@ -172,14 +201,37 @@ func (f *fakeL1) Block(_ context.Context, n uint64) (*L1Block, error) {
 }
 func (f *fakeL1) Proof(_ context.Context, addr common.Address, slots []common.Hash, block uint64) (*StateProof, error) {
 	f.calls++
+	f.proofAddrs = append(f.proofAddrs, addr)
 	if err := f.proofErr[block]; err != nil {
+		return nil, err
+	}
+	if err := f.proofErrAddr[addr]; err != nil {
 		return nil, err
 	}
 	st, ok := f.states[block]
 	if !ok {
 		return nil, errors.New("no state at block")
 	}
-	return st.proof(addr, slots), nil
+	p := st.proof(addr, slots)
+	alter := func(ns [][]byte) [][]byte {
+		out := make([][]byte, len(ns))
+		for i := range ns {
+			out[i] = append([]byte(nil), ns[i]...)
+		}
+		if len(out) > 0 && len(out[0]) > 0 {
+			out[0][len(out[0])-1] ^= 1
+		}
+		return out
+	}
+	switch f.proofCorrupt[addr] {
+	case "account":
+		p.Account = alter(p.Account)
+	case "slot":
+		for k, v := range p.Storage {
+			p.Storage[k] = alter(v)
+		}
+	}
+	return p, nil
 }
 
 type fakeL2 struct {
@@ -266,8 +318,20 @@ func createdLog(a Assertion, block uint64) Log {
 	return Log{Block: block, BlockHash: crypto.Keccak256Hash([]byte(fmt.Sprint("blk", block))), Topics: []common.Hash{TopicAssertionCreated, a.Hash, a.Parent}, Data: data}
 }
 
-// newWorld builds the chains the fakes serve: an L2 chain leg..leg+wAbove, an assertion over its top, the confirmation at wK.
-func newWorld(t *testing.T) *world {
+// walletOpts shapes the confirmation transaction as a ValidatorWallet call: it is sent to callee with the calldata of
+// executeTransaction carrying confirmAssertion for the Rollup, and the state at K and S gains the callee account (nil: the callee has
+// no account) and the implementation account named by its slot.
+type walletOpts struct {
+	callee    common.Address
+	proxyCode *common.Hash // the callee account's code hash (nil: no account for the callee)
+	implWord  *common.Hash // the implementation slot word (nil: the pinned implementation); with proxyCode set
+	noImpl    bool         // do not add the implementation account
+}
+
+func newWorld(t *testing.T) *world { return newWorldWith(t, nil) }
+
+// newWorldWith builds the chains the fakes serve: an L2 chain leg..leg+wAbove, an assertion over its top, the confirmation at wK.
+func newWorldWith(t *testing.T, wo *walletOpts) *world {
 	t.Helper()
 	w := &world{K: wK, S: wK + 2, F: wFinalTop}
 	var l1ref [8]byte
@@ -307,6 +371,9 @@ func newWorld(t *testing.T) *world {
 		var logs []*types.Log
 		if i == wTxIndex {
 			to, data = synthworld.Rollup, synthworld.ConfirmCall(synthworld.SelConfirm)
+			if wo != nil {
+				to, data = wo.callee, synthworld.WalletInput(synthworld.SelWalletTx, [][]byte{synthworld.ConfirmCall(synthworld.SelConfirm)}, []common.Address{synthworld.Rollup})
+			}
 			logs = []*types.Log{{Address: synthworld.Rollup, Topics: []common.Hash{synthworld.TopicConfirm, a.Hash}, Data: make([]byte, 64)}}
 		}
 		tx, err := types.SignTx(types.NewTx(&types.DynamicFeeTx{ChainID: big.NewInt(11155111), Nonce: uint64(i), GasTipCap: big.NewInt(1), GasFeeCap: big.NewInt(10), Gas: 500000, To: &to, Value: big.NewInt(0), Data: data}), signer, key)
@@ -324,6 +391,16 @@ func newWorld(t *testing.T) *world {
 		_ = rcTrie.Update(k, rcs[i])
 	}
 	st := buildState(a.Hash, a.Parent, a.ParentCfg, 2)
+	if wo != nil && wo.proxyCode != nil {
+		implWord := synthworld.WalletImplWord()
+		if wo.implWord != nil {
+			implWord = *wo.implWord
+		}
+		st.addAccount(wo.callee, *wo.proxyCode, map[common.Hash]common.Hash{synthworld.WalletImplSlot: implWord})
+		if !wo.noImpl {
+			st.addAccount(common.BytesToAddress(implWord[12:]), synthworld.WalletLogicCodeHash, nil)
+		}
+	}
 	l1 := &fakeL1{head: wHead, headers: map[uint64][]byte{}, blocks: map[uint64]*L1Block{}, states: map[uint64]*stateT{wK: st, wK + 2: st}, proofErr: map[uint64]error{}}
 	parent := crypto.Keccak256Hash([]byte("l1 parent"))
 	for n := uint64(wK - 5); n <= wHead; n++ {
@@ -725,5 +802,270 @@ func TestRateLimitIsRetriedWithBackoff(t *testing.T) {
 	n = -100
 	if _, err := l1.Head(context.Background()); err == nil || !strings.Contains(err.Error(), "429") {
 		t.Fatalf("persistent rate limit: %v", err)
+	}
+}
+
+// ---- the wallet route: the builder captures the proofs ProveWallet reads (RB12-E1RAISE) --------------------------------------------
+
+var walletCallee = common.HexToAddress("0x000000000000000000000000000000000000beef")
+
+func provenWallet() *walletOpts {
+	return &walletOpts{callee: walletCallee, proxyCode: &synthworld.WalletProxyCodeHash}
+}
+
+func routeOf(t *testing.T, w *world, add *finality.Addendum) string {
+	t.Helper()
+	v, err := arbfinal.New().Verify(w.pins, w.leg, add.Evidence)
+	if err != nil {
+		t.Fatal(canon(err))
+	}
+	r, _ := v.Fields["confirmation_route"].(string)
+	return r
+}
+
+func TestAWalletRouteConfirmationIsBuiltWithItsIdentityProofs(t *testing.T) {
+	w := newWorldWith(t, provenWallet())
+	add, pend, err := w.build(t)
+	if err != nil || pend != nil || add == nil {
+		t.Fatalf("add %v pend %v err %v", add != nil, pend, canon(err))
+	}
+	if got := routeOf(t, w, add); got != "wallet" {
+		t.Fatalf("route %q, want wallet", got)
+	}
+	// state rows at S and K, the confirmation row and the wallet row
+	if n := w.p.Store.(*MemStore).Len(); n != 4 {
+		t.Fatalf("%d capture rows, want 4", n)
+	}
+	var asked []common.Address
+	for _, a := range w.l1.proofAddrs {
+		if a == walletCallee || a == synthworld.WalletImpl {
+			asked = append(asked, a)
+		}
+	}
+	if len(asked) != 2 || asked[0] != walletCallee || asked[1] != synthworld.WalletImpl {
+		t.Fatalf("wallet proofs asked for %v, want the callee then the implementation, once each", asked)
+	}
+}
+
+func TestADirectConfirmationCapturesNoWalletProof(t *testing.T) {
+	w := newWorld(t)
+	if _, _, err := w.build(t); err != nil {
+		t.Fatal(canon(err))
+	}
+	for _, a := range w.l1.proofAddrs {
+		if a == walletCallee || a == synthworld.WalletImpl {
+			t.Fatalf("a direct confirmation asked for the proof of %s", a)
+		}
+	}
+	if n := w.p.Store.(*MemStore).Len(); n != 3 {
+		t.Fatalf("%d capture rows, want 3 (no wallet row)", n)
+	}
+}
+
+func TestAStoredWalletCaptureServesALaterBuildOutsideTheProofWindow(t *testing.T) {
+	w := newWorldWith(t, provenWallet())
+	w.lc.err = errors.New("beacon down")
+	_, pend, err := w.build(t)
+	wantPending(t, pend, err, PendingL1State)
+	calls := w.l1.calls
+	for _, b := range []uint64{wK, wK + 2} {
+		w.l1.proofErr[b] = errors.New("distance to target block exceeds maximum proof window")
+	}
+	w.lc.err = nil
+	add, pend, err := w.build(t)
+	if err != nil || pend != nil || add == nil {
+		t.Fatalf("pend %v err %v", pend, canon(err))
+	}
+	if w.l1.calls != calls {
+		t.Fatalf("eth_getProof called again (%d -> %d) although the wallet capture was stored", calls, w.l1.calls)
+	}
+	if got := routeOf(t, w, add); got != "wallet" {
+		t.Fatalf("route %q", got)
+	}
+}
+
+func TestAnEarlierConfirmationRowWithoutWalletProofsGetsThemFromTheProvider(t *testing.T) {
+	w := newWorldWith(t, provenWallet())
+	if _, _, err := w.build(t); err != nil {
+		t.Fatal(canon(err))
+	}
+	// the store of an earlier build: the state rows and the confirmation row, no wallet row (insert-only rows cannot be extended)
+	old := NewMemStore()
+	ctx := context.Background()
+	for _, x := range []uint64{wK, wK + 2} {
+		hf, _ := finality.ReadHeader(w.l1.headers[x])
+		for _, item := range []string{captureItemState, captureItemConf} {
+			if x != wK && item == captureItemConf {
+				continue
+			}
+			key := finality.CaptureKey{Chain: finality.ChainSepolia, L1Block: x, L1Hash: hf.Hash, Item: item + hex.EncodeToString(w.assertion[:])}
+			b, ok, err := w.p.Store.Get(ctx, key)
+			if err != nil || !ok {
+				t.Fatalf("row %s at %d: %v %v", item, x, ok, err)
+			}
+			if err := old.Put(ctx, key, b); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	w.p.Store = old
+	w.l1.proofAddrs = nil
+	add, pend, err := w.build(t)
+	if err != nil || pend != nil || add == nil {
+		t.Fatalf("pend %v err %v", pend, canon(err))
+	}
+	if got := routeOf(t, w, add); got != "wallet" {
+		t.Fatalf("route %q", got)
+	}
+	if n := old.Len(); n != 4 {
+		t.Fatalf("%d capture rows, want 4 (the wallet row was added)", n)
+	}
+	if len(w.l1.proofAddrs) != 2 {
+		t.Fatalf("only the callee and the implementation were to be asked, got %v", w.l1.proofAddrs)
+	}
+}
+
+func TestWalletProofsThatTheProviderCannotServeAreANamedStateAndResume(t *testing.T) {
+	w := newWorldWith(t, provenWallet())
+	w.l1.proofErrAddr = map[common.Address]error{walletCallee: errors.New("distance to target block exceeds maximum proof window")}
+	_, pend, err := w.build(t)
+	wantPending(t, pend, err, PendingProofWindow)
+	if pend.Judged["l1_block"] != uint64(wK) {
+		t.Fatalf("judged %v", pend.Judged)
+	}
+	if n := w.p.Store.(*MemStore).Len(); n != 3 {
+		t.Fatalf("%d capture rows, want 3 (state S, state K, confirmation; no wallet row)", n)
+	}
+	// the provider recovers: the same store resumes and builds
+	w.l1.proofErrAddr = nil
+	add, pend, err := w.build(t)
+	if err != nil || pend != nil || add == nil {
+		t.Fatalf("pend %v err %v", pend, canon(err))
+	}
+	if got := routeOf(t, w, add); got != "wallet" {
+		t.Fatalf("route %q", got)
+	}
+}
+
+func TestAnImplementationProofTheProviderCannotServeIsANamedState(t *testing.T) {
+	w := newWorldWith(t, provenWallet())
+	w.l1.proofErrAddr = map[common.Address]error{synthworld.WalletImpl: errors.New("distance to target block exceeds maximum proof window")}
+	_, pend, err := w.build(t)
+	wantPending(t, pend, err, PendingProofWindow)
+}
+
+// A callee that is not a wallet needs nothing beyond its own account proof and slot proof: the builder does not chase the implementation
+// it names, and the verifier's own verdict (confirmation_path_unproven{indirect}, judged at K) is what the build returns.
+func TestACalleeThatIsNotAWalletIsRefusedByTheVerifierAndNoImplementationIsChased(t *testing.T) {
+	other := common.BytesToHash(append(make([]byte, 12), common.HexToAddress("0x00000000000000000000000000000000000000dd").Bytes()...))
+	for name, wo := range map[string]*walletOpts{
+		"no account":             {callee: walletCallee},
+		"another contract":       {callee: walletCallee, proxyCode: ptrHash(crypto.Keccak256Hash([]byte("another contract")))},
+		"proxy over another one": {callee: walletCallee, proxyCode: &synthworld.WalletProxyCodeHash, implWord: &other},
+	} {
+		w := newWorldWith(t, wo)
+		_, pend, err := w.build(t)
+		if pend != nil || err == nil {
+			t.Fatalf("%s: pend %v err %v", name, pend, err)
+		}
+		s, ok := finality.AsNamed(err)
+		if !ok || s.Code != arbfinal.CodeConfirmationUnproof || s.Fields["reason"] != arbfinal.ConfirmIndirect || s.Fields["l1_block"] != uint64(wK) {
+			t.Fatalf("%s: %s", name, canon(err))
+		}
+		for _, a := range w.l1.proofAddrs {
+			if a == synthworld.WalletImpl || a == common.BytesToAddress(other[12:]) {
+				t.Fatalf("%s: the implementation %s was asked for", name, a)
+			}
+		}
+	}
+}
+
+func ptrHash(h common.Hash) *common.Hash { return &h }
+
+// The capture row names are stored in proof_finality_capture.item, which the table limits to varchar(160) matching
+// ^[a-z0-9_-]+(/[a-z0-9_-]+)*$ (db/migrations/00028): every item name the builder uses fits, with a real 32-byte assertion hash.
+func TestEveryCaptureItemNameFitsTheTable(t *testing.T) {
+	re := regexp.MustCompile(`^[a-z0-9_-]+(/[a-z0-9_-]+)*$`)
+	h := crypto.Keccak256Hash([]byte("an assertion"))
+	for _, prefix := range []string{captureItemState, captureItemConf, captureItemWallet} {
+		item := prefix + hex.EncodeToString(h[:])
+		if len(item) > 160 || !re.MatchString(item) {
+			t.Errorf("%q does not fit proof_finality_capture.item", item)
+		}
+	}
+	if captureItemWallet == captureItemConf || captureItemWallet == captureItemState {
+		t.Fatal("the wallet row must not share a name with another row")
+	}
+}
+
+// ---- a provider answer that is no proof, a store that fails, bytes that are no transaction -------------------------------------------
+
+func TestAWalletAccountProofThatDoesNotVerifyIsNotCapturedAndIsANamedState(t *testing.T) {
+	w := newWorldWith(t, provenWallet())
+	w.l1.proofCorrupt = map[common.Address]string{walletCallee: "account"}
+	_, pend, err := w.build(t)
+	wantPending(t, pend, err, PendingProofWindow)
+	if n := w.p.Store.(*MemStore).Len(); n != 3 {
+		t.Fatalf("%d capture rows, want 3 (nothing of the bad answer is kept)", n)
+	}
+	w.l1.proofCorrupt = nil
+	if add, pend, err := w.build(t); err != nil || pend != nil || add == nil {
+		t.Fatalf("resume: pend %v err %v", pend, canon(err))
+	}
+}
+
+func TestAnImplementationSlotProofThatDoesNotVerifyIsNotCapturedAndIsANamedState(t *testing.T) {
+	w := newWorldWith(t, provenWallet())
+	w.l1.proofCorrupt = map[common.Address]string{walletCallee: "slot"}
+	_, pend, err := w.build(t)
+	wantPending(t, pend, err, PendingProofWindow)
+	if n := w.p.Store.(*MemStore).Len(); n != 3 {
+		t.Fatalf("%d capture rows, want 3", n)
+	}
+}
+
+// failingStore refuses to keep one kind of row.
+type failingStore struct {
+	finality.CaptureStore
+	prefix string
+}
+
+func (s failingStore) Put(ctx context.Context, k finality.CaptureKey, v []byte) error {
+	if strings.HasPrefix(k.Item, s.prefix) {
+		return errors.New("disk full for " + k.Item)
+	}
+	return s.CaptureStore.Put(ctx, k, v)
+}
+
+func TestAWalletCaptureThatCannotBeKeptIsAVerifierFailureNotASilentPass(t *testing.T) {
+	w := newWorldWith(t, provenWallet())
+	w.p.Store = failingStore{CaptureStore: NewMemStore(), prefix: captureItemWallet}
+	add, pend, err := w.build(t)
+	if add != nil || pend != nil {
+		t.Fatalf("add %v pend %v", add != nil, pend)
+	}
+	s, ok := finality.AsNamed(err)
+	if !ok || s.Code != finality.CodeVerifierFailed || s.Fields["kind"] != arbfinal.KindName || !strings.Contains(fmt.Sprint(s.Fields["cause"]), "disk full") {
+		t.Fatalf("%v", canon(err))
+	}
+}
+
+// Bytes that are no transaction have no callee: nothing is asked of the provider and nothing is kept (the verifier refuses the bytes).
+func TestBytesThatAreNoTransactionNeedNoWalletProof(t *testing.T) {
+	w := newWorld(t)
+	arb, err := arbfinal.LoadPins(w.pins)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kf, _ := finality.ReadHeader(w.l1.headers[wK])
+	a := &Assertion{Hash: w.assertion}
+	for _, raw := range [][]byte{nil, {}, {0x02}, {0x02, 0xc0}, bytes.Repeat([]byte{0xff}, 40)} {
+		ns, pend, err := w.p.walletProofs(context.Background(), arb, a, wK, kf, raw, 0)
+		if ns != nil || pend != nil || err != nil {
+			t.Errorf("%x: nodes %d pend %v err %v", raw, len(ns), pend, err)
+		}
+	}
+	if len(w.l1.proofAddrs) != 0 || w.p.Store.(*MemStore).Len() != 0 {
+		t.Fatalf("asked %v, kept %d rows", w.l1.proofAddrs, w.p.Store.(*MemStore).Len())
 	}
 }

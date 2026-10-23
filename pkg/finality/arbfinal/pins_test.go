@@ -6,9 +6,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"math/big"
+	"strings"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 
 	"github.com/certen/independant-validator/pkg/finality"
@@ -182,12 +184,40 @@ func TestEveryPinDomainCheckNamesItsField(t *testing.T) {
 		{"topic short", []string{"confirm_path", "topics", "assertion_confirmed"}, "0x12", "confirm_path.topics.assertion_confirmed"},
 		{"topic missing", []string{"confirm_path", "topics", "assertion_force_confirmed"}, nil, "confirm_path.topics.assertion_force_confirmed"},
 		{"unknown key", []string{"surprise"}, 1, "section"},
+		// the wallet pins (RB12-E1RAISE): a pins file without them, or with an unusable one, can never prove a wallet
+		{"wallet impl slot missing", []string{"proxy_slots", "wallet_impl"}, nil, "proxy_slots.wallet_impl"},
+		{"wallet impl slot 31 bytes", []string{"proxy_slots", "wallet_impl"}, "0x" + strings.Repeat("ab", 31), "proxy_slots.wallet_impl"},
+		{"wallet impl slot 33 bytes", []string{"proxy_slots", "wallet_impl"}, "0x" + strings.Repeat("ab", 33), "proxy_slots.wallet_impl"},
+		{"wallet impl missing", []string{"confirm_path", "validator_wallet_impl"}, nil, "confirm_path.validator_wallet_impl"},
+		{"wallet impl zero address", []string{"confirm_path", "validator_wallet_impl"}, "0x" + strings.Repeat("00", 20), "confirm_path.validator_wallet_impl"},
+		{"wallet impl 19 bytes", []string{"confirm_path", "validator_wallet_impl"}, "0x" + strings.Repeat("ab", 19), "confirm_path.validator_wallet_impl"},
+		{"wallet impl 21 bytes", []string{"confirm_path", "validator_wallet_impl"}, "0x" + strings.Repeat("ab", 21), "confirm_path.validator_wallet_impl"},
+		{"wallet proxy role absent", []string{"logic_pins", "0x8736329b580cfc0c0c39ee6700515e0bc51652afb614640db9e34a5d784933e8"}, nil, "logic_pins.validator_wallet_proxy"},
+		{"wallet logic role absent", []string{"logic_pins", "0x41aae8a0f910daa7a04450a94f864df487c0226c75e1809298c297d7f9e2f33a"}, nil, "logic_pins.validator_wallet_logic"},
 	}
 	for _, c := range cases {
 		_, err := arbfinal.LoadPins(editSection(t, c.path, c.val))
 		s, ok := finality.AsNamed(err)
 		if !ok || s.Code != arbfinal.CodePinMismatch || s.Fields["field"] != c.field {
 			t.Errorf("%s: got %v, want pin_mismatch{field:%s}", c.name, err, c.field)
+		}
+	}
+	// a role pinned on the zero hash or on the hash of empty code would make an absent or code-less account a wallet: the role under test
+	// is moved from its real hash to the unusable one, the other role keeps its real hash
+	for _, c := range []struct{ role, real string }{{arbfinal.RoleWalletProxy, "0x8736329b580cfc0c0c39ee6700515e0bc51652afb614640db9e34a5d784933e8"}, {arbfinal.RoleWalletLogic, "0x41aae8a0f910daa7a04450a94f864df487c0226c75e1809298c297d7f9e2f33a"}} {
+		for name, h := range map[string]string{"zero hash": "0x" + strings.Repeat("00", 32), "empty code hash": types.EmptyCodeHash.Hex()} {
+			p := editSection(t, []string{"logic_pins", c.real}, nil)
+			var sec map[string]any
+			if err := json.Unmarshal(p.Sections["arb_sepolia"], &sec); err != nil {
+				t.Fatal(err)
+			}
+			sec["logic_pins"].(map[string]any)[h] = c.role
+			raw, _ := json.Marshal(sec)
+			_, err := arbfinal.LoadPins(&finality.Pins{Format: p.Format, Sections: map[string]json.RawMessage{"arb_sepolia": raw}})
+			st, ok := finality.AsNamed(err)
+			if !ok || st.Code != arbfinal.CodePinMismatch || st.Fields["field"] != "logic_pins."+c.role {
+				t.Errorf("%s pinned on the %s: got %v", c.role, name, err)
+			}
 		}
 	}
 	if _, err := arbfinal.LoadPins(nil); err == nil {
@@ -222,6 +252,8 @@ func TestPinDomainEdgesAreAcceptedAndTheL1ConversionKeepsBlockRoots(t *testing.T
 		{[]string{"layout", "fast_confirmer_shift_bits"}, 0},
 		{[]string{"max_header_chain"}, 1},
 		{[]string{"bold_genesis_l2_block"}, 1},
+		// a pins file is append-only: a second build of the proxy or of the template under the same role is accepted
+		{[]string{"logic_pins"}, map[string]any{"0x8736329b580cfc0c0c39ee6700515e0bc51652afb614640db9e34a5d784933e8": "validator_wallet_proxy", "0x" + strings.Repeat("11", 32): "validator_wallet_proxy", "0x41aae8a0f910daa7a04450a94f864df487c0226c75e1809298c297d7f9e2f33a": "validator_wallet_logic"}},
 	} {
 		if _, err := arbfinal.LoadPins(editSection(t, c.path, c.val)); err != nil {
 			t.Errorf("%v = %v: %v", c.path, c.val, err)

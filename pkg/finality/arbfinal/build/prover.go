@@ -10,6 +10,7 @@ import (
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/rlp"
 
 	"github.com/certen/independant-validator/pkg/ethproof"
@@ -29,6 +30,7 @@ const (
 	PendingL1State        = "l1_state_unavailable"
 	captureItemState      = "arbfinal/state/"
 	captureItemConf       = "arbfinal/conf/"
+	captureItemWallet     = "arbfinal/wallet/"
 	defaultLogChunk       = 2000
 	defaultMaxScanBlocks  = 40000
 	maxAssertionsPerBuild = 512
@@ -346,7 +348,11 @@ func (p *Prover) capture(ctx context.Context, arb *arbfinal.Pins, a *Assertion, 
 		if derr != nil {
 			return nil, nil, nil, 0, nil, nil, nil, derr
 		}
-		return finality.EncodeNodes(append(set, ns...)), t, r, i, hdrs[K], hdrs[S], nil, nil
+		wns, wpend, werr := p.walletProofs(ctx, arb, a, K, kf, t, have)
+		if wpend != nil || werr != nil {
+			return nil, nil, nil, 0, nil, nil, wpend, werr
+		}
+		return finality.EncodeNodes(append(append(set, ns...), wns...)), t, r, i, hdrs[K], hdrs[S], nil, nil
 	}
 	blk, berr := p.L1.Block(ctx, K)
 	if berr != nil {
@@ -369,7 +375,64 @@ func (p *Prover) capture(ctx context.Context, arb *arbfinal.Pins, a *Assertion, 
 	if serr := p.Store.Put(ctx, finality.CaptureKey{Chain: finality.ChainSepolia, L1Block: K, L1Hash: kf.Hash, Item: item}, encodeConf(tx, rcpt, idx, ns)); serr != nil {
 		return nil, nil, nil, 0, nil, nil, nil, finality.NewState(finality.CodeVerifierFailed, "chain", finality.ChainArbitrumSepolia, "kind", arbfinal.KindName, "cause", ethrpc.RedactText(serr.Error()))
 	}
-	return finality.EncodeNodes(append(set, ns...)), tx, rcpt, idx, hdrs[K], hdrs[S], nil, nil
+	wns, wpend, werr := p.walletProofs(ctx, arb, a, K, kf, tx, have)
+	if wpend != nil || werr != nil {
+		return nil, nil, nil, 0, nil, nil, wpend, werr
+	}
+	return finality.EncodeNodes(append(append(set, ns...), wns...)), tx, rcpt, idx, hdrs[K], hdrs[S], nil, nil
+}
+
+// walletProofs captures, at K, the proofs arbfinal.ProveWallet reads when the confirmation transaction was sent to a callee other than
+// the Rollup with the calldata of a ValidatorWallet entry point (RB12-E1RAISE): the callee's account with the proof of its EIP-1967
+// implementation slot and, when the callee has the pinned proxy code and that slot holds the pinned implementation, the implementation's
+// account. Exactly the nodes the verifier reads, no more: a callee whose account is absent, has other code or names another
+// implementation needs nothing further, because the verifier then states confirmation_path_unproven{indirect} from the nodes it has. A transaction that is not wallet-shaped needs no
+// wallet proof and captures none. The nodes are kept in their own capture row (the conf row of an earlier build, insert-only, does not
+// carry them); a provider that cannot serve the proofs at K is l1_proof_window_unavailable, as for the Rollup proofs.
+func (p *Prover) walletProofs(ctx context.Context, arb *arbfinal.Pins, a *Assertion, K uint64, kf finality.HeaderFields, txRaw []byte, have finality.LevelSet) ([][]byte, *finality.PendingState, error) {
+	var tx types.Transaction
+	if err := tx.UnmarshalBinary(txRaw); err != nil {
+		return nil, nil, nil // not a transaction: the verifier refuses the carried bytes (l1_tx_proof_invalid), there is no callee
+	}
+	callee, ok := arbfinal.WalletCallee(arb, &tx)
+	if !ok {
+		return nil, nil, nil
+	}
+	key := finality.CaptureKey{Chain: finality.ChainSepolia, L1Block: K, L1Hash: kf.Hash, Item: captureItemWallet + hex.EncodeToString(a.Hash[:])}
+	if stored, found, serr := p.Store.Get(ctx, key); serr == nil && found {
+		ns, derr := decodeNodes(stored)
+		return ns, nil, derr
+	}
+	unavailable := func() *finality.PendingState {
+		return p.pending(have, PendingProofWindow, "l1_block", K, "providers", p.L1.Providers())
+	}
+	sp, err := p.L1.Proof(ctx, callee, []common.Hash{arb.WalletImplSlot}, K)
+	if err != nil {
+		return nil, unavailable(), nil
+	}
+	all := append(append([][]byte(nil), sp.Account...), sp.Storage[arb.WalletImplSlot]...)
+	root := common.Hash(kf.StateRoot)
+	acct, err := ethproof.VerifyAccount(root, callee, sp.Account)
+	if err != nil {
+		return nil, unavailable(), nil // the provider's account proof does not verify under K's root: it is not a proof
+	}
+	if acct.Exists && arb.LogicPins[acct.CodeHash] == arbfinal.RoleWalletProxy {
+		word, serr := ethproof.VerifySlot(acct.StorageRoot, arb.WalletImplSlot, sp.Storage[arb.WalletImplSlot])
+		if serr != nil {
+			return nil, unavailable(), nil
+		}
+		if word == common.BytesToHash(arb.WalletImpl[:]) {
+			ip, ierr := p.L1.Proof(ctx, arb.WalletImpl, nil, K)
+			if ierr != nil {
+				return nil, unavailable(), nil
+			}
+			all = append(all, ip.Account...)
+		}
+	}
+	if serr := p.Store.Put(ctx, key, encodeNodes(all)); serr != nil {
+		return nil, nil, finality.NewState(finality.CodeVerifierFailed, "chain", finality.ChainArbitrumSepolia, "kind", arbfinal.KindName, "cause", ethrpc.RedactText(serr.Error()))
+	}
+	return all, nil, nil
 }
 
 // stateProofs captures the proofs one verifier pass at L1 block x reads: the Rollup account with the two EIP-1967 slots, the

@@ -41,7 +41,8 @@
       "topics": {
         "assertion_confirmed": "0xfc42829b29c259a7370ab56c8f69fce23b5f351a9ce151da453281993ec0090c",
         "assertion_force_confirmed": "0x0ef6ac64bd6b0fa95ed37aa19a1b16613fb89e2269c92639a9d516a64fea4938"
-      }
+      },
+      "validator_wallet_impl": "0x579831De7576B8580A2BEaa5F56b4b32e1292419"
     },
     "layout": {
       "acc_array_slot": 7,
@@ -55,6 +56,8 @@
     },
     "logic_pins": {
       "0x3bd9637547d75e5b4539449e14c759b86b9d37a7c1f2b47a1524f857e4ff1a0c": "bridge_impl",
+      "0x41aae8a0f910daa7a04450a94f864df487c0226c75e1809298c297d7f9e2f33a": "validator_wallet_logic",
+      "0x8736329b580cfc0c0c39ee6700515e0bc51652afb614640db9e34a5d784933e8": "validator_wallet_proxy",
       "0xdd93a7606e6067aaae8ad5afa28b943a8272809eb72face4e2bb3bf4d0609445": "rollup_admin_logic",
       "0xeadf786edd4819d0262d9679d43b878d7005408a822aa0c43cf79bd0043c09a3": "rollup_user_logic"
     },
@@ -65,7 +68,8 @@
     "parent_chain_id": 11155111,
     "proxy_slots": {
       "admin_logic": "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc",
-      "user_logic": "0x2b1dbce74324248c222f0ec2d5ed7bd323cfc425b336f0253c5ccfda7265546d"
+      "user_logic": "0x2b1dbce74324248c222f0ec2d5ed7bd323cfc425b336f0253c5ccfda7265546d",
+      "wallet_impl": "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc"
     },
     "rollup": "0x042B2E6C5E99d4c521bd49beeD5E99651D9B0Cf4"
   },
