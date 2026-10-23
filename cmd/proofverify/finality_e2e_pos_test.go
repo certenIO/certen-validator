@@ -28,6 +28,7 @@ import (
 	"github.com/certen/independant-validator/pkg/finality/basefinal"
 	"github.com/certen/independant-validator/pkg/finality/baseposted"
 	"github.com/certen/independant-validator/pkg/finality/ethsepolia"
+	"github.com/certen/independant-validator/pkg/finality/finalitytest"
 )
 
 // RB11-E2E-POS: the positive end to end of every S7 kind through the real database path.
@@ -302,24 +303,7 @@ func settlementOf(t *testing.T, l e2eLeg) finality.Settlement {
 
 func newProofFor(t *testing.T, db *sql.DB, s finality.Settlement) uuid.UUID {
 	t.Helper()
-	exec := map[string]any{}
-	raw, err := json.Marshal(s.Included)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := json.Unmarshal(raw, &exec); err != nil {
-		t.Fatal(err)
-	}
-	exec["chain_id"] = strconv.FormatUint(s.Chain, 10)
-	artifact, _ := json.Marshal(map[string]any{"proof_components": map[string]any{"5_execution_proof": exec}})
-	created, err := database.NewProofArtifactRepository(db).CreateProofArtifact(context.Background(), &database.NewProofArtifact{
-		ProofType: database.ProofTypeCertenAnchor, AccumTxHash: "e2e_" + uuid.NewString()[:8], AccountURL: "acc://finality-e2e.acme/tokens",
-		ProofClass: database.ProofClassOnCadence, ValidatorID: "test-validator-1", ArtifactJSON: artifact,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return created.ProofID
+	return uuid.MustParse(finalitytest.StoreProductionLeg(t, db, s))
 }
 
 func request(l e2eLeg, id uuid.UUID, s finality.Settlement, level finality.Level, kind string, evidence []byte, reg *finality.Registry) finality.AppendRequest {

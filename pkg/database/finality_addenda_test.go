@@ -4,62 +4,21 @@ package database
 
 import (
 	"context"
-	"encoding/json"
 	"reflect"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 
-	"github.com/certen/independant-validator/pkg/ethproof"
-	"github.com/certen/independant-validator/pkg/ethproof/ethprooftest"
-	"github.com/certen/independant-validator/pkg/ethrpc"
 	"github.com/certen/independant-validator/pkg/finality"
+	"github.com/certen/independant-validator/pkg/finality/finalitytest"
 )
 
-// buildLeg stores a proof_artifacts row whose bundle carries a real L6 execution proof (component 5), the input the worker
-// reads, and returns its proof id and settlement.
+// storeLeg stores one real settled leg exactly as production does (summary-only proof_artifacts row with its settlement columns,
+// the gzip bundle with component 5 in proof_bundles) and returns its proof id and settlement.
 func storeLeg(t *testing.T, fixture string) (string, finality.Settlement) {
 	t.Helper()
-	f := ethprooftest.Load(t, fixture)
-	r, err := ethrpc.NewAgreeingReader(context.Background(), f.ChainID,
-		ethprooftest.URLs(t, &ethprooftest.Provider{F: f}, &ethprooftest.Provider{F: f, NoBlockReceipts: true}), 5*time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
-	b, err := ethproof.ReadBlock(context.Background(), r, f.BlockHash())
-	if err != nil {
-		t.Fatal(err)
-	}
-	proof, err := b.Prove(f.SettlementTx, f.SettlementIndex())
-	if err != nil {
-		t.Fatal(err)
-	}
-	// the bundle's component 5 is the execution proof: the settlement's fields plus the chain id and block number
-	exec := map[string]any{}
-	raw, _ := json.Marshal(proof)
-	_ = json.Unmarshal(raw, &exec)
-	exec["chain_id"] = reflectChain(f.ChainID)
-	artifact, _ := json.Marshal(map[string]any{"proof_components": map[string]any{"5_execution_proof": exec}})
-
-	repo := NewProofArtifactRepository(testDB)
-	created, err := repo.CreateProofArtifact(context.Background(), &NewProofArtifact{
-		ProofType: ProofTypeCertenAnchor, AccumTxHash: "fin_" + uuid.NewString()[:8], AccountURL: "acc://finality-test.acme/tokens",
-		ProofClass: ProofClassOnCadence, ValidatorID: "test-validator-1", ArtifactJSON: artifact,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	subject, err := finality.SubjectOfSettlement(proof)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return created.ProofID.String(), finality.Settlement{Chain: uint64(f.ChainID), Subject: subject, Included: proof}
-}
-
-func reflectChain(id int64) string {
-	b, _ := json.Marshal(id)
-	return string(b)
+	s := finalitytest.Settlement(t, fixture)
+	return finalitytest.StoreProductionLeg(t, testDB, s), s
 }
 
 // addendaChain builds the leg's chain for the given levels (Base kinds for a Base leg, the Adiri kind for Adiri), bound to the
