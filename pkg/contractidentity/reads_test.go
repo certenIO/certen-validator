@@ -665,3 +665,39 @@ func TestReadErrorText(t *testing.T) {
 		t.Fatal(fmt.Sprint(e))
 	}
 }
+
+func TestReadIndexedLeafOverAListTrie(t *testing.T) {
+	// an ordered-list trie (transactions or receipts): key rlp(index), one leaf larger than a state node may be
+	tr := trie.NewEmpty(nil)
+	vals := [][]byte{bytes.Repeat([]byte{1}, 40), bytes.Repeat([]byte{2}, 6000), bytes.Repeat([]byte{3}, 70)}
+	for i, v := range vals {
+		k, _ := rlp.EncodeToBytes(uint64(i))
+		if err := tr.Update(k, v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	root := tr.Hash()
+	var col collectDB
+	for i := range vals {
+		k, _ := rlp.EncodeToBytes(uint64(i))
+		if err := tr.Prove(k, &col); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ns := mustNS(t, asContainerOrder(col.nodes))
+	for i, v := range vals {
+		got, err := ReadIndexedLeaf(root, ns, uint64(i), DefaultLimits().MaxNodeBytes)
+		if err != nil || !bytes.Equal(got, v) {
+			t.Fatalf("index %d: %v", i, err)
+		}
+	}
+	// the node bound is the caller's: a state-node bound refuses the 6000-byte leaf node, exactly
+	_, err := ReadIndexedLeaf(root, ns, 1, MaxTrieNodeBytes)
+	wantRead(t, err, ReadNodeTooLarge)
+	// an index the list does not hold is an absence of the entry, not a zero value
+	_, err = ReadIndexedLeaf(root, ns, 9, DefaultLimits().MaxNodeBytes)
+	wantRead(t, err, ReadLeafAbsent)
+	// a node missing from the set
+	_, err = ReadIndexedLeaf(root, mustNS(t, nil), 0, DefaultLimits().MaxNodeBytes)
+	wantRead(t, err, ReadMissingNode)
+}

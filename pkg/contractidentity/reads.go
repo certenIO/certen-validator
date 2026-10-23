@@ -66,6 +66,7 @@ const (
 	ReadValueMalformed   ReadKind = "value_malformed"
 	ReadDynamicInvalid   ReadKind = "dynamic_invalid"
 	ReadNodeSetInvalid   ReadKind = "node_set_invalid"
+	ReadLeafAbsent       ReadKind = "leaf_absent"
 )
 
 // ReadError is a read that does not verify.
@@ -192,8 +193,9 @@ func (s *NodeSet) VisitedNodes() [][]byte {
 // walkReader is the node store trie.VerifyProof reads: it answers from the set, validates each node's shape as it is read, and remembers
 // the first reason a read failed (VerifyProof reports a nil answer only as "missing").
 type walkReader struct {
-	set  *NodeSet
-	fail *ReadError
+	set     *NodeSet
+	fail    *ReadError
+	maxNode int
 }
 
 func (r *walkReader) Has(key []byte) (bool, error) {
@@ -214,8 +216,8 @@ func (r *walkReader) Get(key []byte) ([]byte, error) {
 		r.fail = &ReadError{Kind: ReadMissingNode, Missing: h}
 		return nil, nil
 	}
-	if len(buf) > MaxTrieNodeBytes {
-		r.fail = &ReadError{Kind: ReadNodeTooLarge, Missing: h, Detail: fmt.Sprintf("%d bytes, limit %d", len(buf), MaxTrieNodeBytes)}
+	if len(buf) > r.maxNode {
+		r.fail = &ReadError{Kind: ReadNodeTooLarge, Missing: h, Detail: fmt.Sprintf("%d bytes, limit %d", len(buf), r.maxNode)}
 		return nil, nil
 	}
 	if err := checkTrieNode(buf); err != nil {
@@ -227,8 +229,8 @@ func (r *walkReader) Get(key []byte) ([]byte, error) {
 }
 
 // walk runs trie.VerifyProof(root, key) over the set. It returns the leaf value (nil for a verified exclusion proof).
-func (s *NodeSet) walk(root common.Hash, key []byte) ([]byte, *ReadError) {
-	r := &walkReader{set: s}
+func (s *NodeSet) walk(root common.Hash, key []byte, maxNode int) ([]byte, *ReadError) {
+	r := &walkReader{set: s, maxNode: maxNode}
 	val, err := trie.VerifyProof(root, key, r)
 	if err != nil {
 		if r.fail != nil {
@@ -382,7 +384,7 @@ func ReadAccount(stateRoot common.Hash, nodes *NodeSet, address common.Address) 
 	if stateRoot == types.EmptyRootHash {
 		return absent, nil
 	}
-	val, rerr := nodes.walk(stateRoot, crypto.Keccak256(address[:]))
+	val, rerr := nodes.walk(stateRoot, crypto.Keccak256(address[:]), MaxTrieNodeBytes)
 	if rerr != nil {
 		a := address
 		rerr.Address = &a
@@ -408,7 +410,7 @@ func ReadSlot(storageRoot common.Hash, nodes *NodeSet, slot common.Hash) (common
 	if storageRoot == types.EmptyRootHash {
 		return common.Hash{}, nil
 	}
-	val, rerr := nodes.walk(storageRoot, crypto.Keccak256(slot[:]))
+	val, rerr := nodes.walk(storageRoot, crypto.Keccak256(slot[:]), MaxTrieNodeBytes)
 	if rerr != nil {
 		s := slot
 		rerr.Slot = &s
@@ -468,4 +470,23 @@ func ReadString(storageRoot common.Hash, nodes *NodeSet, slot common.Hash, maxLe
 		return "", err
 	}
 	return string(b), nil
+}
+
+// ReadIndexedLeaf walks an ordered-list trie (the transactions or receipts root of a header: key rlp(index), NOT hashed) to the entry at
+// index and returns its consensus encoding. The entry must exist (an absence is ReadLeafAbsent: a block holds the entry the proof names).
+// Nodes of these tries may be larger than a state or storage node (a leaf holds a whole transaction), so the bound is maxNode, the node
+// bound of the container (Limits.MaxNodeBytes); the shape rules of the reads are unchanged.
+func ReadIndexedLeaf(root common.Hash, nodes *NodeSet, index uint64, maxNode int) ([]byte, error) {
+	key, err := rlp.EncodeToBytes(index)
+	if err != nil {
+		return nil, &ReadError{Kind: ReadWalkFailed, Root: root, Detail: err.Error()}
+	}
+	val, rerr := nodes.walk(root, key, maxNode)
+	if rerr != nil {
+		return nil, rerr
+	}
+	if val == nil {
+		return nil, &ReadError{Kind: ReadLeafAbsent, Root: root, Detail: fmt.Sprintf("no entry at index %d", index)}
+	}
+	return append([]byte{}, val...), nil
 }
