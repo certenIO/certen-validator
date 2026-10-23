@@ -39,11 +39,16 @@ type pending struct {
 // What a block already holds is READ FROM THE DURABLE STORE AT EVERY CALL (the row sizes of the block, finality.BlockSizer when the
 // store has it, else a block listing), not remembered from the first time this process touched the block: a restart, and rows
 // another validator wrote into the same database since this process last looked, count against the bound as they stand. This process
-// keeps only the rows its own in-flight calls have reserved and not yet written, so two calls of one process never both fit into the
-// same space. The one window that remains is the time between this call's read of the block and its write: a row another VALIDATOR
-// writes into that window is not counted by this call (it is by the next). The durable guarantees that survive it are the store's
-// insert-only key and that every validator runs the same capture, which writes the same rows; a bound that no concurrent writer can
-// cross would be a lock in the database (the per-block sum taken inside the PutBlock transaction), which is not part of this package.
+// keeps the rows its own in-flight calls have reserved and not yet finished writing, and the read of the store, the decision and the
+// reservation are ONE critical section (mu is held across the read, which is one size query per block): a call that reads after
+// another call of this process has finished sees that call's rows in the store, and a call that reads while another is still writing
+// sees that call's reservation (a reservation ends only after the write returned, or when the call panics, and a row visible in both
+// is counted once). So two calls of one process never both fit into the same space. Calls of one process therefore wait for each
+// other's size read, bounded by the context of the call that holds the lock. The one window that remains is between VALIDATORS: a row
+// another validator writes into the block between this call's read and its write is counted by the next call, not this one. The
+// durable guarantees that survive it are the store's insert-only key and that every validator runs the same capture, which writes the
+// same rows; a bound that no concurrent writer of any process can cross would be a lock in the database (the per-block sum taken
+// inside the PutBlock transaction), which is not part of this package.
 type BudgetedStore struct {
 	Inner       finality.CaptureStore
 	MaxLegBytes int64
@@ -141,19 +146,55 @@ func (s *BudgetedStore) PutBlock(ctx context.Context, rows []finality.CaptureRow
 		}
 		return string(a.hash[:]) < string(b.hash[:])
 	})
+	holds, err := s.reserve(ctx, rows, ordered, limit)
+	if err != nil {
+		return err
+	}
+
+	// write; whatever the outcome - success, error or a panic out of the inner store - the call's reservations end with it: the rows it
+	// wrote are in the store and the next call reads them there, the rows it did not write are free again
+	err = func() error {
+		defer s.release(holds)
+		if bp, ok := s.Inner.(finality.BlockPutter); ok {
+			return bp.PutBlock(ctx, rows)
+		}
+		for _, r := range rows {
+			if err := s.Inner.Put(ctx, r.CaptureKey, r.Bytes); err != nil {
+				return err
+			}
+		}
+		return nil
+	}()
+	if err != nil {
+		return err
+	}
+	for gk, h := range holds {
+		for _, n := range h.fresh {
+			if s.OnPut != nil {
+				s.OnPut(gk.chain, int(n))
+			} else {
+				metrics.AddFinalityCaptureBytes(gk.chain, int(n))
+			}
+		}
+	}
+	return nil
+}
+
+// reserve reads what the store holds for every block of the call, checks the planned additions against it plus the reservations of
+// the in-flight calls of this process, and reserves all of them or none. The read, the decision and the reservation happen under one
+// hold of mu: see the type's comment.
+func (s *BudgetedStore) reserve(ctx context.Context, rows []finality.CaptureRow, ordered []groupKey, limit int64) (map[groupKey]*hold, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	held := make(map[groupKey]map[string]int64, len(ordered))
 	for _, gk := range ordered {
 		m, err := s.stored(ctx, gk)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		held[gk] = m
 	}
-
-	// reserve: under one lock, every block's planned addition is checked against what the store held when it was read plus what the
-	// in-flight calls of this process have reserved, and only if all fit are they all reserved
 	holds := make(map[groupKey]*hold, len(ordered))
-	s.mu.Lock()
 	for _, gk := range ordered {
 		var total int64
 		for _, n := range held[gk] {
@@ -185,8 +226,7 @@ func (s *BudgetedStore) PutBlock(ctx context.Context, rows []finality.CaptureRow
 			sum += n
 		}
 		if total+sum > limit {
-			s.mu.Unlock()
-			return s.refuse(gk.chain, "capture.block", total+sum, limit)
+			return nil, s.refuse(gk.chain, "capture.block", total+sum, limit)
 		}
 		holds[gk] = h
 	}
@@ -204,21 +244,13 @@ func (s *BudgetedStore) PutBlock(ctx context.Context, rows []finality.CaptureRow
 			s.inflight[gk][item].holders++
 		}
 	}
-	s.mu.Unlock()
+	return holds, nil
+}
 
-	// write; whatever the outcome, the call's reservations end with it: the rows it wrote are in the store and the next call reads
-	// them there, the rows it did not write are free again
-	var err error
-	if bp, ok := s.Inner.(finality.BlockPutter); ok {
-		err = bp.PutBlock(ctx, rows)
-	} else {
-		for _, r := range rows {
-			if err = s.Inner.Put(ctx, r.CaptureKey, r.Bytes); err != nil {
-				break
-			}
-		}
-	}
+// release ends a call's reservations (a row stays reserved while any other in-flight call of this process still means to write it).
+func (s *BudgetedStore) release(holds map[groupKey]*hold) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	for gk, h := range holds {
 		release := func(item string) {
 			if p := s.inflight[gk][item]; p != nil {
@@ -237,20 +269,6 @@ func (s *BudgetedStore) PutBlock(ctx context.Context, rows []finality.CaptureRow
 			delete(s.inflight, gk)
 		}
 	}
-	s.mu.Unlock()
-	if err != nil {
-		return err
-	}
-	for gk, h := range holds {
-		for _, n := range h.fresh {
-			if s.OnPut != nil {
-				s.OnPut(gk.chain, int(n))
-			} else {
-				metrics.AddFinalityCaptureBytes(gk.chain, int(n))
-			}
-		}
-	}
-	return nil
 }
 
 // Get implements finality.CaptureStore.
