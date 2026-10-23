@@ -302,5 +302,93 @@
     "original": "make(chan out, 1)",
     "mutated": "make(chan out, 2)",
     "reason": "The goroutine sends exactly once, so capacity 2 behaves like capacity 1 (capacity 0 is killed by the goroutine-leak test)."
+  },
+  {
+    "file": "memory.go",
+    "function": "MemoryBudget.yieldYoungest",
+    "operator": "cmp_boundary",
+    "original": "t.age > v.age",
+    "mutated": "t.age >= v.age",
+    "reason": "Ages are unique among the builds in the budget: newAge hands out a strictly increasing counter, and a build that is run again re-joins with its old age only after its previous ticket has left (the hold is released when the prover returns, before the next try starts). With distinct ages > and >= choose the same ticket."
+  },
+  {
+    "file": "memory.go",
+    "function": "MemoryBudget.acquire",
+    "operator": "cmp_boundary",
+    "original": "b.wait <= 0",
+    "mutated": "b.wait < 0",
+    "reason": "A wait of 0 arms a timer that has already expired, so the loop refuses at its next iteration: the same refusal after no wait (a release landing in that instant is within the meaning of no wait)."
+  },
+  {
+    "file": "memory.go",
+    "function": "MemoryBudget.acquire",
+    "operator": "int_literal",
+    "original": "b.wait <= 0",
+    "mutated": "b.wait <= 1",
+    "reason": "A wait of 1 ns arms a timer that has expired by the time the loop looks again: the same refusal after no wait, as for a wait of 0."
+  },
+  {
+    "file": "memory.go",
+    "function": "MemoryBudget.Reserve",
+    "operator": "cmp_boundary",
+    "original": "n <= 0",
+    "mutated": "n < 0",
+    "reason": "Reserve(0) reserves zero bytes through acquire (used += 0, a gauge write) and returns a release that gives zero back: no state differs from the early return."
+  },
+  {
+    "file": "memory.go",
+    "function": "Hold.AddCtx",
+    "operator": "cmp_boundary",
+    "original": "n <= 0",
+    "mutated": "n < 0",
+    "reason": "Add(0) reserves zero bytes (used += 0, held += 0) instead of returning early: no observable difference."
+  },
+  {
+    "file": "memory.go",
+    "function": "Hold.Release",
+    "operator": "guard_off",
+    "original": "if h.budget == nil",
+    "mutated": "if false",
+    "reason": "A hold without a budget never holds bytes (Add returns before reserving) and is never a root (newHold returns before joining a ticket), so the next statement, if !h.root { if n > 0 ... return }, returns for it with n == 0: the same effect."
+  },
+  {
+    "file": "memory.go",
+    "function": "Hold.Release",
+    "operator": "cmp_boundary",
+    "original": "n > 0",
+    "mutated": "n >= 0",
+    "reason": "give(t, 0) subtracts zero, wakes the waiters once more and does nothing else; a spurious wake-up only makes waiters re-check a state that has not changed."
+  },
+  {
+    "file": "upgrader.go",
+    "function": "Upgrader.upgradeLeg",
+    "operator": "logic_swap",
+    "original": "held && !nextAt.IsZero()",
+    "mutated": "held || !nextAt.IsZero()",
+    "reason": "held is implied by the rest of the condition: a status of class pending whose state code is finality_memory_budget_exceeded is built only by the hold branch, which sets held, so with held false the last two operands are already false and the || adds nothing."
+  },
+  {
+    "file": "upgrader.go",
+    "function": "Upgrader.upgradeLeg",
+    "operator": "bool_call",
+    "original": "if held && !nextAt.IsZero() && status.Class == BuilderPending && status.State…",
+    "mutated": "if held && !false && status.Class == BuilderPending && status.State…",
+    "reason": "nextAt is never zero when held is true: the hold branch sets wait = minWait(wait, PendingRetry), which is not negative, so scheduleLevel runs and returns a non-zero time (a verified status, the only path with wait < 0, fails the class test anyway)."
+  },
+  {
+    "file": "upgrader.go",
+    "function": "Upgrader.upgradeLeg",
+    "operator": "logic_swap",
+    "original": "held && !nextAt.IsZero() && status.Class == BuilderPending",
+    "mutated": "held && !nextAt.IsZero() || status.Class == BuilderPending",
+    "reason": "The else-branch is reached only when the failure branch before it was not taken, and a status of class unavailable or refused exists only together with failed, so every status that can carry the state finality_memory_budget_exceeded here is the pending hold row; for it the last two operands (State != nil, Code == CodeMemoryBudget) already decide, and the class operand the mutant turns into an alternative is true for it."
+  },
+  {
+    "file": "upgrader.go",
+    "function": "Upgrader.upgradeLeg",
+    "operator": "logic_swap",
+    "original": "…nextAt.IsZero() && status.Class == BuilderPending && status.State != nil",
+    "mutated": "…nextAt.IsZero() && status.Class == BuilderPending || status.State != nil",
+    "reason": "A status of class pending always carries its state (Document refuses a pending status without one), so State != nil is true wherever the first operands are, and the mutant's alternative is never evaluated on a nil state: the Code operand decides in both forms."
   }
 ]
