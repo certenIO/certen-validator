@@ -32,7 +32,7 @@ trap 'rm -rf "$tmp"' EXIT
 strip() { sed -E 's#[a-zA-Z][a-zA-Z0-9+.-]*://[^[:space:]"'"'"')]*#<url>#g; s#[^[:space:]]*:[^[:space:]@/]*@[^[:space:]]*#<userinfo>#g' | cut -c1-400; }
 
 echo "== (a) validator logs, last $SINCE"
-printf '%-20s %-8s %-9s %-11s %-10s %-11s %-9s %-9s %-6s\n' container ENABLED DISABLED disabled_st lc_unavail pin_unknown restarts givenup PANIC
+printf '%-20s %-8s %-9s %-11s %-10s %-11s %-9s %-9s %-7s %-9s %-6s\n' container ENABLED DISABLED disabled_st lc_unavail pin_unknown restarts givenup handed gapfill PANIC
 for n in $VALIDATORS; do
   c="certen-validator-$n"
   if ! docker inspect "$c" >/dev/null 2>&1; then echo "$c: container not found"; fail=1; continue; fi
@@ -40,10 +40,10 @@ for n in $VALIDATORS; do
   docker logs --since "$SINCE" "$c" >"$log" 2>&1
   cnt() { grep -Ec -- "$1" "$log"; }
   panics=$(grep -Eic -- 'panic|fatal error|goroutine [0-9]+ \[' "$log")
-  printf '%-20s %-8s %-9s %-11s %-10s %-11s %-9s %-9s %-6s\n' "$c" \
+  printf '%-20s %-8s %-9s %-11s %-10s %-11s %-9s %-9s %-7s %-9s %-6s\n' "$c" \
     "$(cnt '\[FINALITY\] upgrader ENABLED')" "$(cnt '\[FINALITY\].*DISABLED')" "$(cnt 'finality_upgrader_disabled')" \
     "$(cnt 'finality_lc_unavailable')" "$(cnt 'finality_pin_unknown|pinned ledger has no anchor')" \
-    "$(cnt 'capturer .* stopped')" "$(cnt 'given up at head')" "$panics"
+    "$(cnt 'capturer .* stopped')" "$(cnt 'given up at head')" "$(cnt 'handed to the gap backfill')" "$(cnt 'gap backfill .*(attempted|closed)')" "$panics"
   [ "$panics" -gt 0 ] && fail=1
 done
 
@@ -56,9 +56,9 @@ for n in $VALIDATORS; do
     echo "-- $c: PANIC lines (this makes the exit status 1)"
     grep -Ei -m10 'panic|fatal error|goroutine [0-9]+ \[' "$log" | strip
   fi
-  if grep -Eq 'finality_lc_unavailable|finality_pin_unknown|pinned ledger has no anchor|stopped:|given up at head|has no registered prover|does not verify' "$log"; then
+  if grep -Eq 'finality_lc_unavailable|finality_pin_unknown|pinned ledger has no anchor|stopped:|given up at head|handed to the gap backfill|recorded as capture gap|gap backfill|has no registered prover|does not verify' "$log"; then
     echo "-- $c: named states / faults (last 6)"
-    grep -E 'finality_lc_unavailable|finality_pin_unknown|pinned ledger has no anchor|stopped:|given up at head|has no registered prover|does not verify' "$log" | strip | tail -6
+    grep -E 'finality_lc_unavailable|finality_pin_unknown|pinned ledger has no anchor|stopped:|given up at head|handed to the gap backfill|recorded as capture gap|gap backfill|has no registered prover|does not verify' "$log" | strip | tail -6
   fi
   echo "-- $c: appended in this window: $(grep -Ec '\[FINALITY\] leg .* reached ' "$log")"
 done
@@ -108,6 +108,16 @@ SELECT chain, max(l1_block) AS cursor_block, max(created_at) AS cursor_written
   FROM proof_finality_capture WHERE item IN ('runtime/cursor', 'cursor') GROUP BY 1 ORDER BY 1;
 SQL
 
+echo; echo "-- capture gaps (RB12-CAPTURE-GAP; the full report is rb12-capture-gaps.sh): rows by kind, and the blocks still open"
+sql <<'SQL'
+SELECT chain, split_part(item, '/', 1) AS kind, count(*) AS rows, min(l1_block) AS first_block, max(l1_block) AS last_block
+  FROM proof_finality_capture
+ WHERE item LIKE 'gap/%' OR item LIKE 'gapfill/%' OR item LIKE 'gapend/%' OR item LIKE 'gapnote/%'
+ GROUP BY 1, 2 ORDER BY 1, 2;
+SELECT chain, count(*) AS gap_rows, sum(split_part(item, '/', 2)::bigint - l1_block + 1) AS gap_block_span
+  FROM proof_finality_capture WHERE item LIKE 'gap/%' GROUP BY 1 ORDER BY 1;
+SQL
+
 echo; [ "$fail" -eq 0 ] && echo "RESULT: no panic line in the last $SINCE; read the tables above against the EXPECTED block" || echo "RESULT: FAIL - a panic line (or a missing container) was found; see above"
 exit "$fail"
 
@@ -116,7 +126,10 @@ exit "$fail"
 #
 # (a) Logs, last 30 minutes, each of the 7 validators after its restart:
 #     ENABLED = 1, DISABLED = 0, disabled_st = 0 (all four chains are on; a nonzero count is a switch or a missing provider setting,
-#     named in env), PANIC = 0, restarts = 0, givenup = 0.
+#     named in env), PANIC = 0, restarts = 0, givenup = 0 (the capture loop never gives a block up any more: a 'given up at head' line
+#     means a validator still runs the OLD binary), handed = the blocks older than the provider window that the capture loop handed to the
+#     gap backfill (0 in a healthy hour; > 0 after an outage, each is an open capture gap, see rb12-capture-gaps.sh), gapfill = the backfill
+#     ticks that attempted or closed blocks (> 0 while a gap is open, 0 when none is).
 #     pin_unknown = 0 and lc_unavail = 0: the embedded Sepolia ledger carries the root pin (period 1378), so every LC-based kind anchors
 #     there. pin_unknown > 0 is a FAILURE (the embedded ledger or its root pin was lost, or CERTEN_FINALITY_PINS_FILE overrides it).
 #     lc_unavail > 0 means every light-client endpoint failed (CERTEN_FINALITY_LC_URLS): a warning, the legs keep 'included' and retry.
