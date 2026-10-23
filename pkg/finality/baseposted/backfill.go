@@ -74,6 +74,8 @@ func (p BackfillPolicy) withDefaults() BackfillPolicy {
 type BackfillReport struct {
 	Attempted, Filled, Failed, Ended, Conflicts, Skipped int
 	Open, UnavailableProven, RetentionExpired            uint64 // blocks still in each state after the step
+	FailedByClass                                        map[string]int
+	EndedByKind                                          map[string]int
 }
 
 type bfEntry struct {
@@ -299,6 +301,10 @@ func (b *Backfiller) attempt(ctx context.Context, n uint64, pol BackfillPolicy, 
 	}
 	rep.Failed++
 	class := ClassOfFailure(err)
+	if rep.FailedByClass == nil {
+		rep.FailedByClass = map[string]int{}
+	}
+	rep.FailedByClass[string(class)]++
 	var cf *CaptureFailure
 	if errors.As(err, &cf) && cf.State != nil && cf.State.Code == CodeCaptureRowConflict {
 		rep.Conflicts++
@@ -315,6 +321,10 @@ func (b *Backfiller) attempt(ctx context.Context, n uint64, pol BackfillPolicy, 
 		if end, ok := b.goneVerdict(e, cf, now, pol); ok {
 			if rerr := finality.RecordGapEnd(ctx, b.Store, b.Chain, n, end); rerr == nil {
 				rep.Ended++
+				if rep.EndedByKind == nil {
+					rep.EndedByKind = map[string]int{}
+				}
+				rep.EndedByKind[string(end.Kind)]++
 				delete(b.reopen, n)
 				b.logf("[FINALITY] gap backfill chain %d: L1 block %d is %s (%s; providers %s): the gap stays recorded and will not be retried by these providers",
 					b.Chain, n, end.Kind, end.Reason, strings.Join(end.Providers, ","))

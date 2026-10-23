@@ -30,24 +30,26 @@ import (
 // The CERTEN_FINALITY_* variables this package reads (the switches CERTEN_FINALITY_UPGRADER_ENABLED and
 // CERTEN_FINALITY_CHAIN_<id>_ENABLED belong to pkg/finality).
 const (
-	EnvL1RPCURLs      = "CERTEN_FINALITY_L1_RPC_URLS"
-	EnvL1ProofURLs    = "CERTEN_FINALITY_L1_PROOF_URLS"
-	EnvArchiveURLs    = "CERTEN_FINALITY_ARCHIVE_URLS"
-	EnvLCURLs         = "CERTEN_FINALITY_LC_URLS"
-	EnvBeaconURLs     = "CERTEN_FINALITY_BEACON_URLS"
-	EnvAdiriURLs      = "CERTEN_FINALITY_ADIRI_PUBLIC_URLS"
-	EnvPinsFile       = "CERTEN_FINALITY_PINS_FILE"
-	EnvRateRPS        = "CERTEN_FINALITY_RATE_LIMIT_RPS"
-	EnvRateBurst      = "CERTEN_FINALITY_RATE_BURST"
-	EnvMaxBatch       = "CERTEN_FINALITY_MAX_BATCH"
-	EnvBackoffRetries = "CERTEN_FINALITY_BACKOFF_RETRIES"
-	EnvBackoffMax     = "CERTEN_FINALITY_BACKOFF_MAX_SECONDS"
-	EnvCaptureEvery   = "CERTEN_FINALITY_CAPTURE_INTERVAL_SECONDS"
-	EnvCaptureBytes   = "CERTEN_FINALITY_MAX_CAPTURE_BYTES_PER_LEG"
-	EnvCaptureBlocks  = "CERTEN_FINALITY_CAPTURE_MAX_BLOCKS_PER_TICK"
-	EnvConcurrency    = "CERTEN_FINALITY_UPGRADER_CONCURRENCY"
-	EnvInterval       = "CERTEN_FINALITY_UPGRADER_INTERVAL_SECONDS"
-	EnvBuildTimeout   = "CERTEN_FINALITY_BUILD_TIMEOUT_SECONDS"
+	EnvL1RPCURLs       = "CERTEN_FINALITY_L1_RPC_URLS"
+	EnvL1ProofURLs     = "CERTEN_FINALITY_L1_PROOF_URLS"
+	EnvArchiveURLs     = "CERTEN_FINALITY_ARCHIVE_URLS"
+	EnvLCURLs          = "CERTEN_FINALITY_LC_URLS"
+	EnvBeaconURLs      = "CERTEN_FINALITY_BEACON_URLS"
+	EnvAdiriURLs       = "CERTEN_FINALITY_ADIRI_PUBLIC_URLS"
+	EnvPinsFile        = "CERTEN_FINALITY_PINS_FILE"
+	EnvRateRPS         = "CERTEN_FINALITY_RATE_LIMIT_RPS"
+	EnvRateBurst       = "CERTEN_FINALITY_RATE_BURST"
+	EnvMaxBatch        = "CERTEN_FINALITY_MAX_BATCH"
+	EnvBackoffRetries  = "CERTEN_FINALITY_BACKOFF_RETRIES"
+	EnvBackoffMax      = "CERTEN_FINALITY_BACKOFF_MAX_SECONDS"
+	EnvCaptureEvery    = "CERTEN_FINALITY_CAPTURE_INTERVAL_SECONDS"
+	EnvCaptureBytes    = "CERTEN_FINALITY_MAX_CAPTURE_BYTES_PER_LEG"
+	EnvCaptureBlocks   = "CERTEN_FINALITY_CAPTURE_MAX_BLOCKS_PER_TICK"
+	EnvConcurrency     = "CERTEN_FINALITY_UPGRADER_CONCURRENCY"
+	EnvInterval        = "CERTEN_FINALITY_UPGRADER_INTERVAL_SECONDS"
+	EnvBuildTimeout    = "CERTEN_FINALITY_BUILD_TIMEOUT_SECONDS"
+	EnvGapBlocks       = "CERTEN_FINALITY_GAPFILL_BLOCKS_PER_TICK"
+	EnvGapAuditSpacing = "CERTEN_FINALITY_GAP_AUDIT_SPACING"
 )
 
 // Defaults of the public providers the kind packages' live sources and recorders were measured against (V2_SPEC_S7 8.1; the
@@ -93,6 +95,8 @@ type Config struct {
 	CaptureEvery    time.Duration
 	CaptureBytes    int64
 	CaptureBlocks   int // L1 blocks one Base capture tick scans at most
+	GapBlocks       int // L1 blocks one gap-backfill tick captures at most (concurrency is one block at a time)
+	GapAuditSpacing int // a run of more than this many blocks between two captured inbox blocks is recorded as an unproven gap
 	Concurrency     int
 	Interval        time.Duration
 	BuildTimeout    time.Duration
@@ -164,6 +168,11 @@ func ConfigFromEnv() (Config, error) {
 			return
 		},
 		func() (e error) { c.CaptureBlocks, e = envvar.Int(EnvCaptureBlocks, 64, 1); return },
+		func() (e error) { c.GapBlocks, e = envvar.Int(EnvGapBlocks, DefaultGapBlocksPerTick, 1); return },
+		func() (e error) {
+			c.GapAuditSpacing, e = envvar.Int(EnvGapAuditSpacing, DefaultGapAuditSpacing, 2)
+			return
+		},
 		func() (e error) { c.Concurrency, e = envvar.Int(EnvConcurrency, 4, 1); return },
 		func() (e error) { c.Interval, e = envvar.Seconds(EnvInterval, 60*time.Second, 1); return },
 		func() (e error) { c.BuildTimeout, e = envvar.Seconds(EnvBuildTimeout, 5*time.Minute, 1); return },
@@ -200,6 +209,7 @@ func (c Config) Describe() map[string]any {
 		"rate_rps": c.RateRPS, "max_batch": c.MaxBatch, "max_capture_bytes_per_leg": c.CaptureBytes,
 		"capture_interval": c.CaptureEvery.String(), "concurrency": c.Concurrency, "interval": c.Interval.String(),
 		"memory_budget_bytes": c.MemoryBudget, "memory_gate_bytes": finality.HeapGate(c.MemoryBudget),
+		"gap_blocks_per_tick": c.GapBlocks, "gap_audit_spacing": c.GapAuditSpacing,
 	}
 }
 
