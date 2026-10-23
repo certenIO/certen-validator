@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/certen/independant-validator/pkg/finality"
+	"github.com/certen/independant-validator/pkg/metrics"
 )
 
 // RB12-INDEX-FIX Note (a): a captured block whose rows the indexer cannot read (a transaction row that does not parse, an inbox row over 4096
@@ -51,6 +52,7 @@ func blobRow(t testing.TB, payload []byte) []byte {
 }
 
 func TestRB12UnreadableBlockIsANamedRecordAndNeverStallsTheCursor(t *testing.T) {
+	metrics.RegisterMetrics()
 	_, bp := idxPins(t)
 	good := channelFrames("G", 1_790_500_000, 10, 1000, 1)
 	for _, c := range []struct {
@@ -81,7 +83,11 @@ func TestRB12UnreadableBlockIsANamedRecordAndNeverStallsTheCursor(t *testing.T) 
 			vPutBlock(t, st, bp, 1010, []Frame{H[0]})
 			putRawBlock(t, st, 1015, c.rows(t))
 			vPutBlock(t, st, bp, 1020, []Frame{I[0]})
+			metricsBefore, _ := vGather(t, "certen_finality_index_unindexable_blocks_total")
 			rep := stepAll(t, newIdx(st, bp, IndexConfig{}), 1500) // a plain error here is the stall
+			if after, _ := vGather(t, "certen_finality_index_unindexable_blocks_total"); after-metricsBefore != 1 {
+				t.Errorf("the unreadable block is counted once: %v", after-metricsBefore)
+			}
 			if rep.Through != 1500 {
 				t.Fatalf("the cursor must pass the unreadable block: through %d", rep.Through)
 			}
@@ -117,6 +123,9 @@ func TestRB12UnreadableBlockIsANamedRecordAndNeverStallsTheCursor(t *testing.T) 
 			// idempotent: a second indexer over the same rows writes nothing new and does not stall
 			rows := indexRows(t, st)
 			stepAll(t, newIdx(st, bp, IndexConfig{ReconcileEvery: 1}), 1500)
+			if after, _ := vGather(t, "certen_finality_index_unindexable_blocks_total"); after-metricsBefore != 1 {
+				t.Errorf("a second pass does not count the record again: %v", after-metricsBefore)
+			}
 			if d := sameRows(rows, indexRows(t, st)); d != "" {
 				t.Fatalf("a second pass changed the index: %s", d)
 			}
