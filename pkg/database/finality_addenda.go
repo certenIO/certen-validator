@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/lib/pq"
 
 	"github.com/certen/independant-validator/pkg/ethproof"
@@ -331,13 +332,15 @@ func idHex(id string) string {
 // is only the cycle summary and is never a source.
 //
 //   - A proof that does not exist is sql.ErrNoRows.
-//   - finality_included_unavailable (no settlement yet) is exactly: the proof has no bundle, or its bundle's component 5 is absent,
+//   - finality_included_unavailable{no_execution_proof_component} (no settlement yet) is: the proof has no bundle, or its bundle's component 5 is absent,
 //     JSON null or {}. Nothing is wrong and nothing was served.
+//   - finality_included_unavailable{no_block_header}: component 5 is non-empty but its block_header_rlp is absent, null or empty (the
+//     bundles written before the header was captured).
 //   - Everything else that is not a usable execution proof is the named finality_included_invalid state with its cause: a bundle
 //     that is not certen_v1, is stored over the size bound, is not gzip, is truncated, decompresses past the bound, is not a JSON
 //     object (a top-level null included), was written for another proof (bundle_integrity.custody_chain_hash is not this proof's
 //     id; the writer, pkg/execution generateAndPersistBundle, has set it to the proof id on every bundle since 2026-01-26), or
-//     whose non-empty component 5 is not an object, has no block_header_rlp (the writer always emits it with the evidence), or
+//     whose non-empty component 5 is not an object, has a block_header_rlp that is present but not a non-empty 0x-hex string, or
 //     names no chain_id that is a decimal number.
 func (r *FinalityAddendaRepository) executionProofOf(ctx context.Context, proofID, bundleID string) (*executionProof, error) {
 	ep := &executionProof{}
@@ -398,9 +401,22 @@ func (r *FinalityAddendaRepository) executionProofOf(ctx context.Context, proofI
 	if len(members) == 0 {
 		return nil, finality.IncludedUnavailable(finality.IncludedNoExecutionProof, "proof_id", proofID)
 	}
+	// A component 5 without its header is what bundles written before the header was captured hold (the same keys otherwise, and a
+	// corrupt one cannot be told from it): nothing can be judged for it, and it is not a failure. A header that is present and
+	// unusable is corrupt.
+	rawHeader, present := members["block_header_rlp"]
+	if !present || string(bytes.TrimSpace(rawHeader)) == "null" {
+		return nil, finality.IncludedUnavailable(finality.IncludedNoBlockHeader, "proof_id", proofID)
+	}
 	var header string
-	if err := json.Unmarshal(members["block_header_rlp"], &header); err != nil || header == "" {
-		return nil, bundleInvalid(proofID, "the bundle's execution proof has evidence but no usable block_header_rlp")
+	if err := json.Unmarshal(rawHeader, &header); err != nil {
+		return nil, bundleInvalid(proofID, "the bundle's execution proof block_header_rlp is not a string")
+	}
+	if header == "" {
+		return nil, finality.IncludedUnavailable(finality.IncludedNoBlockHeader, "proof_id", proofID)
+	}
+	if raw, err := hexutil.Decode(header); err != nil || len(raw) == 0 {
+		return nil, bundleInvalid(proofID, "the bundle's execution proof block_header_rlp is not a non-empty 0x-prefixed hex string")
 	}
 	var chain string
 	if err := json.Unmarshal(members["chain_id"], &chain); err != nil || chain == "" {
@@ -427,6 +443,9 @@ func (r *FinalityAddendaRepository) LegSettlement(ctx context.Context, ref final
 	ep, err := r.executionProofOf(ctx, ref.ProofID, ref.BundleID)
 	if err != nil {
 		return finality.Settlement{}, err
+	}
+	if ref.Chain == 0 {
+		return finality.Settlement{}, bundleInvalid(ref.ProofID, fmt.Sprintf("the proof's summary names no usable chain_id, but its bundle's execution proof settled on chain %d", ep.chain))
 	}
 	if ref.Chain != 0 && ref.Chain != ep.chain {
 		return finality.Settlement{}, bundleInvalid(ref.ProofID, fmt.Sprintf("the bundle's execution proof settled on chain %d, the proof's summary names chain %d", ep.chain, ref.Chain))
