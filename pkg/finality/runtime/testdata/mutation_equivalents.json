@@ -14,5 +14,29 @@
     "original": "h.joined[r.Item] = true",
     "mutated": "h.joined[r.Item] = false",
     "reason": "h.joined is a set. Its value is read once, in `dup || h.joined[r.Item]`, to skip a second listing of an item this call already joined; with false that second listing falls through to the in-flight check, finds the same in-flight entry and assigns the same entry again, which is the same outcome. Every other use ranges over the keys (holders++ at reservation, release at the end), and the key is present whatever the value."
+  },
+  {
+    "file": "budget.go",
+    "function": "BudgetedStore.PutBlock",
+    "operator": "cmp_boundary",
+    "original": "a.chain < b.chain",
+    "mutated": "a.chain <= b.chain",
+    "reason": "the comparison runs only inside `if a.chain != b.chain`, where the two chains are different, so < and <= give the same answer."
+  },
+  {
+    "file": "budget.go",
+    "function": "BudgetedStore.PutBlock",
+    "operator": "cmp_boundary",
+    "original": "a.block < b.block",
+    "mutated": "a.block <= b.block",
+    "reason": "the comparison runs only inside `if a.block != b.block`, where the two blocks are different, so < and <= give the same answer."
+  },
+  {
+    "file": "budget.go",
+    "function": "BudgetedStore.PutBlock",
+    "operator": "cmp_boundary",
+    "original": "string(a.hash[:]) < string(b.hash[:])",
+    "mutated": "string(a.hash[:]) <= string(b.hash[:])",
+    "reason": "the elements sorted are the distinct keys of a map and the comparison is reached only when chain and block are equal, so the hashes differ (two equal hashes would be one key); < and <= give the same answer for different values."
   }
 ]

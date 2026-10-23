@@ -178,19 +178,7 @@ func (s *FinalityCaptureStore) PutBlock(ctx context.Context, rows []finality.Cap
 	// rows are inserted in key order so that two writers of the same block (every validator captures the same blocks into one database)
 	// queue on the first key instead of deadlocking on each other
 	rows = append([]finality.CaptureRow(nil), rows...)
-	sort.Slice(rows, func(i, j int) bool {
-		a, b := rows[i].CaptureKey, rows[j].CaptureKey
-		if a.Chain != b.Chain {
-			return a.Chain < b.Chain
-		}
-		if a.L1Block != b.L1Block {
-			return a.L1Block < b.L1Block
-		}
-		if c := bytes.Compare(a.L1Hash[:], b.L1Hash[:]); c != 0 {
-			return c < 0
-		}
-		return a.Item < b.Item
-	})
+	sort.Slice(rows, func(i, j int) bool { return captureKeyLess(rows[i].CaptureKey, rows[j].CaptureKey) })
 	tx, err := s.client.DB().BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -241,4 +229,19 @@ func (s *FinalityCaptureStore) BlockSizes(ctx context.Context, chain, l1Block ui
 		out[item] = n
 	}
 	return out, rows.Err()
+}
+
+// captureKeyLess is the order PutBlock inserts in: chain, then block, then hash (bytewise), then item. Every writer of a block uses
+// the same order, so two of them queue on the first key they share instead of each holding what the other waits for.
+func captureKeyLess(a, b finality.CaptureKey) bool {
+	if a.Chain != b.Chain {
+		return a.Chain < b.Chain
+	}
+	if a.L1Block != b.L1Block {
+		return a.L1Block < b.L1Block
+	}
+	if c := bytes.Compare(a.L1Hash[:], b.L1Hash[:]); c != 0 {
+		return c < 0
+	}
+	return a.Item < b.Item
 }

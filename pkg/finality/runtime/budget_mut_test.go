@@ -57,13 +57,14 @@ func TestRTBudgetReadsTheSizesOfExactlyTheBlocksOfTheCallInAscendingChainBlockHa
 	s.OnPut, s.OnRefused = func(uint64, int) {}, func(uint64, string) {}
 	rows := []finality.CaptureRow{
 		rowOf(84532, 20, 2, "a", 1), rowOf(84532, 20, 1, "a", 1), rowOf(11155111, 30, 9, "a", 1), rowOf(84532, 10, 5, "a", 1),
+		rowOf(11155111, 5, 3, "a", 1), rowOf(84532, 50, 1, "a", 1), // the chain order and the block order disagree here
 		rowOf(84532, 20, 1, "b", 1), // a second row of an already listed block adds no read
 	}
 	if err := s.PutBlock(context.Background(), rows); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"84532/10/5", "84532/20/1", "84532/20/2", "11155111/30/9"}
-	// ascending by chain first: 84532 < 11155111
+	// ascending by chain first (84532 < 11155111), then block, then hash
+	want := []string{"84532/10/5", "84532/20/1", "84532/20/2", "84532/50/1", "11155111/5/3", "11155111/30/9"}
 	if fmt.Sprint(inner.sizeCalls) != fmt.Sprint(want) {
 		t.Fatalf("sizes read in the order %v, want %v", inner.sizeCalls, want)
 	}
