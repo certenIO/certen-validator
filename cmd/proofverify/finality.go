@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -210,6 +211,18 @@ func printReport(w io.Writer, rep finality.Report, subject string) int {
 			line += "  " + st.State.Error()
 		}
 		fmt.Fprintln(w, line)
+		// V2_SPEC_S7 section 6: a verified level is reported with what it was judged at - the canonical Verdict.Fields of its kind
+		// (the L1 slot, finalized_exec_number, a_number, k_number, confirmation_tx, ...), one line per field in key order
+		if st.Status == finality.StatusVerified && st.Verdict != nil {
+			keys := make([]string, 0, len(st.Verdict.Fields))
+			for k := range st.Verdict.Fields {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			for _, k := range keys {
+				fmt.Fprintf(w, "  S7      %s.%s = %s\n", l, k, finality.CanonicalValue(st.Verdict.Fields[k]))
+			}
+		}
 	}
 	fmt.Fprintf(w, "  S7  level reached: %s\n", rep.Headline)
 	if rep.FinalizedBlock != nil {
