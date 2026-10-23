@@ -151,8 +151,12 @@ func AnnounceIndexDisabled(logf func(format string, args ...any), st *StateError
 	chain, _ := st.Fields["chain"].(uint64)
 	key, _ := st.Fields["variable"].(string)
 	reason, _ := st.Fields["reason"].(string)
-	logf("[FINALITY] capture index DISABLED, the window reader serves: %s", st.Error())
-	metrics.SetFinalityIndexDisabled(chain, "bi", key, reason)
+	family := "bi" // the Base batch-inbox index
+	if chain == ChainArbitrumSepolia {
+		family = "arb" // the Arbitrum batch index
+	}
+	logf("[FINALITY] capture index DISABLED, the reference reader serves: %s", st.Error())
+	metrics.SetFinalityIndexDisabled(chain, family, key, reason)
 	metrics.SetFinalityChainIndexDisabledReason(chain, st.Error())
 }
 

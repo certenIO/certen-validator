@@ -418,6 +418,9 @@ type ArbPostedLoop struct {
 	Every     time.Duration
 	Logf      func(string, ...any)
 	Clock     loopClock
+	// Index, when set, is stepped towards the capture cursor after every tick (RB12-INDEX-B); Memory is the process budget its rows are reserved from.
+	Index  finality.CaptureIndexer
+	Memory *finality.MemoryBudget
 }
 
 var _ finality.Capturer = (*ArbPostedLoop)(nil)
@@ -455,10 +458,45 @@ func (l *ArbPostedLoop) Run(ctx context.Context) error {
 				sink.put(ctx, l.Chain(), finality.LevelL1Posted, st)
 				l.Logf("[FINALITY] capturer %s: %s (batches %v)", l.Name(), st.Error(), rep.Unavailable)
 			}
+			l.noteBlobs(rep)
+			l.runIndex(ctx, sink)
 		}
 		if !l.Clock.wait(ctx, every) {
 			return nil
 		}
 	}
 	return nil
+}
+
+// noteBlobs tells the capture index (when it can be told) which blocks got the last of their blob rows this tick: the index may have passed them
+// while they were incomplete. Any other filler of batch rows below the index cursor (the archive backfill's Arbitrum prefix scan) calls the same
+// finality.LateBlockNoter.
+func (l *ArbPostedLoop) noteBlobs(rep capture.Report) {
+	if nt, ok := l.Index.(finality.LateBlockNoter); ok {
+		for _, b := range rep.BlobBlocks {
+			nt.NoteLate(b)
+		}
+	}
+}
+
+// runIndex steps the batch index towards the capture cursor (the highest cursor row the capture has written). Indexing never stops the capture: a
+// failed step is logged (redacted) and a named inconsistency is recorded in the status table under the chain's capture pseudo id.
+func (l *ArbPostedLoop) runIndex(ctx context.Context, sink statusSink) {
+	if l.Index == nil || ctx.Err() != nil {
+		return
+	}
+	_, upTo, ok, err := finality.BlockBoundsOf(ctx, l.Cap.Store, l.Chain(), capture.ItemCursor)
+	if err != nil || !ok {
+		if err != nil && ctx.Err() == nil {
+			l.Logf("[FINALITY] index %s: the capture cursor is unreadable: %v", l.Index.Family(), ethrpc.RedactError(err))
+		}
+		return
+	}
+	ictx := finality.WithMemoryBudget(ctx, l.Memory)
+	if _, err := l.Index.Step(ictx, upTo); err != nil && ctx.Err() == nil {
+		if st, named := finality.AsNamed(err); named {
+			sink.put(ctx, l.Chain(), finality.LevelL1Posted, st)
+		}
+		l.Logf("[FINALITY] index %s: step to L1 block %d: %v", l.Index.Family(), upTo, ethrpc.RedactError(err))
+	}
 }

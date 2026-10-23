@@ -8,6 +8,7 @@ import (
 	"io"
 
 	"github.com/certen/independant-validator/pkg/finality"
+	"github.com/certen/independant-validator/pkg/finality/arbposted"
 	"github.com/certen/independant-validator/pkg/finality/baseposted"
 )
 
@@ -69,5 +70,48 @@ func RunIndexSelfCheck(ctx context.Context, w io.Writer, cfg Config, ix IndexSel
 		return IndexSelfCheckIncomplete
 	}
 	fmt.Fprintf(w, "finality-index-selfcheck: ok %s\n", line)
+	return IndexSelfCheckOK
+}
+
+// ArbIndexSelfChecker is the Arbitrum indexer as the on-demand caller sees it.
+type ArbIndexSelfChecker interface {
+	SelfCheckReport(ctx context.Context, sample int) (arbposted.SelfCheckResult, error)
+}
+
+// NewArbIndexSelfChecker builds the Arbitrum indexer a process would run (generation and limits of cfg) over store, for the on-demand check.
+func NewArbIndexSelfChecker(cfg Config, store finality.CaptureStore, pins *finality.Pins, logf func(string, ...any)) (ArbIndexSelfChecker, error) {
+	return arbposted.NewIndexer(store, pins, cfg.ArbIndexGeneration, arbposted.IndexConfig{BlocksPerStep: cfg.IndexBlocks, StepBudget: cfg.IndexStep, Logf: logf})
+}
+
+// RunArbIndexSelfCheck is RunIndexSelfCheck for the Arbitrum batch index (validator finality-arb-index-selfcheck): the same one-line result and the
+// same exit codes (0 ok, 1 mismatch, 2 not running, 3 incomplete, 4 failed, 5 usage).
+func RunArbIndexSelfCheck(ctx context.Context, w io.Writer, cfg Config, ix ArbIndexSelfChecker, sample int) int {
+	if cfg.ArbIndexDisabled != nil {
+		fmt.Fprintf(w, "finality-arb-index-selfcheck: not running: %s\n", cfg.ArbIndexDisabled.Error())
+		return IndexSelfCheckNotRunning
+	}
+	if !cfg.ArbIndex || ix == nil {
+		fmt.Fprintf(w, "finality-arb-index-selfcheck: not running: the Arbitrum batch index is switched off (%s)\n", EnvArbIndex)
+		return IndexSelfCheckNotRunning
+	}
+	res, err := ix.SelfCheckReport(ctx, sample)
+	line := fmt.Sprintf("generation=%d around_l1_block=%d entries=%d digests=%d skipped=%d mismatches=%d", res.Generation, res.Around, res.Entries, res.Digests, res.Skipped, res.Mismatches)
+	if err != nil {
+		if st, named := finality.AsNamed(err); named {
+			fmt.Fprintf(w, "finality-arb-index-selfcheck: MISMATCH %s\n%s\n", line, st.Error())
+			return IndexSelfCheckMismatch
+		}
+		fmt.Fprintf(w, "finality-arb-index-selfcheck: FAILED %s: %v\n", line, err)
+		return IndexSelfCheckFailed
+	}
+	if res.Mismatches > 0 {
+		fmt.Fprintf(w, "finality-arb-index-selfcheck: MISMATCH %s\n", line)
+		return IndexSelfCheckMismatch
+	}
+	if res.Skipped > 0 {
+		fmt.Fprintf(w, "finality-arb-index-selfcheck: INCOMPLETE %s (the memory budget refused the rows of the skipped checks; nothing was judged for them)\n", line)
+		return IndexSelfCheckIncomplete
+	}
+	fmt.Fprintf(w, "finality-arb-index-selfcheck: ok %s\n", line)
 	return IndexSelfCheckOK
 }

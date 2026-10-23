@@ -56,9 +56,13 @@ const (
 	EnvGapAuditSpacing = "CERTEN_FINALITY_GAP_AUDIT_SPACING"
 	// EnvBaseIndex switches the Base capture index (RB12-INDEX-A) on (default) or off. Off: the Base builder reads and decompresses
 	// the leg's window of the capture as before and nothing is indexed.
-	EnvBaseIndex       = "CERTEN_FINALITY_BASE_INDEX"
-	EnvIndexBlocks     = "CERTEN_FINALITY_INDEX_BLOCKS_PER_STEP"
-	EnvIndexStepSecond = "CERTEN_FINALITY_INDEX_STEP_SECONDS"
+	EnvBaseIndex = "CERTEN_FINALITY_BASE_INDEX"
+	// EnvArbIndex switches the Arbitrum batch index (RB12-INDEX-B) on (default) or off. Off: the Arbitrum builder reads every captured batch and
+	// decodes every batch of the leg's window as before, and nothing is indexed. EnvArbIndexGeneration starts a new generation.
+	EnvArbIndex           = "CERTEN_FINALITY_ARB_INDEX"
+	EnvArbIndexGeneration = "CERTEN_FINALITY_ARB_INDEX_GENERATION"
+	EnvIndexBlocks        = "CERTEN_FINALITY_INDEX_BLOCKS_PER_STEP"
+	EnvIndexStepSecond    = "CERTEN_FINALITY_INDEX_STEP_SECONDS"
 )
 
 // Defaults of the public providers the kind packages' live sources and recorders were measured against (V2_SPEC_S7 8.1; the
@@ -101,22 +105,25 @@ type Config struct {
 	BackoffRetries int
 	BackoffMax     time.Duration
 
-	CaptureEvery    time.Duration
-	CaptureBytes    int64
-	CaptureBlocks   int // L1 blocks one Base capture tick scans at most
-	GapBlocks       int // L1 blocks one gap-backfill tick captures at most (concurrency is one block at a time)
-	GapAuditSpacing int // a run of more than this many blocks between two captured inbox blocks is recorded as an unproven gap
-	Concurrency     int
-	Interval        time.Duration
-	BuildTimeout    time.Duration
-	MemoryBudget    int64                // bytes of in-flight builder working set per process (finality.EnvMemoryBudget)
-	BaseIndex       bool                 // the Base capture index is built and used (EnvBaseIndex)
-	IndexDisabled   *finality.StateError // set when a bad index setting switched the index off: finality_index_disabled{chain, key, reason}
-	IndexGeneration uint32               // the index generation (finality.EnvIndexGeneration); a new one rebuilds
-	IndexBlocks     int                  // captured blocks one index step digests at most
-	IndexStep       time.Duration        // wall time after which an index step stops
-	ArchiveOrigin   string               // "set" or "unset": whether OD4 is configured (reported, never the URL)
-	ProviderSources map[string]string
+	CaptureEvery       time.Duration
+	CaptureBytes       int64
+	CaptureBlocks      int // L1 blocks one Base capture tick scans at most
+	GapBlocks          int // L1 blocks one gap-backfill tick captures at most (concurrency is one block at a time)
+	GapAuditSpacing    int // a run of more than this many blocks between two captured inbox blocks is recorded as an unproven gap
+	Concurrency        int
+	Interval           time.Duration
+	BuildTimeout       time.Duration
+	MemoryBudget       int64                // bytes of in-flight builder working set per process (finality.EnvMemoryBudget)
+	BaseIndex          bool                 // the Base capture index is built and used (EnvBaseIndex)
+	IndexDisabled      *finality.StateError // set when a bad index setting switched the index off: finality_index_disabled{chain, key, reason}
+	IndexGeneration    uint32               // the index generation (finality.EnvIndexGeneration); a new one rebuilds
+	ArbIndex           bool                 // the Arbitrum batch index is built and used (EnvArbIndex)
+	ArbIndexDisabled   *finality.StateError // set when a bad setting switched the Arbitrum index off: finality_index_disabled{chain=421614, ...}
+	ArbIndexGeneration uint32               // the Arbitrum index generation (EnvArbIndexGeneration)
+	IndexBlocks        int                  // captured blocks one index step digests at most
+	IndexStep          time.Duration        // wall time after which an index step stops
+	ArchiveOrigin      string               // "set" or "unset": whether OD4 is configured (reported, never the URL)
+	ProviderSources    map[string]string
 }
 
 // urlSeparators are the separators of a provider list the validator has always accepted (ethrpc.ParseEndpoints).
@@ -447,9 +454,13 @@ func (c Config) Describe() map[string]any {
 		"memory_budget_bytes": c.MemoryBudget, "memory_gate_bytes": finality.HeapGate(c.MemoryBudget),
 		"gap_blocks_per_tick": c.GapBlocks, "gap_audit_spacing": c.GapAuditSpacing,
 		"base_index": c.BaseIndex, "index_generation": c.IndexGeneration, "index_blocks_per_step": c.IndexBlocks,
+		"arb_index": c.ArbIndex, "arb_index_generation": c.ArbIndexGeneration,
 	}
 	if c.IndexDisabled != nil {
 		out["index_disabled"] = c.IndexDisabled.Error()
+	}
+	if c.ArbIndexDisabled != nil {
+		out["arb_index_disabled"] = c.ArbIndexDisabled.Error()
 	}
 	return out
 }
@@ -492,22 +503,45 @@ func (c Config) Missing() map[uint64][]string {
 func (c *Config) readIndexSettings() {
 	c.BaseIndex, c.IndexGeneration, c.IndexBlocks, c.IndexStep = true, finality.DefaultIndexGeneration, 128, 15*time.Second
 	c.IndexDisabled = nil
-	off := func(variable, reason, refused string) {
+	c.ArbIndex, c.ArbIndexGeneration, c.ArbIndexDisabled = true, finality.DefaultIndexGeneration, nil
+	// a setting of one chain switches that chain's index off; a setting both share (the step bounds) switches both off, each with its own state
+	offBase := func(variable, reason, refused string) {
 		c.BaseIndex = false
 		if c.IndexDisabled == nil {
 			c.IndexDisabled = finality.IndexDisabledState(finality.ChainBaseSepolia, variable, reason, refused)
 		}
 	}
+	offArb := func(variable, reason, refused string) {
+		c.ArbIndex = false
+		if c.ArbIndexDisabled == nil {
+			c.ArbIndexDisabled = finality.IndexDisabledState(finality.ChainArbitrumSepolia, variable, reason, refused)
+		}
+	}
+	off := func(variable, reason, refused string) {
+		offBase(variable, reason, refused)
+		offArb(variable, reason, refused)
+	}
 	on, err := envvar.Bool(EnvBaseIndex, true)
 	if err != nil {
-		off(EnvBaseIndex, finality.IndexSettingSwitchInvalid, "")
+		offBase(EnvBaseIndex, finality.IndexSettingSwitchInvalid, "")
 	} else {
 		c.BaseIndex = on
 	}
 	if v, refused := indexInt(finality.EnvIndexGeneration, int64(finality.DefaultIndexGeneration), 1, math.MaxUint32); refused != "" {
-		off(finality.EnvIndexGeneration, finality.IndexSettingInvalid, refused)
+		offBase(finality.EnvIndexGeneration, finality.IndexSettingInvalid, refused)
 	} else {
 		c.IndexGeneration = uint32(v)
+	}
+	onArb, err := envvar.Bool(EnvArbIndex, true)
+	if err != nil {
+		offArb(EnvArbIndex, finality.IndexSettingSwitchInvalid, "")
+	} else {
+		c.ArbIndex = c.ArbIndex && onArb
+	}
+	if v, refused := indexInt(EnvArbIndexGeneration, int64(finality.DefaultIndexGeneration), 1, math.MaxUint32); refused != "" {
+		offArb(EnvArbIndexGeneration, finality.IndexSettingInvalid, refused)
+	} else {
+		c.ArbIndexGeneration = uint32(v)
 	}
 	if v, refused := indexInt(EnvIndexBlocks, 128, 1, math.MaxInt32); refused != "" {
 		off(EnvIndexBlocks, finality.IndexSettingInvalid, refused)

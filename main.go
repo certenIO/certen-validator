@@ -527,6 +527,10 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "finality-index-selfcheck" {
 		os.Exit(runFinalityIndexSelfCheck(os.Args[2:], os.Stdout, os.Stderr))
 	}
+	// RB12-INDEX-B: the same for the Arbitrum batch index.
+	if len(os.Args) > 1 && os.Args[1] == "finality-arb-index-selfcheck" {
+		os.Exit(runFinalityArbIndexSelfCheck(os.Args[2:], os.Stdout, os.Stderr))
+	}
 
 	// Parse CLI flags
 	var (

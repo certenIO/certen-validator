@@ -192,7 +192,10 @@ type Report struct {
 	// Foreign lists the batches whose record the chain does not hold: the proof just stored shows another accumulator at slot N than the
 	// record's afterAcc (AuthorizeBatch). Their rows stay (the table is insert-only); no reader serves them.
 	Foreign []uint64
-	Errors  []string // redacted
+	// BlobBlocks are the L1 blocks of the batches whose blob rows were all stored this tick: the data of a block the index may have passed while it was
+	// incomplete (the capture loop notes them to the indexer).
+	BlobBlocks []uint64
+	Errors     []string // redacted
 }
 
 func (c *Capturer) logf(f string, a ...any) {
@@ -628,6 +631,7 @@ func (c *Capturer) fetchBlobs(ctx context.Context, rep *Report) {
 		}
 		if ok {
 			delete(c.needBlobs, n)
+			rep.BlobBlocks = append(rep.BlobBlocks, p.rec.L1Block)
 		}
 	}
 }
