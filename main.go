@@ -2314,8 +2314,9 @@ func startValidator(
 		log.Printf("✅ [Phase 5] Standing evidence checks started (settled-without-canonical, " +
 			"contradicted layer 5, schema-behind-binary)")
 
-		// Staged finality (RB11, PROOF_V2 S7): see startFinality. A provider entry the finality runtime refuses is a NAMED disabled
-		// state of the upgrader (finality_upgrader_disabled{reason: config_invalid, variable, entry}), not the end of this process.
+		// Staged finality (RB11, PROOF_V2 S7): see startFinality. No failure of its start ends this process (RB12-GO-INT F14): a refused
+		// setting, a pins or wiring failure or a panic is a NAMED disabled state of the upgrader (finality_upgrader_disabled{reason,...},
+		// log + metric + /health/detailed) and the validator goes on; finality is no input of consensus.
 		if ferr := startFinality(context.Background(), dbClient, log.Printf); ferr != nil {
 			return nil, nil, ferr
 		}

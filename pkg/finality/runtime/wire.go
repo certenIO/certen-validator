@@ -74,6 +74,17 @@ type Wiring struct {
 	Config   Config
 }
 
+// WireError is a failure of Wire that is not a refused setting (a refused setting is an *envvar.Refusal, a refused provider entry a
+// *ConfigError): Stage says where it happened (finality.StartStage*), so the process can announce it as a named state without parsing
+// the text (RB12-GO-INT F14). Its text is the text of the error it wraps.
+type WireError struct {
+	Stage string
+	Err   error
+}
+
+func (e *WireError) Error() string { return e.Err.Error() }
+func (e *WireError) Unwrap() error { return e.Err }
+
 func disabledState(chain uint64, env, value, effect string) *finality.StateError {
 	return finality.NewState(finality.CodeUpgraderDisabled, "chain", chain, "env", env, "value", value, "effect", effect)
 }
@@ -130,7 +141,7 @@ func Wire(cfg Config, d Deps) (*Wiring, error) {
 	}
 	logf = ethrpc.RedactingLogf(logf)
 	if d.Registry == nil || d.Store == nil {
-		return nil, fmt.Errorf("finality runtime: a registry and a capture store are required")
+		return nil, &WireError{Stage: finality.StartStageArguments, Err: fmt.Errorf("finality runtime: a registry and a capture store are required")}
 	}
 	cfg.RegisterRedaction()
 
@@ -139,7 +150,11 @@ func Wire(cfg Config, d Deps) (*Wiring, error) {
 	if pins == nil {
 		var err error
 		if pins, source, sha, err = LoadPins(cfg.PinsFile); err != nil {
-			return nil, err
+			stage := finality.StartStagePinsEmbedded
+			if cfg.PinsFile != "" {
+				stage = finality.StartStagePinsFile
+			}
+			return nil, &WireError{Stage: stage, Err: err}
 		}
 	} else {
 		sha, source = pins.Identity()
@@ -155,7 +170,7 @@ func Wire(cfg Config, d Deps) (*Wiring, error) {
 
 	reg := d.Registry
 	if err := allkinds.Register(reg); err != nil {
-		return nil, err
+		return nil, &WireError{Stage: finality.StartStageKinds, Err: err}
 	}
 
 	hc := d.HTTP

@@ -192,7 +192,11 @@ func TestMainWiresTheUpgraderAloneAndGivesItNoConsensusObject(t *testing.T) {
 	allowed := map[string]bool{"Enabled": true, "Launch": true, "Default": true, "EmbeddedPins": true, "UpgraderConfig": true, "AnnounceUpgraderDisabled": true, "ConfigInvalidState": true}
 	// RB11-B2B2b: the production wiring (pkg/finality/runtime, imported as finruntime) is reached through exactly these symbols:
 	// the configuration read, the wiring call and its collaborator struct. Everything else it builds stays inside that package.
-	runtimeAllowed := map[string]bool{"ConfigFromEnv": true, "Wire": true, "Deps": true, "ConfigError": true, "CheckProviderEnvironment": true}
+	// RB12-GO-INT F14: no failure of the start ends the validator. The runtime classifies a failure into the named state
+	// (StartFailure, StartPanic) and marks the two failures that are raised in startFinality itself (GenesisLinkFailed, LaunchFailed); they
+	// are classifiers, they hand the upgrader nothing.
+	runtimeAllowed := map[string]bool{"ConfigFromEnv": true, "Wire": true, "Deps": true, "ConfigError": true, "CheckProviderEnvironment": true,
+		"StartFailure": true, "StartPanic": true, "GenesisLinkFailed": true, "LaunchFailed": true}
 	var launches []*ast.CallExpr
 	var repoCtors int
 	for _, decl := range f.Decls {
@@ -238,9 +242,37 @@ func TestMainWiresTheUpgraderAloneAndGivesItNoConsensusObject(t *testing.T) {
 						launches = append(launches, call)
 					}
 				}
+				// RB12-GO-INT F14: the one launch is made through launchFinality, a package variable initialised with finality.Launch (checked
+				// below) so a test can make the launch fail; it is the same call with the same arguments, still exactly one.
+				if id, ok := call.Fun.(*ast.Ident); ok && id.Name == "launchFinality" {
+					launches = append(launches, call)
+				}
 			}
 			return true
 		})
+	}
+	seamIsLaunch := false
+	for _, decl := range f.Decls {
+		gd, ok := decl.(*ast.GenDecl)
+		if !ok {
+			continue
+		}
+		for _, spec := range gd.Specs {
+			vs, ok := spec.(*ast.ValueSpec)
+			if !ok || len(vs.Names) != 1 || vs.Names[0].Name != "launchFinality" || len(vs.Values) != 1 {
+				continue
+			}
+			if sel, ok := vs.Values[0].(*ast.SelectorExpr); ok {
+				if p, ok := sel.X.(*ast.Ident); ok && p.Name == "finality" && sel.Sel.Name == "Launch" {
+					seamIsLaunch = true
+				}
+			}
+		}
+	}
+	for _, l := range launches {
+		if id, ok := l.Fun.(*ast.Ident); ok && id.Name == "launchFinality" && !seamIsLaunch {
+			t.Errorf("finality_start.go: launchFinality must be initialised with finality.Launch and nothing else")
+		}
 	}
 	if len(launches) != 1 || repoCtors != 1 {
 		t.Fatalf("finality_start.go has %d finality.Launch calls and %d addendum repository constructors; want exactly one of each", len(launches), repoCtors)

@@ -22,8 +22,44 @@ func lookup(key string) (string, bool) {
 	return v, v != ""
 }
 
-func refuse(key, value, want string) error {
-	return fmt.Errorf("%s=%q is not %s", key, value, want)
+// Refusal is the error of a value the readers refuse: the variable (Key), the text it holds (Value) and what it should have been
+// (Want). Error() is the text the readers have always returned. The typed form lets a caller that must not end the process name the
+// variable without parsing text and without echoing the value, which may have been pasted from anywhere (RB12-GO-INT F14).
+type Refusal struct {
+	Key, Value, Want string
+	// Switch is true for a refused switch (Bool): the setting is on or off and is not to be guessed, which is a different thing to correct
+	// than a number out of range.
+	Switch bool
+}
+
+func (r *Refusal) Error() string { return fmt.Sprintf("%s=%q is not %s", r.Key, r.Value, r.Want) }
+
+func refuse(key, value, want string) error { return &Refusal{Key: key, Value: value, Want: want} }
+
+// Refuse is the refusal of a value a package bounds after the reader accepted it (a number the reader parsed but the package cannot
+// use): the same typed error the readers return.
+func Refuse(key, value, want string) error { return refuse(key, value, want) }
+
+// Refusals returns every Refusal inside err (an error joined by Check, wrapped with %w, or a Refusal itself), in the order the readers
+// ran. An error that holds none returns nil.
+func Refusals(err error) []*Refusal {
+	var out []*Refusal
+	var walk func(error)
+	walk = func(e error) {
+		switch x := e.(type) {
+		case nil:
+		case *Refusal:
+			out = append(out, x)
+		case interface{ Unwrap() []error }:
+			for _, c := range x.Unwrap() {
+				walk(c)
+			}
+		case interface{ Unwrap() error }:
+			walk(x.Unwrap())
+		}
+	}
+	walk(err)
+	return out
 }
 
 // Bool reads a switch. It accepts true/false, 1/0, yes/no and on/off in any case.
@@ -38,7 +74,7 @@ func Bool(key string, def bool) (bool, error) {
 	case "0", "f", "false", "no", "n", "off":
 		return false, nil
 	}
-	return def, refuse(key, v, "a switch (true/false, 1/0, yes/no, on/off)")
+	return def, &Refusal{Key: key, Value: v, Want: "a switch (true/false, 1/0, yes/no, on/off)", Switch: true}
 }
 
 // Int reads an integer no smaller than min.
