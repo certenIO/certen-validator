@@ -40,8 +40,10 @@ type Env struct {
 	Logf    func(string, ...any)
 	L1Block []string // Sepolia execution endpoints
 	L1Proof []string // near-head proof providers followed by the archive provider
-	// Memory is the process memory budget the upgrader's builders and the gap backfill reserve from (one budget, one process).
+	// Memory is the process memory budget the upgrader's builders, the gap backfill and the capture index reserve from (one budget, one process).
 	Memory *finality.MemoryBudget
+	// Durable is the store without the per-leg capture bound: index rows are not capture bytes.
+	Durable finality.CaptureStore
 }
 
 // Deps are the process-level collaborators of the wiring.
@@ -171,7 +173,7 @@ func Wire(cfg Config, d Deps) (*Wiring, error) {
 	cache := &lcCache{inner: lcf, now: now}
 	l1Proof := cfg.proofURLs()
 	mem := finality.NewMemoryBudget(cfg.MemoryBudget)
-	env := Env{Pins: pins, Config: cfg, LC: cache, HTTP: hc, Store: store, Logf: logf, L1Block: cfg.L1RPC, L1Proof: l1Proof, Memory: mem}
+	env := Env{Pins: pins, Config: cfg, LC: cache, HTTP: hc, Store: store, Logf: logf, L1Block: cfg.L1RPC, L1Proof: l1Proof, Memory: mem, Durable: d.Store}
 
 	w := &Wiring{Registry: reg, Pins: pins, PinsSource: source, PinsSHA256: sha, Store: store, Disabled: map[uint64]*finality.StateError{}, Config: cfg}
 
@@ -246,9 +248,20 @@ func wireBase(reg *finality.Registry, env Env, d Deps, clock loopClock, logf fun
 	}
 	l1 := &baseposted.JSONRPCSource{BlockURLs: env.L1Block, ProofURLs: env.L1Proof, Client: env.HTTP}
 	cache := env.LC.(*lcCache)
-	if err := reg.RegisterProver(&baseposted.Builder{Pins: env.Pins, Store: env.Store, L1: l1, Headers: l1,
+	builder := &baseposted.Builder{Pins: env.Pins, Store: env.Store, L1: l1, Headers: l1,
 		L2: &baseposted.L2JSONRPC{URLs: cfg.BaseL2}, LC: lcPlain{cache}, Now: d.Now,
-		CursorSlack: captureSlack(cfg), HasArchive: len(cfg.Archive) > 0}); err != nil {
+		CursorSlack: captureSlack(cfg), HasArchive: len(cfg.Archive) > 0}
+	// the capture index (RB12-INDEX-A): built as captures arrive, read by the builder; off by CERTEN_FINALITY_BASE_INDEX=off
+	var indexer finality.CaptureIndexer
+	if cfg.BaseIndex {
+		builder.Index = baseposted.NewIndexReader(env.Store, bp, cfg.IndexGeneration)
+		durable := env.Durable
+		if durable == nil {
+			durable = env.Store
+		}
+		indexer = baseposted.NewIndexer(durable, bp, cfg.IndexGeneration, baseposted.IndexConfig{BlocksPerStep: cfg.IndexBlocks, StepBudget: cfg.IndexStep, Logf: logf})
+	}
+	if err := reg.RegisterProver(builder); err != nil {
 		return err
 	}
 	rpc := &basefinal.RPC{BlockURLs: env.L1Block, ProofURLs: env.L1Proof, L2URLs: cfg.BaseL2, Client: env.HTTP}
@@ -259,7 +272,7 @@ func wireBase(reg *finality.Registry, env Env, d Deps, clock loopClock, logf fun
 	capt := &baseposted.Capturer{Chain: finality.ChainBaseSepolia, Pins: bp, L1: l1, Beacon: &baseposted.BeaconHTTP{Bases: cfg.Beacon, Client: env.HTTP},
 		Store: env.Store, GenesisTime: capture.BeaconGenesisTime, SlotSeconds: 12}
 	if err := reg.RegisterCapturer(&BasePostedLoop{Cap: capt, Store: env.Store, Status: d.Status, Pins: env.Pins, Every: cfg.CaptureEvery, MaxPerTick: cfg.CaptureBlocks,
-		StartBack: 32, HasArchive: len(cfg.Archive) > 0, Logf: logf, Clock: clock}); err != nil {
+		StartBack: 32, HasArchive: len(cfg.Archive) > 0, Logf: logf, Clock: clock, Index: indexer, Memory: env.Memory}); err != nil {
 		return err
 	}
 	// RB12-CAPTURE-GAP: the loop that closes the recorded capture gaps with the same capture call (the providers are the same, plus the archive

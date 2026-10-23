@@ -121,6 +121,10 @@ type BasePostedLoop struct {
 	cursor       uint64
 	cursorHave   bool
 	cursorKnown  bool
+	// Index, when set, is stepped after every tick (RB12-INDEX-A): it digests the blocks the capture has stored and indexes the channels
+	// they complete. Memory is the per-process budget its working set is reserved against.
+	Index  finality.CaptureIndexer
+	Memory *finality.MemoryBudget
 }
 
 type retryEntry struct {
@@ -234,6 +238,7 @@ func (l *BasePostedLoop) Tick(ctx context.Context, tick int) error {
 	}
 	if from > head {
 		metrics.SetFinalityCaptureLag(chain, l.Name(), 0)
+		l.runIndex(ctx, sink, cur)
 		return nil
 	}
 	to := head
@@ -295,6 +300,7 @@ func (l *BasePostedLoop) Tick(ctx context.Context, tick int) error {
 	l.mu.Unlock()
 	metrics.SetFinalityLastCapturedBlock(chain, l.Name(), safeTo)
 	metrics.SetFinalityCaptureLag(chain, l.Name(), head-safeTo)
+	l.runIndex(ctx, sink, safeTo)
 	return nil
 }
 
@@ -318,6 +324,21 @@ func (l *BasePostedLoop) recordGap(ctx context.Context, n uint64, st *finality.S
 		l.Logf("[FINALITY] capturer %s: the note of the gap at L1 block %d was not recorded: %v", l.Name(), n, ethrpc.RedactError(err))
 	}
 	return nil
+}
+
+// runIndex steps the capture index towards the capture cursor. Indexing never stops the capture: a failed step is logged (redacted) and a
+// named inconsistency is recorded in the status table under the chain's capture pseudo id.
+func (l *BasePostedLoop) runIndex(ctx context.Context, sink statusSink, upTo uint64) {
+	if l.Index == nil || ctx.Err() != nil {
+		return
+	}
+	ictx := finality.WithMemoryBudget(ctx, l.Memory)
+	if _, err := l.Index.Step(ictx, upTo); err != nil && ctx.Err() == nil {
+		if st, ok := finality.AsNamed(err); ok {
+			sink.put(ctx, l.Chain(), finality.LevelL1Posted, st)
+		}
+		l.Logf("[FINALITY] index %s: step to L1 block %d: %v", l.Index.Family(), upTo, ethrpc.RedactError(err))
+	}
 }
 
 // retryFailed retries the held blocks with a doubling gap between attempts. A block older than the provider window without an
