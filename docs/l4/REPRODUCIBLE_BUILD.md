@@ -9,7 +9,7 @@ validator can then be checked against the release.
 | Input | Pin |
 |---|---|
 | Builder image | `golang:1.25.14-alpine3.24@sha256:1ae0735f00daffa3aaf1363a5184c0d2dc55c78e3db4ec70241cdac97bf84b59` |
-| Builder packages | `git=2.54.0-r0`, `gcc=15.2.0-r5`, `musl-dev=1.2.6-r2` |
+| Builder packages | `git=2.54.0-r0`, `gcc=15.2.0-r5`, `musl-dev=1.2.6-r3` |
 | Runtime image | `alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6` |
 | Runtime packages | `ca-certificates`, `tzdata` (deliberately NOT pinned: data only, in no binary; the published SHA-256 are of the binaries) |
 | Go flags | `-trimpath -buildvcs=false -ldflags=-buildid=` on every binary |

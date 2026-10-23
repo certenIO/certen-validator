@@ -6,6 +6,9 @@
 //
 //	certen_finality_upgrader_enabled              1 when the upgrader runs, 0 when CERTEN_FINALITY_UPGRADER_ENABLED turned it off
 //	certen_finality_legs{chain,level}             settled legs whose chain currently stands at this level (none, included, ...)
+//	certen_finality_legs_without_settlement{chain}   legs whose newest bundle holds no execution proof (quiet; read again only when a newer bundle appears)
+//	certen_finality_unrecorded_settlements        legs attempted in the last pass served before their proof row recorded the settlement
+//	certen_finality_legs_no_prover{chain}         listed legs of a chain with no registered prover (not attempted)
 //	certen_finality_addenda_appended_total{chain,level}   addenda this validator appended
 //	certen_finality_build_failures_total{chain,code}      builds that returned a named state other than finality_pending
 //	certen_finality_pending_total{chain,level_reached}    builds that returned finality_pending
@@ -50,6 +53,18 @@ var (
 		Name: "certen_finality_legs",
 		Help: "Settled legs by the finality level their addendum chain stands at, as of the last upgrader pass.",
 	}, []string{"chain", "level"})
+	finalityLegsWithoutSettlement = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "certen_finality_legs_without_settlement",
+		Help: "Legs whose newest bundle holds no execution proof (component 5): finality_included_unavailable, held back quietly and not read again until the proof has a newer bundle, as of the last upgrader pass.",
+	}, []string{"chain"})
+	finalityLegsWithoutProver = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "certen_finality_legs_no_prover",
+		Help: "Listed legs of a chain for which no finality prover is registered (counted as no_prover and not attempted), as of the last complete upgrader pass.",
+	}, []string{"chain"})
+	finalityUnrecordedSettlements = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "certen_finality_unrecorded_settlements",
+		Help: "Legs attempted in the last upgrader pass whose settlement evidence was served while the proof row has no settlement_tx_hash or settlement_block_number yet (the check against the recorded settlement could not be made).",
+	})
 	finalityAppended = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "certen_finality_addenda_appended_total",
 		Help: "Finality addenda this validator appended.",
@@ -241,6 +256,19 @@ func SetFinalityLegs(chain uint64, level string, n int) {
 	finalityHealth.mu.Unlock()
 }
 
+// SetFinalityLegsWithoutSettlement reports how many legs of a chain are held back because their newest bundle holds no execution proof.
+func SetFinalityLegsWithoutSettlement(chain uint64, n int) {
+	finalityLegsWithoutSettlement.WithLabelValues(chainLabel(chain)).Set(float64(n))
+}
+
+// SetFinalityUnrecordedSettlements reports how many legs of the last pass were served before their proof row recorded the settlement.
+func SetFinalityUnrecordedSettlements(n int) { finalityUnrecordedSettlements.Set(float64(n)) }
+
+// SetFinalityLegsWithoutProver reports how many listed legs of a chain have no registered prover.
+func SetFinalityLegsWithoutProver(chain uint64, n int) {
+	finalityLegsWithoutProver.WithLabelValues(chainLabel(chain)).Set(float64(n))
+}
+
 // IncFinalityAppended counts an appended addendum and records when it happened.
 func IncFinalityAppended(chain uint64, level string) {
 	finalityAppended.WithLabelValues(chainLabel(chain), level).Inc()
@@ -372,6 +400,9 @@ func ObserveFinalityPass(d time.Duration, finished time.Time) {
 func registerFinalityMetrics() {
 	prometheus.MustRegister(finalityEnabled)
 	prometheus.MustRegister(finalityLegs)
+	prometheus.MustRegister(finalityLegsWithoutSettlement)
+	prometheus.MustRegister(finalityLegsWithoutProver)
+	prometheus.MustRegister(finalityUnrecordedSettlements)
 	prometheus.MustRegister(finalityAppended)
 	prometheus.MustRegister(finalityBuildFailures)
 	prometheus.MustRegister(finalityPending)

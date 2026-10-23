@@ -220,7 +220,7 @@ func TestFinalityOfAStoredProof(t *testing.T) {
 		t.Fatalf("exit %d\n%s", code, out)
 	}
 	// the same when the proof has a bundle that holds no execution proof
-	finalitytest.StoreBundleRow(t, db, bare.String(), finalitytest.Gzip(finalitytest.ProductionBundleJSON(nil)))
+	finalitytest.StoreBundleRow(t, db, bare.String(), finalitytest.Gzip(finalitytest.ProductionBundleJSON(bare.String(), nil)))
 	if code, out := run(finality.NewRegistry(), bare); code != exitSummaryOnly || !strings.Contains(out, "no settlement evidence") {
 		t.Fatalf("a bundle without component 5: exit %d\n%s", code, out)
 	}
@@ -250,7 +250,10 @@ func TestFinalityReadsTheBundleTheProductionWriterWrites(t *testing.T) {
 	if err := json.Unmarshal(rawExec, &exec); err != nil {
 		t.Fatal(err)
 	}
-	bundle := &proof.CertenProofBundle{Schema: proof.BundleSchemaURL, BundleVersion: proof.BundleVersion, BundleID: "bundle-writer-test"}
+	id := finalitytest.StoreProductionArtifact(t, db, s.Chain, exec.TxHash, exec.BlockNumber)
+	// the writer (pkg/execution generateAndPersistBundle) sets bundle_integrity.custody_chain_hash to the proof id as hex
+	bundle := &proof.CertenProofBundle{Schema: proof.BundleSchemaURL, BundleVersion: proof.BundleVersion, BundleID: "bundle-writer-test",
+		BundleIntegrity: proof.BundleIntegrity{CustodyChainHash: strings.ReplaceAll(id, "-", ""), SignerID: "validator-test"}}
 	bundle.SetExecutionProof(&exec)
 	if bundle.ProofComponents.ExecutionProof == nil {
 		t.Fatal("the writer did not attach component 5")
@@ -259,7 +262,6 @@ func TestFinalityReadsTheBundleTheProductionWriterWrites(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	id := finalitytest.StoreProductionArtifact(t, db, s.Chain, exec.TxHash, exec.BlockNumber)
 	finalitytest.StoreBundleRow(t, db, id, gz)
 
 	repo := database.NewFinalityAddendaRepository(database.NewClientFromDB(db))
@@ -369,5 +371,46 @@ func TestFinalityFileSettlementFromAnExportedOutcomeEvidenceFile(t *testing.T) {
 	}
 	if _, err := settlementFromOutcomeFile(filepath.Join(t.TempDir(), "absent.json")); err == nil {
 		t.Fatal("an absent file was accepted")
+	}
+}
+
+// A stored proof whose row has not recorded its settlement yet (settlement_tx_hash / settlement_block_number NULL) is judged as
+// before, and the report says that the bundle was bound to the proof by its custody hash only. The portable section is untouched.
+func TestFinalityReportSaysWhenTheSettlementColumnsAreNotRecorded(t *testing.T) {
+	url, err := testdb.PackageURL("proofverify")
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("postgres", url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := (schema.Runner{DB: db}).Up(context.Background(), "proofverify-test"); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	pins, err := finality.EmbeddedPins()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := finalitytest.Settlement(t, "base_sepolia_47368146")
+	id := uuid.MustParse(finalitytest.StoreProductionLeg(t, db, s))
+	run := func() (int, string) {
+		var out bytes.Buffer
+		code := reportFinality(ctx, &out, db, id, finality.NewRegistry(), pins)
+		return code, out.String()
+	}
+	const note = "settlement columns not recorded: the bundle is bound to the proof by its custody hash, tx/block not cross-checked"
+	recordedCode, out := run()
+	if strings.Contains(out, note) {
+		t.Fatalf("a recorded settlement carries the note:\n%s", out)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE proof_artifacts SET settlement_tx_hash = NULL, settlement_block_number = NULL WHERE proof_id = $1`, id.String()); err != nil {
+		t.Fatal(err)
+	}
+	code, out := run()
+	if !strings.Contains(out, note) || code != recordedCode {
+		t.Fatalf("exit %d (recorded: %d)\n%s", code, recordedCode, out)
 	}
 }
