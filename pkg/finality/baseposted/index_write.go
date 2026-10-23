@@ -186,11 +186,22 @@ func (ix *Indexer) loadDigests(ctx context.Context, tbl *frameTable, from, to ui
 	return n, nil
 }
 
+// holdWait bounds how long a reservation of the index waits for another build to release memory: the index runs inside the capture loop and
+// must never stall it. A reservation that still does not fit is the named refusal and ends the step (the index lags, it does not fail).
+const holdWait = 2 * time.Second
+
+// hold starts a memory hold for the index against the budget ctx carries; done releases it.
+func (ix *Indexer) hold(ctx context.Context, what string) (*finality.Hold, func()) {
+	hctx, cancel := context.WithTimeout(ctx, holdWait)
+	h := finality.NewHold(hctx, uint64(Chain), what)
+	return h, func() { h.Release(); cancel() }
+}
+
 // digestBlock reads the rows of one captured block and writes its digest. The rows are reserved against the memory budget while they
 // are read and released before the call returns.
 func (ix *Indexer) digestBlock(ctx context.Context, bk finality.CaptureKey, rep *finality.StepReport) (*blockDigest, error) {
-	hold := finality.NewHold(ctx, uint64(Chain), "base_index_block")
-	defer hold.Release()
+	hold, done := ix.hold(ctx, "base_index_block")
+	defer done()
 	bk.Item = ""
 	txs, err := loadBlockTxs(ctx, ix.Store, bk, hold)
 	if err != nil {
@@ -258,8 +269,8 @@ func (ix *Indexer) ensureEntry(ctx context.Context, tbl *frameTable, id [16]byte
 	if err != nil || exists {
 		return false, err
 	}
-	hold := finality.NewHold(ctx, uint64(Chain), "base_index_channel")
-	defer hold.Release()
+	hold, done := ix.hold(ctx, "base_index_channel")
+	defer done()
 	var lts []loadedTx
 	for _, t := range txsOf(fr) {
 		lt, err := loadTxRows(ctx, ix.Store, finality.CaptureKey{Chain: uint64(Chain), L1Block: t.Block, L1Hash: t.Hash}, t.Index, hold, true)
@@ -397,14 +408,15 @@ func (ix *Indexer) Step(ctx context.Context, upTo uint64) (rep finality.StepRepo
 			return rep, err
 		}
 		done := upTo // the cursor candidate: everything up to here is processed
-		for i := 0; i < len(keys); {
+		groups := 0
+		for i := 0; i < len(keys); groups++ {
 			j := i
 			for j < len(keys) && keys[j].L1Block == keys[i].L1Block {
 				j++
 			}
 			group := keys[i:j] // one height: a reorged height has several hashes, evaluated together so the result does not depend on their order
 			i = j
-			if cause := ix.stopCause(ctx, rep.Blocks, deadline); cause != "" {
+			if cause := ix.stopCause(ctx, groups, rep.Blocks, deadline); cause != "" {
 				rep.StoppedByCap, done = cause, group[0].L1Block-1
 				break
 			}
@@ -456,11 +468,13 @@ func stoppedNote(c string) string {
 	return " (stopped: " + c + ")"
 }
 
-// stopCause names why a step must end before starting another block: its block bound, its time bound or the context.
-func (ix *Indexer) stopCause(ctx context.Context, blocks int, deadline time.Time) string {
+// stopCause names why a step must end before starting another height: the context, its block bound (blocks written) or its time bound; never before the first height.
+func (ix *Indexer) stopCause(ctx context.Context, groups, blocks int, deadline time.Time) string {
 	switch {
 	case ctx.Err() != nil:
 		return "context"
+	case groups == 0:
+		return "" // a step always processes its first height, whatever its limits: a limit set too low must slow the index, never stop it
 	case blocks >= ix.Cfg.blocks():
 		return "blocks"
 	case time.Now().After(deadline):
@@ -565,14 +579,15 @@ func (ix *Indexer) reconcile(ctx context.Context, rep *finality.StepReport, dead
 	var tmp *frameTable
 	var tmpLo, tmpHi uint64
 	next := to + 1
-	for i := 0; i < len(missing); {
+	groups := 0
+	for i := 0; i < len(missing); groups++ {
 		j := i
 		for j < len(missing) && missing[j].L1Block == missing[i].L1Block {
 			j++
 		}
 		group := missing[i:j]
 		i = j
-		if cause := ix.stopCause(ctx, rep.Late, deadline); cause != "" {
+		if cause := ix.stopCause(ctx, groups, rep.Late, deadline); cause != "" {
 			next = group[0].L1Block
 			break
 		}
@@ -767,10 +782,10 @@ func (ix *Indexer) SelfCheck(ctx context.Context, sample int) error {
 		}
 		bk := k
 		bk.Item = ""
-		hold := finality.NewHold(ctx, uint64(Chain), "base_index_selfcheck")
+		hold, done := ix.hold(ctx, "base_index_selfcheck")
 		b := &Builder{Store: ix.Store}
 		all, err := b.loadRange(ctx, ix.Pins, bk.L1Block, bk.L1Block, hold)
-		hold.Release()
+		done()
 		if err != nil {
 			if memoryRefusal(err) {
 				return nil
@@ -815,8 +830,8 @@ func (ix *Indexer) referenceEntry(ctx context.Context, n entryName) ([]byte, err
 	if n.Key.L1Block > ix.window() {
 		from = n.Key.L1Block - ix.window()
 	}
-	hold := finality.NewHold(ctx, uint64(Chain), "base_index_selfcheck")
-	defer hold.Release()
+	hold, done := ix.hold(ctx, "base_index_selfcheck")
+	defer done()
 	b := &Builder{Store: ix.Store}
 	all, err := b.loadRange(ctx, ix.Pins, from, n.Key.L1Block, hold)
 	if err != nil {

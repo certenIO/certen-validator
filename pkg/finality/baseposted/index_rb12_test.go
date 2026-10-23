@@ -514,7 +514,7 @@ func TestRB12IndexStepStopsByNameWhenTheMemoryBudgetRefusesAndFinishesLater(t *t
 	_, bp := idxPins(t)
 	w := smallWorld(t, bp, 12)
 	upTo := w.numberOf(11) + 200
-	tight := finality.WithMemoryBudget(ctxBG(), finality.NewMemoryBudget(finality.MinMemoryBudget))
+	tight := finality.WithMemoryBudget(ctxBG(), finality.NewMemoryBudget(finality.MinMemoryBudget).WithWait(0))
 	// the budget is the minimum (64 MB): a block of ~1 MB fits, so shrink it by taking most of it
 	b := finality.MemoryBudgetOf(tight)
 	if _, err := b.Reserve(uint64(Chain), "other", finality.MinMemoryBudget-(1<<20)); err != nil {
@@ -665,3 +665,77 @@ func TestRB12IndexReconcileRepairsAnEntryThatIsMissingBesideItsDigest(t *testing
 }
 
 func mustTS(w *shapeWorld, c int) uint64 { ts, _ := w.legAt(c, 3); return ts }
+
+// A step limit set too low slows the index and never stops it: every step processes at least its first height; a cancelled context
+// processes nothing and is not an error.
+func TestRB12IndexStepAlwaysProcessesItsFirstHeightAndStopsOnACancelledContext(t *testing.T) {
+	_, bp := idxPins(t)
+	w := smallWorld(t, bp, 12)
+	upTo := w.numberOf(11) + 200
+	ix := newIdx(w, bp, IndexConfig{StepBudget: time.Nanosecond, BlocksPerStep: 1})
+	steps := 0
+	for {
+		rep, err := ix.Step(ctxBG(), upTo)
+		if err != nil {
+			t.Fatal(err)
+		}
+		steps++
+		if steps > 40 {
+			t.Fatal("an index with a tiny time budget never finished")
+		}
+		if rep.StoppedByCap == "" {
+			break
+		}
+		if rep.Blocks != 1 {
+			t.Fatalf("each step must digest exactly its first height under a 1 ns budget, digested %d (%+v)", rep.Blocks, rep)
+		}
+	}
+	if steps != 12 || ix.cursor != upTo {
+		t.Fatalf("12 heights at one per step: %d steps, cursor %d", steps, ix.cursor)
+	}
+	w2 := smallWorld(t, bp, 5)
+	cctx, cancel := context.WithCancel(ctxBG())
+	cancel()
+	rep, err := newIdx(w2, bp, IndexConfig{}).Step(cctx, w2.numberOf(4)+200)
+	if err != nil || rep.Blocks != 0 || rep.StoppedByCap != "context" {
+		t.Fatalf("a cancelled context stops the step by name: %+v %v", rep, err)
+	}
+}
+
+// A refusal of the memory budget while a channel is being read for its entry ends the step by name; the digest that was written stays, the
+// cursor stays below that height, and the next step with room writes the entry.
+func TestRB12IndexStepStopsByNameWhenTheBudgetRefusesTheChannelRead(t *testing.T) {
+	_, bp := idxPins(t)
+	w := smallWorld(t, bp, 6)
+	upTo := w.numberOf(5) + 200
+	// a budget that fits one block read (about 1.4 MB reserved) but not the channel read of the same rows plus its stream
+	budget := finality.NewMemoryBudget(finality.MinMemoryBudget).WithWait(0)
+	var blockCost int64
+	for item, row := range w.block(0, 0).rows(bp) { // the rows a block read reserves: inbox, transactions, blobs
+		if item == ItemInbox || strings.HasPrefix(item, "tx/") || strings.HasPrefix(item, "blob/") {
+			blockCost += finality.RowCost(len(row))
+		}
+	}
+	if _, err := budget.Reserve(uint64(Chain), "other", finality.MinMemoryBudget-(blockCost+1000)); err != nil {
+		t.Fatal(err)
+	}
+	ix := newIdx(w, bp, IndexConfig{})
+	rep, err := ix.Step(finality.WithMemoryBudget(ctxBG(), budget), upTo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.StoppedByCap != "budget" || rep.Entries != 0 {
+		t.Fatalf("the channel read must be refused by name: %+v", rep)
+	}
+	if rep.Through >= w.numberOf(0) {
+		t.Fatalf("the cursor must stay below the unfinished height, got %d", rep.Through)
+	}
+	rep = stepAll(t, ix, upTo)
+	if rep.Through != upTo {
+		t.Fatalf("with room the index finishes: %+v", rep)
+	}
+	ts, origin := w.legAt(0, 3)
+	if hit, _, err := findFor(t, w, bp, ts, origin, origin+bp.SeqWindowSize); err != nil || hit == nil {
+		t.Fatalf("the entry of the refused height was written later: %v %v", hit, err)
+	}
+}
