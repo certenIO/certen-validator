@@ -298,6 +298,11 @@ func blockOfItem(item, prefix string) (uint64, string, error) {
 	return n, tail, nil
 }
 
+func isIn(set map[uint64]struct{}, b uint64) bool {
+	_, ok := set[b]
+	return ok
+}
+
 type gapScanResult struct {
 	pieces []GapRange
 	filled uint64 // blocks inside a gap that have a fill
@@ -319,7 +324,10 @@ func gapScan(ctx context.Context, s CaptureStore, chain, from, to uint64) (gapSc
 		if err != nil {
 			return res, err
 		}
-		if gt < from || gt < k.L1Block {
+		if gt < k.L1Block {
+			return res, fmt.Errorf("finality: malformed gap row %s: it ends before it starts", k)
+		}
+		if gt < from {
 			continue
 		}
 		f := k.L1Block
@@ -357,13 +365,13 @@ func gapScan(ctx context.Context, s CaptureStore, chain, from, to uint64) (gapSc
 	if err != nil {
 		return res, err
 	}
-	filled := map[uint64]bool{}
+	filled := map[uint64]struct{}{}
 	for _, k := range fills {
 		b, _, err := blockOfItem(k.Item, GapFillPrefix)
 		if err != nil {
 			return res, err
 		}
-		filled[b] = true
+		filled[b] = struct{}{}
 	}
 	ends, err := s.ListByRange(ctx, chain, lo, hi, GapEndPrefix)
 	if err != nil {
@@ -383,12 +391,12 @@ func gapScan(ctx context.Context, s CaptureStore, chain, from, to uint64) (gapSc
 			endState[b] = st // proved unavailability outranks an expiry
 		}
 	}
-	special := map[uint64]bool{}
+	special := map[uint64]struct{}{}
 	for b := range filled {
-		special[b] = true
+		special[b] = struct{}{}
 	}
 	for b := range endState {
-		special[b] = true
+		special[b] = struct{}{}
 	}
 	sp := make([]uint64, 0, len(special))
 	for b := range special {
@@ -397,9 +405,6 @@ func gapScan(ctx context.Context, s CaptureStore, chain, from, to uint64) (gapSc
 	sort.Slice(sp, func(i, j int) bool { return sp[i] < sp[j] })
 	var pieces []GapRange
 	emit := func(f, t uint64, st GapState) {
-		if t < f {
-			return
-		}
 		if n := len(pieces); n > 0 && pieces[n-1].State == st && pieces[n-1].To+1 == f {
 			pieces[n-1].To = t
 			return
@@ -418,7 +423,7 @@ func gapScan(ctx context.Context, s CaptureStore, chain, from, to uint64) (gapSc
 				emit(cur, b-1, GapOpen)
 			}
 			switch {
-			case filled[b]:
+			case isIn(filled, b):
 				res.filled++
 			default:
 				emit(b, b, endState[b])
@@ -430,10 +435,10 @@ func gapScan(ctx context.Context, s CaptureStore, chain, from, to uint64) (gapSc
 		}
 	}
 	for i := range pieces {
-		set := map[GapClass]bool{}
+		set := map[GapClass]struct{}{}
 		for _, r := range raws {
 			if r.from <= pieces[i].To && r.to >= pieces[i].From {
-				set[r.class] = true
+				set[r.class] = struct{}{}
 			}
 		}
 		for c := range set {
