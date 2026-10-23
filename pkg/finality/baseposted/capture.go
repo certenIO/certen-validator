@@ -220,41 +220,35 @@ func (c *Capturer) CaptureBlock(ctx context.Context, number uint64) (bool, error
 		}
 		proofs[i] = p.ProofNodes
 	}
-	// Everything is known: insert.
-	put := func(item string, b []byte) error { return c.Store.Put(ctx, key(item), b) }
-	if err := put(ItemHeader, blk.HeaderRLP); err != nil {
-		return false, err
-	}
+	// Everything is known: the rows of the block are written as ONE unit (finality.PutBlock). The inbox row names the block as
+	// captured and lists its transactions, so it must never be stored without the rows it lists: a budget that does not fit the
+	// whole block, or a store failure, stores nothing (RB11-DBFIX D7).
+	var rows []finality.CaptureRow
+	add := func(item string, b []byte) { rows = append(rows, finality.CaptureRow{CaptureKey: key(item), Bytes: b}) }
+	add(ItemHeader, blk.HeaderRLP)
 	var w finality.Writer
 	w.Count(len(idx))
 	for _, i := range idx {
 		w.U32(i)
 	}
-	if err := put(ItemInbox, w.Bytes()); err != nil {
-		return false, err
-	}
+	add(ItemInbox, w.Bytes())
 	for _, i := range idx {
-		if err := put(ItemTx(i), blk.TxRaw[i]); err != nil {
-			return false, err
-		}
+		add(ItemTx(i), blk.TxRaw[i])
 		var pw finality.Writer
 		pw.LPList(proofs[i])
-		if err := put(ItemTxNodes(i), pw.Bytes()); err != nil {
-			return false, err
-		}
+		add(ItemTxNodes(i), pw.Bytes())
 	}
 	for _, r := range blobs {
 		var bw finality.Writer
 		bw.LP(r.b.Raw)
 		bw.Fixed(r.b.Commitment[:])
 		bw.Fixed(r.b.Proof[:])
-		if err := put(ItemBlob(r.tx, r.j), bw.Bytes()); err != nil {
-			return false, err
-		}
+		add(ItemBlob(r.tx, r.j), bw.Bytes())
 	}
 	var sw finality.Writer
 	sw.LPList(sc.Nodes)
-	if err := put(ItemSysCfg, sw.Bytes()); err != nil {
+	add(ItemSysCfg, sw.Bytes())
+	if err := finality.PutBlock(ctx, c.Store, rows); err != nil {
 		return false, err
 	}
 	return true, nil

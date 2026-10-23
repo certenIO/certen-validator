@@ -298,3 +298,40 @@ func (d DirCaptureStore) ListByBlock(_ context.Context, chain, l1Block uint64) (
 func (d DirCaptureStore) ListByRange(_ context.Context, chain, from, to uint64, itemPrefix string) ([]CaptureKey, error) {
 	return d.scan(chain, func(n uint64) bool { return n >= from && n <= to }, itemPrefix)
 }
+
+var _ BlockPutter = (*MemCaptureStore)(nil)
+
+// PutBlock implements BlockPutter: under one lock, every row is checked first (an item outside the alphabet, a key stored with other
+// bytes) and the rows are stored only if none is refused.
+func (m *MemCaptureStore) PutBlock(_ context.Context, rows []CaptureRow) error {
+	for _, r := range rows {
+		if err := CheckCaptureItem(r.Item); err != nil {
+			return err
+		}
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	staged := map[CaptureKey][]byte{}
+	for _, r := range rows {
+		if old, ok := m.rows[r.CaptureKey]; ok {
+			if err := sameOrConflict(old, r.Bytes, r.CaptureKey); err != nil {
+				return err
+			}
+			continue
+		}
+		if prev, ok := staged[r.CaptureKey]; ok {
+			if err := sameOrConflict(prev, r.Bytes, r.CaptureKey); err != nil {
+				return err
+			}
+			continue
+		}
+		staged[r.CaptureKey] = append([]byte(nil), r.Bytes...)
+	}
+	if m.rows == nil {
+		m.rows = map[CaptureKey][]byte{}
+	}
+	for k, b := range staged {
+		m.rows[k] = b
+	}
+	return nil
+}

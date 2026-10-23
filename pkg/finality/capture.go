@@ -58,3 +58,30 @@ type CaptureStore interface {
 	// (empty = all), ascending by (l1Block, l1Hash, item).
 	ListByRange(ctx context.Context, chain, from, to uint64, itemPrefix string) ([]CaptureKey, error)
 }
+
+// BlockPutter is a CaptureStore that admits the rows of one captured block as a unit (RB11-DBFIX D7): every row is stored or none
+// is. A capture of a block that is written one row at a time can be cut anywhere - by the per-leg byte bound, by an I/O failure -
+// and then the row that names the block as captured (the inbox row of a Base block, the batch record of an Arbitrum batch) lists
+// rows that are not there, so a builder would attest from half a block. The production store (pkg/database.FinalityCaptureStore)
+// writes the rows in one transaction, and the budgeted store (pkg/finality/runtime.BudgetedStore) reserves the block's planned
+// total before the first row is written and refuses the whole block if the reservation does not fit the bound.
+type BlockPutter interface {
+	// PutBlock stores every row or none. As for Put, a row already stored with the same bytes is a no-op and one stored with other
+	// bytes is ErrCaptureConflict, in which case no row of the call is stored.
+	PutBlock(ctx context.Context, rows []CaptureRow) error
+}
+
+// PutBlock stores the rows of one captured block through the store's own all-or-nothing PutBlock. A store without one (the in-memory
+// and directory stores of tests and the one-shot recorder) has no admission bound to cross, so its rows are written in order and the
+// first error is returned; the stores the validator runs on do implement BlockPutter.
+func PutBlock(ctx context.Context, s CaptureStore, rows []CaptureRow) error {
+	if bp, ok := s.(BlockPutter); ok {
+		return bp.PutBlock(ctx, rows)
+	}
+	for _, r := range rows {
+		if err := s.Put(ctx, r.CaptureKey, r.Bytes); err != nil {
+			return err
+		}
+	}
+	return nil
+}

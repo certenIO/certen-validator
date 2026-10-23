@@ -467,19 +467,18 @@ func (c *Capturer) captureBatch(ctx context.Context, lg Log, rep *Report) (*uint
 	if !rec.ConsistentAcc(data) {
 		return nil, fmt.Errorf("batch %d: keccak256(beforeAcc || dataHash || delayedAcc) differs from the event's afterAcc (the capture cannot reproduce the accumulator)", rec.N)
 	}
-	if err := putRow(ctx, c.Store, hdrKey(c.Cfg.Chain, h, ItemHeader), h.RLP); err != nil {
-		return nil, err
-	}
+	// The header, the calldata and the batch record are written as ONE unit (finality.PutBlock): the batch record names the batch as
+	// captured, so it is never stored without the rows it is attested from (RB11-DBFIX D7).
+	rows := []finality.CaptureRow{{CaptureKey: hdrKey(c.Cfg.Chain, h, ItemHeader), Bytes: h.RLP}}
 	if rec.DataLocation == LocTxInput || rec.DataLocation == LocSeparateBatchEvent {
 		raw := data
 		if rec.DataLocation == LocTxInput {
 			raw = tx.Input
 		}
-		if err := putRow(ctx, c.Store, Key{Chain: c.Cfg.Chain, L1Block: h.Number, L1Hash: h.Hash, Item: ItemCalldata(rec.N)}, raw); err != nil {
-			return nil, err
-		}
+		rows = append(rows, finality.CaptureRow{CaptureKey: Key{Chain: c.Cfg.Chain, L1Block: h.Number, L1Hash: h.Hash, Item: ItemCalldata(rec.N)}, Bytes: raw})
 	}
-	if err := putRow(ctx, c.Store, bk, rec.Encode()); err != nil {
+	rows = append(rows, finality.CaptureRow{CaptureKey: bk, Bytes: rec.Encode()})
+	if err := finality.PutBlock(ctx, c.Store, rows); err != nil {
 		return nil, err
 	}
 	c.needProof[rec.N] = &pendProof{rec: rec}
