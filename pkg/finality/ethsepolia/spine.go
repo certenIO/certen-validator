@@ -58,6 +58,9 @@ const (
 	spineItemPrefix = "spine/n"
 	spineHeadCap    = 64 // finalized-head headers kept in process
 	maxStallKeys    = 4096
+	// SpineLegExpiry is how long a leg that is not attempted again stays in the stall bookkeeping and the gauges: a leg that another validator
+	// completed is never attempted by this process again, and its entry must not outlive its cause.
+	SpineLegExpiry = time.Hour
 )
 
 // SpineItem is the capture item of a chunk of count headers.
@@ -415,15 +418,23 @@ type spineCore struct {
 	chunks spineCache
 	locks  spineLocks
 
-	mu     sync.Mutex
-	heads  map[[32]byte][]byte // finalized-head headers by hash (immutable, so safe to keep)
-	order  [][32]byte
-	stalls map[[32]byte]int // legs (by block hash) whose last attempts kept no new chunk, and how many in a row
-	// awaiting are the legs whose latest attempt ended in awaiting_spine.
-	awaiting map[[32]byte]struct{}
+	mu    sync.Mutex
+	heads map[[32]byte][]byte // finalized-head headers by hash (immutable, so safe to keep)
+	order [][32]byte
+	legs  map[[32]byte]legState // the legs whose latest attempt ended in awaiting_spine
+	now   func() time.Time
 }
 
-func newSpineCore() *spineCore { return &spineCore{chunks: spineCache{cap: SpineCacheBytes}} }
+// legState is what the prover remembers of a leg between attempts.
+type legState struct {
+	at     time.Time // the latest attempt
+	kept   int       // the headers of kept (stored) spans in hand at the end of that attempt
+	stalls int       // attempts in a row that gained no headers in hand
+}
+
+func newSpineCore(now func() time.Time) *spineCore {
+	return &spineCore{chunks: spineCache{cap: SpineCacheBytes}, now: now}
+}
 
 func (c *spineCore) head(h [32]byte) ([]byte, bool) {
 	c.mu.Lock()
@@ -449,48 +460,58 @@ func (c *spineCore) putHead(h [32]byte, raw []byte) {
 	c.order = append(c.order, h)
 }
 
-// noteAttempt records the outcome of an attempt that ended in the progress state and returns the number of attempts in a row before it that
-// kept no new chunk. progressed is true when the attempt fetched at least one chunk that is kept (the window under the head is never kept,
-// it moves with the head, so fetching only that is no progress).
-func (c *spineCore) noteAttempt(leg [32]byte, progressed bool) int {
+// noteAttempt records an attempt that ended in the progress state and returns the number of attempts in a row before it that gained no
+// headers in hand. kept is the number of headers of kept (stored) spans the attempt had in hand, whoever fetched them: it is progress when it
+// exceeds the leg's previous attempt's, so a leg that follows another and only REUSES the chunks that one kept is progressing. The window
+// under the head is never kept and does not count.
+func (c *spineCore) noteAttempt(leg [32]byte, kept int) int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.awaiting == nil {
-		c.awaiting = map[[32]byte]struct{}{}
+	now := c.now()
+	c.expireLocked(now)
+	if c.legs == nil || len(c.legs) >= maxStallKeys {
+		c.legs = map[[32]byte]legState{}
 	}
-	c.awaiting[leg] = struct{}{}
+	st := c.legs[leg]
 	n := 0
-	if progressed {
-		delete(c.stalls, leg)
+	if kept > st.kept {
+		st.stalls = 0
 	} else {
-		n = c.stalls[leg]
-		if c.stalls == nil || len(c.stalls) >= maxStallKeys {
-			c.stalls = map[[32]byte]int{}
-		}
-		c.stalls[leg] = n + 1
+		n = st.stalls
+		st.stalls++
 	}
-	c.publishLocked()
+	st.kept, st.at = kept, now
+	c.legs[leg] = st
 	return n
 }
 
 func (c *spineCore) finished(leg [32]byte) {
 	c.mu.Lock()
-	delete(c.stalls, leg)
-	delete(c.awaiting, leg)
-	c.publishLocked()
+	delete(c.legs, leg)
 	c.mu.Unlock()
 }
 
-// publishLocked sets the two gauges: the legs whose latest attempt ended in awaiting_spine, and the longest run of attempts without a new
-// kept chunk any of them is in (the alert: certen_finality_spine_stalled_attempts_max). One prover per process.
-func (c *spineCore) publishLocked() {
-	most := 0
-	for _, n := range c.stalls {
-		if n > most {
-			most = n
+// expireLocked forgets the legs not attempted for more than SpineLegExpiry.
+func (c *spineCore) expireLocked(now time.Time) {
+	for k, st := range c.legs {
+		if now.Sub(st.at) > SpineLegExpiry {
+			delete(c.legs, k)
 		}
 	}
-	metrics.SetFinalitySpineLegs(len(c.awaiting), most)
+}
+
+// gauges is read at every scrape: the legs awaiting their spine and the longest run of attempts without gaining headers in hand (the
+// alert: certen_finality_spine_stalled_attempts_max), after expiry. One prover per process.
+func (c *spineCore) gauges() (awaiting, stalledMax int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.expireLocked(c.now())
+	for _, st := range c.legs {
+		if st.stalls > stalledMax {
+			stalledMax = st.stalls
+		}
+	}
+	return len(c.legs), stalledMax
 }
 
 // ---- one attempt ----
@@ -517,14 +538,17 @@ type spineRun struct {
 	need    int
 	reserve time.Duration // the part of the deadline kept back for assembling (0: no deadline)
 	fetched int           // headers fetched in this attempt
-	kept    int           // headers fetched in this attempt that belong to chunks which are kept (the progress that counts)
+	kept    int           // headers of kept (stored) spans in hand so far in this attempt, fetched or reused: the progress that counts
 	reused  int           // chunks read from the process cache or the store
 	reusedH int           // headers in those chunks
 	chunks  int           // chunks fetched
 }
 
 func (p *Prover) spineCore() *spineCore {
-	p.coreOnce.Do(func() { p.sc = newSpineCore() })
+	p.coreOnce.Do(func() {
+		p.sc = newSpineCore(p.now)
+		metrics.SetFinalitySpineSource(p.sc.gauges)
+	})
 	return p.sc
 }
 
@@ -572,7 +596,7 @@ func (r *spineRun) logDone() {
 }
 
 func (r *spineRun) pending(sp *spinePause) *finality.PendingState {
-	stalls := r.sc.noteAttempt(r.leg.Hash, r.kept > 0)
+	stalls := r.sc.noteAttempt(r.leg.Hash, r.kept)
 	r.count([]string{"budget", "throttled", "error"}[sp.kind])
 	next := r.p.now().Add(PauseAfter(sp.kind, sp.retryAfter, stalls)).UTC()
 	j := map[string]any{"have": uint64(r.have), "need": uint64(r.need), "next_attempt_at": next.Format(time.RFC3339)}
@@ -671,6 +695,9 @@ func (r *spineRun) walk(c candidate) ([][]byte, error) {
 		parts = append(parts, e.hs)
 		want = e.parent
 		r.have += sp.Count()
+		if sp.Stored {
+			r.kept += sp.Count()
+		}
 	}
 	out := make([][]byte, 0, r.need)
 	out = append(out, h0.raw)
@@ -821,9 +848,6 @@ func (r *spineRun) fetch(sp Span, want [32]byte, k spineKey) (*spineEntry, error
 	e := &spineEntry{enc: enc, hs: dec, parent: parent}
 	r.sc.chunks.put(k, e) // in process first: a store that fails now loses no progress
 	r.fetched += sp.Count()
-	if sp.Stored {
-		r.kept += sp.Count()
-	}
 	r.chunks++
 	if sp.Stored && r.p.Store != nil {
 		if err := r.p.Store.Put(r.ctx, r.key(sp, want), enc); err != nil {
