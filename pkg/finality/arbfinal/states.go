@@ -95,6 +95,12 @@ const (
 	RoleAdminLogic = "rollup_admin_logic"
 	RoleUserLogic  = "rollup_user_logic"
 	roleRollup     = "rollup"
+	// RoleWalletProxy is the exact runtime code of a ValidatorWallet proxy: the OpenZeppelin 4.7.3 TransparentUpgradeableProxy that
+	// ValidatorWalletCreator.createWallet deploys (it has no immutables, so every wallet of the build has this code hash).
+	RoleWalletProxy = "validator_wallet_proxy"
+	// RoleWalletLogic is the exact runtime code of the pinned ValidatorWallet implementation (the creator's template, which embeds
+	// its own address as the DelegateCallAware immutable, so the code hash names one deployment).
+	RoleWalletLogic = "validator_wallet_logic"
 )
 
 // PinMismatch is pin_mismatch{field}.

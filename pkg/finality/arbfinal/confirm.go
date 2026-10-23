@@ -116,15 +116,20 @@ func classifyConfirmation(arb *Pins, kb ethl1.L1Block, kHeader finality.HeaderFi
 		}
 		return out, ConfirmationUnproven(ConfirmIndirect, txHash, kb.Number)
 	}
-	// The wallet route is chosen by the calldata of a transaction that has a callee. The pins carry no ValidatorWallet address or code
-	// hash (a wallet is a per-validator clone), so the callee's code is not proven to be a wallet: the honesty of the confirmation
-	// rests on the Rollup-side facts (the MPT-proven receipt's log set, status 1, anyTrustFastConfirmer = 0 at K), and the route
-	// "wallet" records what the calldata said (spec 5.7: indirect is the state for a caller whose code is not decoded).
+	// The wallet route. The calldata of a transaction that has a callee is a ValidatorWallet entry point only if the callee IS one:
+	// [r3:E1RAISE] that is proven, not read from the calldata. The callee's account is proven under K's state root, its code hash must
+	// be the pinned ValidatorWallet proxy code, its EIP-1967 implementation slot must hold the pinned implementation, and that
+	// implementation's account (proven under the same root) must have the pinned ValidatorWallet logic code hash. Anything not
+	// established is confirmation_path_unproven{indirect}: a statement about code the verifier has not identified, never a weaker
+	// level and never the label "wallet".
 	calls, ok := decodeWalletCalls(arb, sel, input)
 	if !ok {
 		if arb.isWalletSelector(sel) {
 			return out, ConfirmationUnproven(ConfirmWalletUndecodable, txHash, kb.Number)
 		}
+		return out, ConfirmationUnproven(ConfirmIndirect, txHash, kb.Number)
+	}
+	if !ProveWallet(arb, common.Hash(kb.StateRoot), *tx.To(), e.Nodes) {
 		return out, ConfirmationUnproven(ConfirmIndirect, txHash, kb.Number)
 	}
 	var found bool
@@ -158,6 +163,47 @@ func classifyConfirmation(arb *Pins, kb ethl1.L1Block, kHeader finality.HeaderFi
 	}
 	out.Route = RouteWallet
 	return out, nil
+}
+
+// ProveWallet is the identity rule of the wallet route (V2_SPEC_S7 5.7 O4, amendment r3): wallet is a ValidatorWallet at the state
+// whose root is stateRoot, proven from nodes, iff
+//
+//  1. the account proof of wallet resolves from stateRoot to an existing account whose code hash has the logic_pins role
+//     validator_wallet_proxy (the exact runtime code of the OpenZeppelin TransparentUpgradeableProxy that
+//     ValidatorWalletCreator.createWallet deploys: it has no immutables, so one code hash covers every wallet);
+//  2. the storage proof of the EIP-1967 implementation slot (proxy_slots.wallet_impl) resolves from that account's storage root to
+//     exactly the 32-byte word of the pinned implementation address (confirm_path.validator_wallet_impl, high 12 bytes zero);
+//  3. the account proof of that implementation resolves from stateRoot to an existing account whose code hash has the role
+//     validator_wallet_logic (the exact runtime code of the template, which embeds its own address, so it names one deployment).
+//
+// A wallet account that is not proven, a missing or foreign proof node, an externally owned account, any other contract, a proxy of
+// the same code over another implementation, and an implementation of other code all fail. It is exported for the builder, which
+// must capture exactly the nodes this reads.
+func ProveWallet(arb *Pins, stateRoot common.Hash, wallet common.Address, nodes [][]byte) bool {
+	acct, err := ethproof.VerifyAccount(stateRoot, wallet, nodes)
+	if err != nil || !acct.Exists || arb.roleOf(acct.CodeHash) != RoleWalletProxy {
+		return false
+	}
+	word, err := ethproof.VerifySlot(acct.StorageRoot, arb.WalletImplSlot, nodes)
+	if err != nil || word != common.BytesToHash(arb.WalletImpl[:]) {
+		return false
+	}
+	impl, err := ethproof.VerifyAccount(stateRoot, arb.WalletImpl, nodes)
+	return err == nil && impl.Exists && arb.roleOf(impl.CodeHash) == RoleWalletLogic
+}
+
+// WalletCallee is the callee of a confirmation transaction that takes the wallet route's decoding: a transaction with a callee other
+// than the Rollup whose calldata decodes, canonically, as one of the four ValidatorWallet entry points. The builder captures the
+// proofs ProveWallet reads for exactly this address; it is not an identity claim.
+func WalletCallee(arb *Pins, tx *types.Transaction) (common.Address, bool) {
+	if tx == nil || tx.To() == nil || *tx.To() == arb.Rollup {
+		return common.Address{}, false
+	}
+	sel, _ := selectorOf(tx.Data())
+	if _, ok := decodeWalletCalls(arb, sel, tx.Data()); !ok {
+		return common.Address{}, false
+	}
+	return *tx.To(), true
 }
 
 // selectorOf is the first four bytes of calldata; ok is false when there are fewer (no selector).
