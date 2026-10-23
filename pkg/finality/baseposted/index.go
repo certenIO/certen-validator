@@ -372,7 +372,7 @@ func runsOf(batches []Batch, step uint64) (runs []covRun, tmin, tmax uint64, ok 
 		}
 		runs = append(runs, covRun{First: b.Timestamp, Count: 1, Type: b.Type, Epoch: b.EpochNum})
 	}
-	return runs, tmin, tmax, true
+	return runs, tmin, tmax, ok
 }
 
 // ---- names ----
