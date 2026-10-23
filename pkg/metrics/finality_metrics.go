@@ -73,6 +73,10 @@ var (
 		Name: "certen_finality_build_failures_total",
 		Help: "Finality builds that ended in a named state other than finality_pending.",
 	}, []string{"chain", "code"})
+	finalityBuildHeld = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "certen_finality_build_held_total",
+		Help: "Finality asks held by the environment instead of failed (RB12-GO-INT F17): a state that is a fact about this process or its capture store, such as l1_capture_gap, by chain and state code. A held leg is asked again at the bounded poll and is not counted in certen_finality_build_failures_total.",
+	}, []string{"chain", "code"})
 	finalityPending = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "certen_finality_pending_total",
 		Help: "Finality builds that ended in finality_pending (the level reached is proven; the next one is not yet buildable).",
@@ -311,6 +315,11 @@ func IncFinalityAppended(chain uint64, level string) {
 	finalityHealth.mu.Unlock()
 }
 
+// IncFinalityBuildHeld counts an ask held by the environment (a state of the environment class, see pkg/finality/state_class.go).
+func IncFinalityBuildHeld(chain uint64, code string) {
+	finalityBuildHeld.WithLabelValues(chainLabel(chain), code).Inc()
+}
+
 // IncFinalityBuildFailure counts a build that ended in a named state.
 func IncFinalityBuildFailure(chain uint64, code string) {
 	finalityBuildFailures.WithLabelValues(chainLabel(chain), code).Inc()
@@ -454,6 +463,7 @@ func registerFinalityMetrics() {
 	prometheus.MustRegister(finalityUnrecordedSettlements)
 	prometheus.MustRegister(finalityAppended)
 	prometheus.MustRegister(finalityBuildFailures)
+	prometheus.MustRegister(finalityBuildHeld)
 	prometheus.MustRegister(finalityPending)
 	prometheus.MustRegister(finalityChainBroken)
 	prometheus.MustRegister(finalityStatus)
