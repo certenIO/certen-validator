@@ -63,8 +63,9 @@ func TestStatusRepositoryReturnsTheDatabasesErrorAndRefusesAStoredDocumentThatDo
 	if _, ok, err := repo.GetStatus(canceled(), pid, finality.LevelL1Posted); !errors.Is(err, context.Canceled) || ok {
 		t.Errorf("GetStatus on a database that cannot answer: %v %v", ok, err)
 	}
-	if _, ok, err := repo.GetStatus(context.Background(), "not-a-uuid", finality.LevelL1Posted); err == nil || ok {
-		t.Errorf("GetStatus of a bad proof id: %v %v", ok, err)
+	_, badID := finality.ParseProofID("not-a-uuid")
+	if _, ok, err := repo.GetStatus(canceled(), "not-a-uuid", finality.LevelL1Posted); err == nil || badID == nil || err.Error() != badID.Error() || ok {
+		t.Errorf("GetStatus of a bad proof id: %v %v, want %v", ok, err, badID)
 	}
 	// a row whose document is not a certen-finality-status/1 document (written by hand, or by a newer writer): an error, never a row
 	if _, err := testDB.Exec(`INSERT INTO proof_finality_status (proof_id, chain, target_level, state) VALUES ($1::uuid, $2, $3, $4::jsonb)`,

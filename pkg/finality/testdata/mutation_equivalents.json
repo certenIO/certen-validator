@@ -302,5 +302,13 @@
     "original": "make(chan out, 1)",
     "mutated": "make(chan out, 2)",
     "reason": "The goroutine sends exactly once, so capacity 2 behaves like capacity 1 (capacity 0 is killed by the goroutine-leak test)."
+  },
+  {
+    "file": "status.go",
+    "function": "BuilderStatus.Document",
+    "operator": "guard_off",
+    "original": "if err != nil",
+    "mutated": "if false",
+    "reason": "json.Marshal(d) cannot fail here: d holds strings, a uint64 and one json.RawMessage, and that RawMessage is the Canonical rendering of a StateError, which is always valid JSON. The error branch is unreachable."
   }
 ]
