@@ -9,7 +9,7 @@
   },
   {
     "file": "budget.go",
-    "function": "BudgetedStore.PutBlock",
+    "function": "BudgetedStore.reserve",
     "operator": "bool_lit",
     "original": "h.joined[r.Item] = true",
     "mutated": "h.joined[r.Item] = false",

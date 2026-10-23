@@ -891,6 +891,30 @@ func DisabledChainsFromEnv(chains []uint64) (map[uint64]bool, error) {
 	return off, nil
 }
 
+// ConfigInvalidState is the named state of a finality runtime that was NOT started because a setting it parses was refused:
+// finality_upgrader_disabled{reason: config_invalid, variable, entry, class}. entry is the position of the refused entry among the
+// variable's non-blank entries (-1: the variable holds none) and class says what is wrong with it; the value itself is never part of
+// the state, it may hold a credential (env is the variable too, value is the word invalid: the registry's required fields). The validator (consensus, attestation, settlement) is not affected; this validator appends no
+// addenda and captures nothing until the variable is corrected and the process restarted.
+func ConfigInvalidState(variable string, entry int, class string) *StateError {
+	return NewState(CodeUpgraderDisabled, "reason", "config_invalid", "env", variable, "value", "invalid", "variable", variable, "entry", entry, "class", class,
+		"effect", "the finality runtime was not started: no finality addenda are appended and nothing is captured by this validator until the variable is corrected and the process restarted; proofs stay at the level they were stored at; consensus, attestation and settlement are not affected")
+}
+
+// AnnounceUpgraderDisabled announces that the whole upgrader is off, in the one way every such state is announced: the log, the
+// certen_finality_upgrader_enabled gauge, certen_finality_upgrader_disabled_total{chain="0",env} (env: the switch, or the refused
+// variable of a config_invalid state) and the health block's upgrader_disabled_reason. The state carries no secret.
+func AnnounceUpgraderDisabled(logf func(format string, args ...any), st *StateError) {
+	env, _ := st.Fields["variable"].(string)
+	if env == "" {
+		env, _ = st.Fields["env"].(string)
+	}
+	logf("[FINALITY] upgrader DISABLED: %s", st.Error())
+	metrics.SetFinalityUpgraderEnabled(false)
+	metrics.IncFinalityUpgraderDisabled(0, env)
+	metrics.SetFinalityUpgraderDisabledReason(st.Error())
+}
+
 // Launch starts the upgrader and the registered capture loops on their own goroutines, or, when it is switched off, reports
 // the named state finality_upgrader_disabled in the log and the metric: an off switch is never a silent skip. Per-chain
 // switches (CERTEN_FINALITY_CHAIN_<id>_ENABLED, default on) turn one chain's upgrader and capturers off the same way. It
@@ -898,11 +922,8 @@ func DisabledChainsFromEnv(chains []uint64) (map[uint64]bool, error) {
 func Launch(ctx context.Context, enabled bool, src LegSource, store AddendumStore, reg *Registry, pins *Pins, cfg UpgraderConfig) (*Upgrader, error) {
 	cfg = cfg.withDefaults()
 	if !enabled {
-		st := NewState(CodeUpgraderDisabled, "env", EnvEnabled, "value", "false",
-			"effect", "no finality addenda are appended by this validator; proofs stay at the level they were stored at")
-		cfg.Logf("[FINALITY] upgrader DISABLED: %s", st.Error())
-		metrics.SetFinalityUpgraderEnabled(false)
-		metrics.IncFinalityUpgraderDisabled(0, EnvEnabled)
+		AnnounceUpgraderDisabled(cfg.Logf, NewState(CodeUpgraderDisabled, "env", EnvEnabled, "value", "false",
+			"effect", "no finality addenda are appended by this validator; proofs stay at the level they were stored at"))
 		return nil, nil
 	}
 	// a missing registry is NewUpgrader's refusal below, not a nil dereference here

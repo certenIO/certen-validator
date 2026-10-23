@@ -29,7 +29,7 @@ func gatherDefault() ([]string, error) {
 // resetFinalityHealth empties the in-process snapshot so a test sees only what it sets.
 func resetFinalityHealth() {
 	finalityHealth.mu.Lock()
-	finalityHealth.upgraderKnown, finalityHealth.upgraderEnabled = false, false
+	finalityHealth.upgraderKnown, finalityHealth.upgraderEnabled, finalityHealth.upgraderReason = false, false, ""
 	finalityHealth.chains = map[uint64]*finalityChainHealth{}
 	finalityHealth.mu.Unlock()
 }

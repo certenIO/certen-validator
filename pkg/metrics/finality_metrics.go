@@ -159,7 +159,9 @@ var finalityHealth = struct {
 	mu              sync.Mutex
 	upgraderKnown   bool
 	upgraderEnabled bool
-	chains          map[uint64]*finalityChainHealth
+	// upgraderReason is the named state that switched the whole upgrader off (empty while it is on or not yet reported).
+	upgraderReason string
+	chains         map[uint64]*finalityChainHealth
 }{chains: map[uint64]*finalityChainHealth{}}
 
 // finalityChain returns the chain's record; the caller holds finalityHealth.mu.
@@ -175,7 +177,7 @@ func finalityChain(chain uint64) *finalityChainHealth {
 // FinalityHealth is the staged-finality block of /health/detailed: JSON-ready, secret-free (chain ids, counts, block numbers and
 // the name of the setting that switched something off, never a URL or a key). Layout:
 //
-//	{"upgrader_enabled": bool,
+//	{"upgrader_enabled": bool, "upgrader_disabled_reason": string (only while the whole upgrader is off: the named state, e.g. config_invalid with the variable and entry),
 //	 "chains": {"<chain id>": {"enabled": bool (once known), "disabled_reason": string, "last_captured_block": n,
 //	            "capture_lag_blocks": n, "pending_legs_by_level": {"<level>": n}, "last_append_unixtime": n,
 //	            "capturer_restarts": n, "capturers": {"<name>": {"last_captured_block": n, "capture_lag_blocks": n}}}}}
@@ -189,6 +191,9 @@ func FinalityHealth() map[string]any {
 	out := map[string]any{}
 	if finalityHealth.upgraderKnown {
 		out["upgrader_enabled"] = finalityHealth.upgraderEnabled
+	}
+	if finalityHealth.upgraderReason != "" {
+		out["upgrader_disabled_reason"] = finalityHealth.upgraderReason
 	}
 	chains := map[string]any{}
 	ids := make([]uint64, 0, len(finalityHealth.chains))
@@ -240,12 +245,23 @@ func FinalityHealth() map[string]any {
 func SetFinalityUpgraderEnabled(on bool) {
 	finalityHealth.mu.Lock()
 	finalityHealth.upgraderKnown, finalityHealth.upgraderEnabled = true, on
+	if on {
+		finalityHealth.upgraderReason = ""
+	}
 	finalityHealth.mu.Unlock()
 	if on {
 		finalityEnabled.Set(1)
 		return
 	}
 	finalityEnabled.Set(0)
+}
+
+// SetFinalityUpgraderDisabledReason records, for the health block, the named state that switched the whole upgrader off (the state's
+// text: its code, the setting and the entry position, never a URL or a key). Reporting the upgrader on clears it.
+func SetFinalityUpgraderDisabledReason(reason string) {
+	finalityHealth.mu.Lock()
+	finalityHealth.upgraderReason = reason
+	finalityHealth.mu.Unlock()
 }
 
 // SetFinalityLegs reports how many legs stand at a level on a chain.

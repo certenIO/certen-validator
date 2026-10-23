@@ -17,6 +17,7 @@
 package runtime
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -106,14 +107,102 @@ func urlSeparator(r rune) bool {
 	return r == ',' || r == ';' || r == ' ' || r == '\t' || r == '\n' || r == '\r'
 }
 
-// checkURLEntries refuses an entry that is not an http(s) URL with a host. The refusal names the variable (or provider list) and the
-// INDEX of the entry among the non-blank entries, never the entry: a provider URL may hold a credential.
-func checkURLEntries(what string, entries []string) error {
-	for i, e := range entries {
-		u, err := url.Parse(e)
-		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {
-			return fmt.Errorf("%s: entry %d is not an http(s) URL with a host (the entry is not printed: it may hold a credential)", what, i)
+// The classes of a refused provider entry. They name the kind of defect and never carry a byte of the value.
+const (
+	ClassNoEntry          = "no_entry"          // the variable is set but holds no entry at all
+	ClassNoScheme         = "no_scheme"         // no scheme (a bare host, a path, words)
+	ClassOtherScheme      = "other_scheme"      // a scheme that is not http or https (ws, wss, ftp, postgres, ...)
+	ClassNoHost           = "no_host"           // http(s) with an empty host
+	ClassBadEscape        = "bad_escape"        // a percent escape url.Parse rejects
+	ClassBadPort          = "bad_port"          // a port that is not a number
+	ClassBadUserinfo      = "bad_userinfo"      // a character url.Parse does not allow in user information
+	ClassBadHost          = "bad_host"          // a host url.Parse rejects
+	ClassControlCharacter = "control_character" // a control character
+	ClassUnparseable      = "unparseable"       // url.Parse rejects it for another reason
+)
+
+// ConfigError is the refusal of one provider URL entry: the variable that holds it, its position among that variable's non-blank
+// entries (-1: the variable is set but holds none), the chain key for a per-chain variable and the class of the defect. It carries
+// no part of the value, which may hold a credential, so it can be logged, counted and shown as it is.
+type ConfigError struct {
+	Variable string
+	Chain    string
+	Entry    int
+	Class    string
+}
+
+func (e *ConfigError) Error() string {
+	if e.Class == ClassNoEntry {
+		return fmt.Sprintf("%s is set but holds no entry (an empty list would override the default; unset the variable to use it)", e.Variable)
+	}
+	where := e.Variable
+	if e.Chain != "" {
+		where = e.Chain + " provider list (" + e.Variable + ")"
+	}
+	return fmt.Sprintf("%s: entry %d is not an http(s) URL with a host [%s] (the entry is not printed: it may hold a credential)", where, e.Entry, e.Class)
+}
+
+// entryClass judges one provider entry by the rule of the code that uses it: url.Parse must accept it, its scheme must be http or
+// https and it must name a host. It returns "" for an accepted entry and otherwise the class of the defect; it never returns, nor
+// builds a message from, the text of the parse error (that text can quote the value).
+func entryClass(e string) string {
+	u, err := url.Parse(e)
+	if err != nil {
+		msg := err.Error()
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			msg = ue.Err.Error()
 		}
+		return parseErrorClass(msg)
+	}
+	switch u.Scheme {
+	case "http", "https":
+		if u.Hostname() == "" {
+			return ClassNoHost
+		}
+		return ""
+	case "":
+		return ClassNoScheme
+	}
+	return ClassOtherScheme
+}
+
+// parseErrorClass names the kind of defect a url.Parse error message reports; a message it does not know is ClassUnparseable (still a
+// refusal). The message is read here and nowhere else, and is never returned.
+func parseErrorClass(msg string) string {
+	switch {
+	case strings.Contains(msg, "invalid control character"):
+		return ClassControlCharacter
+	case strings.Contains(msg, "invalid URL escape"):
+		return ClassBadEscape
+	case strings.Contains(msg, "invalid port"):
+		return ClassBadPort
+	case strings.Contains(msg, "invalid userinfo"):
+		return ClassBadUserinfo
+	case strings.Contains(msg, "missing protocol scheme"), strings.Contains(msg, "first path segment in URL cannot contain colon"):
+		return ClassNoScheme
+	case strings.Contains(msg, "host"): // "invalid character ... in host name", "missing ']' in host"
+		return ClassBadHost
+	}
+	return ClassUnparseable
+}
+
+// refusedEntries judges every entry of one variable and returns each refusal (the position is the index among the non-blank entries).
+func refusedEntries(variable, chain string, entries []string) []ConfigError {
+	var out []ConfigError
+	for i, e := range entries {
+		if class := entryClass(e); class != "" {
+			out = append(out, ConfigError{Variable: variable, Chain: chain, Entry: i, Class: class})
+		}
+	}
+	return out
+}
+
+// checkURLEntries refuses an entry that is not an http(s) URL with a host. The refusal is a *ConfigError: it names the variable and
+// the INDEX of the entry among the non-blank entries, never the entry (a provider URL may hold a credential).
+func checkURLEntries(variable, chain string, entries []string) error {
+	if refused := refusedEntries(variable, chain, entries); len(refused) > 0 {
+		return &refused[0]
 	}
 	return nil
 }
@@ -123,9 +212,9 @@ func checkURLEntries(what string, entries []string) error {
 func parseURLList(env, value string) ([]string, error) {
 	entries := strings.FieldsFunc(value, urlSeparator)
 	if len(entries) == 0 {
-		return nil, fmt.Errorf("%s is set but holds no entry (an empty list would override the default; unset the variable to use it)", env)
+		return nil, &ConfigError{Variable: env, Entry: -1, Class: ClassNoEntry}
 	}
-	if err := checkURLEntries(env, entries); err != nil {
+	if err := checkURLEntries(env, "", entries); err != nil {
 		return nil, err
 	}
 	return ethrpc.ParseEndpoints(entries...), nil
@@ -139,15 +228,66 @@ func listFromEnv(key string, def []string) ([]string, string, error) {
 	return append([]string(nil), def...), "default", nil
 }
 
-// chainListFromEnv is the validated provider list the validator already uses for a chain (<PREFIX>_RPC_URL, <PREFIX>_URL_FALLBACKS,
-// INFURA_<PREFIX>_URL, ALCHEMY_<PREFIX>_URL): the finality providers speak HTTP JSON-RPC, so an entry that is not an http(s) URL with
-// a host is refused here by chain and index.
+// chainListFromEnv is the validated provider list the validator already uses for a chain (every variable of
+// ethrpc.EndpointVariablesForChain: <PREFIX>_RPC_URL, <PREFIX>_URL_FALLBACKS, INFURA_<PREFIX>_URL, ALCHEMY_<PREFIX>_URL and, for
+// Ethereum Sepolia, its legacy ETHEREUM_* variables): the finality providers speak HTTP JSON-RPC, so an entry that is not an http(s)
+// URL with a host is refused here by chain, variable and index.
 func chainListFromEnv(chainKey string) ([]string, error) {
-	l := ethrpc.EndpointsForChain(chainKey)
-	if err := checkURLEntries(chainKey+" provider list ("+ethrpc.ChainEnvPrefix(chainKey)+"_RPC_URL, "+ethrpc.ChainEnvPrefix(chainKey)+"_URL_FALLBACKS, INFURA_/ALCHEMY_"+ethrpc.ChainEnvPrefix(chainKey)+"_URL)", l); err != nil {
-		return nil, err
+	for _, name := range ethrpc.EndpointVariablesForChain(chainKey) {
+		if err := checkURLEntries(name, chainKey, strings.FieldsFunc(os.Getenv(name), urlSeparator)); err != nil {
+			return nil, err
+		}
 	}
-	return l, nil
+	return ethrpc.EndpointsForChain(chainKey), nil
+}
+
+// ProviderVariable is one environment variable ConfigFromEnv parses as a list of provider URLs; Chain is the chain key of a
+// per-chain provider variable and empty for a CERTEN_FINALITY_* list.
+type ProviderVariable struct {
+	Name  string
+	Chain string
+}
+
+// providerChains are the chain keys whose provider lists ConfigFromEnv reads.
+var providerChains = []string{"ethereum-sepolia", "base-sepolia", "arbitrum-sepolia", "telcoin-adiri"}
+
+// ProviderVariables lists, in the order ConfigFromEnv reads them, every environment variable it parses as a list of provider URLs.
+// It is the table the startup validation and the read-only deploy check share, so neither can name a variable the other does not.
+func ProviderVariables() []ProviderVariable {
+	var out []ProviderVariable
+	chain := func(key string) {
+		for _, n := range ethrpc.EndpointVariablesForChain(key) {
+			out = append(out, ProviderVariable{Name: n, Chain: key})
+		}
+	}
+	chain(providerChains[0])
+	for _, n := range []string{EnvL1RPCURLs, EnvL1ProofURLs, EnvArchiveURLs, EnvLCURLs, EnvBeaconURLs} {
+		out = append(out, ProviderVariable{Name: n})
+	}
+	chain(providerChains[1])
+	chain(providerChains[2])
+	chain(providerChains[3])
+	out = append(out, ProviderVariable{Name: EnvAdiriURLs})
+	return out
+}
+
+// ProviderEntryCount is the number of non-blank entries a provider variable holds (the positions ConfigError.Entry counts).
+func ProviderEntryCount(raw string) int { return len(strings.FieldsFunc(raw, urlSeparator)) }
+
+// CheckProviderEnvironment judges every provider variable of the environment by the rule ConfigFromEnv applies and returns each
+// refusal (all of them, in ProviderVariables order), without reading anything else. It holds no value: see ConfigError.
+func CheckProviderEnvironment() []ConfigError {
+	var out []ConfigError
+	for _, v := range ProviderVariables() {
+		raw := os.Getenv(v.Name)
+		entries := strings.FieldsFunc(raw, urlSeparator)
+		if v.Chain == "" && strings.TrimSpace(raw) != "" && len(entries) == 0 {
+			out = append(out, ConfigError{Variable: v.Name, Entry: -1, Class: ClassNoEntry})
+			continue
+		}
+		out = append(out, refusedEntries(v.Name, v.Chain, entries)...)
+	}
+	return out
 }
 
 // ConfigFromEnv reads the configuration. A numeric variable that is not a number in range refuses startup by name (the
