@@ -105,7 +105,7 @@ type Capturer struct {
 func (c *Capturer) CaptureBlock(ctx context.Context, number uint64) (bool, error) {
 	blk, err := c.L1.Block(ctx, number)
 	if err != nil {
-		return false, err
+		return false, &BlockFetchError{Block: number, Err: err}
 	}
 	var idx []uint32
 	for i := range blk.TxRaw {

@@ -408,6 +408,16 @@ func (b *Builder) search(ctx context.Context, bp *Pins, l2 finality.HeaderFields
 	if sr.ch == nil && known && origin < lower {
 		return sr, notCovering() // part of the window was never scanned: the channel may have been posted there
 	}
+	if sr.ch == nil {
+		// RB12-CAPTURE-GAP: a recorded gap inside the window may hold the channel; "not posted yet" cannot be said while it is open
+		pieces, err := finality.GapsIn(ctx, b.Store, uint64(Chain), origin, end)
+		if err != nil {
+			return sr, err
+		}
+		if gs := gapState(pieces, origin, end, b.HasArchive); gs != nil {
+			return sr, gs
+		}
+	}
 	return sr, nil
 }
 

@@ -253,9 +253,21 @@ type BeaconHTTP struct {
 }
 
 // StatusError carries the HTTP status of a beacon answer (the http_status field of l1_blob_unavailable).
-type StatusError struct{ Status int }
+type StatusError struct {
+	Status int
+	// Gone: every endpoint answered HTTP 404 or 410 on every blob route of this request, Endpoints being how many endpoints were asked. It is
+	// the one provider evidence that a blob is unavailable (RB12-CAPTURE-GAP); a provider error, a timeout or a single dissenting endpoint
+	// is not.
+	Gone      bool
+	Endpoints int
+}
 
-func (e *StatusError) Error() string { return fmt.Sprintf("beacon blob answer HTTP %d", e.Status) }
+func (e *StatusError) Error() string {
+	if e.Gone {
+		return fmt.Sprintf("beacon blob answer HTTP %d from every one of %d endpoints", e.Status, e.Endpoints)
+	}
+	return fmt.Sprintf("beacon blob answer HTTP %d", e.Status)
+}
 
 func (b *BeaconHTTP) Blobs(ctx context.Context, slot uint64) ([][]byte, error) {
 	cl := b.Client
@@ -263,8 +275,11 @@ func (b *BeaconHTTP) Blobs(ctx context.Context, slot uint64) ([][]byte, error) {
 		cl = &http.Client{Timeout: 120 * time.Second}
 	}
 	var last error = fmt.Errorf("no beacon endpoint configured")
+	// gone: every attempt so far was an HTTP 404 or 410 (the evidence that a blob is unavailable); anything else, or no attempt, clears it
+	attempts, goneAnswers := 0, 0
 	for _, base := range b.Bases {
 		for _, path := range []string{"/eth/v1/beacon/blobs/%d", "/eth/v1/beacon/blob_sidecars/%d"} {
+			attempts++
 			req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(base, "/")+fmt.Sprintf(path, slot), nil)
 			if err != nil {
 				last = redact(err)
@@ -282,7 +297,10 @@ func (b *BeaconHTTP) Blobs(ctx context.Context, slot uint64) ([][]byte, error) {
 				continue
 			}
 			if resp.StatusCode != 200 {
-				last = &StatusError{resp.StatusCode}
+				last = &StatusError{Status: resp.StatusCode}
+				if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone {
+					goneAnswers++
+				}
 				continue
 			}
 			var d struct {
@@ -311,6 +329,9 @@ func (b *BeaconHTTP) Blobs(ctx context.Context, slot uint64) ([][]byte, error) {
 			}
 			last = fmt.Errorf("beacon blob answer carries no blobs")
 		}
+	}
+	if se, ok := last.(*StatusError); ok && attempts > 0 && goneAnswers == attempts {
+		return nil, &StatusError{Status: se.Status, Gone: true, Endpoints: len(b.Bases)}
 	}
 	return nil, last
 }
