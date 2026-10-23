@@ -55,7 +55,7 @@ var (
 	}, []string{"chain", "level"})
 	finalityLegsWithoutSettlement = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "certen_finality_legs_without_settlement",
-		Help: "Legs whose newest bundle holds no execution proof (component 5): finality_included_unavailable, held back quietly and not read again until the proof has a newer bundle, as of the last upgrader pass.",
+		Help: "Legs whose L6 evidence is unavailable (finality_included_unavailable): the newest bundle holds no execution proof (component 5; not read again until the proof has a newer bundle) or an execution proof without its block header (read again every HeaderRetry until its header is reconstructed), held back quietly, as of the last upgrader pass.",
 	}, []string{"chain"})
 	finalityLegacyHeaders = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "certen_finality_legacy_headers",

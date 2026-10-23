@@ -5,8 +5,11 @@ package legacyhdr
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -162,5 +165,54 @@ func TestJudgeRedactsProviderTextInItsLog(t *testing.T) {
 	}
 	if strings.Contains(logged[0], "KEY-12345-SECRET") {
 		t.Fatalf("the log carries the provider credential: %s", logged[0])
+	}
+}
+
+// Every token and field this package puts in a named state is in the registry (testdata/finality/states.json): a closed `check` set
+// for finality_included_invalid, the new reason of finality_included_unavailable, and the optional fields both carry.
+func TestStatesRegistryHoldsEveryTokenAndFieldOfTheLegacyHeaderStates(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "testdata", "finality", "states.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reg struct {
+		States map[string]struct {
+			Enums    map[string][]string `json:"enums"`
+			Required []string            `json:"required"`
+			Optional []string            `json:"optional"`
+		} `json:"states"`
+	}
+	if err := json.Unmarshal(raw, &reg); err != nil {
+		t.Fatal(err)
+	}
+	has := func(set []string, v string) bool {
+		for _, s := range set {
+			if s == v {
+				return true
+			}
+		}
+		return false
+	}
+	inv, unav := reg.States[finality.CodeIncludedInvalid], reg.States[finality.CodeIncludedUnavailable]
+	for _, c := range []string{CheckHeaderSize, CheckHeaderHash, CheckHeaderParse, CheckBlockNumber, CheckStoredRoots, CheckInclusion, CheckStoreConflict} {
+		if !has(inv.Enums["check"], c) {
+			t.Errorf("check %q is not in the closed set of finality_included_invalid", c)
+		}
+	}
+	if len(inv.Enums["check"]) != 7 {
+		t.Errorf("the closed set of checks has %d members, this package uses 7: %v", len(inv.Enums["check"]), inv.Enums["check"])
+	}
+	for _, f := range []string{"proof_id", "chain", "block", "check"} {
+		if !has(inv.Optional, f) && !has(inv.Required, f) {
+			t.Errorf("finality_included_invalid does not list the field %q", f)
+		}
+	}
+	if !has(unav.Enums["reason"], string(finality.IncludedLegacyHeaderUnserved)) || !has(unav.Enums["reason"], string(finality.IncludedNoBlockHeader)) {
+		t.Errorf("finality_included_unavailable reasons %v", unav.Enums["reason"])
+	}
+	for _, f := range []string{"proof_id", "chain", "block", "asked", "not_served", "unreachable", "wrong_block", "oversized"} {
+		if !has(unav.Optional, f) && !has(unav.Required, f) {
+			t.Errorf("finality_included_unavailable does not list the field %q", f)
+		}
 	}
 }

@@ -666,3 +666,36 @@ func TestRTWireNamesAMissingLegLister(t *testing.T) {
 		t.Fatalf("the startup line does not say the legacy-header loops are off:\n%s", logs.String())
 	}
 }
+
+// A problem registering the legacy-header loops is a named state, never a boot failure of a consensus node: the validator keeps
+// running and the state says which chains have no loop.
+func TestRTWireLegacyHeaderRegistrationProblemsAreNamedAndNeverFatal(t *testing.T) {
+	rtProviderEnv(t)
+	cfg, err := ConfigFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := Env{Config: cfg, Store: finality.NewMemCaptureStore()}
+	logs := &syncBuf{}
+
+	// a chain the registry has no profile for cannot be wired: it is named, the others are not affected
+	w := &Wiring{}
+	unwired := wireLegacy(w, finality.NewRegistry(), env, Deps{Legacy: &lgLister{}}, loopClock{}, logs.Logf, finality.NewMemoryBudget(0), []uint64{99999, finality.ChainBaseSepolia})
+	if len(unwired) != 1 || len(w.LegacyLoops) != 1 || w.LegacyLoops[0].ChainID != finality.ChainBaseSepolia {
+		t.Fatalf("unwired %v loops %d", unwired, len(w.LegacyLoops))
+	}
+	if st := unwired[99999]; st == nil || st.Code != finality.CodeUpgraderDisabled || st.Fields["env"] != "legacy-header" || st.Fields["value"] != "unwired" || st.Fields["chain"] != uint64(99999) {
+		t.Fatalf("state = %v", st)
+	}
+
+	// the same loops registered twice: the second registration is refused by name for every chain
+	reg := finality.NewRegistry()
+	w2, err := Wire(cfg, Deps{Registry: reg, Store: finality.NewMemCaptureStore(), Logf: logs.Logf, Legacy: &lgLister{}})
+	if err != nil || len(w2.LegacyLoops) != 3 || len(w2.LegacyUnwired) != 0 {
+		t.Fatalf("first wiring: %v loops %d unwired %v", err, len(w2.LegacyLoops), w2.LegacyUnwired)
+	}
+	again := wireLegacy(&Wiring{}, reg, env, Deps{Legacy: &lgLister{}}, loopClock{}, logs.Logf, finality.NewMemoryBudget(0), legacyChains)
+	if len(again) != 3 {
+		t.Fatalf("a second registration was not refused for every chain: %v", again)
+	}
+}

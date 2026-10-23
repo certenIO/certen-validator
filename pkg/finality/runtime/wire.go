@@ -77,6 +77,9 @@ type Wiring struct {
 	Config   Config
 	// LegacyLoops are the registered legacy-header reconstruction loops (one per chain), exposed for the health endpoint and the tests.
 	LegacyLoops []*LegacyHeaderLoop
+	// LegacyUnwired maps each chain whose legacy-header loop could not be registered to its named finality_upgrader_disabled state.
+	// The validator keeps running without that loop; a registration problem is never fatal for a consensus node.
+	LegacyUnwired map[uint64]*finality.StateError
 }
 
 func disabledState(chain uint64, env, value, effect string) *finality.StateError {
@@ -214,8 +217,11 @@ func Wire(cfg Config, d Deps) (*Wiring, error) {
 	legacyState := "off (no leg lister)"
 	if d.Legacy != nil {
 		legacyState = "on"
-		if err := wireLegacy(w, reg, env, d, clock, logf, mem); err != nil {
-			return nil, err
+		if w.LegacyUnwired = wireLegacy(w, reg, env, d, clock, logf, mem, legacyChains); len(w.LegacyUnwired) > 0 {
+			legacyState = fmt.Sprintf("on, unwired for chains %v", sortedChains(w.LegacyUnwired))
+			for _, c := range sortedChains(w.LegacyUnwired) {
+				logf("[FINALITY] legacy-header loop DISABLED: %s", w.LegacyUnwired[c].Error())
+			}
 		}
 	}
 	// the per-chain switches (CERTEN_FINALITY_CHAIN_<id>_ENABLED) join the missing-configuration chains
@@ -325,12 +331,16 @@ func wireSepolia(reg *finality.Registry, env Env, d Deps) error {
 		Pins: env.Pins, Verifier: ethsepolia.New(), Now: d.Now, ExtraLinks: links})
 }
 
+// legacyChains are the chains that hold legacy legs (the stored execution proofs written before block_header_rlp was captured).
+var legacyChains = []uint64{finality.ChainSepolia, finality.ChainBaseSepolia, finality.ChainArbitrumSepolia}
+
 // wireLegacy registers the legacy-header reconstruction loop of each chain whose legs can carry the stored execution proof of the
 // pre-2026-10-04 bundles: Ethereum Sepolia, Base Sepolia and Arbitrum Sepolia. Their providers are the chain's own configured
 // execution endpoints in the order the validator uses them (a pruning primary is followed by the others; for Sepolia the OD4
 // archive provider comes last): availability only, every header is verified against the hash the bundle stores. A chain whose
 // providers are missing is switched off by the wiring (Missing) and the supervisor does not start its loop.
-func wireLegacy(w *Wiring, reg *finality.Registry, env Env, d Deps, clock loopClock, logf func(string, ...any), mem *finality.MemoryBudget) error {
+func wireLegacy(w *Wiring, reg *finality.Registry, env Env, d Deps, clock loopClock, logf func(string, ...any), mem *finality.MemoryBudget, chains []uint64) map[uint64]*finality.StateError {
+	unwired := map[uint64]*finality.StateError{}
 	cfg := env.Config
 	urls := map[uint64][]string{
 		finality.ChainSepolia:         ethrpc.ParseEndpoints(append(append([]string(nil), cfg.L1RPC...), cfg.Archive...)...),
@@ -338,10 +348,11 @@ func wireLegacy(w *Wiring, reg *finality.Registry, env Env, d Deps, clock loopCl
 		finality.ChainArbitrumSepolia: cfg.ArbL2,
 	}
 	src := &legacyhdr.RPCSource{URLs: urls, Client: env.HTTP}
-	for _, chain := range []uint64{finality.ChainSepolia, finality.ChainBaseSepolia, finality.ChainArbitrumSepolia} {
+	for _, chain := range chains {
 		profile, err := reg.Profile(chain)
 		if err != nil {
-			return err
+			unwired[chain] = disabledState(chain, "legacy-header", "unwired", "no legacy-header reconstruction for chain "+fmt.Sprint(chain)+" by this validator ("+ethrpc.RedactText(err.Error())+"); its legacy legs stay finality_included_unavailable{no_block_header}")
+			continue
 		}
 		var targets []finality.Level
 		for _, lv := range profile.Levels {
@@ -352,9 +363,19 @@ func wireLegacy(w *Wiring, reg *finality.Registry, env Env, d Deps, clock loopCl
 		loop := &LegacyHeaderLoop{ChainID: chain, Legs: d.Legacy, Source: src, Store: env.Store, Status: d.Status, Targets: targets, Budget: mem,
 			Logf: logf, Clock: clock}
 		if err := reg.RegisterCapturer(loop); err != nil {
-			return err
+			unwired[chain] = disabledState(chain, "legacy-header", "unwired", "no legacy-header reconstruction for chain "+fmt.Sprint(chain)+" by this validator ("+ethrpc.RedactText(err.Error())+"); its legacy legs stay finality_included_unavailable{no_block_header}")
+			continue
 		}
 		w.LegacyLoops = append(w.LegacyLoops, loop)
 	}
-	return nil
+	return unwired
+}
+
+func sortedChains(m map[uint64]*finality.StateError) []uint64 {
+	out := make([]uint64, 0, len(m))
+	for c := range m {
+		out = append(out, c)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
 }

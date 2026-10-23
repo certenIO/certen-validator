@@ -310,7 +310,7 @@ type PassReport struct {
 	NoProver     int // legs of a chain with no registered prover: not loaded, not verified, not scheduled (logged once per chain)
 	Disabled     int // legs of a chain whose per-chain switch is off (finality_upgrader_disabled, logged once per chain)
 	Unusable     int // legs whose L6 evidence could not be loaded
-	NoSettlement int // legs whose newest bundle holds no execution proof (finality_included_unavailable): not a failure, not logged per leg, not read again until the proof has a newer bundle
+	NoSettlement int // legs whose L6 evidence is unavailable (finality_included_unavailable): not a failure, not logged per leg; a bundle with no execution proof is not read again until the proof has a newer bundle, one whose execution proof lacks only its block header is read again every HeaderRetry
 	Unrecorded   int // attempted legs whose settlement evidence was served while the proof row has no settlement_tx_hash or settlement_block_number yet
 	Deferred     int // suspect legs (an earlier ask failed) left for the next pass because every suspect slot was taken
 	MemoryHeld   int // due legs not started because the heap in use was above the memory gate (finality_memory_budget_exceeded, what=attempt)
@@ -888,9 +888,10 @@ func (u *Upgrader) upgradeLeg(ctx context.Context, ref LegRef) (res legResult) {
 	})
 	if err != nil {
 		if st, ok := AsNamed(err); ok && st.Code == CodeIncludedUnavailable {
-			// The leg has no L6 evidence (yet): its bundle holds no execution proof. Nothing is wrong and nothing is judged, so
-			// this is neither counted as a failure nor logged per leg. A source that names its bundles gets the examined bundle
-			// remembered, so it is not read again until the proof has a newer one; a source that does not is asked again on the
+			// The leg has no L6 evidence (yet): its bundle holds no execution proof, or one without its block header. Nothing is
+			// wrong and nothing is judged, so this is neither counted as a failure nor logged per leg. A source that names its
+			// bundles gets a bundle without an execution proof remembered, so it is not read again until the proof has a newer one
+			// (a bundle without only its header is read again every HeaderRetry); a source that does not is asked again on the
 			// pending schedule.
 			res.noSettlement = true
 			u.quietUnavailable(ref, st)
@@ -1260,7 +1261,7 @@ func (MetricsRecorder) LegsWithoutProver(chain uint64, n int) {
 func (u *Upgrader) announceGaps(rep PassReport) {
 	if rep.NoSettlement != u.lastNoSettlement {
 		u.lastNoSettlement = rep.NoSettlement
-		u.cfg.Logf("[FINALITY] %d legs have no execution proof in their newest bundle (finality_included_unavailable): they are not read again until the proof has a newer bundle", rep.NoSettlement)
+		u.cfg.Logf("[FINALITY] %d legs have no execution proof in their newest bundle (or one without its block header) (finality_included_unavailable): a bundle with no execution proof is not read again until the proof has a newer bundle, one whose execution proof lacks only its block header is read again every %s", rep.NoSettlement, u.cfg.HeaderRetry)
 	}
 	if rep.Unrecorded != u.lastUnrecorded {
 		u.lastUnrecorded = rep.Unrecorded
