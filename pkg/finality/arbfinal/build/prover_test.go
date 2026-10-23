@@ -136,6 +136,9 @@ type fakeL1 struct {
 	proofErr map[uint64]error
 	// proofErrAddr fails eth_getProof for one address (at any block); proofAddrs records every address asked, in order.
 	proofErrAddr map[common.Address]error
+	// proofCorrupt serves a proof that does not verify for one address: "account" alters the first node of its account proof, "slot" the
+	// first node of each of its storage proofs.
+	proofCorrupt map[common.Address]string
 	proofAddrs   []common.Address
 	logsErr      error
 	calls        int
@@ -209,7 +212,26 @@ func (f *fakeL1) Proof(_ context.Context, addr common.Address, slots []common.Ha
 	if !ok {
 		return nil, errors.New("no state at block")
 	}
-	return st.proof(addr, slots), nil
+	p := st.proof(addr, slots)
+	alter := func(ns [][]byte) [][]byte {
+		out := make([][]byte, len(ns))
+		for i := range ns {
+			out[i] = append([]byte(nil), ns[i]...)
+		}
+		if len(out) > 0 && len(out[0]) > 0 {
+			out[0][len(out[0])-1] ^= 1
+		}
+		return out
+	}
+	switch f.proofCorrupt[addr] {
+	case "account":
+		p.Account = alter(p.Account)
+	case "slot":
+		for k, v := range p.Storage {
+			p.Storage[k] = alter(v)
+		}
+	}
+	return p, nil
 }
 
 type fakeL2 struct {
@@ -973,5 +995,77 @@ func TestEveryCaptureItemNameFitsTheTable(t *testing.T) {
 	}
 	if captureItemWallet == captureItemConf || captureItemWallet == captureItemState {
 		t.Fatal("the wallet row must not share a name with another row")
+	}
+}
+
+// ---- a provider answer that is no proof, a store that fails, bytes that are no transaction -------------------------------------------
+
+func TestAWalletAccountProofThatDoesNotVerifyIsNotCapturedAndIsANamedState(t *testing.T) {
+	w := newWorldWith(t, provenWallet())
+	w.l1.proofCorrupt = map[common.Address]string{walletCallee: "account"}
+	_, pend, err := w.build(t)
+	wantPending(t, pend, err, PendingProofWindow)
+	if n := w.p.Store.(*MemStore).Len(); n != 3 {
+		t.Fatalf("%d capture rows, want 3 (nothing of the bad answer is kept)", n)
+	}
+	w.l1.proofCorrupt = nil
+	if add, pend, err := w.build(t); err != nil || pend != nil || add == nil {
+		t.Fatalf("resume: pend %v err %v", pend, canon(err))
+	}
+}
+
+func TestAnImplementationSlotProofThatDoesNotVerifyIsNotCapturedAndIsANamedState(t *testing.T) {
+	w := newWorldWith(t, provenWallet())
+	w.l1.proofCorrupt = map[common.Address]string{walletCallee: "slot"}
+	_, pend, err := w.build(t)
+	wantPending(t, pend, err, PendingProofWindow)
+	if n := w.p.Store.(*MemStore).Len(); n != 3 {
+		t.Fatalf("%d capture rows, want 3", n)
+	}
+}
+
+// failingStore refuses to keep one kind of row.
+type failingStore struct {
+	finality.CaptureStore
+	prefix string
+}
+
+func (s failingStore) Put(ctx context.Context, k finality.CaptureKey, v []byte) error {
+	if strings.HasPrefix(k.Item, s.prefix) {
+		return errors.New("disk full for " + k.Item)
+	}
+	return s.CaptureStore.Put(ctx, k, v)
+}
+
+func TestAWalletCaptureThatCannotBeKeptIsAVerifierFailureNotASilentPass(t *testing.T) {
+	w := newWorldWith(t, provenWallet())
+	w.p.Store = failingStore{CaptureStore: NewMemStore(), prefix: captureItemWallet}
+	add, pend, err := w.build(t)
+	if add != nil || pend != nil {
+		t.Fatalf("add %v pend %v", add != nil, pend)
+	}
+	s, ok := finality.AsNamed(err)
+	if !ok || s.Code != finality.CodeVerifierFailed || s.Fields["kind"] != arbfinal.KindName || !strings.Contains(fmt.Sprint(s.Fields["cause"]), "disk full") {
+		t.Fatalf("%v", canon(err))
+	}
+}
+
+// Bytes that are no transaction have no callee: nothing is asked of the provider and nothing is kept (the verifier refuses the bytes).
+func TestBytesThatAreNoTransactionNeedNoWalletProof(t *testing.T) {
+	w := newWorld(t)
+	arb, err := arbfinal.LoadPins(w.pins)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kf, _ := finality.ReadHeader(w.l1.headers[wK])
+	a := &Assertion{Hash: w.assertion}
+	for _, raw := range [][]byte{nil, {}, {0x02}, {0x02, 0xc0}, bytes.Repeat([]byte{0xff}, 40)} {
+		ns, pend, err := w.p.walletProofs(context.Background(), arb, a, wK, kf, raw, 0)
+		if ns != nil || pend != nil || err != nil {
+			t.Errorf("%x: nodes %d pend %v err %v", raw, len(ns), pend, err)
+		}
+	}
+	if len(w.l1.proofAddrs) != 0 || w.p.Store.(*MemStore).Len() != 0 {
+		t.Fatalf("asked %v, kept %d rows", w.l1.proofAddrs, w.p.Store.(*MemStore).Len())
 	}
 }
