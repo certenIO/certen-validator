@@ -22,6 +22,7 @@ import (
 	"github.com/certen/independant-validator/pkg/finality/baseposted"
 	"github.com/certen/independant-validator/pkg/finality/ethl1"
 	"github.com/certen/independant-validator/pkg/finality/ethsepolia"
+	"github.com/certen/independant-validator/pkg/finality/legacyhdr"
 )
 
 // LCFeed is the light-client source the wiring needs: the L1-finality part of the evidence and the beacon head slot it observed.
@@ -48,6 +49,10 @@ type Deps struct {
 	Store    finality.CaptureStore // the durable store (database.FinalityCaptureStore)
 	Status   finality.BuilderStatusStore
 	Logf     func(string, ...any)
+	// Legacy lists the legs whose stored execution proof has no block header (pkg/database.FinalityAddendaRepository). When set, a
+	// legacy-header reconstruction loop is registered for each chain that has legacy legs to serve (RB12-LEGACY-191); the wiring
+	// line says "legacy_headers=off (no leg lister)" when it is not.
+	Legacy legacyhdr.LegLister
 
 	// Test hooks.
 	HTTP  *http.Client
@@ -70,6 +75,8 @@ type Wiring struct {
 	// Disabled maps each chain that will not build to its named finality_upgrader_disabled state.
 	Disabled map[uint64]*finality.StateError
 	Config   Config
+	// LegacyLoops are the registered legacy-header reconstruction loops (one per chain), exposed for the health endpoint and the tests.
+	LegacyLoops []*LegacyHeaderLoop
 }
 
 func disabledState(chain uint64, env, value, effect string) *finality.StateError {
@@ -156,6 +163,7 @@ func Wire(cfg Config, d Deps) (*Wiring, error) {
 		return nil, err
 	}
 
+	mem := finality.NewMemoryBudget(cfg.MemoryBudget)
 	hc := d.HTTP
 	if hc == nil {
 		hc = NewTransport(cfg).Client(90 * time.Second)
@@ -203,6 +211,13 @@ func Wire(cfg Config, d Deps) (*Wiring, error) {
 				fmt.Sprintf("the %s builders could not be built (%s); no finality addenda are appended for chain %d by this validator", s.name, ethrpc.RedactText(err.Error()), s.chain))
 		}
 	}
+	legacyState := "off (no leg lister)"
+	if d.Legacy != nil {
+		legacyState = "on"
+		if err := wireLegacy(w, reg, env, d, clock, logf, mem); err != nil {
+			return nil, err
+		}
+	}
 	// the per-chain switches (CERTEN_FINALITY_CHAIN_<id>_ENABLED) join the missing-configuration chains
 	off, err := finality.DisabledChainsFromEnv(reg.Chains())
 	if err != nil {
@@ -219,7 +234,7 @@ func Wire(cfg Config, d Deps) (*Wiring, error) {
 		}
 	}
 	w.Upgrader = finality.UpgraderConfig{
-		Concurrency: cfg.Concurrency, Interval: cfg.Interval, BuildTimeout: cfg.BuildTimeout, Memory: finality.NewMemoryBudget(cfg.MemoryBudget),
+		Concurrency: cfg.Concurrency, Interval: cfg.Interval, BuildTimeout: cfg.BuildTimeout, Memory: mem,
 		Status: d.Status, DisabledChains: disabled, DisabledReasons: reasons, Logf: logf, Now: d.Now,
 	}
 	chains := make([]uint64, 0, len(w.Disabled))
@@ -227,7 +242,7 @@ func Wire(cfg Config, d Deps) (*Wiring, error) {
 		chains = append(chains, c)
 	}
 	sort.Slice(chains, func(i, j int) bool { return chains[i] < chains[j] })
-	logf("[FINALITY] runtime wiring: pins_source=%s pins_sha256=%s chains_off_by_configuration=%v config=%v", source, sha, chains, cfg.Describe())
+	logf("[FINALITY] runtime wiring: pins_source=%s pins_sha256=%s chains_off_by_configuration=%v legacy_headers=%s config=%v", source, sha, chains, legacyState, cfg.Describe())
 	return w, nil
 }
 
@@ -308,4 +323,38 @@ func wireSepolia(reg *finality.Registry, env Env, d Deps) error {
 	}
 	return reg.RegisterProver(&ethsepolia.Prover{Source: srcs, Exec: &ethsepolia.RPCHeaders{Endpoints: env.L1Block, Client: env.HTTP, BatchSize: cfg.MaxBatch},
 		Pins: env.Pins, Verifier: ethsepolia.New(), Now: d.Now, ExtraLinks: links})
+}
+
+// wireLegacy registers the legacy-header reconstruction loop of each chain whose legs can carry the stored execution proof of the
+// pre-2026-10-04 bundles: Ethereum Sepolia, Base Sepolia and Arbitrum Sepolia. Their providers are the chain's own configured
+// execution endpoints in the order the validator uses them (a pruning primary is followed by the others; for Sepolia the OD4
+// archive provider comes last): availability only, every header is verified against the hash the bundle stores. A chain whose
+// providers are missing is switched off by the wiring (Missing) and the supervisor does not start its loop.
+func wireLegacy(w *Wiring, reg *finality.Registry, env Env, d Deps, clock loopClock, logf func(string, ...any), mem *finality.MemoryBudget) error {
+	cfg := env.Config
+	urls := map[uint64][]string{
+		finality.ChainSepolia:         ethrpc.ParseEndpoints(append(append([]string(nil), cfg.L1RPC...), cfg.Archive...)...),
+		finality.ChainBaseSepolia:     cfg.BaseL2,
+		finality.ChainArbitrumSepolia: cfg.ArbL2,
+	}
+	src := &legacyhdr.RPCSource{URLs: urls, Client: env.HTTP}
+	for _, chain := range []uint64{finality.ChainSepolia, finality.ChainBaseSepolia, finality.ChainArbitrumSepolia} {
+		profile, err := reg.Profile(chain)
+		if err != nil {
+			return err
+		}
+		var targets []finality.Level
+		for _, lv := range profile.Levels {
+			if lv.Stored() {
+				targets = append(targets, lv)
+			}
+		}
+		loop := &LegacyHeaderLoop{ChainID: chain, Legs: d.Legacy, Source: src, Store: env.Store, Status: d.Status, Targets: targets, Budget: mem,
+			Logf: logf, Clock: clock}
+		if err := reg.RegisterCapturer(loop); err != nil {
+			return err
+		}
+		w.LegacyLoops = append(w.LegacyLoops, loop)
+	}
+	return nil
 }

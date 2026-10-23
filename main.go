@@ -2322,7 +2322,11 @@ func startValidator(
 		if ferr != nil {
 			return nil, nil, fmt.Errorf("finality upgrader: %w", ferr)
 		}
-		finalityRepo := database.NewFinalityAddendaRepository(dbClient)
+		// The header of a legacy leg (a bundle whose execution proof was written before block_header_rlp was captured) is read from
+		// the capture store the legacy-header loop (pkg/finality/legacyhdr, RB12-LEGACY-191) fills; the store is not trusted, the
+		// stored proofs are verified against the header like any other.
+		finalityCapture := database.NewFinalityCaptureStore(dbClient)
+		finalityRepo := database.NewFinalityAddendaRepository(dbClient).WithLegacyHeaders(finalityCapture)
 		// The finality runtime wiring (pkg/finality/runtime) builds, from the validator's provider configuration plus the
 		// CERTEN_FINALITY_* variables, the provers and capture loops of every live chain and the light-client source. The pins
 		// are the embedded, hash-checked file unless CERTEN_FINALITY_PINS_FILE names an override, whose source it reports. A chain
@@ -2332,7 +2336,7 @@ func startValidator(
 			return nil, nil, fmt.Errorf("finality configuration: %w", ferr)
 		}
 		finalityWire, ferr := finruntime.Wire(finalityCfg, finruntime.Deps{
-			Registry: finality.Default, Store: database.NewFinalityCaptureStore(dbClient),
+			Registry: finality.Default, Store: finalityCapture, Legacy: finalityRepo,
 			Status: database.NewFinalityStatusRepository(dbClient), Logf: log.Printf,
 		})
 		if ferr != nil {

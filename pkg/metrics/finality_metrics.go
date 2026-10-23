@@ -57,6 +57,10 @@ var (
 		Name: "certen_finality_legs_without_settlement",
 		Help: "Legs whose newest bundle holds no execution proof (component 5): finality_included_unavailable, held back quietly and not read again until the proof has a newer bundle, as of the last upgrader pass.",
 	}, []string{"chain"})
+	finalityLegacyHeaders = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "certen_finality_legacy_headers",
+		Help: "Legacy legs (stored execution proof without block_header_rlp) by chain and reconstruction state as of the last reconstruction tick: pending (not yet judged), reconstructed (header stored and the leg's proofs verify), unserved (no configured provider served the block; asked again with backoff) or invalid (the header is the block's own and the stored component contradicts it, or the component cannot be read).",
+	}, []string{"chain", "state"})
 	finalityLegsWithoutProver = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "certen_finality_legs_no_prover",
 		Help: "Listed legs of a chain for which no finality prover is registered (counted as no_prover and not attempted), as of the last complete upgrader pass.",
@@ -277,6 +281,11 @@ func SetFinalityLegsWithoutSettlement(chain uint64, n int) {
 	finalityLegsWithoutSettlement.WithLabelValues(chainLabel(chain)).Set(float64(n))
 }
 
+// SetFinalityLegacyHeaders reports how many legacy legs of a chain stand in one reconstruction state.
+func SetFinalityLegacyHeaders(chain uint64, state string, n int) {
+	finalityLegacyHeaders.WithLabelValues(chainLabel(chain), state).Set(float64(n))
+}
+
 // SetFinalityUnrecordedSettlements reports how many legs of the last pass were served before their proof row recorded the settlement.
 func SetFinalityUnrecordedSettlements(n int) { finalityUnrecordedSettlements.Set(float64(n)) }
 
@@ -430,6 +439,7 @@ func registerFinalityMetrics() {
 	prometheus.MustRegister(finalityLegs)
 	prometheus.MustRegister(finalityLegsWithoutSettlement)
 	prometheus.MustRegister(finalityLegsWithoutProver)
+	prometheus.MustRegister(finalityLegacyHeaders)
 	prometheus.MustRegister(finalityUnrecordedSettlements)
 	prometheus.MustRegister(finalityAppended)
 	prometheus.MustRegister(finalityBuildFailures)

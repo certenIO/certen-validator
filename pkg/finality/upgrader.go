@@ -112,6 +112,11 @@ type UpgraderConfig struct {
 	// V2_SPEC_S7 8.3 constant that keeps such a level from being polled in a tight loop. A level WITH an eta is not asked
 	// before it, whatever this value is.
 	PendingRetry time.Duration
+	// HeaderRetry is how often a leg whose stored execution proof has no block header is read again (default 10m, at least MinPoll): the
+	// header is reconstructed in the background (pkg/finality/legacyhdr) and kept in the capture store, and a bundle that was examined
+	// without one is NOT remembered against its bundle id (as a bundle without an execution proof is), because the row can appear
+	// without the bundle changing.
+	HeaderRetry  time.Duration
 	FailureRetry time.Duration // next ask of a level after its FIRST named build failure or refusal (default 5m, at least MinPoll)
 	// MaxFailureRetry caps the exponential back-off of a (leg, level) that keeps failing (default 6h): the n-th consecutive failure
 	// waits FailureRetry*2^(n-1), never more than this. A leg whose evidence cannot be built inside BuildTimeout (RB12-F1) is asked
@@ -165,6 +170,7 @@ func (c UpgraderConfig) withDefaults() UpgraderConfig {
 	def(&c.BuildTimeout, 5*time.Minute)
 	def(&c.StoreTimeout, 30*time.Second)
 	def(&c.PendingRetry, 2*time.Minute)
+	def(&c.HeaderRetry, 10*time.Minute)
 	def(&c.FailureRetry, 5*time.Minute)
 	def(&c.BrokenRetry, time.Hour)
 	def(&c.MaxFailureRetry, 6*time.Hour)
@@ -190,7 +196,7 @@ func (c UpgraderConfig) withDefaults() UpgraderConfig {
 	if c.SuspectSlots > c.Concurrency {
 		c.SuspectSlots = c.Concurrency
 	}
-	for _, d := range []*time.Duration{&c.Interval, &c.PendingRetry, &c.FailureRetry, &c.BrokenRetry} {
+	for _, d := range []*time.Duration{&c.Interval, &c.PendingRetry, &c.HeaderRetry, &c.FailureRetry, &c.BrokenRetry} {
 		if *d < MinPoll {
 			*d = MinPoll
 		}
@@ -887,10 +893,7 @@ func (u *Upgrader) upgradeLeg(ctx context.Context, ref LegRef) (res legResult) {
 			// remembered, so it is not read again until the proof has a newer one; a source that does not is asked again on the
 			// pending schedule.
 			res.noSettlement = true
-			u.markQuiet(ref)
-			if ref.BundleID == "" {
-				u.scheduleBoth(ref.ProofID, u.cfg.PendingRetry)
-			}
+			u.quietUnavailable(ref, st)
 			return res
 		}
 		res.unusable = true
@@ -1207,15 +1210,31 @@ func (u *Upgrader) examinedWithoutComponent(ref LegRef) bool {
 	return true
 }
 
-// markQuiet records a leg whose bundle holds no execution proof: counted by the quiet gauge, not at any level, and (when the
-// source names its bundles) remembered against that bundle so it is not read again.
-func (u *Upgrader) markQuiet(ref LegRef) {
+// quietUnavailable settles a leg whose L6 evidence the source reported as finality_included_unavailable. A bundle that holds no
+// execution proof is remembered against its bundle id (a newer bundle is examined at once; this one is not read again). A bundle whose
+// execution proof lacks only its header is NOT: the header is reconstructed in the background and appears without the bundle
+// changing, so the leg is read again every HeaderRetry.
+func (u *Upgrader) quietUnavailable(ref LegRef, st *StateError) {
+	if reason, _ := st.Fields["reason"].(IncludedReason); reason == IncludedNoBlockHeader || reason == IncludedLegacyHeaderUnserved {
+		u.markQuiet(ref, false)
+		u.scheduleBoth(ref.ProofID, u.cfg.HeaderRetry)
+		return
+	}
+	u.markQuiet(ref, true)
+	if ref.BundleID == "" {
+		u.scheduleBoth(ref.ProofID, u.cfg.PendingRetry)
+	}
+}
+
+// markQuiet records a leg whose L6 evidence is unavailable: counted by the quiet gauge, not at any level, and (when remember is set
+// and the source names its bundles) remembered against that bundle so it is not read again.
+func (u *Upgrader) markQuiet(ref LegRef, remember bool) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	u.quiet[ref.ProofID] = ref.Chain
 	delete(u.unrecorded, ref.ProofID)
 	delete(u.stand, ref.ProofID)
-	if ref.BundleID != "" {
+	if remember && ref.BundleID != "" {
 		u.noComponent.put(ref.ProofID, ref.BundleID)
 	}
 }
@@ -1307,10 +1326,7 @@ func (u *Upgrader) upgradeChainless(ctx context.Context, ref LegRef) (res legRes
 	})
 	if st, ok := AsNamed(err); ok && st.Code == CodeIncludedUnavailable {
 		res.noSettlement = true
-		u.markQuiet(ref)
-		if ref.BundleID == "" {
-			u.scheduleBoth(ref.ProofID, u.cfg.PendingRetry)
-		}
+		u.quietUnavailable(ref, st)
 		return res
 	}
 	if err == nil {
