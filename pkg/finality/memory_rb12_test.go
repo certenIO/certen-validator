@@ -160,8 +160,8 @@ func TestRB12ABuildRunsUnderTheProcessBudget(t *testing.T) {
 	if seen.Load() != budget {
 		t.Fatalf("the build did not run under the configured budget")
 	}
-	if rep.Failed != 1 || f.rec.failures[CodeMemoryBudget] < 1 {
-		t.Fatalf("a refused reservation is a named failure of the attempt: %+v %v", rep, f.rec.failures)
+	if rep.Failed != 0 || rep.BuildHeld != 1 || f.rec.failures[CodeMemoryBudget] != 0 {
+		t.Fatalf("a refused reservation is a named hold of the process (BuildHeld), not a failure of the leg: %+v %v", rep, f.rec.failures)
 	}
 	if budget.Used() != 0 {
 		t.Fatalf("used %d after the attempt", budget.Used())

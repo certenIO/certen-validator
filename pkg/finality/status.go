@@ -180,13 +180,35 @@ func (s *BuilderStatus) noteAttempt(attempt int, next time.Time) {
 	if s.State == nil {
 		return
 	}
-	st := NewState(s.State.Code)
-	for k, v := range s.State.Fields {
-		st.Fields[k] = v
-	}
+	st := copyState(s.State)
 	st.Fields[FieldAttempt] = uint64(attempt)
 	st.Fields[FieldNextAttemptAt] = next.UTC().Format(time.RFC3339)
 	s.State = st
+}
+
+// noteRetry records on a held status when the builder asks again: the eta of the pending row and the next_attempt_at field of its
+// state. A hold is no failed ask, so it carries no attempt ordinal.
+func (s *BuilderStatus) noteRetry(next time.Time) {
+	if s.State == nil {
+		return
+	}
+	st := copyState(s.State)
+	st.Fields[FieldNextAttemptAt] = next.UTC().Format(time.RFC3339)
+	s.State, s.ETA = st, next
+}
+
+func copyState(s *StateError) *StateError {
+	st := NewState(s.Code)
+	for k, v := range s.Fields {
+		st.Fields[k] = v
+	}
+	return st
+}
+
+// HeldBuilderStatus is the row of a level whose build the process memory budget held back (CodeMemoryBudget, even after waiting for a
+// release): the leg is pending, not failed. The row names the state; the upgrader adds the time of the next ask.
+func HeldBuilderStatus(proofID string, chain uint64, target, reached Level, st *StateError, at time.Time) BuilderStatus {
+	return BuilderStatus{ProofID: proofID, Chain: chain, TargetLevel: target, Class: BuilderPending, LevelReached: reached, NextLevel: target, State: redactedState(st), JudgedAt: at}
 }
 
 // redactedState is st with every text field (a string or an error value) passed through the one
