@@ -39,6 +39,8 @@ const (
 	// itemQuarantine is the self-check mismatch record of a channel: written at the entry's key by the first validator whose self-check finds the
 	// entry different from what the captured rows give, shared through the table, read by every build that would use the entry.
 	itemQuarantine = "q"
+	// itemUnindexable is the record of a captured block the indexer cannot read (Note (a)): insert-only, at the block's key, the reason as content.
+	itemUnindexable = "u"
 )
 
 const (
@@ -437,6 +439,20 @@ func parseEntryName(gen uint32, k finality.CaptureKey) (entryName, bool) {
 	return n, true
 }
 
+// unindexableError marks a failure that comes from the CONTENT of a captured block's rows (not from the store): the indexer records the block
+// as unindexable and goes on, because the rows will not change.
+type unindexableError struct {
+	Reason string
+	Err    error
+}
+
+func (e *unindexableError) Error() string { return "unindexable (" + e.Reason + "): " + e.Err.Error() }
+func (e *unindexableError) Unwrap() error { return e.Err }
+
+func unindexableItem(gen uint32) string {
+	return finality.IndexItem(gen, FamilyBaseInbox, itemUnindexable)
+}
+
 // ---- loading the rows of a transaction ----
 
 // loadedTx is one batch-inbox transaction with its blob rows (and, when asked, the frames it carries).
@@ -480,7 +496,7 @@ func loadTxRows(ctx context.Context, store finality.CaptureStore, bk finality.Ca
 	lt.raw = txb
 	var tx txView
 	if err := tx.parse(txb); err != nil {
-		return lt, err
+		return lt, &unindexableError{Reason: finality.UnindexableTxUnparseable, Err: err}
 	}
 	lt.isBlob = tx.isBlob
 	if flt.foreign(txb) {
@@ -506,7 +522,7 @@ func loadTxRows(ctx context.Context, store finality.CaptureStore, bk finality.Ca
 			br := finality.NewReader(bb, finality.DefaultLimits())
 			var bl Blob
 			if bl.Raw, err = br.LP("blob.raw", BlobSize); err != nil {
-				return lt, err
+				return lt, &unindexableError{Reason: finality.UnindexableBlobRowMalformed, Err: err}
 			}
 			c, _ := br.Fixed("blob.commitment", 48)
 			p, _ := br.Fixed("blob.proof", 48)
@@ -524,6 +540,11 @@ func loadTxRows(ctx context.Context, store finality.CaptureStore, bk finality.Ca
 		}
 	} else if parse {
 		datas = append(datas, tx.data)
+	}
+	if parse && tx.isBlob && len(lt.blobs) != tx.nBlobs {
+		// the capturer writes every blob row of a transaction or none: fewer rows (a missing or non-contiguous index) is a block that was not
+		// captured whole, and the frames it carries cannot be told from the frames it lost
+		return lt, &unindexableError{Reason: finality.UnindexableBlobRowsInconsistent, Err: fmt.Errorf("%d blob rows for a transaction naming %d blobs", len(lt.blobs), tx.nBlobs)}
 	}
 	if parse {
 		for _, d := range datas {
@@ -559,13 +580,17 @@ func loadBlockTxs(ctx context.Context, store finality.CaptureStore, bk finality.
 	r := finality.NewReader(raw, finality.DefaultLimits())
 	n, err := r.Count("inbox", 4096, 4)
 	if err != nil {
-		return nil, err
+		reason := finality.UnindexableInboxMalformed
+		if len(raw) >= 4 && uint32(raw[0])<<24|uint32(raw[1])<<16|uint32(raw[2])<<8|uint32(raw[3]) > 4096 {
+			reason = finality.UnindexableInboxOverLimit
+		}
+		return nil, &unindexableError{Reason: reason, Err: err}
 	}
 	var out []loadedTx
 	for i := 0; i < n; i++ {
 		idx, err := r.U32("inbox.index")
 		if err != nil {
-			return nil, err
+			return nil, &unindexableError{Reason: finality.UnindexableInboxMalformed, Err: err}
 		}
 		lt, err := loadTxRows(ctx, store, bk, idx, hold, true, flt)
 		if err != nil {

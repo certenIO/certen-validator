@@ -46,6 +46,9 @@ type GapBackfillLoop struct {
 	BlockBytes   int64
 	Logf         func(string, ...any)
 	Clock        loopClock
+	// OnFilled, when set, is told the blocks a step captured: the capture index digests them and completes the channels they touch at its
+	// next step (finality.LateBlockNoter), instead of waiting for its rotating walk of the table.
+	OnFilled func(blocks []uint64)
 
 	lastSig        string
 	lastOpenBlocks uint64
@@ -171,6 +174,9 @@ func (l *GapBackfillLoop) Tick(ctx context.Context, tick int) error {
 		return fmt.Errorf("backfill step: %w", err)
 	}
 	l.filledTotal += rep.Filled
+	if l.OnFilled != nil && len(rep.FilledBlocks) > 0 {
+		l.OnFilled(rep.FilledBlocks)
+	}
 	metrics.AddFinalityGapBackfilled(chain, rep.Filled)
 	for class, n := range rep.FailedByClass {
 		for i := 0; i < n; i++ {

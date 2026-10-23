@@ -156,6 +156,34 @@ func AnnounceIndexDisabled(logf func(format string, args ...any), st *StateError
 	metrics.SetFinalityChainIndexDisabledReason(chain, st.Error())
 }
 
+// CodeIndexBlockUnindexable is the named state of a leg whose window holds a captured block the indexer could not read (go_operational): the
+// channel the leg needs may lie in that block. The reasons are the closed set below; the record is insert-only (idx/g<G>/bi/u at the block).
+const CodeIndexBlockUnindexable = "index_block_unindexable"
+
+// Reasons of index_block_unindexable.
+const (
+	UnindexableTxUnparseable        = "tx_unparseable"         // a tx/N row of the block is not a transaction
+	UnindexableInboxOverLimit       = "inbox_over_limit"       // the inbox row lists more than 4096 transactions
+	UnindexableInboxMalformed       = "inbox_malformed"        // the inbox row is not a list of transaction indices
+	UnindexableBlobRowMalformed     = "blob_row_malformed"     // a blob/N/J row is not a blob row
+	UnindexableBlobRowsInconsistent = "blob_rows_inconsistent" // the blob rows of a transaction are not the blobs it names (a missing or non-contiguous index)
+)
+
+// UnindexableReasons is the closed set of reasons, in registry order.
+func UnindexableReasons() []string {
+	return []string{UnindexableBlobRowMalformed, UnindexableBlobRowsInconsistent, UnindexableInboxMalformed, UnindexableInboxOverLimit, UnindexableTxUnparseable}
+}
+
+// IndexBlockUnindexable builds index_block_unindexable for the captured block at L1 height block.
+func IndexBlockUnindexable(chain, block uint64, reason string) *StateError {
+	return NewState(CodeIndexBlockUnindexable, "chain", chain, "block", block, "reason", reason)
+}
+
+// LateBlockNoter is implemented by an indexer that can be told a block was captured (or filled) after its cursor passed it: the capture loop
+// that retried it and the gap backfill that filled it call it, and the indexer digests the block and completes the channels it touches at its
+// next step instead of waiting for its rotating walk of the whole table. The walk stays the guarantee; the note is the speed.
+type LateBlockNoter interface{ NoteLate(block uint64) }
+
 // GapStateUnrecorded is the gap_state of an l1_capture_gap the index INFERS: no durable gap record names the hole, but captured channels of
 // later L2 time exist past the capture retry window and none covers the leg. The record-backed states are GapOpen, GapUnavailableProven and
 // GapRetentionExpired (gaps.go); the registry (testdata/finality/states.json) requires each producer's own fields by this discriminator.

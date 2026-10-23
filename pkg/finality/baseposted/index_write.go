@@ -8,7 +8,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"math/rand"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/certen/independant-validator/pkg/finality"
@@ -23,6 +25,7 @@ type IndexConfig struct {
 	ReconcileEvery  int           // a reconcile round every this many steps (default 8; the first step always reconciles)
 	SelfCheckEvery  int           // a self-check every this many steps (default 256)
 	SelfCheckSample int           // entries and digests recomputed per self-check (default 4)
+	RecentSpan      uint64        // L1 blocks below the cursor every reconcile round re-examines first (default 512): late captures lie near the cursor
 	Logf            func(string, ...any)
 	// OnState receives the named inconsistency a self-check or a corrupt row found (the runner records it in the status table).
 	OnState func(*finality.StateError)
@@ -47,6 +50,13 @@ func (c IndexConfig) span() uint64 {
 		return c.ReconcileSpan
 	}
 	return 4096
+}
+
+func (c IndexConfig) recent() uint64 {
+	if c.RecentSpan > 0 {
+		return c.RecentSpan
+	}
+	return 512
 }
 
 func (c IndexConfig) every() int {
@@ -92,6 +102,8 @@ type Indexer struct {
 	steps        int
 	reconcilePos uint64
 	rng          *rand.Rand
+	hintMu       sync.Mutex
+	hints        map[uint64]bool // blocks noted as captured late (NoteLate)
 }
 
 var _ finality.CaptureIndexer = (*Indexer)(nil)
@@ -205,6 +217,10 @@ func (ix *Indexer) digestBlock(ctx context.Context, bk finality.CaptureKey, rep 
 	bk.Item = ""
 	txs, err := loadBlockTxs(ctx, ix.Store, bk, ix.Pins, hold)
 	if err != nil {
+		var ue *unindexableError
+		if errors.As(err, &ue) {
+			return nil, ix.recordUnindexable(ctx, bk, ue)
+		}
 		return nil, err
 	}
 	for _, t := range txs {
@@ -227,6 +243,15 @@ func (ix *Indexer) getOrMakeDigest(ctx context.Context, bk finality.CaptureKey, 
 	b, ok, err := ix.Store.Get(ctx, dk)
 	if err != nil {
 		return nil, false, err
+	}
+	if !ok {
+		uk := bk
+		uk.Item = unindexableItem(ix.Gen)
+		if _, rec, err := ix.Store.Get(ctx, uk); err != nil {
+			return nil, false, err
+		} else if rec {
+			return nil, false, nil // already recorded as unindexable: its rows will not change
+		}
 	}
 	if ok {
 		d, err := decodeDigest(bk, b)
@@ -444,6 +469,11 @@ func (ix *Indexer) Step(ctx context.Context, upTo uint64) (rep finality.StepRepo
 		}
 		rep.Through = ix.cursor
 	}
+	if ix.haveCursor && rep.StoppedByCap == "" {
+		if err := ix.reconcileHints(ctx, &rep, deadline); err != nil && !memoryRefusal(err) {
+			return rep, err
+		}
+	}
 	if ix.haveCursor && (ix.steps-1)%ix.Cfg.every() == 0 && rep.StoppedByCap == "" {
 		if err := ix.reconcile(ctx, &rep, deadline); err != nil && !memoryRefusal(err) {
 			return rep, err
@@ -510,6 +540,9 @@ func (ix *Indexer) digestGroup(ctx context.Context, group []finality.CaptureKey,
 		if err != nil {
 			return nil, err
 		}
+		if d == nil {
+			continue // recorded as unindexable: the cursor passes it
+		}
 		if wrote {
 			rep.Blocks++
 		}
@@ -547,6 +580,18 @@ func (ix *Indexer) reconcile(ctx context.Context, rep *finality.StepReport, dead
 	if err != nil || !ok {
 		return err
 	}
+	// The recent window first, every round: a block the capture retried or another validator captured late lies near the cursor, and waiting
+	// for the rotation to come round to it would take up to a whole walk of the table (about 51 minutes at 18 days of table).
+	recent := ix.Cfg.recent()
+	rf := lo
+	if ix.cursor+1 > recent && ix.cursor+1-recent > lo {
+		rf = ix.cursor + 1 - recent
+	}
+	if rf <= ix.cursor {
+		if _, err := ix.reconcileRange(ctx, rep, deadline, rf, ix.cursor); err != nil {
+			return err
+		}
+	}
 	if ix.reconcilePos < lo || ix.reconcilePos > ix.cursor {
 		ix.reconcilePos = lo
 	}
@@ -558,17 +603,36 @@ func (ix *Indexer) reconcile(ctx context.Context, rep *finality.StepReport, dead
 	if from > to {
 		return nil
 	}
-	sys, err := finality.CaptureKeysOfItemIn(ctx, ix.Store, uint64(Chain), from, to, ItemSysCfg)
+	next, err := ix.reconcileRange(ctx, rep, deadline, from, to)
 	if err != nil {
 		return err
 	}
+	ix.reconcilePos = next
+	return nil
+}
+
+// reconcileRange indexes the captured blocks of [from, to] that have no digest (and are not recorded as unindexable) and the channels they
+// touch. It returns the block it stopped at (to+1 when it covered the range); at the end of a fully covered range it repairs the entries
+// that close in it.
+func (ix *Indexer) reconcileRange(ctx context.Context, rep *finality.StepReport, deadline time.Time, from, to uint64) (uint64, error) {
+	sys, err := finality.CaptureKeysOfItemIn(ctx, ix.Store, uint64(Chain), from, to, ItemSysCfg)
+	if err != nil {
+		return from, err
+	}
 	have, err := finality.CaptureKeysOfItemIn(ctx, ix.Store, uint64(Chain), from, to, ix.item(itemDigest))
 	if err != nil {
-		return err
+		return from, err
+	}
+	unread, err := finality.CaptureKeysOfItemIn(ctx, ix.Store, uint64(Chain), from, to, unindexableItem(ix.Gen))
+	if err != nil {
+		return from, err
 	}
 	digested := map[[40]byte]bool{}
 	for _, k := range have {
 		digested[blockID(k)] = true
+	}
+	for _, k := range unread {
+		digested[blockID(k)] = true // recorded as unindexable: nothing to digest
 	}
 	var missing []finality.CaptureKey
 	for _, k := range sys {
@@ -597,7 +661,7 @@ func (ix *Indexer) reconcile(ctx context.Context, rep *finality.StepReport, dead
 				next = group[0].L1Block
 				break
 			}
-			return err
+			return from, err
 		}
 		rep.Late += len(group)
 		metrics.AddFinalityIndexWritten(uint64(Chain), FamilyBaseInbox, 0, 0, len(group))
@@ -611,7 +675,7 @@ func (ix *Indexer) reconcile(ctx context.Context, rep *finality.StepReport, dead
 			}
 			tmpHi = h + 3*ix.window()
 			if _, err := ix.loadDigests(ctx, tmp, tmpLo, tmpHi); err != nil {
-				return err
+				return from, err
 			}
 		}
 		for _, d := range ds {
@@ -625,14 +689,13 @@ func (ix *Indexer) reconcile(ctx context.Context, rep *finality.StepReport, dead
 				next = h
 				break
 			}
-			return err
+			return from, err
 		}
 	}
-	ix.reconcilePos = next
 	if next <= to {
-		return nil // the round ended early (limits); the repair pass waits for a round that covers its chunk
+		return next, nil // the round ended early (limits); the repair pass waits for a round that covers its range
 	}
-	return ix.repairEntries(ctx, from, to, rep)
+	return next, ix.repairEntries(ctx, from, to, rep)
 }
 
 // repairEntries makes sure that every channel that closes in [from, to] and is complete over the stored digests has its entry: a crash between
@@ -916,3 +979,62 @@ func minU64(a, b uint64) uint64 {
 
 // IsIndexConflict reports whether err is the named conflicting-write error.
 func IsIndexConflict(err error) bool { return errors.Is(err, finality.ErrIndexConflict) }
+
+// recordUnindexable writes the insert-only record of a captured block the indexer cannot read and lets the cursor pass it. The record is
+// named (index_block_unindexable{block, reason}) in the log and the metric, and in the state of any leg whose window holds the block and
+// whose channel is not found.
+func (ix *Indexer) recordUnindexable(ctx context.Context, bk finality.CaptureKey, ue *unindexableError) error {
+	uk := bk
+	uk.Item = unindexableItem(ix.Gen)
+	if err := finality.IndexPut(ctx, ix.Store, FamilyBaseInbox, uk, []byte(ue.Reason)); err != nil {
+		return err
+	}
+	metrics.IncFinalityIndexUnindexable(uint64(Chain), FamilyBaseInbox, ue.Reason)
+	ix.Cfg.logf("[FINALITY] index base-inbox: %s", finality.IndexBlockUnindexable(uint64(Chain), bk.L1Block, ue.Reason).Error())
+	return nil
+}
+
+// maxHints bounds the blocks waiting to be noted; a note is a speed-up, the rotating walk is the guarantee, so a full set drops the note.
+const maxHints = 4096
+
+// NoteLate tells the indexer that block was captured (or filled) after its cursor may have passed it. The next step digests it and completes
+// the channels it touches (finality.LateBlockNoter). It is safe to call from any goroutine.
+func (ix *Indexer) NoteLate(block uint64) {
+	ix.hintMu.Lock()
+	defer ix.hintMu.Unlock()
+	if ix.hints == nil {
+		ix.hints = map[uint64]bool{}
+	}
+	if len(ix.hints) < maxHints {
+		ix.hints[block] = true
+	}
+}
+
+var _ finality.LateBlockNoter = (*Indexer)(nil)
+
+// reconcileHints indexes the noted blocks at or below the cursor, lowest first; a block above the cursor stays noted (the forward step takes it),
+// and one the step ran out of limits for stays noted too.
+func (ix *Indexer) reconcileHints(ctx context.Context, rep *finality.StepReport, deadline time.Time) error {
+	ix.hintMu.Lock()
+	var todo []uint64
+	for b := range ix.hints {
+		if b <= ix.cursor {
+			todo = append(todo, b)
+		}
+	}
+	ix.hintMu.Unlock()
+	sort.Slice(todo, func(i, j int) bool { return todo[i] < todo[j] })
+	for _, b := range todo {
+		next, err := ix.reconcileRange(ctx, rep, deadline, b, b)
+		if err != nil {
+			return err
+		}
+		if next <= b {
+			return nil // the limits of the step ended it; the note stays
+		}
+		ix.hintMu.Lock()
+		delete(ix.hints, b)
+		ix.hintMu.Unlock()
+	}
+	return nil
+}

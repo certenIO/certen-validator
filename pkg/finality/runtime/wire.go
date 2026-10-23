@@ -298,7 +298,20 @@ func wireBase(reg *finality.Registry, env Env, d Deps, clock loopClock, logf fun
 	bf := &baseposted.Backfiller{Chain: finality.ChainBaseSepolia, Store: env.Store, Capturer: baseposted.CapturerOf(capt), Providers: Hosts(cfg.Beacon),
 		Policy: baseposted.DefaultBackfillPolicy(), Now: d.Now, Logf: logf}
 	return reg.RegisterCapturer(&GapBackfillLoop{ChainID: finality.ChainBaseSepolia, Store: env.Store, Backfill: bf, Every: cfg.CaptureEvery, PerTick: cfg.GapBlocks,
-		AuditSpacing: uint64(cfg.GapAuditSpacing), Memory: env.Memory, Logf: logf, Clock: clock})
+		AuditSpacing: uint64(cfg.GapAuditSpacing), Memory: env.Memory, Logf: logf, Clock: clock, OnFilled: lateNoter(indexer)})
+}
+
+// lateNoter is the gap backfill's hook into the capture index: the blocks it fills are noted to the indexer (nil when there is none).
+func lateNoter(ix finality.CaptureIndexer) func([]uint64) {
+	nt, ok := ix.(finality.LateBlockNoter)
+	if !ok {
+		return nil
+	}
+	return func(blocks []uint64) {
+		for _, b := range blocks {
+			nt.NoteLate(b)
+		}
+	}
 }
 
 // captureSlack is how many blocks before its first cursor row the Base capture loop may have started scanning: its first range ends

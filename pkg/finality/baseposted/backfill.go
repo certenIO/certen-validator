@@ -73,7 +73,8 @@ func (p BackfillPolicy) withDefaults() BackfillPolicy {
 // BackfillReport is what one Step did.
 type BackfillReport struct {
 	Attempted, Filled, Failed, Ended, Conflicts, Skipped int
-	Open, UnavailableProven, RetentionExpired            uint64 // blocks still in each state after the step
+	FilledBlocks                                         []uint64 // the blocks this step captured (the capture index is told, it digests them at its next step)
+	Open, UnavailableProven, RetentionExpired            uint64   // blocks still in each state after the step
 	FailedByClass                                        map[string]int
 	EndedByKind                                          map[string]int
 }
@@ -294,6 +295,7 @@ func (b *Backfiller) attempt(ctx context.Context, n uint64, pol BackfillPolicy, 
 		delete(b.entries, n)
 		delete(b.reopen, n)
 		rep.Filled++
+		rep.FilledBlocks = append(rep.FilledBlocks, n)
 		return
 	}
 	if ctx.Err() != nil {

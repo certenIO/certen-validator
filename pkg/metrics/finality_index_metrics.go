@@ -17,6 +17,7 @@
 //	certen_finality_index_lookup_bytes{chain,family}      capture bytes a build read to assemble its channel (histogram)
 //	certen_finality_index_step_seconds{chain,family}      wall time of one indexer step (histogram)
 //	certen_finality_index_selfcheck_skipped_total{chain,family}  self-checks not run because the memory budget refused the rows (never silent)
+//	certen_finality_index_unindexable_blocks_total{chain,family,reason}  captured blocks the indexer could not read (index_block_unindexable)
 //	certen_finality_index_disabled{chain,family,key,reason}      1 while a bad setting has switched the index off (finality_index_disabled)
 //	certen_finality_capture_foreign_txs_total{chain}      batch-inbox transactions skipped because the batcher of their block did not send them (F19)
 //	certen_finality_capture_batcher_unestablished_total{chain}   blocks whose captured rows cannot establish the batcher (their frames are not filtered)
@@ -61,6 +62,10 @@ var (
 		Name: "certen_finality_index_conflicts_total",
 		Help: "Index writes refused because the row exists with different bytes (rows are a pure function of the captured bytes).",
 	}, []string{"chain", "family"})
+	finalityIndexUnindexable = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "certen_finality_index_unindexable_blocks_total",
+		Help: "Captured blocks the indexer could not read, recorded as index_block_unindexable by reason (a leg whose window holds one and whose channel is missing is told by name).",
+	}, []string{"chain", "family", "reason"})
 	finalityIndexSelfCheckSkipped = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "certen_finality_index_selfcheck_skipped_total",
 		Help: "Index self-checks not run because the memory budget refused the rows they read (a skipped check is counted, never silent).",
@@ -107,6 +112,7 @@ func registerFinalityIndexMetrics() {
 	prometheus.MustRegister(finalityIndexLookupBytes)
 	prometheus.MustRegister(finalityIndexStepSeconds)
 	prometheus.MustRegister(finalityIndexSelfCheckSkipped)
+	prometheus.MustRegister(finalityIndexUnindexable)
 	prometheus.MustRegister(finalityIndexDisabled)
 	prometheus.MustRegister(finalityForeignTxs)
 	prometheus.MustRegister(finalityBatcherUnestablished)
@@ -187,4 +193,9 @@ func AddFinalityCaptureForeignTxs(chain uint64, n int) {
 // IncFinalityBatcherUnestablished counts a captured block whose rows cannot establish the batcher.
 func IncFinalityBatcherUnestablished(chain uint64) {
 	finalityBatcherUnestablished.WithLabelValues(chainLabel(chain)).Inc()
+}
+
+// IncFinalityIndexUnindexable counts a captured block recorded as unindexable.
+func IncFinalityIndexUnindexable(chain uint64, family, reason string) {
+	finalityIndexUnindexable.WithLabelValues(chainLabel(chain), family, reason).Inc()
 }

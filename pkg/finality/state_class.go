@@ -24,6 +24,8 @@ const (
 )
 
 var stateClasses = map[string]StateClass{
+	// index_block_unindexable: the stored rows of the block do not parse, and stored rows do not change: persistent, so the failure back-off.
+	"index_block_unindexable": ClassFailure,
 	// index_inconsistent: the class depends on the reason (stateReasonClasses, state_class_reason.go); this row is the class of every reason that
 	// table does not name.
 	"index_inconsistent": ClassFailure,

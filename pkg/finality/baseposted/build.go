@@ -565,6 +565,7 @@ func faultCode(err error) string {
 // txView reads the two things the builder needs of a batch-inbox transaction without a signature check (the verifier checks).
 type txView struct {
 	isBlob bool
+	nBlobs int // the blobs the transaction names
 	data   []byte
 }
 
@@ -574,6 +575,7 @@ func (v *txView) parse(raw []byte) error {
 		return err
 	}
 	v.isBlob = t.Type() == types.BlobTxType
+	v.nBlobs = len(t.BlobHashes())
 	v.data = t.Data()
 	return nil
 }

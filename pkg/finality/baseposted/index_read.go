@@ -303,6 +303,29 @@ func (r *IndexReader) partialFrames(ctx context.Context, from, to uint64, covere
 	return n, nil
 }
 
+// unindexableIn is the named state of the lowest captured block in [origin, end] that the indexer recorded as unreadable (nil: none). A leg
+// whose channel is not found and whose window holds such a block cannot be told "not posted yet": the channel may lie in it.
+func (r *IndexReader) unindexableIn(ctx context.Context, origin, end uint64) (*finality.StateError, error) {
+	keys, err := finality.CaptureKeysOfItemIn(ctx, r.Store, uint64(Chain), origin, end, unindexableItem(r.Gen))
+	if err != nil || len(keys) == 0 {
+		return nil, err
+	}
+	k := keys[0]
+	b, ok, err := r.Store.Get(ctx, k)
+	if err != nil {
+		return nil, err
+	}
+	reason := string(b)
+	known := false
+	for _, m := range finality.UnindexableReasons() {
+		known = known || m == reason
+	}
+	if !ok || !known {
+		return nil, r.inconsistent(finality.IndexEntryCorrupt, "item", k.Item, "l1_block", k.L1Block)
+	}
+	return finality.IndexBlockUnindexable(uint64(Chain), k.L1Block, reason), nil
+}
+
 // searchIndexed is search's index path: the same prelude (origin, window, capture cursor) and the same named outcomes, with the window
 // read replaced by a lookup. It fills sr; a nil sr.ch with sr.pending set is a named pending, a nil sr.ch alone is l1_posted_unproven.
 func (b *Builder) searchIndexed(ctx context.Context, bp *Pins, l2 finality.HeaderFields, hold *finality.Hold, sr *searched, origin, end uint64,
@@ -369,6 +392,13 @@ func (b *Builder) searchIndexed(ctx context.Context, bp *Pins, l2 finality.Heade
 		return nil
 	}
 	sr.lastScanned = capHi
+	// a block of the window that the indexer could not read may hold the channel: named before any inference
+	if us, err := r.unindexableIn(ctx, origin, end); err != nil {
+		return err
+	} else if us != nil {
+		metrics.IncFinalityIndexLookup(uint64(Chain), FamilyBaseInbox, "unindexable")
+		return us
+	}
 	// RB12-CAPTURE-GAP (INT-1): a recorded gap inside the window may hold the channel, so "not posted yet" cannot be said; the durable records are
 	// consulted exactly as the window reader does (same function, same state bytes) BEFORE the inference below, which stays the answer for a
 	// hole no record names.

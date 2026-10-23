@@ -326,6 +326,13 @@ func (l *BasePostedLoop) recordGap(ctx context.Context, n uint64, st *finality.S
 	return nil
 }
 
+// noteLate tells the capture index (when it can be told) that block was captured after the index cursor may have passed it.
+func (l *BasePostedLoop) noteLate(block uint64) {
+	if nt, ok := l.Index.(finality.LateBlockNoter); ok {
+		nt.NoteLate(block)
+	}
+}
+
 // runIndex steps the capture index towards the capture cursor. Indexing never stops the capture: a failed step is logged (redacted) and a
 // named inconsistency is recorded in the status table under the chain's capture pseudo id.
 func (l *BasePostedLoop) runIndex(ctx context.Context, sink statusSink, upTo uint64) {
@@ -386,6 +393,7 @@ func (l *BasePostedLoop) retryFailed(ctx context.Context, tick int, head uint64,
 				l.Logf("[FINALITY] capturer %s: the fill of L1 block %d was not recorded (the gap backfill closes it): %v", l.Name(), n, ethrpc.RedactError(ferr))
 			}
 			l.Logf("[FINALITY] capturer %s: L1 block %d captured on retry (inbox transactions: %t)", l.Name(), n, inbox)
+			l.noteLate(n)
 		} else if e != nil {
 			e.attempts++
 			gap := 1 << uint(min(e.attempts, 6))
