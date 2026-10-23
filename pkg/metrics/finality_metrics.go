@@ -136,7 +136,7 @@ var (
 	}, []string{"chain", "code"})
 	finalityHeapInUse = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "certen_finality_heap_inuse_bytes",
-		Help: "Go heap in use by this validator process, sampled once per upgrader pass (the figure the finality memory gate compares with its budget).",
+		Help: "Go heap in use by this validator process, refreshed every few seconds while the upgrader runs, independent of its passes (the figure the finality memory gate compares with its budget).",
 	})
 	finalityMemoryBudget = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "certen_finality_memory_budget_bytes",
@@ -411,6 +411,11 @@ func IncFinalityCaptureRefused(chain uint64, code string) {
 func SetFinalityHeap(heapInUse uint64, budget, reserved int64) {
 	finalityHeapInUse.Set(float64(heapInUse))
 	finalityMemoryBudget.Set(float64(budget))
+	finalityMemoryReserved.Set(float64(reserved))
+}
+
+// SetFinalityMemoryReserved reports the bytes currently reserved against the memory budget; the budget calls it on every reservation and release.
+func SetFinalityMemoryReserved(reserved int64) {
 	finalityMemoryReserved.Set(float64(reserved))
 }
 

@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -152,7 +153,7 @@ func BuilderStatusOf(proofID string, chain uint64, target, reached Level, pd *Pe
 	}
 	st, named := AsNamed(err)
 	if !named {
-		st = NewState(CodeVerifierFailed, "chain", chain, "kind", "unnamed", "cause", fmt.Sprint(err))
+		st = builderErrorState(chain, err)
 	}
 	switch {
 	case st.Code == CodeNotApplicable:
@@ -164,6 +165,49 @@ func BuilderStatusOf(proofID string, chain uint64, target, reached Level, pd *Pe
 	}
 	s.State = redactedState(st)
 	return s
+}
+
+// CodeBuilderError is the named state of an error that carries no name of its own: a capture row that vanished, a database error, a
+// provider error, any plain error a prover or the addendum store returns. It is class unavailable and says WHERE it came from (stage) and
+// what it said (cause, redacted). finality_verifier_failed is NOT used for it: that code means evidence was built and failed
+// verification, which none of these is (RB12-P0LIVE-FIX D4).
+const CodeBuilderError = "finality_builder_error"
+
+// The stages of a builder error: the prover building the evidence, and the store appending what was built.
+const (
+	StageBuild  = "build"
+	StageAppend = "append"
+)
+
+// stagedError marks an unnamed error with the stage that raised it.
+type stagedError struct {
+	stage string
+	err   error
+}
+
+func (e *stagedError) Error() string { return e.err.Error() }
+func (e *stagedError) Unwrap() error { return e.err }
+
+// AtStage marks an unnamed error with the stage (StageBuild, StageAppend) it came from; BuilderStatusOf reads it. An error that already
+// has a name is returned as it is.
+func AtStage(stage string, err error) error {
+	if err == nil {
+		return nil
+	}
+	if _, named := AsNamed(err); named {
+		return err
+	}
+	return &stagedError{stage: stage, err: err}
+}
+
+// builderErrorState is the named state of an unnamed builder error (the stage is StageBuild unless the error was marked by AtStage).
+func builderErrorState(chain uint64, err error) *StateError {
+	stage := StageBuild
+	var se *stagedError
+	if errors.As(err, &se) {
+		stage = se.stage
+	}
+	return NewState(CodeBuilderError, "chain", chain, "stage", stage, "cause", fmt.Sprint(err))
 }
 
 // Field names a failed builder status adds to its named state (RB12-F1): how many consecutive asks of this (leg, level) have failed
@@ -180,13 +224,35 @@ func (s *BuilderStatus) noteAttempt(attempt int, next time.Time) {
 	if s.State == nil {
 		return
 	}
-	st := NewState(s.State.Code)
-	for k, v := range s.State.Fields {
-		st.Fields[k] = v
-	}
+	st := copyState(s.State)
 	st.Fields[FieldAttempt] = uint64(attempt)
 	st.Fields[FieldNextAttemptAt] = next.UTC().Format(time.RFC3339)
 	s.State = st
+}
+
+// noteRetry records on a held status when the builder asks again: the eta of the pending row and the next_attempt_at field of its
+// state. A hold is no failed ask, so it carries no attempt ordinal.
+func (s *BuilderStatus) noteRetry(next time.Time) {
+	if s.State == nil {
+		return
+	}
+	st := copyState(s.State)
+	st.Fields[FieldNextAttemptAt] = next.UTC().Format(time.RFC3339)
+	s.State, s.ETA = st, next
+}
+
+func copyState(s *StateError) *StateError {
+	st := NewState(s.Code)
+	for k, v := range s.Fields {
+		st.Fields[k] = v
+	}
+	return st
+}
+
+// HeldBuilderStatus is the row of a level whose build the process memory budget held back (CodeMemoryBudget, even after waiting for a
+// release): the leg is pending, not failed. The row names the state; the upgrader adds the time of the next ask.
+func HeldBuilderStatus(proofID string, chain uint64, target, reached Level, st *StateError, at time.Time) BuilderStatus {
+	return BuilderStatus{ProofID: proofID, Chain: chain, TargetLevel: target, Class: BuilderPending, LevelReached: reached, NextLevel: target, State: redactedState(st), JudgedAt: at}
 }
 
 // redactedState is st with every text field (a string or an error value) passed through the one

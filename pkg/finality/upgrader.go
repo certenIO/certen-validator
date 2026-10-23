@@ -125,6 +125,9 @@ type UpgraderConfig struct {
 	// Go heap in use is above HeapGate(budget) (a pass-level state, logged and counted), so the process cannot be driven to the host's
 	// OOM killer by legs it has not started yet.
 	Memory *MemoryBudget
+	// GaugeEvery is how often the memory gauges (heap in use, budget, reserved) are refreshed between passes (default 5s): a pass lasts as
+	// long as its slowest leg, and an alert on the heap must not wait for it.
+	GaugeEvery time.Duration
 	// HeapInUse reads the Go heap in use (default: runtime.MemStats.HeapInuse, sampled at most once a second); GC is run (default
 	// runtime.GC) once before a pass is held back, because the figure may be garbage that has not been collected. Tests replace both.
 	HeapInUse   func() uint64
@@ -168,6 +171,7 @@ func (c UpgraderConfig) withDefaults() UpgraderConfig {
 	def(&c.FailureRetry, 5*time.Minute)
 	def(&c.BrokenRetry, time.Hour)
 	def(&c.MaxFailureRetry, 6*time.Hour)
+	def(&c.GaugeEvery, 5*time.Second)
 	if c.Memory == nil {
 		c.Memory = NewMemoryBudget(DefaultMemoryBudget)
 	}
@@ -308,6 +312,7 @@ type PassReport struct {
 	Unrecorded   int // attempted legs whose settlement evidence was served while the proof row has no settlement_tx_hash or settlement_block_number yet
 	Deferred     int // suspect legs (an earlier ask failed) left for the next pass because every suspect slot was taken
 	MemoryHeld   int // due legs not started because the heap in use was above the memory gate (finality_memory_budget_exceeded, what=attempt)
+	BuildHeld    int // attempts whose build the memory budget could not cover even after waiting for a release (finality_memory_budget_exceeded): holds of the process, not failures
 	InFlight     int // legs skipped because an attempt started by an earlier pass is still running
 	// SourceErr is a failure listing legs (the pass ended early).
 	SourceErr error
@@ -315,6 +320,8 @@ type PassReport struct {
 
 // Run passes every Interval until ctx is cancelled, and returns when the pass in flight has stopped.
 func (u *Upgrader) Run(ctx context.Context) {
+	u.publishMemory(0) // the budget and heap gauges exist from the start, not from the end of the first pass
+	go u.publishMemoryEvery(ctx)
 	t := time.NewTimer(0)
 	defer t.Stop()
 	defer u.bg.Wait() // the attempts a pass detached stop with ctx (each is bounded by BuildTimeout and by ctx)
@@ -329,11 +336,26 @@ func (u *Upgrader) Run(ctx context.Context) {
 			u.cfg.Logf("[FINALITY] pass could not list settled legs: %v", rep.SourceErr)
 		}
 		if rep.Appended > 0 || rep.Failed > 0 || rep.Broken > 0 || rep.Unusable > 0 {
-			u.cfg.Logf("[FINALITY] pass: listed=%d attempts=%d appended=%d pending=%d failed=%d broken=%d conflict=%d unusable=%d complete=%d no_settlement=%d unrecorded=%d no_prover=%d deferred=%d in_flight=%d memory_held=%d heap_in_use=%d",
-				rep.Listed, rep.Attempts, rep.Appended, rep.Pending, rep.Failed, rep.Broken, rep.Conflict, rep.Unusable, rep.Complete, rep.NoSettlement, rep.Unrecorded, rep.NoProver, rep.Deferred, rep.InFlight, rep.MemoryHeld, u.cfg.HeapInUse())
+			u.cfg.Logf("[FINALITY] pass: listed=%d attempts=%d appended=%d pending=%d failed=%d broken=%d conflict=%d unusable=%d complete=%d no_settlement=%d unrecorded=%d no_prover=%d deferred=%d in_flight=%d memory_held=%d build_held=%d heap_in_use=%d",
+				rep.Listed, rep.Attempts, rep.Appended, rep.Pending, rep.Failed, rep.Broken, rep.Conflict, rep.Unusable, rep.Complete, rep.NoSettlement, rep.Unrecorded, rep.NoProver, rep.Deferred, rep.InFlight, rep.MemoryHeld, rep.BuildHeld, u.cfg.HeapInUse())
 		}
 		u.announceGaps(rep)
 		t.Reset(u.cfg.Interval)
+	}
+}
+
+// publishMemoryEvery keeps the memory gauges current on a ticker of its own until ctx ends (RB12-F12: they were written only at the end of
+// a pass and read 0 for as long as a pass lasted).
+func (u *Upgrader) publishMemoryEvery(ctx context.Context) {
+	t := time.NewTicker(u.cfg.GaugeEvery)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			u.publishMemory(0)
+		}
 	}
 }
 
@@ -549,6 +571,7 @@ func addResult(rep *PassReport, res legResult) {
 	rep.Appended += res.appended
 	rep.Pending += b2i(res.pending != nil)
 	rep.Failed += b2i(res.failed)
+	rep.BuildHeld += b2i(res.held)
 	rep.Broken += b2i(res.broken)
 	rep.Conflict += b2i(res.conflict)
 	rep.Unusable += b2i(res.unusable)
@@ -564,6 +587,7 @@ func (u *Upgrader) mergeLate(rep *PassReport) {
 	rep.Appended += l.Appended
 	rep.Pending += l.Pending
 	rep.Failed += l.Failed
+	rep.BuildHeld += l.BuildHeld
 	rep.Broken += l.Broken
 	rep.Conflict += l.Conflict
 	rep.Unusable += l.Unusable
@@ -801,6 +825,7 @@ type legResult struct {
 	appended     int
 	pending      *PendingState
 	failed       bool
+	held         bool // a build was held by the process memory budget (not a failure of the leg)
 	broken       bool
 	conflict     bool
 	unusable     bool
@@ -959,7 +984,7 @@ func (u *Upgrader) upgradeLeg(ctx context.Context, ref LegRef) (res legResult) {
 		}
 		wait := time.Duration(-1)                                 // next ask of this level; <0 = the level was stored
 		failWait, failAttempt := u.failDelay(ref.ProofID, target) // the back-off of this ask if it fails (RB12-F1)
-		failed := false
+		failed, held := false, false
 		var status *BuilderStatus
 		for _, p := range u.reg.Provers(ref.Chain) {
 			if c, ok := p.(Ceilinged); ok && c.Ceiling() < target {
@@ -975,6 +1000,20 @@ func (u *Upgrader) upgradeLeg(ctx context.Context, ref LegRef) (res legResult) {
 					status = &s
 					wait = u.cfg.BrokenRetry
 					continue // the chain does not have that level: nothing to build, nothing wrong
+				}
+				if st, ok := AsNamed(err); ok && st.Code == CodeMemoryBudget {
+					// The process's memory budget could not cover this build even after waiting for another build to release
+					// (RB12-P0LIVE-FIX D2). That is a hold of the PROCESS, not a failure of the leg: no failure is counted, the back-off
+					// exponent is not advanced, the leg does not become a suspect, and it is asked again at PendingRetry. The status row
+					// is pending and names the state, with the time of the next ask.
+					logf("[FINALITY] leg %s chain %d: build of %s held, the memory budget cannot cover it now: %v", ref.ProofID, ref.Chain, target, err)
+					res.held, held = true, true
+					if status == nil || (status.Class != BuilderUnavailable && status.Class != BuilderRefused) {
+						s := HeldBuilderStatus(ref.ProofID, ref.Chain, target, reached(), st, u.cfg.Now())
+						status = &s
+					}
+					wait = minWait(wait, u.cfg.PendingRetry)
+					continue
 				}
 				u.cfg.Recorder.BuildFailed(ref.Chain, codeOf(err))
 				logf("[FINALITY] leg %s chain %d: build of %s refused: %v", ref.ProofID, ref.Chain, target, err)
@@ -1032,7 +1071,7 @@ func (u *Upgrader) upgradeLeg(ctx context.Context, ref LegRef) (res legResult) {
 					res.failed, failed = true, true
 					u.cfg.Recorder.BuildFailed(ref.Chain, "store_write")
 					logf("[FINALITY] leg %s chain %d: appending the %s addendum: %v", ref.ProofID, ref.Chain, target, err)
-					s := BuilderStatusOf(ref.ProofID, ref.Chain, target, reached(), nil, err, false, u.cfg.Now())
+					s := BuilderStatusOf(ref.ProofID, ref.Chain, target, reached(), nil, AtStage(StageAppend, err), false, u.cfg.Now())
 					status = &s
 					wait = minWait(wait, failWait)
 				}
@@ -1051,7 +1090,9 @@ func (u *Upgrader) upgradeLeg(ctx context.Context, ref LegRef) (res legResult) {
 			wait = -1
 			break // one addendum per level
 		}
-		u.commitFail(ref.ProofID, target, failed, failAttempt)
+		if failed || !held { // a held build says nothing about the leg: its failure count stays as it was
+			u.commitFail(ref.ProofID, target, failed, failAttempt)
+		}
 		var nextAt time.Time
 		if wait >= 0 {
 			nextAt = u.scheduleLevel(ref.ProofID, target, wait)
@@ -1062,6 +1103,8 @@ func (u *Upgrader) upgradeLeg(ctx context.Context, ref LegRef) (res legResult) {
 			}
 			if failed && !nextAt.IsZero() && (status.Class == BuilderUnavailable || status.Class == BuilderRefused) {
 				status.noteAttempt(failAttempt, nextAt)
+			} else if held && !nextAt.IsZero() && status.Class == BuilderPending && status.State != nil && status.State.Code == CodeMemoryBudget {
+				status.noteRetry(nextAt)
 			}
 			u.putStatus(ctx, *status)
 		}
@@ -1102,23 +1145,46 @@ func (u *Upgrader) build(ctx context.Context, p Prover, s *ethproof.Settlement, 
 		add *Addendum
 		pd  *PendingState
 	}
-	// everything the prover reads through the generic row loaders is reserved against the process budget and given back when the
-	// attempt ends (an abandoned prover keeps its reservation no longer than its own call: the hold is released on return)
-	hold := NewHold(ctx, p.Chain(), "build")
-	defer hold.Release()
-	ctx = WithHold(ctx, hold)
-	o, err := bounded(ctx, u.cfg.BuildTimeout, p.Chain(), "building the evidence", func(c context.Context) (out, error) {
-		add, pd, err := p.Build(c, s, have, target)
-		return out{add, pd}, err
-	})
-	return o.add, o.pd, err
+	budget := MemoryBudgetOf(ctx)
+	var age uint64 // the build's place in the budget: kept when it has to be run again, so it is not made to wait behind younger builds
+	if budget != nil {
+		age = budget.newAge()
+	}
+	var deadline time.Time
+	for {
+		// Everything the prover reads through the generic row loaders is reserved against the process budget. The hold ends when the
+		// PROVER RETURNS, not when the build is abandoned at BuildTimeout: a prover that ignores its context keeps running with what it has
+		// read in memory, and the budget must go on counting it until it is really gone (RB12-P0LIVE-FIX F7). A reservation it makes
+		// after its hold ended is refused by name, so it cannot read more.
+		hold := newHold(ctx, p.Chain(), "build", age)
+		o, err := bounded(WithHold(ctx, hold), u.cfg.BuildTimeout, p.Chain(), "building the evidence", func(c context.Context) (out, error) {
+			defer hold.Release()
+			add, pd, err := p.Build(c, s, have, target)
+			return out{add, pd}, err
+		})
+		yielded, finished := hold.Yielded()
+		if err == nil || !yielded || budget == nil {
+			return o.add, o.pd, err
+		}
+		// The budget asked this build to give back what it held so that an older build could finish (RB12-P0LIVE-FIX D2): run it again
+		// when another build has finished, within the budget's wait; if none does, the refusal stands and the leg is held.
+		if st, ok := AsNamed(err); !ok || st.Code != CodeMemoryBudget {
+			return o.add, o.pd, err
+		}
+		if deadline.IsZero() {
+			deadline = time.Now().Add(budget.Wait())
+		}
+		if !budget.waitFinished(ctx, finished, time.Until(deadline)) {
+			return o.add, o.pd, err
+		}
+	}
 }
 
 func codeOf(err error) string {
 	if n, ok := AsNamed(err); ok {
 		return n.Code
 	}
-	return "unnamed_error"
+	return CodeBuilderError
 }
 
 // ---- the enable flags ----
