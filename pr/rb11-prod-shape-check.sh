@@ -847,6 +847,24 @@ EOF
   else rec WARN C10 "Base capture: consecutive inbox blocks are at most 40 apart unless a gap row covers the run" "0 uncovered runs (the spacing audit records them on the first tick of the RB12-CAPTURE-GAP binary)" "$s_runs uncovered run(s), $s_blocks uncaptured blocks; $s_n inbox blocks, largest ordinary spacing $s_max"; fi
 else rec FAIL C10 "Base capture spacing query" "query answers" "failed: $(errline)"; fi
 
+# C11 (RB12-GO-INT D5): the additive member pinsSha256 of the certen-finality-status/1 document (pkg/finality/status.go) that the validators of
+# this branch write and proofs_service (pkg/server/finality_handlers.go) decodes strictly (a malformed value makes the whole /finality answer of
+# the proof unusable). Positions and classes only: how many rows carry it and how many carry something that is not 64 lowercase hex characters.
+if out=$(sqlro <<'SQL'
+SELECT count(*),
+  count(*) FILTER (WHERE state ? 'pinsSha256'),
+  count(*) FILTER (WHERE state ? 'pinsSha256' AND (jsonb_typeof(state->'pinsSha256') <> 'string' OR length(state->>'pinsSha256') <> 64 OR (state->>'pinsSha256') ~ '[^0-9a-f]'))
+  FROM proof_finality_status;
+SQL
+); then
+  IFS='|' read -r p_n p_has p_bad <<EOF
+$out
+EOF
+  if [ "$p_bad" -ne 0 ]; then rec FAIL C11 "status rows carry pinsSha256 only as 64 lowercase hex characters (proofs_service refuses the whole /finality answer of a proof with another value)" "0 malformed in $p_has rows that carry it" "$p_bad malformed of $p_has"
+  elif [ "$p_has" -eq 0 ]; then rec WARN C11 "status rows carry pinsSha256 as 64 lowercase hex characters" "at least 1 row once the validators of this branch run" "no row carries it yet ($p_n status rows; expected before the validators are deployed, and until they write their first row)"
+  else rec PASS C11 "status rows carry pinsSha256 only as 64 lowercase hex characters" "0 malformed" "$p_has of $p_n rows carry it, all well-formed"; fi
+else rec FAIL C11 "status pinsSha256 query" "query answers" "failed: $(errline)"; fi
+
 # RB12-SEPOLIA-SPINE (SP1, SP2): the Sepolia execution-header spine is kept as insert-only capture rows (chain 11155111, item spine/n<count>) and
 # its progress is a finality_pending{awaiting_spine} status row. Empty before the first deploy of the fix; on the live store afterwards.
 if out=$(sqlro <<SQL

@@ -29,6 +29,7 @@ type BackfillPolicy struct {
 	BackoffBase, BackoffMax time.Duration // wait after the first failure of a block, doubling up to the cap
 	GoneObservations        int           // how many failures with every beacon endpoint answering 404/410 prove a blob unavailable ...
 	GoneSpan                time.Duration // ... when they span at least this long (a beacon node that is merely behind recovers inside it)
+	MinGoneHosts            int           // ... and every observation was made by at least this many DISTINCT beacon hosts (default 2): one provider's 404 is not proof
 	Retention               time.Duration // beacon blob retention (4096 epochs) plus one epoch of margin
 	GenesisTime             uint64
 	SlotSeconds             uint64
@@ -37,7 +38,7 @@ type BackfillPolicy struct {
 // DefaultBackfillPolicy is the production policy: blobs are kept 4096 epochs (about 18.2 days), a blob is proven gone by three
 // all-endpoints-404/410 answers over half an hour, a block is retried after 30 s doubling to 30 min.
 func DefaultBackfillPolicy() BackfillPolicy {
-	return BackfillPolicy{BackoffBase: 30 * time.Second, BackoffMax: 30 * time.Minute, GoneObservations: 3, GoneSpan: 30 * time.Minute,
+	return BackfillPolicy{BackoffBase: 30 * time.Second, BackoffMax: 30 * time.Minute, GoneObservations: 3, GoneSpan: 30 * time.Minute, MinGoneHosts: 2,
 		Retention: (4096 + 1) * 32 * 12 * time.Second, GenesisTime: SepoliaBeaconGenesis, SlotSeconds: 12}
 }
 
@@ -54,6 +55,9 @@ func (p BackfillPolicy) withDefaults() BackfillPolicy {
 	}
 	if p.GoneObservations <= 0 {
 		p.GoneObservations = d.GoneObservations
+	}
+	if p.MinGoneHosts <= 0 {
+		p.MinGoneHosts = d.MinGoneHosts
 	}
 	if p.GoneSpan <= 0 {
 		p.GoneSpan = d.GoneSpan
@@ -317,8 +321,8 @@ func (b *Backfiller) attempt(ctx context.Context, n uint64, pol BackfillPolicy, 
 		}
 	}
 	now := b.now()
-	if _, gone := BlobsGone(err); class == finality.GapBlobUnavailable && gone {
-		if end, ok := b.goneVerdict(e, cf, now, pol); ok {
+	if ge, gone := BlobsGone(err); class == finality.GapBlobUnavailable && gone {
+		if end, ok := b.goneVerdict(e, cf, ge.Endpoints, now, pol); ok {
 			if rerr := finality.RecordGapEnd(ctx, b.Store, b.Chain, n, end); rerr == nil {
 				rep.Ended++
 				if rep.EndedByKind == nil {
@@ -346,7 +350,7 @@ func (b *Backfiller) attempt(ctx context.Context, n uint64, pol BackfillPolicy, 
 // goneVerdict decides whether the blobs of a block are provably unavailable. Every beacon endpoint said 404/410 on this attempt; that is
 // the evidence. Past the retention it is enough (the data was pruned); inside it, it must hold on GoneObservations attempts spanning
 // GoneSpan, so a beacon node that is merely behind does not end a gap.
-func (b *Backfiller) goneVerdict(e *bfEntry, cf *CaptureFailure, now time.Time, pol BackfillPolicy) (finality.GapEnd, bool) {
+func (b *Backfiller) goneVerdict(e *bfEntry, cf *CaptureFailure, hosts int, now time.Time, pol BackfillPolicy) (finality.GapEnd, bool) {
 	providers := append([]string(nil), b.Providers...)
 	sort.Strings(providers)
 	var slot uint64
@@ -361,6 +365,13 @@ func (b *Backfiller) goneVerdict(e *bfEntry, cf *CaptureFailure, now time.Time, 
 		if now.Sub(slotTime) > pol.Retention {
 			return finality.GapEnd{Kind: finality.GapRetentionExpired, Reason: "blob_retention_elapsed", Providers: providers}, true
 		}
+	}
+	if hosts < pol.MinGoneHosts {
+		// One provider's 404 proves nothing about the data: the gap stays open, named by the count of hosts that answered (the note of this
+		// attempt carries it too), and the observations do not accumulate toward a verdict.
+		e.goneCount = 0
+		b.logf("[FINALITY] gap backfill chain %d: the blobs of a block are gone on %d distinct beacon host(s) and unavailable_proven needs %d: the gap stays open", b.Chain, hosts, pol.MinGoneHosts)
+		return finality.GapEnd{}, false
 	}
 	if e.goneCount == 0 {
 		e.goneFirst = now

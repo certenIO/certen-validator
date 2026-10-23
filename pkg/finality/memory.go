@@ -62,6 +62,12 @@ type ticket struct {
 // all back and is refused (it yields: the older builds can then finish, and the upgrader runs the yielded build again after one has).
 // The oldest build is therefore never made to give up, and a request larger than the whole budget, or larger than what is left when
 // the build holds all of it, is refused at once: waiting could not help it.
+//
+// Admission is in AGE ORDER (RB12-GO-INT D3). A request by build T is granted when it fits AND no build older than T is waiting in a
+// reservation: a younger request never passes an older one that waits, however small it is. The oldest waiter is granted as soon as it
+// fits, and while it waits the bytes only fall (the younger builds cannot take them), so its delay is bounded by the time its holders
+// take to finish or, when every build is blocked, by the yield rule above. A plain Reserve (no build: the backfill's fixed reservation) is
+// not ordered, never waits and is bounded in size; it is the one thing that can take bytes from a waiter, and only for as long as it is held.
 type MemoryBudget struct {
 	limit int64
 	wait  time.Duration
@@ -109,11 +115,13 @@ func (b *MemoryBudget) wake() {
 	b.changed = make(chan struct{})
 }
 
-// stopWait takes t out of the blocked count. b.mu is held.
+// stopWait takes t out of the blocked count. b.mu is held. A waiter that stops waiting (granted, refused or timed out) no longer holds the
+// younger requests back (admission is in age order), so the others are woken to look again.
 func (b *MemoryBudget) stopWait(t *ticket) {
 	if t != nil && t.waiting {
 		t.waiting = false
 		b.waiting--
+		b.wake()
 	}
 }
 
@@ -131,6 +139,19 @@ func (b *MemoryBudget) yieldYoungest() {
 	}
 }
 
+// olderWaiting reports whether a build older than t is blocked in a reservation. b.mu is held.
+func (b *MemoryBudget) olderWaiting(t *ticket) bool {
+	if t == nil {
+		return false
+	}
+	for o := range b.tickets {
+		if o != t && o.waiting && !o.victim && o.age < t.age {
+			return true
+		}
+	}
+	return false
+}
+
 // acquire takes n bytes for t (nil: a plain reservation that never waits). It reports whether they were granted and, when not, the bytes
 // in use at the moment of the refusal.
 func (b *MemoryBudget) acquire(ctx context.Context, t *ticket, n int64) (granted bool, used int64) {
@@ -145,7 +166,8 @@ func (b *MemoryBudget) acquire(ctx context.Context, t *ticket, n int64) (granted
 				return false, b.used
 			}
 		}
-		if b.used+n <= b.limit {
+		fits := b.used+n <= b.limit
+		if fits && !b.olderWaiting(t) {
 			b.used += n
 			metrics.SetFinalityMemoryReserved(b.used)
 			if t != nil {
@@ -159,7 +181,7 @@ func (b *MemoryBudget) acquire(ctx context.Context, t *ticket, n int64) (granted
 			t.yielded = true
 			return false, b.used
 		}
-		if t == nil || b.wait <= 0 || n > b.limit || b.used == t.held || expired || ctx.Err() != nil {
+		if t == nil || b.wait <= 0 || n > b.limit || (!fits && b.used == t.held) || expired || ctx.Err() != nil {
 			return false, b.used
 		}
 		if !t.waiting {

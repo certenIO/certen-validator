@@ -55,6 +55,11 @@ Measured with a tight GC target on the recorded day-old leg (spine 3,128,792 byt
 
 ## Deploy note
 
+**Merge order: this PR MUST be merged AFTER the Train 2 PR (pv2/rb12-train2 @d6a9eef1, merged into this branch) and deployed in the same sitting, one certen-deploy.sh run.** It builds on Train 2's registry (states.json, the retry-class table, the shape-check numbering: SP1/SP2 stay distinct from Train 2's C8 to C11) and on its upgrader.
+
+**Train 2's held-memo hazard (its PR, section 7): n/a for ethsepolia.** The held-answer memo (`heldKey`) is baseposted's. Nothing the Sepolia spine caches depends on gap pieces or the inbox-key count: a chunk is addressed by (last block, hash of its last header, item) and its bytes are fixed by that hash, so a cached or kept chunk never goes stale.
+
+
 Non-consensus: no govRoot input, no consensus gate, no signature rule, no format a verifier reads. No migration (`proof_finality_capture` accepts chain 11155111 and the item names). No new required environment variable. Validators can be restarted one at a time. `CERTEN_FINALITY_BUILD_TIMEOUT_SECONDS` stays as it is; raising it was never the fix. Owner configuration note OQ-R11-7: a keyed Sepolia RPC (`ETHEREUM_SEPOLIA_RPC_URL`) makes the spine faster but is no longer required.
 
 ## Findings (not fixed here)

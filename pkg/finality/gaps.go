@@ -164,6 +164,9 @@ func RecordGapNote(ctx context.Context, s CaptureStore, chain, block uint64, cla
 // RecordGapFill closes block: it was captured (hasInbox) or scanned and found to hold nothing to capture. The row is keyed under the
 // block's hash, so a reorged height closes under each hash it was read at.
 func RecordGapFill(ctx context.Context, s CaptureStore, chain, block uint64, hash [32]byte, hasInbox bool) error {
+	if hash == ([32]byte{}) {
+		return fmt.Errorf("finality: a gap fill names the hash of the block the capture verified; block %d has none", block)
+	}
 	var w Writer
 	w.Fixed([]byte(fillMagic))
 	w.U64(block)
@@ -370,6 +373,9 @@ func gapScan(ctx context.Context, s CaptureStore, chain, from, to uint64) (gapSc
 		b, _, err := blockOfItem(k.Item, GapFillPrefix)
 		if err != nil {
 			return res, err
+		}
+		if k.L1Hash == ([32]byte{}) {
+			continue // a fill closes a block for the hash the capture verified; one that names none closes nothing (RB12-GO-INT D7)
 		}
 		filled[b] = struct{}{}
 	}
