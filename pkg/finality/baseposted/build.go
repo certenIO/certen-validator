@@ -133,7 +133,7 @@ func (b *Builder) loadRange(ctx context.Context, bp *Pins, from, to uint64, hold
 		if err := reserve(len(raw)); err != nil {
 			return nil, err
 		}
-		flt, err := loadSenderFilter(ctx, b.Store, k, bp, hold) // F19: only the batcher's transactions carry channels
+		flt, err := loadSenderFilter(ctx, b.Store, k, bp, hold, false) // F19: only the batcher's transactions carry channels
 		if err != nil {
 			return nil, err
 		}

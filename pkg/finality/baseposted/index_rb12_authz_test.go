@@ -58,7 +58,7 @@ func TestRB12CaptureAndReadersAuthorizeTheSameTransactionsOnTheRealEvidence(t *t
 				if err != nil {
 					t.Fatalf("the real SystemConfig proof verifies under the header's state root: %v", err)
 				}
-				reader, err := loadSenderFilter(ctx, w.store, k, bp, nil) // the call the window reader and the index writer make
+				reader, err := loadSenderFilter(ctx, w.store, k, bp, nil, true) // the call the window reader and the index writer make
 				if err != nil || reader == nil {
 					t.Fatalf("the readers establish the same batcher: %v %v", reader, err)
 				}

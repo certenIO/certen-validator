@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"encoding/json"
+	"errors"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -461,5 +462,32 @@ func TestRB12L1CaptureGapIsOneRegistryEntryAndEveryEmittersOutputValidates(t *te
 	}
 	if msg := regConforms(t, "l1_capture_gap", map[string]any{"chain": uint64(84532), "gap_state": "open", "from_l1": uint64(1)}); msg == "" {
 		t.Error("a recorded gap without its record fields must not conform")
+	}
+}
+
+// A row the store cannot give: the window reader leaves the batcher unestablished (the assembly names batcher_state_unavailable, as before),
+// the index writer stops its step and writes nothing, because what it derives is persisted for ever.
+func TestRB12F19AFailingStoreIsNeverBakedIntoADigest(t *testing.T) {
+	st := NewMemStore()
+	w := newF19(t, st)
+	H := channelFrames("honest", 1_790_100_000, 30, 1000, 1)
+	hash := w.putBlock(1020, w.honest, f19Tx{key: w.junk, frames: H})
+	bad := hookStore{CaptureStore: st, get: func(k CaptureKey) ([]byte, bool, error, bool) {
+		return nil, false, errors.New("db down"), k.Item == ItemSysCfg && k.L1Hash == hash
+	}}
+	if f, err := loadSenderFilter(context.Background(), bad, CaptureKey{Chain: uint64(Chain), L1Block: 1020, L1Hash: hash}, w.bp, nil, false); f != nil || err != nil {
+		t.Fatalf("the window reader leaves the batcher unestablished: %v %v", f, err)
+	}
+	if _, err := loadSenderFilter(context.Background(), bad, CaptureKey{Chain: uint64(Chain), L1Block: 1020, L1Hash: hash}, w.bp, nil, true); err == nil {
+		t.Fatal("the index writer must stop on a store it cannot read")
+	}
+	ix := NewIndexer(bad, w.bp, 0, IndexConfig{})
+	if _, err := ix.Step(context.Background(), 1500); err == nil {
+		t.Fatal("the step stops")
+	}
+	for k := range indexRows(t, st) {
+		if strings.HasSuffix(k.Item, "/f") {
+			t.Fatalf("nothing is persisted from a block whose batcher could not be read: %v", k)
+		}
 	}
 }

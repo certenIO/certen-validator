@@ -56,14 +56,21 @@ func authorizerFromRows(bp *Pins, hdrRaw, sysRow []byte) (*batcherAuthorizer, bo
 
 // loadSenderFilter reads the header and syscfg rows of the captured block bk (chain, number, hash) and returns its filter, or nil when the
 // rows cannot establish the batcher (counted). The two rows are reserved against hold (nil: unbounded). Only a failing store is an error.
-func loadSenderFilter(ctx context.Context, store finality.CaptureStore, bk finality.CaptureKey, bp *Pins, hold *finality.Hold) (*senderFilter, error) {
+// strict says what a failing store means: the index writer persists what it derives, so a store that cannot be read must stop its step (strict);
+// the window reader persists nothing, and a row it could not read is read again, and named, by the assembly of the evidence (batcher_state_unavailable),
+// so there it only leaves the batcher unestablished (not strict). A cancelled context is an error in both.
+func loadSenderFilter(ctx context.Context, store finality.CaptureStore, bk finality.CaptureKey, bp *Pins, hold *finality.Hold, strict bool) (*senderFilter, error) {
 	var rows [2][]byte
 	for i, item := range []string{ItemHeader, ItemSysCfg} {
 		k := bk
 		k.Item = item
 		b, ok, err := store.Get(ctx, k)
 		if err != nil {
-			return nil, err
+			if strict || ctx.Err() != nil {
+				return nil, err
+			}
+			metrics.IncFinalityBatcherUnestablished(uint64(Chain))
+			return nil, nil
 		}
 		if !ok {
 			metrics.IncFinalityBatcherUnestablished(uint64(Chain))

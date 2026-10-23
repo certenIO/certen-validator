@@ -594,7 +594,7 @@ func loadBlockTxs(ctx context.Context, store finality.CaptureStore, bk finality.
 			return nil, err
 		}
 	}
-	flt, err := loadSenderFilter(ctx, store, bk, bp, hold)
+	flt, err := loadSenderFilter(ctx, store, bk, bp, hold, true)
 	if err != nil {
 		return nil, err
 	}
