@@ -38,7 +38,7 @@ const DefaultMemoryWait = 45 * time.Second
 // it as a pending row with the time of the next ask: a hold of the process, never a failure of the leg.
 const CodeMemoryBudget = "finality_memory_budget_exceeded"
 
-// MemoryBudgetFromEnv reads EnvMemoryBudget (bytes). A value that is not a number of at least MinMemoryBudget refuses startup by name.
+// MemoryBudgetFromEnv reads EnvMemoryBudget (bytes). A value that is not a number of at least MinMemoryBudget is refused by name (*envvar.Refusal); the validator announces it as finality_upgrader_disabled{reason=setting_invalid} and keeps running.
 func MemoryBudgetFromEnv() (int64, error) {
 	return envvar.Int64(EnvMemoryBudget, DefaultMemoryBudget, MinMemoryBudget)
 }

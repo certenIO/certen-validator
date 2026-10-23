@@ -296,8 +296,8 @@ func CheckProviderEnvironment() []ConfigError {
 	return out
 }
 
-// ConfigFromEnv reads the configuration. A numeric variable that is not a number in range refuses startup by name (the
-// envvar package's rule); a list variable that is empty takes its default, and one that is set must hold at least one entry and every
+// ConfigFromEnv reads the configuration. A numeric variable that is not a number in range is refused by name (the
+// envvar package's rule: a *envvar.Refusal, announced by the process as finality_upgrader_disabled{reason=setting_invalid}); a list variable that is empty takes its default, and one that is set must hold at least one entry and every
 // entry must be an http(s) URL with a host (the refusal names the variable and the entry index, never the value); the per-chain
 // provider lists are the ones the validator already uses (<PREFIX>_RPC_URL, <PREFIX>_URL_FALLBACKS, INFURA_/ALCHEMY_<PREFIX>_URL).
 func ConfigFromEnv() (Config, error) {
