@@ -1,0 +1,364 @@
+// Copyright 2026 Certen Protocol
+
+package baseposted
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"sort"
+
+	"github.com/certen/independant-validator/pkg/finality"
+	"github.com/certen/independant-validator/pkg/metrics"
+)
+
+// DefaultGapMargin is how many L1 blocks past a captured later channel the capture must have scanned before a missing earlier channel is
+// a capture gap and not a channel still in flight: the capture loop's own retry window for a block (BasePostedLoop.ProofWindow).
+const DefaultGapMargin uint64 = 96
+
+// IndexReader answers a build's question "which channel carries the batch of L2 timestamp T" from the index rows. It reads the key
+// names of the channel entries in the widening parts of the leg's window and the (few hundred byte) entries of the channels whose
+// timestamp range holds T. It decides nothing: the evidence is assembled from the captured rows and judged by Kind.Verify.
+type IndexReader struct {
+	Store     finality.CaptureStore
+	Pins      *Pins
+	Gen       uint32
+	GapMargin uint64 // 0: DefaultGapMargin
+}
+
+// NewIndexReader returns a reader of generation gen (0: finality.DefaultIndexGeneration).
+func NewIndexReader(store finality.CaptureStore, bp *Pins, gen uint32) *IndexReader {
+	if gen == 0 {
+		gen = finality.DefaultIndexGeneration
+	}
+	return &IndexReader{Store: store, Pins: bp, Gen: gen}
+}
+
+func (r *IndexReader) margin() uint64 {
+	if r.GapMargin > 0 {
+		return r.GapMargin
+	}
+	return DefaultGapMargin
+}
+
+// indexHit is the channel found for a timestamp.
+type indexHit struct {
+	entry *chanEntry
+	key   finality.CaptureKey // the entry's key (the closing block)
+	run   covRun
+}
+
+// Through is the L1 block the index has processed through (ok false: nothing yet).
+func (r *IndexReader) Through(ctx context.Context) (uint64, bool, error) {
+	_, hi, ok, err := finality.ReadIndexCursor(ctx, r.Store, uint64(Chain), r.Gen, FamilyBaseInbox)
+	return hi, ok, err
+}
+
+func (r *IndexReader) inconsistent(reason string, extra ...any) *finality.StateError {
+	return finality.IndexInconsistent(uint64(Chain), FamilyBaseInbox, reason, extra...)
+}
+
+// getEntry reads and checks one entry: decodes, checks the pins and looks for the duplicate-after-close marker.
+func (r *IndexReader) getEntry(ctx context.Context, n entryName, io *ioCount) (*chanEntry, error) {
+	b, ok, err := r.Store.Get(ctx, n.Key)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, r.inconsistent(finality.IndexRowMissing, "item", n.Key.Item, "l1_block", n.Key.L1Block)
+	}
+	io.add(len(b))
+	e, err := decodeEntry(b)
+	if err != nil {
+		return nil, r.inconsistent(finality.IndexEntryCorrupt, "item", n.Key.Item, "l1_block", n.Key.L1Block)
+	}
+	if e.ID != n.ID || e.TMin != n.TMin || e.TMax != n.TMax {
+		return nil, r.inconsistent(finality.IndexRowsDisagree, "item", n.Key.Item, "l1_block", n.Key.L1Block)
+	}
+	if e.Pins != pinsDigest(r.Pins) {
+		return nil, r.inconsistent(finality.IndexPinsChanged, "item", n.Key.Item, "l1_block", n.Key.L1Block)
+	}
+	mk := n.Key
+	mk.Item = markerItem(r.Gen, n.ID)
+	if _, marked, err := r.Store.Get(ctx, mk); err != nil {
+		return nil, err
+	} else if marked {
+		return nil, r.inconsistent(finality.IndexDuplicateAfterOpen, "item", n.Key.Item, "l1_block", n.Key.L1Block)
+	}
+	return e, nil
+}
+
+// ioCount counts the stored bytes a lookup and the assembly of its channel read.
+type ioCount struct{ n int64 }
+
+func (c *ioCount) add(n int) {
+	if c != nil {
+		c.n += int64(n)
+	}
+}
+
+// Find looks for the channel that carries the batch of timestamp t among the entries that close in [origin, end], in the same widening
+// parts findChannel's window is read in. names is every entry name listed (the caller classifies a miss from it). A hit is the first
+// channel, by position of its first frame, whose coverage holds t in the first part that has one: exactly the choice findChannel makes.
+func (r *IndexReader) Find(ctx context.Context, t, origin, end uint64, io *ioCount) (hit *indexHit, names []entryName, err error) {
+	step := r.Pins.L2BlockTime
+	prefix := r.item(itemChannel) + "/"
+	chain := uint64(Chain)
+	got := map[finality.CaptureKey]*chanEntry{}
+	next := origin
+	for i := 0; ; i++ {
+		hi := end
+		if i < len(searchSteps) && origin+searchSteps[i] < end {
+			hi = origin + searchSteps[i]
+		}
+		keys, err := r.Store.ListByRange(ctx, chain, next, hi, prefix)
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, k := range keys {
+			n, ok := parseEntryName(r.Gen, k)
+			if !ok {
+				return nil, nil, r.inconsistent(finality.IndexEntryCorrupt, "item", k.Item, "l1_block", k.L1Block)
+			}
+			names = append(names, n)
+		}
+		var cands []*chanEntry
+		var keysOf []finality.CaptureKey
+		for _, n := range names {
+			if n.TMin == 0 || t < n.TMin || t > n.TMax {
+				continue
+			}
+			e, have := got[n.Key]
+			if !have {
+				if e, err = r.getEntry(ctx, n, io); err != nil {
+					return nil, nil, err
+				}
+				got[n.Key] = e
+			}
+			if e.Status == entryCoverageOverflow {
+				return nil, nil, r.inconsistent(finality.IndexCoverageOverflow, "item", n.Key.Item, "l1_block", n.Key.L1Block)
+			}
+			if e.Status != entryDecoded {
+				continue
+			}
+			cands = append(cands, e)
+			keysOf = append(keysOf, n.Key)
+		}
+		var best int = -1
+		var bestRun covRun
+		for j, e := range cands {
+			var run covRun
+			found := false
+			for _, c := range e.Runs {
+				if c.covers(t, step) {
+					run, found = c, true
+					break // runs are in decode order: the first run holding t holds the first batch at t
+				}
+			}
+			if !found {
+				continue
+			}
+			if best < 0 || firstLess(e, cands[best]) {
+				best, bestRun = j, run
+			}
+		}
+		if best >= 0 {
+			return &indexHit{entry: cands[best], key: keysOf[best], run: bestRun}, names, nil
+		}
+		if hi >= end {
+			return nil, names, nil
+		}
+		next = hi + 1
+	}
+}
+
+// firstLess orders channels by the position of their first frame in capture order: findChannel's order of first appearance.
+func firstLess(a, b *chanEntry) bool {
+	if a.FirstBlock != b.FirstBlock {
+		return a.FirstBlock < b.FirstBlock
+	}
+	if c := bytes.Compare(a.FirstHash[:], b.FirstHash[:]); c != 0 {
+		return c < 0
+	}
+	return a.FirstTx < b.FirstTx
+}
+
+// Assemble loads the transactions of the hit's channel, with all their blob rows, in the order findChannel returns them.
+func (r *IndexReader) Assemble(ctx context.Context, h *indexHit, hold *finality.Hold, io *ioCount) ([]capturedTx, error) {
+	out := make([]capturedTx, 0, len(h.entry.Txs))
+	for _, t := range h.entry.Txs {
+		bk := finality.CaptureKey{Chain: uint64(Chain), L1Block: t.Block, L1Hash: t.Hash}
+		lt, err := loadTxRows(ctx, r.Store, bk, t.Index, hold, false)
+		if err != nil {
+			return nil, err
+		}
+		io.add(int(lt.read))
+		if uint32(len(lt.blobs)) != t.Blobs {
+			return nil, r.inconsistent(finality.IndexRowsDisagree, "item", ItemBlob(t.Index, len(lt.blobs)), "l1_block", t.Block)
+		}
+		out = append(out, capturedTx{key: lt.key, index: lt.index, raw: lt.raw, blobs: lt.blobs})
+	}
+	return out, nil
+}
+
+// missClass is what a miss in the index means: the channel is not posted (or not captured) yet, or the capture has a hole.
+type missClass struct {
+	gap *finality.StateError // non-nil: l1_capture_gap
+}
+
+// classifyMiss decides, from the entry names of the whole window, whether a missing channel for timestamp t is a capture hole. The Base
+// batcher posts L2 blocks in order, so captured channels tile L2 time: if a captured channel covers only later timestamps than t and the
+// capture has scanned more than GapMargin blocks past its closing block, the channel of t cannot still be in flight and no captured row
+// explains the interval between the nearest covered timestamps around t. partialFrames counts the digested frames inside the L1 range
+// that belong to no entry (channels with a frame in the hole, or whose other frames the hole swallowed).
+func (r *IndexReader) classifyMiss(ctx context.Context, t, origin, capHi uint64, names []entryName) (missClass, error) {
+	step := r.Pins.L2BlockTime
+	var below, above *entryName
+	for i := range names {
+		n := &names[i]
+		if n.TMin == 0 {
+			continue
+		}
+		if n.TMax < t && (below == nil || n.TMax > below.TMax) {
+			below = n
+		}
+		if n.TMin > t && (above == nil || n.TMin < above.TMin) {
+			above = n
+		}
+	}
+	if above == nil || capHi < above.Key.L1Block || capHi-above.Key.L1Block < r.margin() {
+		return missClass{}, nil
+	}
+	from, to := origin, above.Key.L1Block
+	l2From := t
+	if below != nil {
+		from = below.Key.L1Block
+		l2From = below.TMax + step
+	}
+	l2To := above.TMin - step
+	if l2To < l2From {
+		l2To = l2From
+	}
+	covered := map[[16]byte]bool{}
+	for _, n := range names {
+		covered[n.ID] = true
+	}
+	partial, err := r.partialFrames(ctx, from, to, covered)
+	if err != nil {
+		return missClass{}, err
+	}
+	return missClass{gap: finality.NewState(finality.CodeCaptureGap, "chain", uint64(Chain), "l2_timestamp", t, "l2_from", l2From, "l2_to", l2To,
+		"from_l1", from, "to_l1", to, "partial_frames", partial)}, nil
+}
+
+// partialFrames counts the frames in the digests of [from, to] whose channel has no entry.
+func (r *IndexReader) partialFrames(ctx context.Context, from, to uint64, covered map[[16]byte]bool) (uint64, error) {
+	keys, err := finality.CaptureKeysOfItemIn(ctx, r.Store, uint64(Chain), from, to, r.item(itemDigest))
+	if err != nil {
+		return 0, err
+	}
+	var n uint64
+	for _, k := range keys {
+		b, ok, err := r.Store.Get(ctx, k)
+		if err != nil {
+			return 0, err
+		}
+		if !ok {
+			continue
+		}
+		d, err := decodeDigest(k, b)
+		if err != nil {
+			return 0, r.inconsistent(finality.IndexEntryCorrupt, "item", k.Item, "l1_block", k.L1Block)
+		}
+		for _, tx := range d.Txs {
+			for _, f := range tx.Frames {
+				if !covered[f.ID] {
+					n++
+				}
+			}
+		}
+	}
+	return n, nil
+}
+
+// searchIndexed is search's index path: the same prelude (origin, window, capture cursor) and the same named outcomes, with the window
+// read replaced by a lookup. It fills sr; a nil sr.ch with sr.pending set is a named pending, a nil sr.ch alone is l1_posted_unproven.
+func (b *Builder) searchIndexed(ctx context.Context, bp *Pins, l2 finality.HeaderFields, hold *finality.Hold, sr *searched, origin, end uint64,
+	cov finality.CaptureCoverage, known bool, lower uint64, notCovering func() error) error {
+	r := b.Index
+	io := &ioCount{}
+	defer func() { metrics.ObserveFinalityIndexLookupBytes(uint64(Chain), FamilyBaseInbox, io.n) }()
+	hit, names, err := r.Find(ctx, l2.Timestamp, origin, end, io)
+	if err != nil {
+		metrics.IncFinalityIndexLookup(uint64(Chain), FamilyBaseInbox, "inconsistent")
+		return err
+	}
+	if hit != nil {
+		txs, err := r.Assemble(ctx, hit, hold, io)
+		if err != nil {
+			metrics.IncFinalityIndexLookup(uint64(Chain), FamilyBaseInbox, "inconsistent")
+			return err
+		}
+		sr.ch, sr.frameTxs = &channelRef{ID: hit.entry.ID}, txs
+		sr.bt = &Batch{Type: hit.run.Type, EpochNum: hit.run.Epoch, Timestamp: l2.Timestamp}
+		metrics.IncFinalityIndexLookup(uint64(Chain), FamilyBaseInbox, "hit")
+		return nil
+	}
+	if known && origin < lower {
+		metrics.IncFinalityIndexLookup(uint64(Chain), FamilyBaseInbox, "miss")
+		return notCovering() // part of the window was never scanned: the channel may have been posted there
+	}
+	through, haveIdx, err := r.Through(ctx)
+	if err != nil {
+		return err
+	}
+	capHi := cov.Last
+	if !known {
+		_, hi, ok, err := finality.BlockBoundsOf(ctx, r.Store, uint64(Chain), ItemSysCfg)
+		if err != nil {
+			return err
+		}
+		if ok {
+			capHi = hi
+		}
+	}
+	need := end
+	if capHi < need {
+		need = capHi
+	}
+	if !haveIdx || through < need {
+		// still l1_posted_unproven (the closed set of pending reasons is the spec's), judged at the positions that show why: the index has not
+		// reached what the capture holds (backfill after a deploy, a lagging step)
+		sr.pending = "l1_posted_unproven"
+		sr.judged = map[string]any{"l2_timestamp": l2.Timestamp, "last_scanned_l1": capHi, "index_behind": true, "index_through_l1": through, "window_end_l1": end}
+		metrics.IncFinalityIndexLookup(uint64(Chain), FamilyBaseInbox, "behind")
+		return nil
+	}
+	sr.lastScanned = capHi
+	mc, err := r.classifyMiss(ctx, l2.Timestamp, origin, capHi, names)
+	if err != nil {
+		return err
+	}
+	if mc.gap != nil {
+		metrics.IncFinalityIndexLookup(uint64(Chain), FamilyBaseInbox, "gap")
+		return mc.gap
+	}
+	metrics.IncFinalityIndexLookup(uint64(Chain), FamilyBaseInbox, "miss")
+	return nil
+}
+
+// sortedNames returns the names ordered by (timestamp range, id) for diagnostics.
+func sortedNames(ns []entryName) []entryName {
+	out := append([]entryName(nil), ns...)
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].TMin != out[j].TMin {
+			return out[i].TMin < out[j].TMin
+		}
+		return bytes.Compare(out[i].ID[:], out[j].ID[:]) < 0
+	})
+	return out
+}
+
+func (n entryName) String() string {
+	return fmt.Sprintf("channel %x covers %d..%d closes at %d", n.ID[:4], n.TMin, n.TMax, n.Key.L1Block)
+}

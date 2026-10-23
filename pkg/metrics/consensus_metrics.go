@@ -227,6 +227,7 @@ func RegisterMetrics() {
 		registerEvidenceMonitorMetrics()
 		registerPersistenceMetrics()
 		registerFinalityMetrics()
+		registerFinalityIndexMetrics()
 		registerLifecycleMetrics()
 	})
 }

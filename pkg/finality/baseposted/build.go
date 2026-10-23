@@ -55,6 +55,9 @@ type Builder struct {
 	// HasArchive is whether an archive provider (OD4) is configured; it is carried by the capture-not-covering state so an operator can
 	// see whether a deeper source exists.
 	HasArchive bool
+	// Index, when set, answers 'which channel carries this timestamp' from the capture index (index.go) instead of reading and
+	// decompressing the leg's window; the evidence is still assembled from the captured rows and judged by Kind.Verify.
+	Index *IndexReader
 }
 
 // Codes of this builder that are not verifier refusals (class U, go_operational scope of testdata/finality/states.json).
@@ -214,6 +217,9 @@ func (b *Builder) Build(ctx context.Context, s *ethproof.Settlement, have finali
 		return nil, nil, err
 	}
 	ch, frameTxs, bt, l2blk := sr.ch, sr.frameTxs, sr.bt, sr.l2blk
+	if ch == nil && sr.pending != "" {
+		return pend(sr.pending, sr.judged)
+	}
 	if ch == nil {
 		return pend("l1_posted_unproven", map[string]any{"l2_timestamp": l2.Timestamp, "last_scanned_l1": sr.lastScanned})
 	}
@@ -321,6 +327,10 @@ type searched struct {
 	bt          *Batch
 	lastScanned uint64
 	l2blk       *L2BlockData
+	// pending, when set with no channel, is the named pending reason of the index path (with the position it was judged at);
+	// without it a missing channel is l1_posted_unproven.
+	pending string
+	judged  map[string]any
 }
 
 // search finds the channel that carries the batch of the leg's L2 block in the captured rows, reading the window of the store the leg
@@ -382,6 +392,10 @@ func (b *Builder) search(ctx context.Context, bp *Pins, l2 finality.HeaderFields
 	}
 	if known && end < lower {
 		return sr, notCovering()
+	}
+	if b.Index != nil {
+		err := b.searchIndexed(ctx, bp, l2, hold, &sr, origin, end, cov, known, lower, notCovering)
+		return sr, err
 	}
 	var all []capturedTx
 	next := origin

@@ -48,6 +48,11 @@ const (
 	EnvConcurrency    = "CERTEN_FINALITY_UPGRADER_CONCURRENCY"
 	EnvInterval       = "CERTEN_FINALITY_UPGRADER_INTERVAL_SECONDS"
 	EnvBuildTimeout   = "CERTEN_FINALITY_BUILD_TIMEOUT_SECONDS"
+	// EnvBaseIndex switches the Base capture index (RB12-INDEX-A) on (default) or off. Off: the Base builder reads and decompresses
+	// the leg's window of the capture as before and nothing is indexed.
+	EnvBaseIndex       = "CERTEN_FINALITY_BASE_INDEX"
+	EnvIndexBlocks     = "CERTEN_FINALITY_INDEX_BLOCKS_PER_STEP"
+	EnvIndexStepSecond = "CERTEN_FINALITY_INDEX_STEP_SECONDS"
 )
 
 // Defaults of the public providers the kind packages' live sources and recorders were measured against (V2_SPEC_S7 8.1; the
@@ -96,8 +101,12 @@ type Config struct {
 	Concurrency     int
 	Interval        time.Duration
 	BuildTimeout    time.Duration
-	MemoryBudget    int64  // bytes of in-flight builder working set per process (finality.EnvMemoryBudget)
-	ArchiveOrigin   string // "set" or "unset": whether OD4 is configured (reported, never the URL)
+	MemoryBudget    int64         // bytes of in-flight builder working set per process (finality.EnvMemoryBudget)
+	BaseIndex       bool          // the Base capture index is built and used (EnvBaseIndex)
+	IndexGeneration uint32        // the index generation (finality.EnvIndexGeneration); a new one rebuilds
+	IndexBlocks     int           // captured blocks one index step digests at most
+	IndexStep       time.Duration // wall time after which an index step stops
+	ArchiveOrigin   string        // "set" or "unset": whether OD4 is configured (reported, never the URL)
 	ProviderSources map[string]string
 }
 
@@ -168,6 +177,14 @@ func ConfigFromEnv() (Config, error) {
 		func() (e error) { c.Interval, e = envvar.Seconds(EnvInterval, 60*time.Second, 1); return },
 		func() (e error) { c.BuildTimeout, e = envvar.Seconds(EnvBuildTimeout, 5*time.Minute, 1); return },
 		func() (e error) { c.MemoryBudget, e = finality.MemoryBudgetFromEnv(); return },
+		func() (e error) { c.BaseIndex, e = envvar.Bool(EnvBaseIndex, true); return },
+		func() (e error) {
+			g, e := envvar.Int(finality.EnvIndexGeneration, int(finality.DefaultIndexGeneration), 1)
+			c.IndexGeneration = uint32(g)
+			return e
+		},
+		func() (e error) { c.IndexBlocks, e = envvar.Int(EnvIndexBlocks, 128, 1); return },
+		func() (e error) { c.IndexStep, e = envvar.Seconds(EnvIndexStepSecond, 15*time.Second, 1); return },
 	}
 	if err = envvar.Check(rd...); err != nil {
 		return Config{}, err
@@ -200,6 +217,7 @@ func (c Config) Describe() map[string]any {
 		"rate_rps": c.RateRPS, "max_batch": c.MaxBatch, "max_capture_bytes_per_leg": c.CaptureBytes,
 		"capture_interval": c.CaptureEvery.String(), "concurrency": c.Concurrency, "interval": c.Interval.String(),
 		"memory_budget_bytes": c.MemoryBudget, "memory_gate_bytes": finality.HeapGate(c.MemoryBudget),
+		"base_index": c.BaseIndex, "index_generation": c.IndexGeneration, "index_blocks_per_step": c.IndexBlocks,
 	}
 }
 

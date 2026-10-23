@@ -754,6 +754,152 @@ EOF
 else rec FAIL C7 "capture query" "query answers" "failed: $(errline)"; fi
 
 # ==============================================================================================================================
+# (h) RB12-INDEX-A: the stored-data assumptions of the Base capture index and of the windowed build (READ-ONLY, aggregates only)
+# ==============================================================================================================================
+# The index reads the Base (84532) capture rows through ListByRange/Get and the aggregate BlockBounds query. Every number it assumes about
+# those rows is checked here against the live table: the completion marker, the inbox/tx/blob row structure, the frame header inside the
+# first bytes of a blob row, the cursor rows, the capture holes and forks (which the index must name, not hide), the absence or shape of
+# the index rows themselves, and the query plans of the two statements a build runs.
+section "(h) Base capture index (RB12-INDEX-A): row structure, holes, forks, cursor rows, index rows, query plans"
+if out=$(sqlro <<'SQL'
+WITH inb AS (SELECT l1_block, l1_hash, bytes FROM proof_finality_capture WHERE chain=84532 AND item='inbox'),
+ sys AS (SELECT l1_block, l1_hash FROM proof_finality_capture WHERE chain=84532 AND item='syscfg')
+SELECT (SELECT count(*) FROM inb),
+  (SELECT count(*) FROM inb i WHERE NOT EXISTS (SELECT 1 FROM sys s WHERE s.l1_block=i.l1_block AND s.l1_hash=i.l1_hash)),
+  (SELECT count(*) FROM sys s WHERE NOT EXISTS (SELECT 1 FROM inb i WHERE s.l1_block=i.l1_block AND s.l1_hash=i.l1_hash)),
+  (SELECT count(*) FROM inb WHERE octet_length(bytes) < 4 OR octet_length(bytes) <> 4 + 4*((get_byte(bytes,0)<<24)+(get_byte(bytes,1)<<16)+(get_byte(bytes,2)<<8)+get_byte(bytes,3))),
+  (SELECT coalesce(sum((get_byte(bytes,0)<<24)+(get_byte(bytes,1)<<16)+(get_byte(bytes,2)<<8)+get_byte(bytes,3)),0) FROM inb),
+  (SELECT count(*) FROM proof_finality_capture WHERE chain=84532 AND item ~ '^tx/[0-9]+$'),
+  (SELECT count(*) FROM proof_finality_capture WHERE chain=84532 AND item ~ '^txnodes/[0-9]+$');
+SQL
+); then
+  IFS='|' read -r i_inb i_nosys i_noinb i_badinb i_txsum i_txrows i_nodes <<EOF
+$out
+EOF
+  if [ "$i_inb" -eq 0 ]; then rec WARN I1 "Base inbox blocks carry the completion row (syscfg, the capturer's last put) and a well-formed inbox row" "rows to examine" "no Base inbox rows"
+  else
+    [ "$((i_noinb + i_badinb))" -eq 0 ] && st=PASS || st=FAIL
+    [ "$st" = PASS ] && [ "$i_nosys" -gt 0 ] && st=WARN
+    rec $st I1 "every Base inbox block has its syscfg row (the index digests a block only once syscfg exists) and a well-formed inbox row (u32 count + u32 per tx)" "0 inbox blocks without syscfg, 0 syscfg without inbox, 0 malformed" "inbox blocks $i_inb; inbox without syscfg $i_nosys (a crash between puts: the index waits); syscfg without inbox $i_noinb; malformed inbox rows $i_badinb"
+    [ "$i_txsum" -eq "$i_txrows" ] && [ "$i_txrows" -eq "$i_nodes" ] && st=PASS || st=FAIL
+    rec $st I2 "the tx/N and txnodes/N rows are exactly the transactions the inbox rows list (the index and the builder Get tx/N for every listed N)" "listed = tx rows = txnodes rows" "listed $i_txsum; tx rows $i_txrows; txnodes rows $i_nodes"
+  fi
+else rec FAIL I1 "inbox/syscfg query" "query answers" "failed: $(errline)"; fi
+
+if out=$(sqlro <<'SQL'
+SELECT count(*),
+  count(*) FILTER (WHERE item !~ '^blob/[0-9]+/[0-9]+$'),
+  count(*) FILTER (WHERE octet_length(bytes) <> 131172),
+  count(*) FILTER (WHERE octet_length(bytes) = 131172 AND (get_byte(bytes,0)<<24)+(get_byte(bytes,1)<<16)+(get_byte(bytes,2)<<8)+get_byte(bytes,3) <> 131072),
+  count(*) FILTER (WHERE octet_length(bytes) = 131172 AND get_byte(bytes,5) <> 0),
+  count(*) FILTER (WHERE octet_length(bytes) = 131172 AND get_byte(bytes,9) <> 0),
+  count(*) FILTER (WHERE octet_length(bytes) = 131172 AND (get_byte(bytes,6)<<16)+(get_byte(bytes,7)<<8)+get_byte(bytes,8) > 130044),
+  count(*) FILTER (WHERE octet_length(bytes) = 131172 AND (get_byte(bytes,6)<<16)+(get_byte(bytes,7)<<8)+get_byte(bytes,8)
+      <> ((get_byte(bytes,28)::bigint<<24)+(get_byte(bytes,29)<<16)+(get_byte(bytes,30)<<8)+get_byte(bytes,31)) + 24)
+FROM proof_finality_capture WHERE chain=84532 AND item LIKE 'blob/%';
+SQL
+); then
+  IFS='|' read -r b_n b_name b_len b_lp b_ver b_deriv b_big b_multi <<EOF
+$out
+EOF
+  if [ "$b_n" -eq 0 ]; then rec WARN I3 "Base blob rows are 4+131072+96 bytes, blob version 0, derivation version 0, data length <= 130044" "rows to examine" "no blob rows"
+  else
+    [ "$((b_name + b_len + b_lp + b_ver + b_big))" -eq 0 ] && st=PASS || st=FAIL
+    rec $st I3 "every Base blob row is LP(131072)+B48+B48 = 131172 bytes with blob version 0 and a data length the blob format allows (loadTxRows/blobToData read exactly this)" "0 violations in $b_n rows" "bad item name $b_name; length != 131172 $b_len; LP prefix != 131072 $b_lp; blob version != 0 $b_ver; data length > 130044 $b_big"
+    # a blob whose data is not [derivation version 0][one frame] is read by the index anyway (parseFrames; a blob that is not frame data belongs to no channel): reported, not failed
+    [ "$b_deriv" -eq 0 ] && [ "$b_multi" -eq 0 ] && st=PASS || st=WARN
+    rec $st I4 "every Base blob carries derivation version 0 and exactly one frame (data length = frame length + 24): the shape the production-shaped fixtures use" "0 blobs with another shape" "derivation version != 0: $b_deriv; blobs whose data length is not one frame: $b_multi (of $b_n)"
+  fi
+else rec FAIL I3 "blob query" "query answers" "failed: $(errline)"; fi
+
+if out=$(sqlro <<'SQL'
+WITH b AS (
+ SELECT l1_block, l1_hash, substring(bytes from 11 for 16) AS ch, get_byte(bytes,26)*256+get_byte(bytes,27) AS num
+ FROM proof_finality_capture WHERE chain=84532 AND item LIKE 'blob/%' AND octet_length(bytes)=131172),
+c AS (SELECT ch, count(*) AS blobs, min(num) AS mn, max(num) AS mx, count(DISTINCT num) AS dn, max(l1_block)-min(l1_block) AS span FROM b GROUP BY ch)
+SELECT count(*), count(*) FILTER (WHERE blobs<>dn), count(*) FILTER (WHERE mn<>0), count(*) FILTER (WHERE mx-mn+1<>dn), coalesce(max(span),0), coalesce(max(blobs),0),
+  (SELECT count(*) FROM (SELECT l1_block FROM proof_finality_capture WHERE chain=84532 AND item='inbox' GROUP BY l1_block HAVING count(*)>1) f)
+FROM c;
+SQL
+); then
+  IFS='|' read -r ch_n ch_dup ch_nostart ch_gap ch_span ch_maxb forks <<EOF
+$out
+EOF
+  [ "$ch_n" -gt 0 ] && [ "$ch_span" -le 3600 ] && st=PASS || st=WARN
+  rec $st I5 "channels (by the frame header in the first bytes of each blob row) span at most the sequencing window (3600 L1 blocks); the index joins the frames of a channel within SeqWindowSize" "max span <= 3600" "channels $ch_n; max span $ch_span L1 blocks; max blobs per channel $ch_maxb"
+  [ "$ch_dup" -eq 0 ] && [ "$forks" -eq 0 ] && st=PASS || st=WARN
+  rec $st I6 "no reorged L1 height holds two inbox rows and no channel has duplicate frame numbers (the window reader and the verifier both call such a channel channel_incomplete; the index mirrors that and names the interval l1_capture_gap)" "0 forked heights, 0 channels with duplicate frames" "heights with two inbox hashes $forks; channels with duplicate frame numbers $ch_dup; channels not starting at frame 0 $ch_nostart (a frame is in a capture hole); channels with a number gap $ch_gap (of $ch_n)"
+else rec FAIL I5 "channel query" "query answers" "failed: $(errline)"; fi
+
+if out=$(sqlro <<'SQL'
+WITH b AS (SELECT DISTINCT l1_block FROM proof_finality_capture WHERE chain=84532 AND item='inbox'),
+ g AS (SELECT l1_block AS a, lead(l1_block) OVER (ORDER BY l1_block) AS z FROM b)
+SELECT count(*) FILTER (WHERE z-a>64), coalesce(max(z-a),0), coalesce(sum(z-a) FILTER (WHERE z-a>64),0),
+  coalesce(left(string_agg(a||'..'||z, ' ' ORDER BY z-a DESC) FILTER (WHERE z-a>64), 160), '')
+FROM g WHERE z IS NOT NULL;
+SQL
+); then
+  IFS='|' read -r h_n h_max h_sum h_list <<EOF
+$out
+EOF
+  [ "$h_n" -eq 0 ] && st=PASS || st=WARN
+  rec $st I7 "no stretch of more than 64 L1 blocks between consecutive Base inbox blocks (an empty block and an uncaptured one leave the same rows; the index derives holes from the L2 timeline and names them l1_capture_gap)" "0 suspect holes" "stretches > 64 blocks: $h_n (longest $h_max, total $h_sum blocks): $h_list"
+else rec FAIL I7 "hole query" "query answers" "failed: $(errline)"; fi
+
+if out=$(sqlro <<'SQL'
+SELECT count(*),
+  count(*) FILTER (WHERE octet_length(bytes) <> 8),
+  count(*) FILTER (WHERE l1_hash <> decode(repeat('00',32),'hex')),
+  count(*) FILTER (WHERE octet_length(bytes) = 8 AND ('x'||encode(bytes,'hex'))::bit(64)::bigint <> l1_block),
+  coalesce(min(l1_block),0), coalesce(max(l1_block),0)
+FROM proof_finality_capture WHERE chain=84532 AND item='runtime/cursor';
+SQL
+); then
+  IFS='|' read -r k_n k_len k_hash k_val k_min k_max <<EOF
+$out
+EOF
+  if [ "$k_n" -eq 0 ]; then rec WARN I8 "Base runtime/cursor rows are 8 bytes at the zero hash, valued at their own block (l1_capture_not_covering reads min/max with one aggregate query)" "rows to examine" "no cursor rows"
+  else
+    [ "$((k_len + k_hash + k_val))" -eq 0 ] && st=PASS || st=FAIL
+    rec $st I8 "Base runtime/cursor rows are 8 bytes at the zero hash, valued at their own block" "0 violations in $k_n rows" "length != 8: $k_len; hash != zero: $k_hash; value != block: $k_val; first cursor block $k_min, latest $k_max (min/max do NOT prove coverage: holes exist inside)"
+  fi
+else rec FAIL I8 "cursor query" "query answers" "failed: $(errline)"; fi
+
+if out=$(sqlro <<'SQL'
+SELECT count(*),
+  count(*) FILTER (WHERE item !~ '^idx/g[0-9]+/bi/(f|cursor|c/[0-9]+/[0-9]+/[0-9a-f]{32}|x/[0-9a-f]{32})$'),
+  count(*) FILTER (WHERE item ~ '^idx/g[0-9]+/bi/f$'),
+  count(*) FILTER (WHERE item ~ '^idx/g[0-9]+/bi/c/'),
+  count(*) FILTER (WHERE item ~ '^idx/g[0-9]+/bi/x/'),
+  count(*) FILTER (WHERE item ~ '^idx/g[0-9]+/bi/cursor$' AND (octet_length(bytes)<>8 OR l1_hash <> decode(repeat('00',32),'hex'))),
+  count(*) FILTER (WHERE item ~ '^idx/g[0-9]+/bi/f$' AND NOT EXISTS (SELECT 1 FROM proof_finality_capture s WHERE s.chain=84532 AND s.l1_block=p.l1_block AND s.l1_hash=p.l1_hash AND s.item='syscfg')),
+  coalesce(sum(octet_length(bytes)),0)
+FROM proof_finality_capture p WHERE chain=84532 AND item LIKE 'idx/%';
+SQL
+); then
+  IFS='|' read -r x_n x_name x_f x_c x_x x_cur x_nosys x_bytes <<EOF
+$out
+EOF
+  if [ "$x_n" -eq 0 ]; then rec WARN I9 "Base index rows (idx/g<G>/bi/...) have the documented names, sit at captured blocks and are tiny" "rows to examine" "no index rows yet (expected before the first deploy of the index; run again after the backfill)"
+  else
+    [ "$((x_name + x_cur + x_nosys))" -eq 0 ] && st=PASS || st=FAIL
+    rec $st I9 "every Base index row has a documented name, digests sit at blocks that have syscfg, cursor rows are 8 bytes at the zero hash" "0 violations in $x_n rows" "bad names $x_name; cursor rows malformed $x_cur; digests without syscfg $x_nosys; digests $x_f; entries $x_c; markers $x_x (a marker names a late duplicate frame); index bytes $x_bytes"
+  fi
+else rec FAIL I9 "index row query" "query answers" "failed: $(errline)"; fi
+
+# the two statements a build runs on this table, as plans (EXPLAIN without ANALYZE executes nothing)
+if plan=$(printf '%s\n' "EXPLAIN SELECT l1_block, l1_hash, item FROM proof_finality_capture WHERE chain = 84532 AND l1_block BETWEEN 11958043 AND 11958139 AND starts_with(item, 'idx/g1/bi/c/') ORDER BY l1_block, l1_hash, item;" | sqlro); then
+  case "$plan" in
+    *"Seq Scan"*) rec WARN I10 "the entry key listing (chain, l1_block range, item prefix) is served by the primary key index" "an Index Scan on proof_finality_capture_pkey" "the planner chose a sequential scan: $(printf '%s' "$plan" | head -1 | cut -c1-120) (acceptable only while the table is small)" ;;
+    *Index*) rec PASS I10 "the entry key listing (chain, l1_block range, item prefix) is served by the primary key index" "an Index Scan on proof_finality_capture_pkey" "$(printf '%s' "$plan" | head -1 | cut -c1-120)" ;;
+    *) rec WARN I10 "the entry key listing plan" "an Index Scan" "unrecognised plan: $(printf '%s' "$plan" | head -1 | cut -c1-120)" ;;
+  esac
+else rec FAIL I10 "entry listing plan" "EXPLAIN answers" "failed: $(errline)"; fi
+if plan=$(printf '%s\n' "EXPLAIN SELECT min(l1_block), max(l1_block) FROM proof_finality_capture WHERE chain = 84532 AND item = 'idx/g1/bi/cursor';" | sqlro); then
+  rec PASS I11 "the cursor read (BlockBounds: one aggregate query per build) is a plan the database can run" "a plan" "$(printf '%s' "$plan" | head -1 | cut -c1-140)"
+else rec FAIL I11 "cursor aggregate plan" "EXPLAIN answers" "failed: $(errline)"; fi
+
+# ==============================================================================================================================
 # (f) container environment hygiene (names only, never values)
 # ==============================================================================================================================
 section "(f) validator containers: finality and provider variables (SET / EMPTY / UNSET only; values are never read out) and /health/detailed"

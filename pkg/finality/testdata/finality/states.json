@@ -98,6 +98,8 @@
     "l1_batch_header_unknown": {"group": "Arbitrum R", "optional": ["batch", "byte"], "required": [], "scope": "spec"},
     "l1_blob_unavailable": {"group": "Builder U", "optional": [], "required": ["beacon_slot", "http_status", "l1_block", "versioned_hashes"], "scope": "spec"},
     "l1_capture_not_covering": {"group": "Builder U", "optional": [], "required": ["archive_provider", "capture_first_l1_block", "capture_slack", "chain", "epoch_l1_block", "kind", "window_end_l1_block"], "scope": "go_operational"},
+    "l1_capture_gap": {"group": "Builder U", "optional": [], "required": ["chain", "from_l1", "l2_from", "l2_timestamp", "l2_to", "partial_frames", "to_l1"], "scope": "go_operational"},
+    "index_inconsistent": {"enums": {"reason": ["coverage_overflow", "duplicate_frame_after_close", "entry_corrupt", "pins_changed", "row_missing", "rows_disagree", "self_check_mismatch"]}, "group": "Builder U", "optional": ["item", "l1_block"], "required": ["chain", "family", "reason"], "scope": "go_operational"},
     "l1_finality_unproven": {"enums": {"reason": ["lc_refused", "spine_refused"]}, "group": "L1 head R", "optional": ["inner"], "required": ["reason"], "scope": "spec"},
     "l1_posted_content_not_found": {"enums": {"reason": ["accumulator_mismatch", "block_txs_root_mismatch", "no_data_batch", "no_matching_message", "no_standard_transactions", "payload_undecodable", "unsupported_tx_type"]}, "group": "Arbitrum R", "optional": ["batch", "messages_scanned", "segments", "tx_type"], "required": ["reason"], "scope": "spec"},
     "l1_posted_delayed_origin_unproven": {"group": "Arbitrum R", "optional": ["block_tx_types", "header_nonce", "k", "message_kind"], "required": [], "scope": "spec"},
