@@ -1102,12 +1102,14 @@ func (u *Upgrader) build(ctx context.Context, p Prover, s *ethproof.Settlement, 
 		add *Addendum
 		pd  *PendingState
 	}
-	// everything the prover reads through the generic row loaders is reserved against the process budget and given back when the
-	// attempt ends (an abandoned prover keeps its reservation no longer than its own call: the hold is released on return)
+	// Everything the prover reads through the generic row loaders is reserved against the process budget. The hold ends when the PROVER
+	// RETURNS, not when the build is abandoned at BuildTimeout: a prover that ignores its context keeps running with what it has read
+	// in memory, and the budget must go on counting it until it is really gone (RB12-P0LIVE-FIX F7). A reservation it makes after its
+	// hold ended is refused by name, so it cannot read more.
 	hold := NewHold(ctx, p.Chain(), "build")
-	defer hold.Release()
 	ctx = WithHold(ctx, hold)
 	o, err := bounded(ctx, u.cfg.BuildTimeout, p.Chain(), "building the evidence", func(c context.Context) (out, error) {
+		defer hold.Release()
 		add, pd, err := p.Build(c, s, have, target)
 		return out{add, pd}, err
 	})

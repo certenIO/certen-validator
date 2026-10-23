@@ -124,11 +124,16 @@ func ReserveRow(ctx context.Context, n int) error {
 	return h.Add(RowCost(n))
 }
 
-// Hold accumulates reservations of one build and gives them all back at once.
+// Hold accumulates the reservations of one build and gives them all back at once. Release is terminal: nothing can be reserved through a
+// released hold (it is refused by name, so a reader that outlives its build - an abandoned prover - stops instead of leaking budget), and
+// Release may be called any number of times. A Hold is safe for concurrent use.
 type Hold struct {
-	ctx     context.Context
-	chain   uint64
-	what    string
+	ctx   context.Context
+	chain uint64
+	what  string
+
+	mu      sync.Mutex
+	closed  bool
 	release []func()
 }
 
@@ -137,9 +142,19 @@ func NewHold(ctx context.Context, chain uint64, what string) *Hold {
 	return &Hold{ctx: ctx, chain: chain, what: what}
 }
 
-// Add reserves n more bytes (the budget of ctx; nothing when ctx carries none).
+// Add reserves n more bytes (the budget of ctx; nothing when ctx carries none). A released hold refuses by name and reserves nothing.
 func (h *Hold) Add(n int64) error {
-	rel, err := MemoryBudgetOf(h.ctx).Reserve(h.chain, h.what, n)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	b := MemoryBudgetOf(h.ctx)
+	if h.closed {
+		if b == nil || n <= 0 {
+			return nil
+		}
+		metrics.IncFinalityMemoryRefused(h.chain, h.what+"/released")
+		return NewState(CodeMemoryBudget, "chain", h.chain, "what", h.what+"/released", "requested", uint64(n), "in_use", uint64(b.Used()), "limit", uint64(b.Limit()))
+	}
+	rel, err := b.Reserve(h.chain, h.what, n)
 	if err != nil {
 		return err
 	}
@@ -147,8 +162,11 @@ func (h *Hold) Add(n int64) error {
 	return nil
 }
 
-// Release gives every reservation of the hold back.
+// Release gives every reservation of the hold back and closes it.
 func (h *Hold) Release() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.closed = true
 	for _, r := range h.release {
 		r()
 	}
