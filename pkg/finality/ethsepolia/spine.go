@@ -428,7 +428,7 @@ type spineCore struct {
 // legState is what the prover remembers of a leg between attempts.
 type legState struct {
 	at     time.Time // the latest attempt
-	kept   int       // the headers of kept (stored) spans in hand at the end of that attempt
+	kept   int       // the headers of kept (stored) spans in hand at the end of that attempt, the top span included
 	stalls int       // attempts in a row that gained no headers in hand
 }
 
@@ -461,10 +461,11 @@ func (c *spineCore) putHead(h [32]byte, raw []byte) {
 }
 
 // noteAttempt records an attempt that ended in the progress state and returns the number of attempts in a row before it that gained no
-// headers in hand. kept is the number of headers of kept (stored) spans the attempt had in hand, whoever fetched them: it is progress when it
-// exceeds the leg's previous attempt's, so a leg that follows another and only REUSES the chunks that one kept is progressing. The window
-// under the head is never kept and does not count.
-func (c *spineCore) noteAttempt(leg [32]byte, kept int) int {
+// headers in hand. kept is the number of headers of kept (stored) spans BELOW the top span that the attempt had in hand, whoever fetched them;
+// keptAll is the same with the top span, when it is a stored one. It is progress when kept exceeds the leg's previous keptAll, so a leg that
+// follows another and only REUSES the chunks that one kept is progressing, and the window under the head (the top span), which moves with the
+// head and is a stored span whenever the head's parent closes a window, can never count as progress when it later sits below a new head.
+func (c *spineCore) noteAttempt(leg [32]byte, kept, keptAll int) int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	now := c.now()
@@ -480,7 +481,7 @@ func (c *spineCore) noteAttempt(leg [32]byte, kept int) int {
 		n = st.stalls
 		st.stalls++
 	}
-	st.kept, st.at = kept, now
+	st.kept, st.at = keptAll, now
 	c.legs[leg] = st
 	return n
 }
@@ -538,7 +539,8 @@ type spineRun struct {
 	need    int
 	reserve time.Duration // the part of the deadline kept back for assembling (0: no deadline)
 	fetched int           // headers fetched in this attempt
-	kept    int           // headers of kept (stored) spans in hand so far in this attempt, fetched or reused: the progress that counts
+	kept    int           // headers of kept (stored) spans below the top span in hand so far in this attempt, fetched or reused: the progress
+	keptAll int           // the same with the top span when it is a stored one
 	reused  int           // chunks read from the process cache or the store
 	reusedH int           // headers in those chunks
 	chunks  int           // chunks fetched
@@ -596,7 +598,7 @@ func (r *spineRun) logDone() {
 }
 
 func (r *spineRun) pending(sp *spinePause) *finality.PendingState {
-	stalls := r.sc.noteAttempt(r.leg.Hash, r.kept)
+	stalls := r.sc.noteAttempt(r.leg.Hash, r.kept, r.keptAll)
 	r.count([]string{"budget", "throttled", "error"}[sp.kind])
 	next := r.p.now().Add(PauseAfter(sp.kind, sp.retryAfter, stalls)).UTC()
 	j := map[string]any{"have": uint64(r.have), "need": uint64(r.need), "next_attempt_at": next.Format(time.RFC3339)}
@@ -687,7 +689,7 @@ func (r *spineRun) walk(c candidate) ([][]byte, error) {
 	spans := PlanSpans(r.leg.Number, h0.fields.Number-1)
 	want := h0.fields.ParentHash
 	parts := make([][][]byte, 0, len(spans))
-	for _, sp := range spans {
+	for i, sp := range spans {
 		e, err := r.span(sp, want)
 		if err != nil {
 			return nil, err
@@ -696,7 +698,10 @@ func (r *spineRun) walk(c candidate) ([][]byte, error) {
 		want = e.parent
 		r.have += sp.Count()
 		if sp.Stored {
-			r.kept += sp.Count()
+			r.keptAll += sp.Count()
+			if i > 0 { // the top span moves with the head: it is no progress of this attempt
+				r.kept += sp.Count()
+			}
 		}
 	}
 	out := make([][]byte, 0, r.need)

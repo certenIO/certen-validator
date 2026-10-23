@@ -88,3 +88,42 @@ func TestAStalledLegIsForgottenAfterAnHourWithoutAnAttempt(t *testing.T) {
 		t.Fatalf("more than an hour after the last attempt: stalled %v awaiting %v, want 0 and 0: the alert outlives its cause", s, a)
 	}
 }
+
+// V-SPINE-3 N3. The window under the head moves with the head: whenever the head's parent closes a window it is a stored span, but it never
+// carries over to the next attempt and is no progress. A provider that serves that window and then refuses is a stall whatever the head does
+// (+1, +32 per epoch, +33, +40): the stall count must reach 3 in three attempts and the pause must climb to its cap.
+func TestAProviderThatOnlyServesTheWindowUnderTheHeadIsAStallWhateverTheHeadDoes(t *testing.T) {
+	metrics.RegisterMetrics()
+	wantPause := []time.Duration{30 * time.Second, 60 * time.Second, 120 * time.Second, 240 * time.Second, 480 * time.Second, SpineErrorMax, SpineErrorMax, SpineErrorMax}
+	for _, step := range []uint64{1, 32, 33, 40} {
+		ch := newSynth(1_000_000, 3000, 1)
+		clk := newClock()
+		src := ch.model(clk, 0)
+		var curLast uint64
+		src.hook = func(call int, from, to uint64, out [][]byte) ([][]byte, error) {
+			if to == curLast {
+				return out, nil // the window under the head
+			}
+			return nil, errors.New("provider refuses")
+		}
+		p := spineProver(src, finality.NewMemCaptureStore(), clk, 0)
+		head := uint64(1_002_000) // its parent, 1_001_999, closes a window: the top span is a stored one
+		for k, want := range wantPause {
+			curLast = head - 1
+			cand := candidate{execHash: ch.hashOf(head), execNumber: head}
+			_, pend, err := p.spineFor(context.Background(), ch.leg(1_000_100), cand)
+			if err != nil || pend == nil {
+				t.Fatalf("step %d, attempt %d: %v %v", step, k+1, pend, err)
+			}
+			_, _, next := pendingOf(t, pend)
+			at, _ := time.Parse(time.RFC3339, next)
+			if d := at.Sub(clk.Now()); d != want {
+				t.Fatalf("head +%d, attempt %d (head %d): next attempt in %s, want %s", step, k+1, head, d, want)
+			}
+			if stalled, _ := scraped(t, "certen_finality_spine_stalled_attempts_max", nil); stalled != float64(k+1) {
+				t.Fatalf("head +%d, attempt %d (head %d): stalled_attempts_max %v, want %d", step, k+1, head, stalled, k+1)
+			}
+			head += step
+		}
+	}
+}

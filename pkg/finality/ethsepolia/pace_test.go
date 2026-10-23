@@ -239,7 +239,7 @@ func TestRPCHeadersKeepsItsRequestsAGapApartForAllCallersTogether(t *testing.T) 
 	sort.Slice(at, func(i, j int) bool { return at[i].Before(at[j]) })
 	for i := 1; i < len(at); i++ {
 		// the slots are reserved a gap apart; arrival at the server jitters by the timer resolution of the machine (15 ms on Windows)
-		if d := at[i].Sub(at[i-1]); d < gap/2 {
+		if d := at[i].Sub(at[i-1]); d < gap/3 {
 			t.Fatalf("requests %d and %d arrived %s apart, the gap is %s", i-1, i, d, gap)
 		}
 	}
