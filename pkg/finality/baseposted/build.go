@@ -56,6 +56,10 @@ type Builder struct {
 	// HasArchive is whether an archive provider (OD4) is configured; it is carried by the capture-not-covering state so an operator can
 	// see whether a deeper source exists.
 	HasArchive bool
+	// Prefix is the policy for extending the capture store BELOW the first block its loop scanned (RB12-ARCHIVE-BACKFILL): a leg whose
+	// window lies there asks for its window to be captured (finality.RequestPrefix) and is judged l1_capture_gap until it is. The zero
+	// value is off: such a leg is l1_capture_not_covering, as before.
+	Prefix finality.PrefixPolicy
 
 	// heldMu guards held: the last HELD answer (l1_capture_gap) of each window (RB12-GO-INT D4).
 	heldMu sync.Mutex
@@ -390,16 +394,20 @@ func (b *Builder) search(ctx context.Context, bp *Pins, l2 finality.HeaderFields
 		}
 		sr.lastScanned = cov.Last
 	}
-	notCovering := func() error {
+	notCovering := func(extra ...any) error {
 		archive := "unset"
 		if b.HasArchive {
 			archive = "set"
 		}
-		return st(CodeCaptureNotCovering, "chain", uint64(Chain), "kind", KindName, "epoch_l1_block", origin, "window_end_l1_block", end,
-			"capture_first_l1_block", cov.First, "capture_slack", slackOf(b.CursorSlack), "archive_provider", archive)
+		return st(CodeCaptureNotCovering, append([]any{"chain", uint64(Chain), "kind", KindName, "epoch_l1_block", origin, "window_end_l1_block", end,
+			"capture_first_l1_block", cov.First, "capture_slack", slackOf(b.CursorSlack), "archive_provider", archive}, extra...)...)
 	}
 	if known && end < lower {
-		return sr, notCovering()
+		if ok, extra, err := b.prefixCovers(ctx, origin, end, lower); err != nil {
+			return sr, err
+		} else if !ok {
+			return sr, notCovering(extra...)
+		}
 	}
 	// A held ask rebuilds no evidence and used to read the whole window (up to ~300 MB of rows) before the gap lookup. The lookups that decide
 	// whether the answer could have changed are key-only (the gap pieces of the window and the number of captured blocks in it); when
@@ -439,7 +447,12 @@ func (b *Builder) search(ctx context.Context, bp *Pins, l2 finality.HeaderFields
 		next = hi + 1
 	}
 	if sr.ch == nil && known && origin < lower {
-		return sr, notCovering() // part of the window was never scanned: the channel may have been posted there
+		// part of the window was never scanned by the loop: the channel may have been posted there, unless that part is a requested prefix
+		if ok, extra, err := b.prefixCovers(ctx, origin, end, lower); err != nil {
+			return sr, err
+		} else if !ok {
+			return sr, notCovering(extra...)
+		}
 	}
 	if sr.ch == nil {
 		// RB12-CAPTURE-GAP: a recorded gap inside the window may hold the channel; "not posted yet" cannot be said while it is open
@@ -705,3 +718,32 @@ var (
 
 // RegisterProver adds a configured Builder to the registry (explicit; there is no init()).
 func RegisterProver(reg *finality.Registry, b *Builder) error { return reg.RegisterProver(b) }
+
+// prefixCovers decides whether the part of the window [origin, end] that lies below the scanned region (lower) is a requested prefix,
+// asking for it when the policy allows. It returns the extra fields of l1_capture_not_covering when it is not: prefix_state (off,
+// below_floor, over_budget), the lowest block any recorded window reaches and the blocks they hold. Only keys are read.
+func (b *Builder) prefixCovers(ctx context.Context, origin, end, lower uint64) (bool, []any, error) {
+	below := end
+	if below >= lower {
+		below = lower - 1
+	}
+	ws, err := finality.PrefixWindowsOf(ctx, b.Store, uint64(Chain))
+	if err != nil {
+		return false, nil, err
+	}
+	merged := finality.MergePrefixWindows(ws)
+	if ok, _ := finality.PrefixCovers(merged, origin, below); ok {
+		return true, nil, nil
+	}
+	verdict := finality.PrefixOff
+	if b.Prefix.Enabled() {
+		if verdict, err = finality.RequestPrefix(ctx, b.Store, uint64(Chain), origin, below, b.Prefix); err != nil {
+			return false, nil, err
+		}
+		if verdict == finality.PrefixRecorded || verdict == finality.PrefixKnown {
+			return true, nil, nil
+		}
+	}
+	lowest, _ := finality.PrefixLowest(merged)
+	return false, []any{"prefix_state", string(verdict), "prefix_lowest_l1_block", lowest, "prefix_blocks", finality.PrefixBlocks(merged)}, nil
+}

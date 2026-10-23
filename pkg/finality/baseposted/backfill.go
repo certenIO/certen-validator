@@ -80,6 +80,9 @@ type BackfillReport struct {
 	Open, UnavailableProven, RetentionExpired            uint64 // blocks still in each state after the step
 	FailedByClass                                        map[string]int
 	EndedByKind                                          map[string]int
+	// RB12-ARCHIVE-BACKFILL
+	PrefixAttempted, PrefixFilled int // attempts / fills of blocks that lie only in prefix windows (included in Attempted / Filled)
+	LeaseLost, LeaseErrors        int // chunks another validator held for this bucket / claims the store could not take
 }
 
 type bfEntry struct {
@@ -105,6 +108,8 @@ type Backfiller struct {
 	// all start at the same block). The tests pin it.
 	Pick func(n int) int
 	Logf func(string, ...any)
+	// Lease, when set, is the cross-validator claim on chunks of prefix blocks (nil: no claims, one validator or tests).
+	Lease *Lease
 
 	mu          sync.Mutex
 	entries     map[uint64]*bfEntry
@@ -191,6 +196,10 @@ func (b *Backfiller) Step(ctx context.Context, max int) (BackfillReport, error) 
 	if err := b.reopenTerminal(ctx, pieces); err != nil {
 		return rep, err
 	}
+	wins, err := finality.PrefixWindowsOf(ctx, b.Store, b.Chain)
+	if err != nil {
+		return rep, err
+	}
 	now := b.now()
 	// the blocks that must not be taken now: attempted and not yet due again
 	skip := map[uint64]bool{}
@@ -199,29 +208,40 @@ func (b *Backfiller) Step(ctx context.Context, max int) (BackfillReport, error) 
 			skip[n] = true
 		}
 	}
-	var openTotal uint64
-	var eligible int
+	taken := map[uint64]bool{}
+	// the prefix windows of legs that predate the capture: the windows that can still complete first (oldest block first), see prefix.go
+	var dead []bool
+	if len(wins) > 0 {
+		dead = deadWindows(pieces, wins)
+		b.prefixPhase(ctx, pieces, wins, dead, true, skip, taken, max, pol, &rep)
+	}
+	// the holes of the live range: the pieces that are not open only because of a prefix request
+	var holes []finality.GapRange
 	for _, p := range pieces {
+		if !isPrefixOnly(p) {
+			holes = append(holes, p)
+		}
+	}
+	var eligible int
+	for _, p := range holes {
 		if p.State != finality.GapOpen {
 			continue
 		}
-		openTotal += p.Blocks()
 		eligible += int(p.Blocks())
 	}
 	for n := range skip {
-		for _, p := range pieces {
+		for _, p := range holes {
 			if p.State == finality.GapOpen && n >= p.From && n <= p.To {
 				eligible--
 				break
 			}
 		}
 	}
-	taken := map[uint64]bool{}
 	for rep.Attempted < max && ctx.Err() == nil {
 		var n uint64
 		var ok bool
 		if eligible > 0 {
-			n, ok = nthEligible(pieces, skip, taken, b.pick(eligible))
+			n, ok = nthEligible(holes, skip, taken, b.pick(eligible))
 			if ok {
 				eligible--
 			}
@@ -244,6 +264,10 @@ func (b *Backfiller) Step(ctx context.Context, max int) (BackfillReport, error) 
 		}
 		rep.Attempted++
 		b.attempt(ctx, n, pol, &rep)
+	}
+	// windows that hold a block no provider has: last, so a later archive finds the rest already captured
+	if len(wins) > 0 {
+		b.prefixPhase(ctx, pieces, wins, dead, false, skip, taken, max, pol, &rep)
 	}
 	// the state after the step
 	after, err := finality.GapsIn(ctx, b.Store, b.Chain, 0, finality.MaxCaptureBlock)

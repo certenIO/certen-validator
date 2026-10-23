@@ -47,11 +47,12 @@ const (
 	GapOutageUnscanned       GapClass = "outage_unscanned"        // the loop was not running (or too far behind its provider window) while the block was produced
 	GapSpacingUnproven       GapClass = "spacing_unproven"        // no captured block for a run longer than the audit spacing: not proven scanned (spacing audit)
 	GapOperatorDeclared      GapClass = "operator_declared"       // recorded by an operator for a range known from logs
+	// GapCapturePrefix (prefix.go) is declared there: the store is to be extended below the first block the capture loop scanned.
 )
 
 var gapClasses = map[GapClass]bool{
 	GapBlockUnavailable: true, GapStateProofUnavailable: true, GapBlobUnavailable: true, GapCaptureFailed: true,
-	GapOutageUnscanned: true, GapSpacingUnproven: true, GapOperatorDeclared: true,
+	GapOutageUnscanned: true, GapSpacingUnproven: true, GapOperatorDeclared: true, GapCapturePrefix: true,
 }
 
 // Valid reports whether c is one of the closed set.
