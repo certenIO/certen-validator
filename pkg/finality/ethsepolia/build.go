@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/certen/independant-validator/pkg/ethproof"
@@ -38,6 +39,19 @@ type Prover struct {
 	// ExtraLinks supplies the bytes of ledger link files (finality-pins-links/<period>.ssz) by period; the anchor's committee body
 	// is read from them when present and from the LC source otherwise. Neither is trusted: the body is hashed against the ledger.
 	ExtraLinks map[uint64][]byte
+
+	// Store keeps the checked chunks of the execution-header spine across attempts (insert-only capture rows, see spine.go). Nil keeps
+	// them in this process only: a restart then starts the spine again.
+	Store finality.CaptureStore
+	// SpineBudget is the time one attempt may spend on NEW header fetches (DefaultSpineBudget when zero), further bounded by what is left
+	// of the caller's deadline. When it is spent the attempt ends with finality_pending{awaiting_spine} and the next one resumes.
+	SpineBudget time.Duration
+	// Logf receives one line per attempt that ends with the spine unfinished and one per spine completed (nil: no log). The wiring passes
+	// its redacting logger.
+	Logf func(format string, args ...any)
+
+	coreOnce sync.Once
+	sc       *spineCore
 }
 
 var (
@@ -241,6 +255,12 @@ func (p *Prover) assemble(ctx context.Context, e *finality.EthSepoliaPins, leg f
 	if sigPeriod-anchor.Period > uint64(e.MaxLinks) {
 		return nil, p.ledgerIncomplete(e, sigPeriod, &anchor), nil
 	}
+	// The spine first: it is the long part, it is resumable, and an attempt that cannot finish it must not spend its time (and the light
+	// client's) on links it would throw away. A finished spine is in hand before the links are fetched.
+	spine, pend, err := p.spineFor(ctx, leg, c)
+	if err != nil || pend != nil {
+		return nil, pend, err
+	}
 	lc := ethl1.LC{Profile: ethl1.ProfileLC, AnchorPeriod: anchor.Period}
 	if err := p.anchorEvidence(ctx, anchor, &lc); err != nil {
 		return nil, unavailable(err), nil
@@ -256,21 +276,8 @@ func (p *Prover) assemble(ctx context.Context, e *finality.EthSepoliaPins, leg f
 	}
 	lc.FinalUpdate = ethl1.LB{Layout: finality.L1Layout(c.layout), SSZ: c.final}
 
-	// the spine h_0 = the finalized execution head ... h_k = the leg block
-	h0, err := p.Exec.HeaderByHash(ctx, c.execHash)
-	if err != nil {
-		return nil, unavailable(err), nil
-	}
-	spine := [][]byte{h0}
-	if c.execNumber > leg.Number {
-		lower, err := p.Exec.HeadersByNumber(ctx, leg.Number, c.execNumber-1)
-		if err != nil {
-			return nil, unavailable(err), nil
-		}
-		for i := len(lower) - 1; i >= 0; i-- {
-			spine = append(spine, lower[i])
-		}
-	}
+	// the spine h_0 = the finalized execution head ... h_k = the leg block (spineFor), judged below by the registered verifier exactly
+	// as when it was fetched in one piece
 	ev, err := BuildContainer(leg, Body{LC: lc, Spine: spine})
 	if err != nil {
 		return nil, nil, err
