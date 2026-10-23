@@ -993,6 +993,74 @@ if plan=$(printf '%s\n' "EXPLAIN SELECT min(l1_block), max(l1_block) FROM proof_
   rec PASS I11 "the cursor read (BlockBounds: one aggregate query per build) is a plan the database can run" "a plan" "$(printf '%s' "$plan" | head -1 | cut -c1-140)"
 else rec FAIL I11 "cursor aggregate plan" "EXPLAIN answers" "failed: $(errline)"; fi
 
+# RB12-INDEX-FIX Note (c): the rest of what the indexer assumes about the rows it reads. Each check is read-only and reports positions and
+# classes only. A violation is not fatal for the validator: the indexer records the block as index_block_unindexable{reason} and goes on
+# (the leg whose window holds it is told by name), so these are WARN with the class of the fault, never a silent pass.
+if out=$(sqlro <<'SQL'
+SELECT count(*),
+  coalesce(max((get_byte(bytes,0)<<24)+(get_byte(bytes,1)<<16)+(get_byte(bytes,2)<<8)+get_byte(bytes,3)),0),
+  count(*) FILTER (WHERE (get_byte(bytes,0)<<24)+(get_byte(bytes,1)<<16)+(get_byte(bytes,2)<<8)+get_byte(bytes,3) > 4096)
+FROM proof_finality_capture WHERE chain=84532 AND item='inbox' AND octet_length(bytes) >= 4;
+SQL
+); then
+  IFS='|' read -r n_in n_max n_over <<EOF
+$out
+EOF
+  if [ "$n_in" -eq 0 ]; then rec WARN I12 "no Base inbox row lists more than 4096 transactions (the reader's bound: loadRange and the indexer refuse such a row)" "rows to examine" "no inbox rows"
+  else
+    [ "$n_over" -eq 0 ] && st=PASS || st=WARN
+    rec $st I12 "no Base inbox row lists more than 4096 transactions (the reader's bound; a block over it is recorded as index_block_unindexable{inbox_over_limit})" "0 inbox rows over 4096 in $n_in" "$n_over over the bound; the largest lists $n_max"
+  fi
+else rec FAIL I12 "inbox transaction-count query" "query answers" "failed: $(errline)"; fi
+
+if out=$(sqlro <<'SQL'
+WITH b AS (SELECT l1_block, l1_hash, split_part(item,'/',2)::int AS tx, split_part(item,'/',3)::int AS j
+           FROM proof_finality_capture WHERE chain=84532 AND item ~ '^blob/[0-9]+/[0-9]+$'),
+g AS (SELECT l1_block, l1_hash, tx, min(j) AS mn, max(j) AS mx, count(*) AS n FROM b GROUP BY 1,2,3),
+t AS (SELECT l1_block, l1_hash, split_part(item,'/',2)::int AS idx, get_byte(bytes,0) AS ty
+      FROM proof_finality_capture WHERE chain=84532 AND item ~ '^tx/[0-9]+$' AND octet_length(bytes) > 0)
+SELECT (SELECT count(*) FROM g),
+  (SELECT count(*) FROM g WHERE mn <> 0 OR mx + 1 <> n),
+  (SELECT count(*) FROM t WHERE ty = 3 AND NOT EXISTS (SELECT 1 FROM g WHERE g.l1_block=t.l1_block AND g.l1_hash=t.l1_hash AND g.tx=t.idx)),
+  (SELECT count(*) FROM t WHERE ty <> 3 AND EXISTS (SELECT 1 FROM g WHERE g.l1_block=t.l1_block AND g.l1_hash=t.l1_hash AND g.tx=t.idx));
+SQL
+); then
+  IFS='|' read -r g_n g_gap g_nobl g_wrong <<EOF
+$out
+EOF
+  if [ "$g_n" -eq 0 ]; then rec WARN I13 "the blob rows of a transaction are contiguous from index 0 (the loaders stop at the first missing index) and belong to a blob transaction" "rows to examine" "no blob rows"
+  else
+    [ "$((g_gap + g_nobl + g_wrong))" -eq 0 ] && st=PASS || st=WARN
+    rec $st I13 "blob rows of one transaction are contiguous from 0 (loaders stop at the first missing index), every type-3 transaction row has blob rows and no other type has (a fault is recorded as index_block_unindexable{blob_rows_inconsistent})" "0 violations in $g_n transactions with blobs" "non-contiguous or not from 0: $g_gap; type-3 rows without blob rows: $g_nobl; blob rows of a non-blob transaction: $g_wrong"
+    info "the number of blob rows equals the number of blob hashes in the transaction RLP: PostgreSQL has no RLP; the indexer compares them (blob_rows_inconsistent) and the production check is N8"
+  fi
+else rec FAIL I13 "blob contiguity query" "query answers" "failed: $(errline)"; fi
+
+if out=$(sqlro <<'SQL'
+WITH t AS (SELECT bytes, octet_length(bytes) AS len, get_byte(bytes,0) AS b0 FROM proof_finality_capture WHERE chain=84532 AND item ~ '^tx/[0-9]+$'),
+p AS (SELECT len, b0, bytes, CASE WHEN b0 >= 192 THEN 0 ELSE 1 END AS off FROM t WHERE len >= 2),
+q AS (SELECT len, b0, off, bytes, get_byte(bytes, off) AS lp FROM p),
+x AS (SELECT b0, len, CASE
+    WHEN lp BETWEEN 192 AND 247 THEN off + 1 + (lp - 192)
+    WHEN lp = 248 THEN off + 2 + get_byte(bytes, off + 1)
+    WHEN lp = 249 THEN off + 3 + get_byte(bytes, off + 1) * 256 + get_byte(bytes, off + 2)
+    WHEN lp = 250 THEN off + 4 + get_byte(bytes, off + 1) * 65536 + get_byte(bytes, off + 2) * 256 + get_byte(bytes, off + 3)
+    ELSE -1 END AS expected FROM q)
+SELECT (SELECT count(*) FROM t),
+  (SELECT count(*) FROM t WHERE len < 2 OR NOT (b0 IN (1,2,3,4) OR b0 >= 192)),
+  (SELECT count(*) FROM x WHERE (b0 IN (1,2,3,4) OR b0 >= 192) AND expected <> len);
+SQL
+); then
+  IFS='|' read -r r_n r_type r_env <<EOF
+$out
+EOF
+  if [ "$r_n" -eq 0 ]; then rec WARN I14 "every tx/N row is an EIP-2718 envelope (a legacy RLP list or a type byte and an RLP list) that the reader parses" "rows to examine" "no tx rows"
+  else
+    [ "$((r_type + r_env))" -eq 0 ] && st=PASS || st=WARN
+    rec $st I14 "every Base tx/N row starts like an EIP-2718 transaction (a legacy RLP list, or type 1-4 and an RLP list); the full parse is the vendored go-ethereum's, and a row it refuses is recorded as index_block_unindexable{tx_unparseable}" "0 malformed prefixes in $r_n rows" "bad first byte or length: $r_type; an RLP list whose declared length does not match the row: $r_env"
+  fi
+else rec FAIL I14 "tx row query" "query answers" "failed: $(errline)"; fi
+
 # ==============================================================================================================================
 # (f) container environment hygiene (names only, never values)
 # ==============================================================================================================================
