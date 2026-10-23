@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
@@ -104,6 +105,16 @@ type RPCHeaders struct {
 	Endpoints []string
 	Client    *http.Client
 	BatchSize int
+	// MinGap is the floor of the gap kept between two requests of this source, for all callers together (default 0: no gap until a
+	// provider answers 429, then the gap grows and shrinks again with the answers, see NextGap).
+	MinGap time.Duration
+	// MaxRetryAfter is the longest Retry-After one call waits out itself (default DefaultMaxRetryAfter). A provider that asks for more
+	// ends the call at once with a SourceError whose Throttle() carries the time to come back after.
+	MaxRetryAfter time.Duration
+
+	pace pacer
+	// now is the clock of the pacing (tests); nil is time.Now.
+	now func() time.Time
 }
 
 var _ HeaderSource = (*RPCHeaders)(nil)
@@ -147,7 +158,11 @@ func (r *RPCHeaders) post(ctx context.Context, url string, reqs []rpcReq) ([]rpc
 		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+		he := &httpStatusError{Code: resp.StatusCode}
+		if resp.StatusCode == http.StatusTooManyRequests {
+			he.RetryAfter, he.Stated = ParseRetryAfter(resp.Header.Get("Retry-After"), time.Now())
+		}
+		return nil, he
 	}
 	var out []rpcResp
 	if err := json.Unmarshal(raw, &out); err != nil {
@@ -168,23 +183,72 @@ func (r *RPCHeaders) post(ctx context.Context, url string, reqs []rpcReq) ([]rpc
 	return ordered, nil
 }
 
+func (r *RPCHeaders) clock() time.Time {
+	if r.now != nil {
+		return r.now()
+	}
+	return time.Now()
+}
+
+func (r *RPCHeaders) maxRetryAfter() time.Duration {
+	if r.MaxRetryAfter > 0 {
+		return r.MaxRetryAfter
+	}
+	return DefaultMaxRetryAfter
+}
+
+// timeLeft is the time ctx has left, or -1 when it has no deadline.
+func timeLeft(ctx context.Context) time.Duration {
+	dl, ok := ctx.Deadline()
+	if !ok {
+		return -1
+	}
+	if d := time.Until(dl); d > 0 {
+		return d
+	}
+	return 0
+}
+
+// post429 posts reqs to one endpoint, keeping the source's pace and waiting out a 429 as ThrottleWait decides: a stated Retry-After is
+// honoured, an unstated one backs off 1.5 s, 3 s, ..., and a wait the call cannot afford (longer than MaxRetryAfter, or not inside
+// ctx's deadline) ends the call at once. throttled and hint say that the endpoint ended on a 429 and when to come back.
+func (r *RPCHeaders) post429(ctx context.Context, ep string, reqs []rpcReq) (rs []rpcResp, throttled bool, hint time.Duration, err error) {
+	for try := 0; ; try++ {
+		if err = r.pace.wait(ctx, r.MinGap, r.clock); err != nil {
+			return nil, false, 0, err
+		}
+		rs, err = r.post(ctx, ep, reqs)
+		var he *httpStatusError
+		if !errors.As(err, &he) || he.Code != http.StatusTooManyRequests {
+			r.pace.answered(r.MinGap, false)
+			return rs, false, 0, err
+		}
+		r.pace.answered(r.MinGap, true)
+		wait, giveUp, h := ThrottleWait(he.RetryAfter, he.Stated, try, r.maxRetryAfter(), timeLeft(ctx))
+		if giveUp {
+			return nil, true, h, err
+		}
+		tm := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			tm.Stop()
+			return nil, false, 0, ctx.Err()
+		case <-tm.C:
+		}
+	}
+}
+
 func (r *RPCHeaders) batch(ctx context.Context, reqs []rpcReq) ([][]byte, error) {
 	var fails []EndpointFailure
 	for _, ep := range r.Endpoints {
-		var rs []rpcResp
-		var err error
-		for try := 0; try < 8; try++ {
-			if rs, err = r.post(ctx, ep, reqs); err == nil || !strings.Contains(err.Error(), "HTTP 429") {
-				break
-			}
-			select {
-			case <-ctx.Done():
-			case <-time.After(time.Duration(try+1) * 1500 * time.Millisecond):
-			}
-		}
+		rs, throttled, hint, err := r.post429(ctx, ep, reqs)
 		name := (&HTTPSource{Base: ep}).Name()
 		if err != nil {
-			fails = append(fails, EndpointFailure{Endpoint: name, Op: "headers", Reason: ethrpc.RedactText(err.Error())})
+			f := EndpointFailure{Endpoint: name, Op: "headers", Reason: ethrpc.RedactText(err.Error())}
+			if throttled {
+				f.Throttled, f.RetryAfter = true, hint
+			}
+			fails = append(fails, f)
 			continue
 		}
 		out := make([][]byte, len(rs))
