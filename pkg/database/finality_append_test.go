@@ -142,8 +142,11 @@ func TestFinalityAppendStoresOnlyWhatTheRegisteredKindVerifies(t *testing.T) {
 		proofID, s := storeLeg(t, "base_sepolia_47368146")
 		other := s.Block()
 		other.Number++
+		// the table itself now refuses a row whose own_hash is not the one under the block named by its evidence header (migration
+		// 00029, TestFinalityTriggerRefusesAGarbageRowEvenWhenItIsCorrectlyLinked), so a forged row can only exist if it was stored
+		// before that trigger or with the trigger switched off by the table owner: the repository must still never extend it
 		for _, a := range addendaChainUnder(t, proofID, s, finality.LegBindingOf(other), finality.LevelL1Posted) {
-			rawInsert(t, a)
+			insertAddendumUnguarded(t, a)
 		}
 		_, err := repo.Append(ctx, appendRequest(t, kindRegistry(t, nil), proofID, s, finality.LevelFinalized, "x"))
 		st, ok := finality.AsNamed(err)

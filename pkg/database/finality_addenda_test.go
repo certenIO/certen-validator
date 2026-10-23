@@ -159,10 +159,13 @@ func TestFinalityAddendaAreAppendOnly(t *testing.T) {
 				VALUES ($1, $2, $3, $4, 'x.y/v1', '', $5, $6)`, id, seq, level, chainID, prev, own)
 			return err
 		}
+		// the linkage refusals come first and fire whatever the evidence and the hash are; the rows that must be ACCEPTED are the
+		// Go-built ones (migration 00029: the trigger recomputes own_hash from the evidence header)
+		good := addendaChain(t, pid, settlement, finality.LevelL1Posted, finality.LevelFinalized)
 		if err := insert(pid, 1, 2, one, one, 84532); pgCode(err) != "23001" {
 			t.Fatalf("first addendum with a non-zero prev_hash: %v", err)
 		}
-		if err := insert(pid, 1, 2, zero, one, 84532); err != nil {
+		if err := insertAddendum(good[0]); err != nil {
 			t.Fatalf("a well-formed first addendum was refused: %v", err)
 		}
 		for name, err := range map[string]error{
@@ -180,7 +183,7 @@ func TestFinalityAddendaAreAppendOnly(t *testing.T) {
 		if err := insert(pid, 2, 1, one, one, 84532); pgCode(err) != "23514" {
 			t.Fatalf("level 1: want SQLSTATE 23514 (check_violation), got %v", err)
 		}
-		if err := insert(pid, 2, 3, one, one, 84532); err != nil {
+		if err := insertAddendum(good[1]); err != nil {
 			t.Fatalf("a well-formed second addendum was refused: %v", err)
 		}
 		// a duplicate (proof_id, seq) repeats a level the proof already holds, so the trigger refuses it before the primary key can

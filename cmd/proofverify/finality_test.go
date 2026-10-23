@@ -204,9 +204,25 @@ func TestFinalityOfAStoredProof(t *testing.T) {
 	other := s2.Block()
 	other.Number++
 	for _, a := range chainFor(t, s2, id2, finality.LegBindingOf(other), finality.LevelFinalized) {
-		// a writer that is not the repository (the repository would refuse to extend or form this chain)
-		if _, err := db.ExecContext(ctx, `INSERT INTO proof_finality_addenda (proof_id, seq, level, chain, kind, evidence, prev_hash, own_hash)
+		// a row the repository would never form and that migration 00029's trigger now refuses to any writer: it can exist only if it
+		// was stored before that trigger or with the trigger switched off by the table owner, as here, for this one statement
+		tx, err := db.BeginTx(ctx, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, stmt := range []string{`ALTER TABLE proof_finality_addenda DISABLE TRIGGER proof_finality_addenda_row_guard`} {
+			if _, err := tx.ExecContext(ctx, stmt); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO proof_finality_addenda (proof_id, seq, level, chain, kind, evidence, prev_hash, own_hash)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`, id2.String(), int64(a.Seq), int16(a.Level), int64(a.Chain), a.Kind, a.Evidence, a.PrevHash[:], a.OwnHash[:]); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.ExecContext(ctx, `ALTER TABLE proof_finality_addenda ENABLE TRIGGER proof_finality_addenda_row_guard`); err != nil {
+			t.Fatal(err)
+		}
+		if err := tx.Commit(); err != nil {
 			t.Fatal(err)
 		}
 	}
