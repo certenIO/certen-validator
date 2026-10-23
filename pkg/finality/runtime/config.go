@@ -307,8 +307,8 @@ func CheckProviderEnvironment() []ConfigError {
 	return out
 }
 
-// ConfigFromEnv reads the configuration. A numeric variable that is not a number in range refuses startup by name (the
-// envvar package's rule); a list variable that is empty takes its default, and one that is set must hold at least one entry and every
+// ConfigFromEnv reads the configuration. A numeric variable that is not a number in range is refused by name (the
+// envvar package's rule: a *envvar.Refusal, announced by the process as finality_upgrader_disabled{reason=setting_invalid}); a list variable that is empty takes its default, and one that is set must hold at least one entry and every
 // entry must be an http(s) URL with a host (the refusal names the variable and the entry index, never the value); the per-chain
 // provider lists are the ones the validator already uses (<PREFIX>_RPC_URL, <PREFIX>_URL_FALLBACKS, INFURA_/ALCHEMY_<PREFIX>_URL).
 func ConfigFromEnv() (Config, error) {
@@ -373,6 +373,15 @@ func ConfigFromEnv() (Config, error) {
 
 	c.PinsFile = strings.TrimSpace(os.Getenv(EnvPinsFile))
 
+	if err = readSettings(&c); err != nil {
+		return Config{}, err
+	}
+	return c, nil
+}
+
+// readSettings reads every number, duration and size setting into c and returns EVERY refusal (a joined error of *envvar.Refusal, in
+// the order the settings are read), including the bound of the batch size that is checked after its reader accepted it.
+func readSettings(c *Config) error {
 	rd := []func() error{
 		func() (e error) { c.RateRPS, e = envvar.Float(EnvRateRPS, DefaultRateRPS, 0.1); return },
 		func() (e error) { c.RateBurst, e = envvar.Int(EnvRateBurst, 5, 1); return },
@@ -395,15 +404,23 @@ func ConfigFromEnv() (Config, error) {
 		func() (e error) { c.BuildTimeout, e = envvar.Seconds(EnvBuildTimeout, 5*time.Minute, 1); return },
 		func() (e error) { c.MemoryBudget, e = finality.MemoryBudgetFromEnv(); return },
 	}
-	if err = envvar.Check(rd...); err != nil {
-		return Config{}, err
+	var errs []error
+	if err := envvar.Check(rd...); err != nil {
+		errs = append(errs, err)
 	}
 	// the capture index settings are NOT checked with the rest: a bad one never stops a consensus node (RB12-INDEX-FIX D2)
 	c.readIndexSettings()
 	if c.MaxBatch > 100 {
-		return Config{}, fmt.Errorf("%s=%d: public providers answer 429 to 100-request batches; the largest accepted value is 100", EnvMaxBatch, c.MaxBatch)
+		errs = append(errs, envvar.Refuse(EnvMaxBatch, strconv.Itoa(c.MaxBatch), "an integer from 1 to 100 (public providers answer 429 to 100-request batches)"))
 	}
-	return c, nil
+	return errors.Join(errs...)
+}
+
+// RefusedSettings judges every number, duration and size setting of the environment by the rule ConfigFromEnv applies and returns each
+// refusal (all of them), without reading anything else. A refusal holds the name of the variable and what it must be, never its value.
+func RefusedSettings() []*envvar.Refusal {
+	var c Config
+	return envvar.Refusals(readSettings(&c))
 }
 
 // RegisterRedaction tells pkg/ethrpc every configured URL so no provider text carrying a credential reaches a log.

@@ -4,8 +4,6 @@ package main
 
 import (
 	"context"
-	"errors"
-	"fmt"
 
 	"github.com/certen/independant-validator/pkg/database"
 	"github.com/certen/independant-validator/pkg/finality"
@@ -15,6 +13,9 @@ import (
 
 // genesisLinkCheck is the load-time check of the embedded Adiri genesis link (a variable so a test can make it fail).
 var genesisLinkCheck = adiri.CheckEmbeddedGenesisLink
+
+// launchFinality is finality.Launch (a variable so a test can make it fail or observe what it is given).
+var launchFinality = finality.Launch
 
 // finalityRegistry is the registry the finality kinds are registered into: the process-wide one (a variable so each test can use its own,
 // since a kind can be registered once).
@@ -32,28 +33,37 @@ var finalityRegistry = finality.Default
 // file unless CERTEN_FINALITY_PINS_FILE names an override, whose source it reports. A chain whose providers are missing is announced
 // as the named state finality_upgrader_disabled, never skipped silently.
 //
-// A provider-list entry the runtime refuses (a *finruntime.ConfigError: not an http(s) URL with a host, or rejected by url.Parse) does
-// NOT stop the validator. The provider variables are shared by all validators, so a refusal that ended the process would take them
-// all down at the same roll, and finality is not an input of consensus. It is announced as the named state
-// finality_upgrader_disabled{reason: config_invalid, variable, entry, class} (log, metric certen_finality_upgrader_disabled_total
-// {chain="0",env=<variable>}, gauge certen_finality_upgrader_enabled 0 and the health block's upgrader_disabled_reason), every
-// refused entry is logged by position, and nothing of the value is printed. Any other failure of the start (a malformed number or
-// switch, a wiring or pins error) still refuses the start by name, as before.
+// NO failure of this start ends the validator (RB12-GO-INT F14). The settings come from one environment shared by every validator of the
+// fleet, and finality is not an input of consensus, so a start that returned an error - which main turns into log.Fatal and a restart of
+// all seven at the same roll - would let a typo in a setting nobody attests with stop the fleet. Every failure is announced as the named
+// state finality_upgrader_disabled{reason,...} (log, metric certen_finality_upgrader_disabled_total{chain="0",env=<setting or stage>},
+// gauge certen_finality_upgrader_enabled 0 and the health block's upgrader_disabled_reason) and the function returns nil:
+//
+//	config_invalid   a provider-list entry (a provider URL, the archive list) is refused: variable, entry position, class
+//	switch_invalid   the upgrader switch or a per-chain switch is not a switch: variable
+//	setting_invalid  a number or duration is malformed or out of its bounds: the first variable, how many were refused
+//	pins_invalid     the pins file cannot be read or parsed, the embedded pins fail their hash, or the genesis link fails: stage
+//	wiring_failed    a verifier kind cannot be registered: stage
+//	launch_failed    finality.Launch refused: stage
+//	start_panicked   the start panicked and the panic was recovered: stage
+//
+// The value of a setting is never printed or stored: it may hold a credential. Every refused setting and provider entry is logged by
+// name and position so one restart can correct them all. The error result is kept for the caller's signature; no failure of the start
+// is returned through it.
 func startFinality(ctx context.Context, dbClient *database.Client, logf func(string, ...any)) error {
+	defer func() {
+		if r := recover(); r != nil {
+			finality.AnnounceUpgraderDisabled(logf, finruntime.StartPanic(r))
+		}
+	}()
 	on, err := finality.Enabled()
 	if err != nil {
-		return fmt.Errorf("finality upgrader: %w", err)
+		finality.AnnounceUpgraderDisabled(logf, finruntime.StartFailure(logf, err))
+		return nil
 	}
 	cfg, err := finruntime.ConfigFromEnv()
 	if err != nil {
-		var refused *finruntime.ConfigError
-		if !errors.As(err, &refused) {
-			return fmt.Errorf("finality configuration: %w", err)
-		}
-		for _, r := range finruntime.CheckProviderEnvironment() {
-			logf("[FINALITY] config_invalid: %s entry %d (%s)", r.Variable, r.Entry, r.Class)
-		}
-		finality.AnnounceUpgraderDisabled(logf, finality.ConfigInvalidState(refused.Variable, refused.Entry, refused.Class))
+		finality.AnnounceUpgraderDisabled(logf, finruntime.StartFailure(logf, err))
 		return nil
 	}
 	repo := database.NewFinalityAddendaRepository(dbClient)
@@ -62,15 +72,18 @@ func startFinality(ctx context.Context, dbClient *database.Client, logf func(str
 		Status: database.NewFinalityStatusRepository(dbClient), Logf: logf,
 	})
 	if err != nil {
-		return fmt.Errorf("finality wiring: %w", err)
+		finality.AnnounceUpgraderDisabled(logf, finruntime.StartFailure(logf, err))
+		return nil
 	}
 	// The Adiri genesis link is embedded and hash-pinned by the pins the runtime built under; it is checked once here, at startup,
 	// never per proof.
 	if err := genesisLinkCheck(wire.Pins); err != nil {
-		return fmt.Errorf("finality pins: %w", err)
+		finality.AnnounceUpgraderDisabled(logf, finruntime.StartFailure(logf, finruntime.GenesisLinkFailed(err)))
+		return nil
 	}
-	if _, err := finality.Launch(ctx, on, repo, repo, wire.Registry, wire.Pins, wire.Upgrader); err != nil {
-		return fmt.Errorf("finality upgrader: %w", err)
+	if _, err := launchFinality(ctx, on, repo, repo, wire.Registry, wire.Pins, wire.Upgrader); err != nil {
+		finality.AnnounceUpgraderDisabled(logf, finruntime.StartFailure(logf, finruntime.LaunchFailed(err)))
+		return nil
 	}
 	return nil
 }

@@ -42,7 +42,7 @@ case "$SAMPLE" in ''|*[!0-9]*) SAMPLE=20 ;; esac
 # The supported chains of the S7 table (pkg/finality/table.go): Sepolia, Base Sepolia, Arbitrum Sepolia, Adiri.
 CHAINS_SQL="11155111,84532,421614,2017"
 
-# ---- migration checksums: certen-validator db/migrations at pv2/rb11-int (== the proofs_service RequiredSchema pins for 00000-00014, 00026-00028)
+# ---- migration checksums: certen-validator db/migrations at pv2/rb12-train2 (00000-00028 as at pv2/rb11-int, == the proofs_service RequiredSchema pins for 00000-00014, 00026-00028; 00029 = the dbfix own-hash guard, RB12-GO-INT)
 MIGRATION_SHA='
 00000 dacf9261f48333444c3657532a575ae02ed583fe57f516aef7af3e26cd7c6a14
 00001 ed6ddda58c77649769ecff8ca5bbc555ab36e93118106339155b48c1443028c6
@@ -73,6 +73,7 @@ MIGRATION_SHA='
 00026 3c8aab92e4d5bede91b245121f18e7f29459f987e816237d1ce4c0b0357324f8
 00027 33111ed2735c8af9581bf4502f422935c1131589f47a9e31b8b874301cfe7d63
 00028 759cfbda9571a7a1063a4034fcf7502ce94210800ed49eb53e4e5992ab8b81c5
+00029 2cc377c51c1b1269c8173e850e011646a16a7adb6a49945451fb199b1a63b533
 '
 
 if [ "${1:-}" = "--selftest-migrations" ]; then
@@ -325,9 +326,9 @@ SQL
 ' ' ' | sed 's/^/ /; s/^ $/ none/')"
   fi
   if [ -z "$missing" ] && [ -z "$wrong" ]; then
-    rec PASS E2 "every migration 00000-00028 of the repo is in the history with its file's checksum (proofs_service refuses to start otherwise)" "29 versions, sha256 equal" "29 of 29 equal; versions in the history beyond the repo list: ${extra:-none}"
+    rec PASS E2 "every migration 00000-00029 of the repo is in the history with its file's checksum (proofs_service refuses to start otherwise; 00029 must be staged before the validators with this binary start)" "30 versions, sha256 equal" "30 of 30 equal; versions in the history beyond the repo list: ${extra:-none}"
   else
-    rec FAIL E2 "every migration 00000-00028 of the repo is in the history with its file's checksum (proofs_service refuses to start otherwise)" "29 versions, sha256 equal" "not applied: ${missing:-none}; checksum differs:${wrong:- none}"
+    rec FAIL E2 "every migration 00000-00029 of the repo is in the history with its file's checksum (proofs_service refuses to start otherwise; 00029 must be staged before the validators with this binary start)" "30 versions, sha256 equal" "not applied: ${missing:-none}; checksum differs:${wrong:- none}"
   fi
 else rec FAIL E1 "certen_schema_history readable" "table answers" "query failed: $(errline)"; fi
 

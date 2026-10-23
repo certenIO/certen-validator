@@ -2,9 +2,7 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -117,46 +115,4 @@ func TestStartFinalityWithAGoodConfigurationAndTheSwitchOffIsTheSwitchsState(t *
 	if h["upgrader_enabled"] != false || !strings.Contains(reason, finality.EnvEnabled) || strings.Contains(reason, "config_invalid") {
 		t.Fatalf("%v", h)
 	}
-}
-
-// Every other failure of the start still refuses it by name, as before (a switch that is not a switch, a malformed number, a wiring
-// failure, a failed genesis link, a per-chain switch that is not a switch).
-func TestStartFinalityStillRefusesEveryOtherFailureByName(t *testing.T) {
-	t.Run("a switch that is not a switch", func(t *testing.T) {
-		clearProviderEnv(t)
-		t.Setenv(finality.EnvEnabled, "maybe")
-		if err := startFinality(context.Background(), nil, (&finLogs{}).logf); err == nil || !strings.Contains(err.Error(), "finality upgrader") {
-			t.Fatalf("%v", err)
-		}
-	})
-	t.Run("a malformed number", func(t *testing.T) {
-		clearProviderEnv(t)
-		t.Setenv(finruntime.EnvRateRPS, "fast")
-		if err := startFinality(context.Background(), nil, (&finLogs{}).logf); err == nil || !strings.Contains(err.Error(), "finality configuration") {
-			t.Fatalf("%v", err)
-		}
-	})
-	t.Run("a pins file that cannot be read", func(t *testing.T) {
-		clearProviderEnv(t)
-		t.Setenv(finruntime.EnvPinsFile, filepath.Join(t.TempDir(), "absent.json"))
-		if err := startFinality(context.Background(), nil, (&finLogs{}).logf); err == nil || !strings.Contains(err.Error(), "finality wiring") {
-			t.Fatalf("%v", err)
-		}
-	})
-	t.Run("a failed genesis link", func(t *testing.T) {
-		clearProviderEnv(t)
-		old := genesisLinkCheck
-		genesisLinkCheck = func(*finality.Pins) error { return errors.New("link broken") }
-		defer func() { genesisLinkCheck = old }()
-		if err := startFinality(context.Background(), nil, (&finLogs{}).logf); err == nil || !strings.Contains(err.Error(), "finality pins") {
-			t.Fatalf("%v", err)
-		}
-	})
-	t.Run("a per-chain switch that is not a switch (refused while wiring, before Launch)", func(t *testing.T) {
-		clearProviderEnv(t)
-		t.Setenv(finality.ChainEnv(finality.ChainBaseSepolia), "maybe")
-		if err := startFinality(context.Background(), nil, (&finLogs{}).logf); err == nil || !strings.Contains(err.Error(), "finality wiring") {
-			t.Fatalf("%v", err)
-		}
-	})
 }

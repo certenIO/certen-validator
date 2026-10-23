@@ -294,6 +294,18 @@ func (s *BuilderStatus) noteRetry(next time.Time) {
 	s.State, s.ETA = st, next
 }
 
+// noteNextAttempt records on the row of a leg held by the environment (a state of ClassEnvironment that is not itself a pending row, such
+// as l1_capture_gap) when the builder asks again: the next_attempt_at field of its state. It carries no attempt ordinal (a hold is no
+// failed ask) and no eta (the row's class says what the leg is; the field says when it is asked next).
+func (s *BuilderStatus) noteNextAttempt(next time.Time) {
+	if s.State == nil {
+		return
+	}
+	st := copyState(s.State)
+	st.Fields[FieldNextAttemptAt] = next.UTC().Format(time.RFC3339)
+	s.State = st
+}
+
 func copyState(s *StateError) *StateError {
 	st := NewState(s.Code)
 	for k, v := range s.Fields {
