@@ -206,6 +206,10 @@ const (
 	IncludedNoSettlement        IncludedReason = "no_settlement"
 	IncludedNoExecutionProof    IncludedReason = "no_execution_proof_component"
 	IncludedSettlementNotJudged IncludedReason = "no_settlement_to_recompute_d0"
+	// IncludedNoBlockHeader: the bundle holds an execution proof (component 5) without its block_header_rlp, as bundles written before
+	// the header was captured do. Without the header the leg binding D0 cannot be recomputed, so nothing is judged; it is not corrupt
+	// evidence and not a failure.
+	IncludedNoBlockHeader IncludedReason = "no_block_header"
 )
 
 // FinalizedBlockReason is the reason of finality_finalized_block_unavailable: a verified finalized level whose leg block cannot
