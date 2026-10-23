@@ -167,11 +167,16 @@ const (
 	UnindexableInboxMalformed       = "inbox_malformed"        // the inbox row is not a list of transaction indices
 	UnindexableBlobRowMalformed     = "blob_row_malformed"     // a blob/N/J row is not a blob row
 	UnindexableBlobRowsInconsistent = "blob_rows_inconsistent" // the blob rows of a transaction are not the blobs it names (a missing or non-contiguous index)
+	// the Arbitrum batch index (RB12-INDEX-B)
+	UnindexableBatchRowMalformed  = "batch_row_malformed"  // a batch/N row does not decode or is not the batch its key names
+	UnindexableHeaderRowMalformed = "header_row_malformed" // the header row of a batch's block is absent, is not that block's header, or does not hash to its key
+	UnindexableWindowBeyondCap    = "window_beyond_cap"    // a batch's time bounds are wider than the lookup window assumes (the SequencerInbox time variation was raised)
 )
 
 // UnindexableReasons is the closed set of reasons, in registry order.
 func UnindexableReasons() []string {
-	return []string{UnindexableBlobRowMalformed, UnindexableBlobRowsInconsistent, UnindexableInboxMalformed, UnindexableInboxOverLimit, UnindexableTxUnparseable}
+	return []string{UnindexableBatchRowMalformed, UnindexableBlobRowMalformed, UnindexableBlobRowsInconsistent, UnindexableHeaderRowMalformed, UnindexableInboxMalformed,
+		UnindexableInboxOverLimit, UnindexableTxUnparseable, UnindexableWindowBeyondCap}
 }
 
 // IndexBlockUnindexable builds index_block_unindexable for the captured block at L1 height block.

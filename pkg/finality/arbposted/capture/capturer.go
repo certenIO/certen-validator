@@ -18,6 +18,7 @@ import (
 	"github.com/certen/independant-validator/pkg/ethproof"
 	"github.com/certen/independant-validator/pkg/ethrpc"
 	"github.com/certen/independant-validator/pkg/finality"
+	"github.com/certen/independant-validator/pkg/metrics"
 )
 
 // The rollup deployment the capture serves (V2_SPEC_S7 4.2; the verifier reads the same addresses from the pins).
@@ -188,7 +189,10 @@ type Report struct {
 	Proofs      []uint64
 	ProofBlock  uint64
 	Unavailable []uint64
-	Errors      []string // redacted
+	// Foreign lists the batches whose record the chain does not hold: the proof just stored shows another accumulator at slot N than the
+	// record's afterAcc (AuthorizeBatch). Their rows stay (the table is insert-only); no reader serves them.
+	Foreign []uint64
+	Errors  []string // redacted
 }
 
 func (c *Capturer) logf(f string, a ...any) {
@@ -809,6 +813,15 @@ func (c *Capturer) proveAt(ctx context.Context, h Header, stateRoot [32]byte, jo
 			if j.kind == ProofBatchAcc {
 				delete(c.needProof, j.index)
 				rep.Proofs = append(rep.Proofs, j.index)
+				// the same authorization every reader applies: a record the stored proof contradicts is counted and reported here
+				if j.rec != nil && j.rec.rec.N == j.index {
+					view := ProofView{Rec: pr, Block: h.Number, StateRoot: stateRoot}
+					if AuthorizeBatch(j.rec.rec, c.Cfg.Bridge, SequencerAccSlot, []ProofView{view}) == AuthForeign {
+						rep.Foreign = append(rep.Foreign, j.index)
+						metrics.AddFinalityCaptureForeignTxs(c.Cfg.Chain, 1)
+						c.logf("capture: batch %d recorded at L1 block %d is not the batch the Bridge holds at slot %d (proof block %d): its record is foreign and is never served", j.index, j.rec.rec.L1Block, j.index, h.Number)
+					}
+				}
 			} else {
 				delete(c.wantDelayed, j.index)
 			}
