@@ -857,6 +857,7 @@ func (u *Upgrader) putStatus(ctx context.Context, st BuilderStatus) {
 		return
 	}
 	st.JudgedAt = u.cfg.Now()
+	st = st.WithPins(u.pins) // every row names the pins this builder judged under
 	_, err := bounded(ctx, u.cfg.StoreTimeout, st.Chain, "writing the builder status", func(c context.Context) (struct{}, error) {
 		return struct{}{}, u.cfg.Status.UpsertStatus(c, st)
 	})
@@ -958,6 +959,7 @@ func (u *Upgrader) upgradeLeg(ctx context.Context, ref LegRef) (res legResult) {
 	if len(chain) > 0 && chain[0].Chain != ref.Chain {
 		return u.brokenChain(ref, ChainBroken(1, CheckKind, "stored", chain[0].Chain, "settled_on", ref.Chain))
 	}
+	u.convergeStatus(ctx, ref, chain)
 	have := LevelsOf(chain)
 	current := Top(chain)
 	var targets []Level
@@ -1060,10 +1062,11 @@ func (u *Upgrader) upgradeLeg(ctx context.Context, ref LegRef) (res legResult) {
 					res.conflict = true // another validator appended first; the next pass reads its chain
 					wait = minWait(wait, u.cfg.Interval)
 				case named && n.Code != CodeBuildTimeout && n.Code != CodePanic:
-					// the registered Kind (or the chain checks) refused what the prover built: nothing was stored (class R)
+					// the append of what the prover built was refused - by the registered Kind, the store's chain checks or the table's guard, the
+					// state's code says which - and nothing was stored (the refused class)
 					res.failed, failed = true, true
 					u.cfg.Recorder.BuildFailed(ref.Chain, n.Code)
-					logf("[FINALITY] leg %s chain %d: built %s evidence that does not verify: %v", ref.ProofID, ref.Chain, target, err)
+					logf("[FINALITY] leg %s chain %d: the append of the built %s evidence was refused (nothing stored): %v", ref.ProofID, ref.Chain, target, err)
 					s := BuilderStatusOf(ref.ProofID, ref.Chain, target, reached(), nil, err, true, u.cfg.Now())
 					status = &s
 					wait = minWait(wait, failWait)
@@ -1221,6 +1224,33 @@ func DisabledChainsFromEnv(chains []uint64) (map[uint64]bool, error) {
 	return off, nil
 }
 
+// ConfigInvalidState is the named state of a finality runtime that was NOT started because a setting it parses was refused:
+// finality_upgrader_disabled{reason: config_invalid, variable, entry, class}. entry is the position of the refused entry among the
+// variable's non-blank entries (-1: the variable holds none) and class says what is wrong with it; the value itself is never part of
+// the state, it may hold a credential (env is the variable too, value is the word invalid: the registry's required fields). The validator (consensus, attestation, settlement) is not affected; this validator appends no
+// addenda and captures nothing until the variable is corrected and the process restarted.
+func ConfigInvalidState(variable string, entry int, class string) *StateError {
+	return NewState(CodeUpgraderDisabled, "reason", "config_invalid", "env", variable, "value", "invalid", "variable", variable, "entry", entry, "class", class,
+		"effect", "the finality runtime was not started: no finality addenda are appended and nothing is captured by this validator until the variable is corrected and the process restarted; proofs stay at the level they were stored at; consensus, attestation and settlement are not affected")
+}
+
+// AnnounceUpgraderDisabled announces that the whole upgrader is off, in the one way every such state is announced: the log, the
+// certen_finality_upgrader_enabled gauge, certen_finality_upgrader_disabled_total{chain="0",env} (env: the switch, or the refused
+// variable of a config_invalid state) and the health block's upgrader_disabled_reason. The state carries no secret.
+func AnnounceUpgraderDisabled(logf func(format string, args ...any), st *StateError) {
+	logf("[FINALITY] upgrader DISABLED: %s", st.Error())
+	metrics.SetFinalityUpgraderEnabled(false)
+	metrics.IncFinalityUpgraderDisabled(0, upgraderDisabledEnv(st))
+	metrics.SetFinalityUpgraderDisabledReason(st.Error())
+}
+
+// upgraderDisabledEnv is the setting that caused a whole-upgrader off state: the switch, or the refused variable of a config_invalid state
+// (ConfigInvalidState carries it as env too).
+func upgraderDisabledEnv(st *StateError) string {
+	env, _ := st.Fields["env"].(string)
+	return env
+}
+
 // Launch starts the upgrader and the registered capture loops on their own goroutines, or, when it is switched off, reports
 // the named state finality_upgrader_disabled in the log and the metric: an off switch is never a silent skip. Per-chain
 // switches (CERTEN_FINALITY_CHAIN_<id>_ENABLED, default on) turn one chain's upgrader and capturers off the same way. It
@@ -1228,11 +1258,8 @@ func DisabledChainsFromEnv(chains []uint64) (map[uint64]bool, error) {
 func Launch(ctx context.Context, enabled bool, src LegSource, store AddendumStore, reg *Registry, pins *Pins, cfg UpgraderConfig) (*Upgrader, error) {
 	cfg = cfg.withDefaults()
 	if !enabled {
-		st := NewState(CodeUpgraderDisabled, "env", EnvEnabled, "value", "false",
-			"effect", "no finality addenda are appended by this validator; proofs stay at the level they were stored at")
-		cfg.Logf("[FINALITY] upgrader DISABLED: %s", st.Error())
-		metrics.SetFinalityUpgraderEnabled(false)
-		metrics.IncFinalityUpgraderDisabled(0, EnvEnabled)
+		AnnounceUpgraderDisabled(cfg.Logf, NewState(CodeUpgraderDisabled, "env", EnvEnabled, "value", "false",
+			"effect", "no finality addenda are appended by this validator; proofs stay at the level they were stored at"))
 		return nil, nil
 	}
 	// a missing registry is NewUpgrader's refusal below, not a nil dereference here
@@ -1312,6 +1339,43 @@ func (u *Upgrader) announceGaps(rep PassReport) {
 	if rep.Unrecorded != u.lastUnrecorded {
 		u.lastUnrecorded = rep.Unrecorded
 		u.cfg.Logf("[FINALITY] %d legs had settlement evidence served while their proof row has no settlement_tx_hash or settlement_block_number yet: the check against the recorded settlement was skipped", rep.Unrecorded)
+	}
+}
+
+// convergeStatus writes the verified status row of every level the leg's chain holds whose row is not verified (RB11-DBFIX D1). All
+// validators share one database, so a level can be stored by another validator while this one's row for it still says pending or
+// unavailable, or says nothing (the other validator crashed between its append and its status write, or its write lost a race). A
+// level the chain holds is never a build target again, so nothing else would ever correct that row. The addendum is the fact: the
+// row is derived from it (the store refuses a verified row the chain does not support), never from a judgement of the moment.
+func (u *Upgrader) convergeStatus(ctx context.Context, ref LegRef, chain []Addendum) {
+	if u.cfg.Status == nil {
+		return
+	}
+	type read struct {
+		v  BuilderStatusView
+		ok bool
+	}
+	for _, a := range chain {
+		if !a.Level.Stored() {
+			continue
+		}
+		cur, err := bounded(ctx, u.cfg.StoreTimeout, ref.Chain, "reading the builder status", func(c context.Context) (read, error) {
+			v, ok, err := u.cfg.Status.GetStatus(c, ref.ProofID, a.Level)
+			return read{v, ok}, err
+		})
+		if err != nil {
+			if ctx.Err() == nil {
+				if sr, ok := u.cfg.Recorder.(StatusRecorder); ok {
+					sr.StatusWriteFailed(ref.Chain)
+				}
+				u.cfg.Logf("[FINALITY] leg %s chain %d: the %s status row was not read: %v", ref.ProofID, ref.Chain, a.Level, err)
+			}
+			continue
+		}
+		if cur.ok && cur.v.Class == BuilderVerified {
+			continue
+		}
+		u.putStatus(ctx, VerifiedBuilderStatus(ref.ProofID, ref.Chain, a.Level, a.Seq, u.cfg.Now()))
 	}
 }
 

@@ -390,5 +390,13 @@
     "original": "…nextAt.IsZero() && status.Class == BuilderPending && status.State != nil",
     "mutated": "…nextAt.IsZero() && status.Class == BuilderPending || status.State != nil",
     "reason": "A status of class pending always carries its state (Document refuses a pending status without one), so State != nil is true wherever the first operands are, and the mutant's alternative is never evaluated on a nil state: the Code operand decides in both forms."
+  },
+  {
+    "file": "status.go",
+    "function": "BuilderStatus.Document",
+    "operator": "guard_off",
+    "original": "if err != nil",
+    "mutated": "if false",
+    "reason": "json.Marshal(d) cannot fail here: d holds strings, a uint64 and one json.RawMessage, and that RawMessage is the Canonical rendering of a StateError, which is always valid JSON. The error branch is unreachable."
   }
 ]
