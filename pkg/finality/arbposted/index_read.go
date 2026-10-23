@@ -82,12 +82,16 @@ func (r *IndexReader) getEntry(ctx context.Context, n entryName, io *ioCount) (*
 	return e, nil
 }
 
+// firstScanSlack is how far below its first cursor row the capture can have stored a batch: the first scan of a capture loop starts
+// StartBack blocks below the head and ends at its first cursor row, and covers at most MaxCatchUp (400) blocks.
+const firstScanSlack uint64 = 512
+
 // ---- the time map: from an L2 time to the L1 blocks that can hold its batch ----
 
 // probeDigest returns the first digest at or after m, up to limit: its block and L1 timestamp (from the name).
 func (r *IndexReader) probeDigest(ctx context.Context, m, limit uint64, io *ioCount) (block, t uint64, ok bool, err error) {
 	prefix := ixItem(r.Gen, ixDigest) + "/"
-	width := uint64(64)
+	width := uint64(8) // a batch about every 8 L1 blocks: the first window usually holds one digest; a longer stretch without one widens it
 	for m <= limit {
 		hi := limit
 		if limit-m >= width {
@@ -109,7 +113,9 @@ func (r *IndexReader) probeDigest(ctx context.Context, m, limit uint64, io *ioCo
 			break
 		}
 		m = hi + 1
-		width *= 4
+		if width < 2048 { // widen through an empty stretch, but never to a window that would list the history
+			width *= 4
+		}
 	}
 	return 0, 0, false, nil
 }
@@ -137,13 +143,14 @@ func (r *IndexReader) firstAtOrAfter(ctx context.Context, x, lo, limit uint64, i
 // window is the L1 block range that holds every batch whose time bounds can hold ts: the batches whose L1 block has a timestamp T with
 // ts - futureCap <= T <= ts + delayCap (a batch's bounds are T - delay .. T + future and the writer refuses a batch beyond the caps). The
 // range runs from the first digested block with T >= ts - futureCap to the block before the first digest with T > ts + delayCap, so that a
-// captured block that has no digest yet (its data is incomplete) between two digests is inside it.
-func (r *IndexReader) window(ctx context.Context, ts, through uint64, io *ioCount) (from, to uint64, err error) {
+// captured block that has no digest yet (its data is incomplete) between two digests is inside it. lo is a block no batch lies below (the
+// capture's first scan, less its first range): the search starts there, not at block 0, so its probes land where the digests are.
+func (r *IndexReader) window(ctx context.Context, ts, lo, through uint64, io *ioCount) (from, to uint64, err error) {
 	x := uint64(0)
 	if ts > windowFutureCap {
 		x = ts - windowFutureCap
 	}
-	from, err = r.firstAtOrAfter(ctx, x, 0, through, io)
+	from, err = r.firstAtOrAfter(ctx, x, lo, through, io)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -198,17 +205,20 @@ func (r *IndexReader) Locate(ctx context.Context, b *Builder, hdr finality.Heade
 		}
 		return nil, pend(nil, newest), nil
 	}
-	capHi := uint64(0)
-	if _, hi, ok, err := finality.BlockBoundsOf(ctx, r.Store, chain, capture.ItemCursor); err != nil {
+	capLo, capHi := uint64(0), uint64(0)
+	if lo, hi, ok, err := finality.BlockBoundsOf(ctx, r.Store, chain, capture.ItemCursor); err != nil {
 		return nil, nil, err
 	} else if ok {
 		capHi = hi
+		if lo > firstScanSlack {
+			capLo = lo - firstScanSlack
+		}
 	}
 	if !have {
 		metrics.IncFinalityIndexLookup(chain, FamilyArb, "behind")
 		return nil, pend(map[string]any{"index_behind": true, "index_through_l1": uint64(0), "last_scanned_l1": capHi}, 0), nil
 	}
-	from, to, err := r.window(ctx, hdr.Timestamp, through, io)
+	from, to, err := r.window(ctx, hdr.Timestamp, capLo, through, io)
 	if err != nil {
 		return nil, nil, err
 	}
