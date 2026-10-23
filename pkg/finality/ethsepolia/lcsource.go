@@ -39,7 +39,8 @@ type EndpointFailure struct {
 	HTTP     int
 	Reason   string
 	// Throttled marks a provider that answered 429 and was not waited out inside the call; RetryAfter is the time to come back after
-	// (the provider's Retry-After, else the backoff the call had reached). Both are zero for every other failure.
+	// (the provider's own Retry-After; ZERO when it stated none, so that a caller escalates its own wait instead of taking a backoff for a request).
+	// Both are zero for every other failure.
 	Throttled  bool
 	RetryAfter time.Duration
 }

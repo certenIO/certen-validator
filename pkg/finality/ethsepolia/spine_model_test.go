@@ -40,6 +40,8 @@ type modelHeaders struct {
 	clock  *fakeClock
 	perHdr time.Duration
 	limit  time.Duration
+	// sleep is real time spent in every HeadersByNumber call (concurrency tests that need real goroutines and a real deadline)
+	sleep time.Duration
 
 	mu        sync.Mutex
 	calls     [][2]uint64
@@ -66,6 +68,9 @@ func (m *modelHeaders) HeadersByNumber(_ context.Context, from, to uint64) ([][]
 		m.served = map[uint64]int{}
 	}
 	m.mu.Unlock()
+	if m.sleep > 0 {
+		time.Sleep(m.sleep)
+	}
 	cost := time.Duration(to-from+1) * m.perHdr
 	if m.clock != nil {
 		if m.limit > 0 && cost > m.limit {

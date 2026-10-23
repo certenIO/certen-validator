@@ -519,7 +519,9 @@ func replaced(t *testing.T, st finality.CaptureStore, k finality.CaptureKey, bad
 	return out
 }
 
-func TestAWrongKeptChunkFailsTheBuildByNameAndNothingIsVerifiedFromIt(t *testing.T) {
+// Every kind of wrong kept row is a miss that is reported by name: the chunk is fetched, authenticated, kept in the process, and the leg
+// completes with the right headers. Nothing is verified from the row itself.
+func TestEveryKindOfWrongKeptRowIsReportedByNameAndReplacedFromTheProvider(t *testing.T) {
 	ch := newSynth(1_000_000, 1000, 1)
 	legN := uint64(1_000_100)
 	spans := PlanSpans(legN, ch.top()-1)
@@ -532,8 +534,7 @@ func TestAWrongKeptChunkFailsTheBuildByNameAndNothingIsVerifiedFromIt(t *testing
 	sib := func(i int, seed byte) [][]byte {
 		w := append([][]byte(nil), win...)
 		n := target.Start + uint64(i)
-		parent := ch.hashOf(n - 1)
-		w[i] = spineSynthHeader(n, parent, seed)
+		w[i] = spineSynthHeader(n, ch.hashOf(n-1), seed)
 		return w
 	}
 	cases := []struct {
@@ -549,18 +550,24 @@ func TestAWrongKeptChunkFailsTheBuildByNameAndNothingIsVerifiedFromIt(t *testing
 		{"half of it", encodeSpan(win)[:len(encodeSpan(win))/2], SpineRowMalformed},
 		{"empty", nil, SpineRowMalformed},
 	}
+	want := expectedSpine(ch, legN)
 	for _, c := range cases {
 		clk := newClock()
-		src := ch.model(clk, 0)
-		p := spineProver(src, replaced(t, good, k, c.bytes), clk, 0)
+		var logs logSink
+		p := spineProver(ch.model(clk, 0), replaced(t, good, k, c.bytes), clk, 0)
+		p.Logf = logs.Logf
 		spine, pend, err := p.spineFor(context.Background(), ch.leg(legN), ch.candidate())
-		if spine != nil || pend != nil {
-			t.Fatalf("%s: a spine or a pending state came back (%d headers, %v)", c.name, len(spine), pend)
+		if err != nil || pend != nil || len(spine) != len(want) {
+			t.Fatalf("%s: %d headers, pending %v, err %v", c.name, len(spine), pend, err)
 		}
-		isNamed(t, err, CodeSpineRowInvalid, c.reason)
-		s, _ := finality.AsNamed(err)
-		if s.Fields["block"] != target.End || s.Fields["item"] != SpineItem(target.Count()) || s.Fields["chain"] != finality.ChainSepolia {
-			t.Fatalf("%s: fields %v", c.name, s.Fields)
+		for i := range want {
+			if !bytes.Equal(spine[i], want[i]) {
+				t.Fatalf("%s: spine[%d] is not the chain's header", c.name, i)
+			}
+		}
+		st := spineRowInvalid(target, &spineFault{Reason: c.reason})
+		if !logs.has(CodeSpineRowInvalid+"{") || !logs.has(`reason="`+c.reason+`"`) || !logs.has(`block="`+fmt.Sprint(target.End)+`"`) || st.Code != CodeSpineRowInvalid {
+			t.Fatalf("%s: the wrong row was not reported as %s{reason=%s}: %v", c.name, CodeSpineRowInvalid, c.reason, logs.lines)
 		}
 	}
 }
@@ -696,10 +703,10 @@ func TestAThrottledOrFailedAttemptEndsWithTheProgressStateAndBacksOffWithoutProg
 	attempt()
 	attempt()
 	mode = nil
-	p.SpineBudget = 3 * time.Second
+	p.SpineBudget = 100 * time.Second // the top window (39 s) and one kept window (40 s): the next would end after 100 s
 	src.perHdr = time.Second
 	if pend := attempt(); pend == nil {
-		t.Fatal("a 3 s budget at 1 s a header cannot finish 900 headers")
+		t.Fatal("a 100 s budget at 1 s a header cannot finish 900 headers")
 	}
 	mode = func() error { return errors.New("down") }
 	if d := nextIn(attempt()); d != SpineErrorBase {
@@ -784,30 +791,25 @@ func TestAStoreThatFailsPausesTheSpineAndLosesNoProgress(t *testing.T) {
 	}
 }
 
-func TestAnIdenticalRowWrittenByAnotherValidatorIsAcceptedAndADifferentOneIsNamed(t *testing.T) {
+// A row another validator wrote with the same bytes is accepted. (A row with other bytes is TestAPutConflictWithAStoredRowIsReported...)
+func TestAnIdenticalRowWrittenByAnotherValidatorIsAccepted(t *testing.T) {
 	ch := newSynth(1_000_000, 1000, 1)
 	legN := uint64(1_000_100)
 	good := filledStore(t, ch, legN)
 	// the row is there but this validator does not see it (it reads between the other's read and write): Put of the same bytes is a no-op
 	seen := &failingStore{CaptureStore: good, hideGets: true}
 	clk := newClock()
+	var logs logSink
 	p := spineProver(ch.model(clk, 0), seen, clk, 0)
+	p.Logf = logs.Logf
 	if _, _, err := p.spineFor(context.Background(), ch.leg(legN), ch.candidate()); err != nil {
 		t.Fatalf("identical duplicate rows: %v", err)
 	}
 	if seen.puts == 0 {
 		t.Fatal("the duplicate path was not exercised")
 	}
-	// the same key holds other bytes: the conflict is the named state, with the block it is about
-	spans := PlanSpans(legN, ch.top()-1)
-	other := newSynth(1_000_000, 1000, 1)
-	k := finality.CaptureKey{Chain: finality.ChainSepolia, L1Block: spans[1].End, L1Hash: ch.hashOf(spans[1].End), Item: SpineItem(spans[1].Count())}
-	bad := replaced(t, good, k, encodeSpan(other.hs[10:50]))
-	p2 := spineProver(ch.model(newClock(), 0), &failingStore{CaptureStore: bad, hideGets: true}, newClock(), 0)
-	_, _, err := p2.spineFor(context.Background(), ch.leg(legN), ch.candidate())
-	isNamed(t, err, CodeSpineRowInvalid, SpineRowConflict)
-	if s, _ := finality.AsNamed(err); s.Fields["block"] != spans[1].End {
-		t.Fatalf("fields %v", s.Fields)
+	if logs.has(CodeSpineRowInvalid) {
+		t.Fatalf("an identical duplicate was reported as invalid: %v", logs.lines)
 	}
 }
 
@@ -1037,5 +1039,30 @@ func TestPeakHeapOfTheLargestSpineStaysWithinAFewTimesItsSize(t *testing.T) {
 	t.Logf("spine of %d headers, %d bytes: peak heap growth %d bytes (%.2f x)", ch.top()-legN+1, payload, peak, float64(peak)/float64(payload))
 	if peak > uint64(4*payload) {
 		t.Fatalf("peak heap grew by %d bytes for a %d byte spine", peak, payload)
+	}
+}
+
+func TestAttemptReserveIsAFifthOfTheDeadlineAtLeastTenSeconds(t *testing.T) {
+	s := time.Second
+	for _, c := range []struct{ left, want time.Duration }{
+		{-1, 0}, {0, 10 * s}, {40 * s, 10 * s}, {50 * s, 10 * s}, {51 * s, 10*s + 200*time.Millisecond}, {300 * s, 60 * s},
+	} {
+		if got := AttemptReserve(c.left); got != c.want {
+			t.Errorf("AttemptReserve(%s) = %s, want %s", c.left, got, c.want)
+		}
+	}
+}
+
+func TestFetchFitsNeedsTheReserveAndTheLongestFetchLeftOfTheDeadlineExactly(t *testing.T) {
+	s := time.Second
+	for _, c := range []struct {
+		left, reserve, longest time.Duration
+		want                   bool
+	}{
+		{-1, 10 * s, 5 * s, true}, {15 * s, 10 * s, 5 * s, true}, {15*s - 1, 10 * s, 5 * s, false}, {0, 10 * s, 0, false}, {10 * s, 10 * s, 0, true}, {0, 0, 0, true},
+	} {
+		if got := FetchFits(c.left, c.reserve, c.longest); got != c.want {
+			t.Errorf("FetchFits(%s,%s,%s) = %v, want %v", c.left, c.reserve, c.longest, got, c.want)
+		}
 	}
 }

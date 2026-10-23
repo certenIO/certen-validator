@@ -211,8 +211,9 @@ func timeLeft(ctx context.Context) time.Duration {
 
 // post429 posts reqs to one endpoint, keeping the source's pace and waiting out a 429 as ThrottleWait decides: a stated Retry-After is
 // honoured, an unstated one backs off 1.5 s, 3 s, ..., and a wait the call cannot afford (longer than MaxRetryAfter, or not inside
-// ctx's deadline) ends the call at once. throttled and hint say that the endpoint ended on a 429 and when to come back.
-func (r *RPCHeaders) post429(ctx context.Context, ep string, reqs []rpcReq) (rs []rpcResp, throttled bool, hint time.Duration, err error) {
+// ctx's deadline) ends the call at once. throttled says that the endpoint ended on a 429; retryAfter is the provider's own Retry-After when it
+// stated one and ZERO when it did not (the backoff this call had reached is not a request of the provider and must not pass for one).
+func (r *RPCHeaders) post429(ctx context.Context, ep string, reqs []rpcReq) (rs []rpcResp, throttled bool, retryAfter time.Duration, err error) {
 	for try := 0; ; try++ {
 		if err = r.pace.wait(ctx, r.MinGap, r.clock); err != nil {
 			return nil, false, 0, err
@@ -226,6 +227,9 @@ func (r *RPCHeaders) post429(ctx context.Context, ep string, reqs []rpcReq) (rs 
 		r.pace.answered(r.MinGap, true)
 		wait, giveUp, h := ThrottleWait(he.RetryAfter, he.Stated, try, r.maxRetryAfter(), timeLeft(ctx))
 		if giveUp {
+			if !he.Stated {
+				h = 0
+			}
 			return nil, true, h, err
 		}
 		tm := time.NewTimer(wait)
@@ -241,12 +245,12 @@ func (r *RPCHeaders) post429(ctx context.Context, ep string, reqs []rpcReq) (rs 
 func (r *RPCHeaders) batch(ctx context.Context, reqs []rpcReq) ([][]byte, error) {
 	var fails []EndpointFailure
 	for _, ep := range r.Endpoints {
-		rs, throttled, hint, err := r.post429(ctx, ep, reqs)
+		rs, throttled, retryAfter, err := r.post429(ctx, ep, reqs)
 		name := (&HTTPSource{Base: ep}).Name()
 		if err != nil {
 			f := EndpointFailure{Endpoint: name, Op: "headers", Reason: ethrpc.RedactText(err.Error())}
 			if throttled {
-				f.Throttled, f.RetryAfter = true, hint
+				f.Throttled, f.RetryAfter = true, retryAfter
 			}
 			fails = append(fails, f)
 			continue

@@ -13,6 +13,7 @@ import (
 
 	"github.com/certen/independant-validator/pkg/ethrpc"
 	"github.com/certen/independant-validator/pkg/finality"
+	"github.com/certen/independant-validator/pkg/metrics"
 )
 
 // RB12-SEPOLIA-SPINE (live defect F6, 2026-10-23): the execution-header spine of an eth-sepolia/finalized/v1 proof is every header from the
@@ -48,6 +49,8 @@ const (
 	SpineCacheBytes = 24 << 20
 	// SpineResumeDelay is the time between two attempts of a spine that is making progress.
 	SpineResumeDelay = 2 * time.Second
+	// SpineMinReserve is the least time of a deadline kept back for assembling and verifying once the spine is complete.
+	SpineMinReserve = 10 * time.Second
 	// SpineErrorBase and SpineErrorMax bound the wait after an attempt that fetched nothing: base, doubled per such attempt in a row.
 	SpineErrorBase = 30 * time.Second
 	SpineErrorMax  = 15 * time.Minute
@@ -130,9 +133,22 @@ func BudgetAllows(spent, longest, budget time.Duration) bool {
 	return budget > 0 && spent+longest <= budget
 }
 
+// AttemptReserve is the part of a deadline kept back for assembling and verifying the evidence: a fifth of what is left, at least
+// SpineMinReserve. A context without a deadline (left < 0) keeps nothing back.
+func AttemptReserve(left time.Duration) time.Duration {
+	if left < 0 {
+		return 0
+	}
+	r := left / 5
+	if r < SpineMinReserve {
+		r = SpineMinReserve
+	}
+	return r
+}
+
 // AttemptBudget is the time an attempt may spend on new fetches: cap (DefaultSpineBudget when zero), and, when the caller's context has a
-// deadline (left >= 0), never more than what is left of it minus a reserve for assembling and verifying (a fifth, at least 10 s). A
-// context with less than that left allows no new work at all: the attempt still reads what is kept.
+// deadline (left >= 0), never more than what is left of it minus AttemptReserve. A context with less than that left allows no new work at
+// all: the attempt still reads what is kept.
 func AttemptBudget(cap, left time.Duration) time.Duration {
 	if cap <= 0 {
 		cap = DefaultSpineBudget
@@ -140,10 +156,7 @@ func AttemptBudget(cap, left time.Duration) time.Duration {
 	if left < 0 {
 		return cap
 	}
-	reserve := left / 5
-	if reserve < 10*time.Second {
-		reserve = 10 * time.Second
-	}
+	reserve := AttemptReserve(left)
 	if left <= reserve {
 		return 0
 	}
@@ -151,6 +164,13 @@ func AttemptBudget(cap, left time.Duration) time.Duration {
 		return b
 	}
 	return cap
+}
+
+// FetchFits says whether one more fetch, expected to last as long as the longest so far, still ends with the reserve intact: what the
+// deadline has left (negative: no deadline) must cover the reserve and that fetch. It is checked in addition to the budget, which is
+// measured in the prover's own clock and per leg, so that however many legs wait for each other none of them runs into the deadline.
+func FetchFits(left, reserve, longest time.Duration) bool {
+	return left < 0 || left >= reserve+longest
 }
 
 // PauseKind is why an attempt stopped before the spine was complete.
@@ -321,7 +341,7 @@ func (c *spineCache) get(k spineKey) (*spineEntry, bool) {
 	return e, ok
 }
 
-// put keeps e under k, dropping the oldest entries to stay within the byte bound. An entry larger than the bound is not kept.
+// put keeps e under k, dropping the OLDEST INSERTED entries (first in, first out; a get does not refresh an entry) to stay within the byte bound. An entry larger than the bound is not kept.
 func (c *spineCache) put(k spineKey, e *spineEntry) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -377,10 +397,14 @@ func (l *spineLocks) acquire(ctx context.Context, k spineKey) (release func(), e
 		l.mu.Unlock()
 	}
 	select {
-	case e.ch <- struct{}{}:
-	case <-ctx.Done():
-		drop()
-		return nil, ctx.Err()
+	case e.ch <- struct{}{}: // free: taken whatever the context says
+	default:
+		select {
+		case e.ch <- struct{}{}:
+		case <-ctx.Done():
+			drop()
+			return nil, ctx.Err()
+		}
 	}
 	var once sync.Once
 	return func() { once.Do(func() { <-e.ch; drop() }) }, nil
@@ -394,7 +418,9 @@ type spineCore struct {
 	mu     sync.Mutex
 	heads  map[[32]byte][]byte // finalized-head headers by hash (immutable, so safe to keep)
 	order  [][32]byte
-	stalls map[[32]byte]int // legs (by block hash) whose last attempts fetched nothing, and how many in a row
+	stalls map[[32]byte]int // legs (by block hash) whose last attempts kept no new chunk, and how many in a row
+	// awaiting are the legs whose latest attempt ended in awaiting_spine.
+	awaiting map[[32]byte]struct{}
 }
 
 func newSpineCore() *spineCore { return &spineCore{chunks: spineCache{cap: SpineCacheBytes}} }
@@ -423,28 +449,48 @@ func (c *spineCore) putHead(h [32]byte, raw []byte) {
 	c.order = append(c.order, h)
 }
 
-// noteAttempt records the outcome of an attempt for the leg and returns the number of attempts in a row before it that fetched nothing.
-func (c *spineCore) noteAttempt(leg [32]byte, progressed bool, kind PauseKind) int {
+// noteAttempt records the outcome of an attempt that ended in the progress state and returns the number of attempts in a row before it that
+// kept no new chunk. progressed is true when the attempt fetched at least one chunk that is kept (the window under the head is never kept,
+// it moves with the head, so fetching only that is no progress).
+func (c *spineCore) noteAttempt(leg [32]byte, progressed bool) int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.awaiting == nil {
+		c.awaiting = map[[32]byte]struct{}{}
+	}
+	c.awaiting[leg] = struct{}{}
+	n := 0
 	if progressed {
 		delete(c.stalls, leg)
-		return 0
-	}
-	n := c.stalls[leg]
-	if kind != PauseBudget {
+	} else {
+		n = c.stalls[leg]
 		if c.stalls == nil || len(c.stalls) >= maxStallKeys {
 			c.stalls = map[[32]byte]int{}
 		}
 		c.stalls[leg] = n + 1
 	}
+	c.publishLocked()
 	return n
 }
 
 func (c *spineCore) finished(leg [32]byte) {
 	c.mu.Lock()
 	delete(c.stalls, leg)
+	delete(c.awaiting, leg)
+	c.publishLocked()
 	c.mu.Unlock()
+}
+
+// publishLocked sets the two gauges: the legs whose latest attempt ended in awaiting_spine, and the longest run of attempts without a new
+// kept chunk any of them is in (the alert: certen_finality_spine_stalled_attempts_max). One prover per process.
+func (c *spineCore) publishLocked() {
+	most := 0
+	for _, n := range c.stalls {
+		if n > most {
+			most = n
+		}
+	}
+	metrics.SetFinalitySpineLegs(len(c.awaiting), most)
 }
 
 // ---- one attempt ----
@@ -469,9 +515,12 @@ type spineRun struct {
 	longest time.Duration // the longest single fetch of this attempt
 	have    int
 	need    int
-	fetched int // headers fetched in this attempt
-	reused  int // chunks read from the process cache or the store
-	chunks  int // chunks fetched
+	reserve time.Duration // the part of the deadline kept back for assembling (0: no deadline)
+	fetched int           // headers fetched in this attempt
+	kept    int           // headers fetched in this attempt that belong to chunks which are kept (the progress that counts)
+	reused  int           // chunks read from the process cache or the store
+	reusedH int           // headers in those chunks
+	chunks  int           // chunks fetched
 }
 
 func (p *Prover) spineCore() *spineCore {
@@ -483,7 +532,8 @@ func (p *Prover) spineCore() *spineCore {
 // leg block. When the walk stops early it returns the progress state (finality_pending{awaiting_spine}) and no spine; a chunk that is not
 // what its address says is an error that names it (finality_spine_row_invalid).
 func (p *Prover) spineFor(ctx context.Context, leg finality.BlockRef, c candidate) ([][]byte, *finality.PendingState, error) {
-	r := &spineRun{p: p, sc: p.spineCore(), ctx: ctx, leg: leg, budget: AttemptBudget(p.SpineBudget, timeLeft(ctx))}
+	left := timeLeft(ctx)
+	r := &spineRun{p: p, sc: p.spineCore(), ctx: ctx, leg: leg, budget: AttemptBudget(p.SpineBudget, left), reserve: AttemptReserve(left)}
 	r.need = 1
 	if c.execNumber > leg.Number {
 		r.need = int(c.execNumber-leg.Number) + 1
@@ -492,13 +542,22 @@ func (p *Prover) spineFor(ctx context.Context, leg finality.BlockRef, c candidat
 	if err == nil {
 		r.sc.finished(leg.Hash)
 		r.logDone()
+		r.count("complete")
 		return spine, nil, nil
 	}
 	var sp *spinePause
 	if errors.As(err, &sp) {
 		return nil, r.pending(sp), nil
 	}
+	r.count("failed")
 	return nil, nil, err
+}
+
+// count adds the attempt and its headers to the spine metrics.
+func (r *spineRun) count(outcome string) {
+	metrics.IncFinalitySpineAttempt(outcome)
+	metrics.AddFinalitySpineHeaders("fetched", r.fetched)
+	metrics.AddFinalitySpineHeaders("reused", r.reusedH)
 }
 
 func (r *spineRun) logf(format string, args ...any) {
@@ -513,7 +572,8 @@ func (r *spineRun) logDone() {
 }
 
 func (r *spineRun) pending(sp *spinePause) *finality.PendingState {
-	stalls := r.sc.noteAttempt(r.leg.Hash, r.fetched > 0, sp.kind)
+	stalls := r.sc.noteAttempt(r.leg.Hash, r.kept > 0)
+	r.count([]string{"budget", "throttled", "error"}[sp.kind])
 	next := r.p.now().Add(PauseAfter(sp.kind, sp.retryAfter, stalls)).UTC()
 	j := map[string]any{"have": uint64(r.have), "need": uint64(r.need), "next_attempt_at": next.Format(time.RFC3339)}
 	if sp.cause != "" {
@@ -626,27 +686,40 @@ func (r *spineRun) key(sp Span, want [32]byte) finality.CaptureKey {
 	return finality.CaptureKey{Chain: finality.ChainSepolia, L1Block: sp.End, L1Hash: want, Item: SpineItem(sp.Count())}
 }
 
-// span returns the checked chunk for sp whose last header has hash want: from the process, from the store, or from the provider.
+// canFetch says whether another fetch may start: the attempt's budget must admit it (BudgetAllows) and the deadline must still have the
+// reserve and a fetch as long as the longest so far (FetchFits).
+func (r *spineRun) canFetch() bool {
+	return BudgetAllows(r.spent, r.longest, r.budget) && FetchFits(timeLeft(r.ctx), r.reserve, r.longest)
+}
+
+func (r *spineRun) budgetPause(why string) *spinePause {
+	return &spinePause{kind: PauseBudget, cause: fmt.Sprintf("the attempt's budget of %s for new work is spent (%s)", r.budget.Round(time.Second), why)}
+}
+
+// span returns the checked chunk for sp whose last header has hash want: from the process, from the store, or from the provider. A kept
+// row that fails its check is a MISS, not a stop: the table is insert-only, so a wrong row can never be corrected, and a leg must not be
+// blocked by it for ever. The chunk is then fetched, authenticated by the same hash chain, and kept in the process only.
 func (r *spineRun) span(sp Span, want [32]byte) (*spineEntry, error) {
 	k := spineKey{End: sp.End, Top: want, Count: sp.Count()}
 	e, ok := r.sc.chunks.get(k)
-	if ok {
-		r.reused++
-	} else if sp.Stored && r.p.Store != nil {
+	if !ok && sp.Stored && r.p.Store != nil {
 		enc, found, err := r.p.Store.Get(r.ctx, r.key(sp, want))
 		if err != nil {
 			return nil, r.failed("reading a kept spine chunk", err)
 		}
 		if found {
-			if e, err = r.entry(enc, sp, want); err != nil {
-				return nil, err
+			if got, f := r.entry(enc, sp, want); f != nil {
+				r.reportInvalid(sp, f)
+			} else {
+				e, ok = got, true
+				r.sc.chunks.put(k, e)
 			}
-			r.sc.chunks.put(k, e)
-			r.reused++
-			ok = true
 		}
 	}
-	if !ok {
+	if ok {
+		r.reused++
+		r.reusedH += sp.Count()
+	} else {
 		var err error
 		if e, err = r.fetch(sp, want, k); err != nil {
 			return nil, err
@@ -658,36 +731,83 @@ func (r *spineRun) span(sp Span, want [32]byte) (*spineEntry, error) {
 	return e, nil
 }
 
-// entry checks stored bytes against the address they were read from. A fault is a named state, not a pause: the row is wrong.
-func (r *spineRun) entry(enc []byte, sp Span, want [32]byte) (*spineEntry, error) {
+// entry checks stored bytes against the address they were read from.
+func (r *spineRun) entry(enc []byte, sp Span, want [32]byte) (*spineEntry, *spineFault) {
 	hs, f := decodeSpan(enc)
 	if f != nil {
-		return nil, spineRowInvalid(sp, f)
+		return nil, f
 	}
 	parent, f := checkSpan(hs, sp, want)
 	if f != nil {
-		return nil, spineRowInvalid(sp, f)
+		return nil, f
 	}
 	return &spineEntry{enc: enc, hs: hs, parent: parent}, nil
 }
 
-// fetch gets sp from the provider (new work, counted against the attempt's budget), checks that it chains to want, keeps it and returns it.
-func (r *spineRun) fetch(sp Span, want [32]byte, k spineKey) (*spineEntry, error) {
-	if !BudgetAllows(r.spent, r.longest, r.budget) {
-		return nil, &spinePause{kind: PauseBudget, cause: fmt.Sprintf("the attempt's budget of %s for new work is spent", r.budget.Round(time.Second))}
+// reportInvalid makes a kept row that is not what its key says visible: the named state in the log and a counter. Nothing is written
+// over the row (the table refuses it) and it is not read again by this process, which holds the authenticated chunk.
+func (r *spineRun) reportInvalid(sp Span, f *spineFault) {
+	metrics.IncFinalitySpineRowInvalid(f.Reason)
+	r.logf("[FINALITY] sepolia spine: a kept chunk is not what its key says and is replaced from the provider in this process only (the table is insert-only): %s", spineRowInvalid(sp, f).Error())
+}
+
+// callContext bounds one provider call: when the caller has a deadline, to what is left of the attempt's budget plus half the reserve, so
+// that a call that runs far longer than expected ends before the deadline and the attempt can still report its progress.
+func (r *spineRun) callContext() (context.Context, context.CancelFunc) {
+	if _, ok := r.ctx.Deadline(); !ok {
+		return r.ctx, func() {}
 	}
-	rel, err := r.sc.locks.acquire(r.ctx, k)
+	left := r.budget - r.spent
+	if left < 0 {
+		left = 0
+	}
+	return context.WithTimeout(r.ctx, left+r.reserve/2)
+}
+
+// fetch gets sp from the provider (new work, counted against the attempt's budget), checks that it chains to want, keeps it and returns it.
+// The time spent waiting for another leg's fetch of the same chunk is time of this attempt and counts against its budget as well.
+func (r *spineRun) fetch(sp Span, want [32]byte, k spineKey) (*spineEntry, error) {
+	if !r.canFetch() {
+		return nil, r.budgetPause("before fetching headers " + fmt.Sprint(sp.Start, "..", sp.End))
+	}
+	wctx, cancel := r.ctx, context.CancelFunc(func() {})
+	if _, ok := r.ctx.Deadline(); ok {
+		left := r.budget - r.spent
+		if left < 0 {
+			left = 0
+		}
+		wctx, cancel = context.WithTimeout(r.ctx, left)
+	}
+	w0 := r.p.now()
+	rel, err := r.sc.locks.acquire(wctx, k)
+	cancel()
+	if d := r.p.now().Sub(w0); d > 0 {
+		r.spent += d
+	}
 	if err != nil {
-		return nil, r.failed("waiting for another leg's fetch of the same chunk", err)
+		if r.ctx.Err() != nil {
+			return nil, r.failed("waiting for another leg's fetch of the same chunk", err)
+		}
+		return nil, r.budgetPause("waiting for another leg's fetch of the same chunk")
 	}
 	defer rel()
 	if e, ok := r.sc.chunks.get(k); ok { // another leg fetched it while this one waited
 		r.reused++
+		r.reusedH += sp.Count()
 		return e, nil
 	}
+	if !r.canFetch() {
+		return nil, r.budgetPause("after waiting for another leg's fetch")
+	}
+	cctx, ccancel := r.callContext()
 	t0 := r.p.now()
-	hs, err := r.p.Exec.HeadersByNumber(r.ctx, sp.Start, sp.End)
+	hs, err := r.p.Exec.HeadersByNumber(cctx, sp.Start, sp.End)
 	r.note(t0)
+	outlasted := err != nil && cctx.Err() != nil && r.ctx.Err() == nil
+	ccancel()
+	if outlasted {
+		return nil, r.budgetPause(fmt.Sprintf("the fetch of headers %d..%d outlasted it", sp.Start, sp.End))
+	}
 	if err != nil {
 		return nil, r.failed(fmt.Sprintf("fetching headers %d..%d", sp.Start, sp.End), err)
 	}
@@ -701,11 +821,16 @@ func (r *spineRun) fetch(sp Span, want [32]byte, k spineKey) (*spineEntry, error
 	e := &spineEntry{enc: enc, hs: dec, parent: parent}
 	r.sc.chunks.put(k, e) // in process first: a store that fails now loses no progress
 	r.fetched += sp.Count()
+	if sp.Stored {
+		r.kept += sp.Count()
+	}
 	r.chunks++
 	if sp.Stored && r.p.Store != nil {
 		if err := r.p.Store.Put(r.ctx, r.key(sp, want), enc); err != nil {
 			if errors.Is(err, finality.ErrCaptureConflict) {
-				return nil, spineRowInvalid(sp, &spineFault{Reason: SpineRowConflict})
+				// the table holds other bytes under this key and refuses to change them; the chunk in hand is authenticated, so it is used
+				r.reportInvalid(sp, &spineFault{Reason: SpineRowConflict})
+				return e, nil
 			}
 			return nil, r.failed("keeping a spine chunk", err)
 		}

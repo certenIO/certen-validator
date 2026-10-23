@@ -190,7 +190,7 @@ func TestRPCHeadersHandsBackARetryAfterItCannotWaitOut(t *testing.T) {
 		{"longer than the default patience", "120", 0, 20 * time.Second, 120 * time.Second},
 		{"longer than the configured patience", "3", 2 * time.Second, 20 * time.Second, 3 * time.Second},
 		{"longer than the deadline has left", "10", 0, time.Second, 10 * time.Second},
-		{"unstated, backoff beyond the deadline", "", 0, time.Second, Backoff429(0)},
+		{"unstated, backoff beyond the deadline: no Retry-After is reported", "", 0, time.Second, 0},
 	} {
 		srv, calls, _, _, topN := slowDownServer(t, 100, c.hdr)
 		r := &RPCHeaders{Endpoints: []string{srv.URL}, BatchSize: 4, MaxRetryAfter: c.maxRA}

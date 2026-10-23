@@ -110,9 +110,9 @@ func TestADayOldLegCompletesInThePlannedNumberOfAttemptsWithTheProgressStateBetw
 	}
 }
 
-// A stored chunk that is not what its address says never reaches the verifier: the build fails by name, no addendum is returned. And the
-// verifier is independently the last line: the same corruption put into evidence by hand is refused as a broken header chain.
-func TestACorruptedKeptChunkNeverVerifiesAndTheVerifierRefusesTheSameCorruption(t *testing.T) {
+// A corrupted kept chunk is replaced from the provider (the evidence is still the recorded evidence), never used; and the verifier is
+// independently the last line: the same substitution put into evidence by hand is refused as a broken header chain.
+func TestACorruptedKeptChunkIsReplacedAndTheVerifierRefusesTheSameCorruption(t *testing.T) {
 	l := loadRecorded(t, "gloas_period")
 	store := finality.NewMemCaptureStore()
 	if add, pend, err := recordedProver(t, l, recordedModel(l, newClock(), 0, 0), store, nil, 0).BuildLeg(context.Background(), l.ref); err != nil || add == nil || pend != nil {
@@ -135,11 +135,16 @@ func TestACorruptedKeptChunkNeverVerifiesAndTheVerifierRefusesTheSameCorruption(
 	}
 	win[9] = sibling
 	bad := replaced(t, store, k, encodeSpan(win))
-	add, pend, err := recordedProver(t, l, recordedModel(l, newClock(), 0, 0), bad, nil, 0).BuildLeg(context.Background(), l.ref)
-	if add != nil || pend != nil {
-		t.Fatal("evidence or a pending state came back from a corrupted chunk")
+	var logs logSink
+	p := recordedProver(t, l, recordedModel(l, newClock(), 0, 0), bad, nil, 0)
+	p.Logf = logs.Logf
+	add, pend, err := p.BuildLeg(context.Background(), l.ref)
+	if err != nil || pend != nil || add == nil || !bytes.Equal(add.Evidence, l.ev) {
+		t.Fatalf("the corrupted row blocked the leg or changed its evidence: add %v pend %v err %v", add != nil, pend, err)
 	}
-	isNamed(t, err, CodeSpineRowInvalid, SpineRowNotChained)
+	if !logs.has(CodeSpineRowInvalid+"{") || !logs.has(SpineRowNotChained) {
+		t.Fatalf("the corrupted row was not reported: %v", logs.lines)
+	}
 
 	// the same substitution in the evidence itself: the registered verifier refuses it
 	body := l.body
