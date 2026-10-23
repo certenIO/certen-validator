@@ -125,6 +125,9 @@ type UpgraderConfig struct {
 	// Go heap in use is above HeapGate(budget) (a pass-level state, logged and counted), so the process cannot be driven to the host's
 	// OOM killer by legs it has not started yet.
 	Memory *MemoryBudget
+	// GaugeEvery is how often the memory gauges (heap in use, budget, reserved) are refreshed between passes (default 5s): a pass lasts as
+	// long as its slowest leg, and an alert on the heap must not wait for it.
+	GaugeEvery time.Duration
 	// HeapInUse reads the Go heap in use (default: runtime.MemStats.HeapInuse, sampled at most once a second); GC is run (default
 	// runtime.GC) once before a pass is held back, because the figure may be garbage that has not been collected. Tests replace both.
 	HeapInUse   func() uint64
@@ -168,6 +171,7 @@ func (c UpgraderConfig) withDefaults() UpgraderConfig {
 	def(&c.FailureRetry, 5*time.Minute)
 	def(&c.BrokenRetry, time.Hour)
 	def(&c.MaxFailureRetry, 6*time.Hour)
+	def(&c.GaugeEvery, 5*time.Second)
 	if c.Memory == nil {
 		c.Memory = NewMemoryBudget(DefaultMemoryBudget)
 	}
@@ -316,6 +320,8 @@ type PassReport struct {
 
 // Run passes every Interval until ctx is cancelled, and returns when the pass in flight has stopped.
 func (u *Upgrader) Run(ctx context.Context) {
+	u.publishMemory(0) // the budget and heap gauges exist from the start, not from the end of the first pass
+	go u.publishMemoryEvery(ctx)
 	t := time.NewTimer(0)
 	defer t.Stop()
 	defer u.bg.Wait() // the attempts a pass detached stop with ctx (each is bounded by BuildTimeout and by ctx)
@@ -335,6 +341,21 @@ func (u *Upgrader) Run(ctx context.Context) {
 		}
 		u.announceGaps(rep)
 		t.Reset(u.cfg.Interval)
+	}
+}
+
+// publishMemoryEvery keeps the memory gauges current on a ticker of its own until ctx ends (RB12-F12: they were written only at the end of
+// a pass and read 0 for as long as a pass lasted).
+func (u *Upgrader) publishMemoryEvery(ctx context.Context) {
+	t := time.NewTicker(u.cfg.GaugeEvery)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			u.publishMemory(0)
+		}
 	}
 }
 

@@ -147,6 +147,7 @@ func (b *MemoryBudget) acquire(ctx context.Context, t *ticket, n int64) (granted
 		}
 		if b.used+n <= b.limit {
 			b.used += n
+			metrics.SetFinalityMemoryReserved(b.used)
 			if t != nil {
 				t.held += n
 				t.victim = false
@@ -205,6 +206,7 @@ func (b *MemoryBudget) refusal(chain uint64, what string, n, used int64) error {
 func (b *MemoryBudget) give(t *ticket, n int64) {
 	b.mu.Lock()
 	b.used -= n
+	metrics.SetFinalityMemoryReserved(b.used)
 	if t != nil {
 		t.held -= n
 	}
@@ -235,6 +237,7 @@ func (b *MemoryBudget) leave(t *ticket, n int64) (finished uint64, yielded bool)
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.used -= n
+	metrics.SetFinalityMemoryReserved(b.used)
 	t.held -= n
 	b.stopWait(t)
 	delete(b.tickets, t)
