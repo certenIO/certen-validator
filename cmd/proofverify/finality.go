@@ -63,6 +63,9 @@ func reportFinality(ctx context.Context, w io.Writer, db *sql.DB, id uuid.UUID, 
 		fmt.Fprintf(w, "FAILED (finality)  %s\n  the bundle's L6 settlement evidence does not verify: %v\n", id, err)
 		return exitFailed
 	}
+	if settlement.Unrecorded {
+		fmt.Fprint(w, unrecordedNote)
+	}
 	chain, err := repo.Chain(ctx, id.String())
 	if err != nil {
 		fmt.Fprintf(w, "FAILED (finality)  %s\n  reading the stored addenda: %v\n", id, err)
@@ -124,6 +127,9 @@ type legSettlement struct {
 	chain  uint64
 	s      *ethproof.Settlement
 	source string
+	// unrecorded: the stored proof row does not record its settlement (settlement_tx_hash / settlement_block_number NULL), so the
+	// bundle's evidence is bound to the proof by its custody hash only and its tx and block were not cross-checked.
+	unrecorded bool
 }
 
 // settlementFromOutcomeFile reads an exported outcome evidence file (execution.OutcomeEvidence) and returns the Settlement of the
@@ -189,7 +195,7 @@ func settlementFromDB(ctx context.Context, dsn, proofID string) (*legSettlement,
 	if err != nil {
 		return nil, err
 	}
-	return &legSettlement{chain: ref.Chain, s: st.Included, source: "the bundle of proof " + proofID}, nil
+	return &legSettlement{chain: ref.Chain, s: st.Included, source: "the bundle of proof " + proofID, unrecorded: st.Unrecorded}, nil
 }
 
 // printReport writes one leg's per-statement S7 verdicts and returns the leg's exit code.
@@ -285,3 +291,8 @@ func reportPinsSelfcheck(out, errw io.Writer, pins *finality.Pins) int {
 		len(e.Anchors), e.Anchors[0].Period, last.Period, hash, src)
 	return exitVerified
 }
+
+// unrecordedNote is printed when the stored proof row does not record its settlement yet (settlement_tx_hash or
+// settlement_block_number is NULL): the bundle was bound to the proof by its custody hash, and the settlement was not
+// cross-checked against the row. It is a statement about the stored row and does not change the verdict or the portable section.
+const unrecordedNote = "  S7  settlement columns not recorded: the bundle is bound to the proof by its custody hash, tx/block not cross-checked\n"
