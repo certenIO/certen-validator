@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"runtime"
 	"sync"
 	"time"
 
@@ -111,8 +112,24 @@ type UpgraderConfig struct {
 	// V2_SPEC_S7 8.3 constant that keeps such a level from being polled in a tight loop. A level WITH an eta is not asked
 	// before it, whatever this value is.
 	PendingRetry time.Duration
-	FailureRetry time.Duration // next ask of a level after a named build failure or refusal (default 5m, at least MinPoll)
-	BrokenRetry  time.Duration // next attempt after a stored chain failed verification (default 1h, at least MinPoll)
+	FailureRetry time.Duration // next ask of a level after its FIRST named build failure or refusal (default 5m, at least MinPoll)
+	// MaxFailureRetry caps the exponential back-off of a (leg, level) that keeps failing (default 6h): the n-th consecutive failure
+	// waits FailureRetry*2^(n-1), never more than this. A leg whose evidence cannot be built inside BuildTimeout (RB12-F1) is asked
+	// ever less often and its status row says when it is asked next.
+	MaxFailureRetry time.Duration
+	// SuspectSlots bounds how many of the Concurrency slots legs with a failed earlier attempt (suspects) may hold at once (default
+	// Concurrency/2, at least 1), so a backlog of legs that time out can never take every slot from a leg that has not failed.
+	SuspectSlots int
+	// Memory is the per-process budget of the builders' in-flight working sets (EnvMemoryBudget; default DefaultMemoryBudget). Every build
+	// runs under it: a reservation it cannot cover is the named state finality_memory_budget_exceeded. New attempts also wait while the
+	// Go heap in use is above HeapGate(budget) (a pass-level state, logged and counted), so the process cannot be driven to the host's
+	// OOM killer by legs it has not started yet.
+	Memory *MemoryBudget
+	// HeapInUse reads the Go heap in use (default: runtime.MemStats.HeapInuse, sampled at most once a second); GC is run (default
+	// runtime.GC) once before a pass is held back, because the figure may be garbage that has not been collected. Tests replace both.
+	HeapInUse   func() uint64
+	GC          func()
+	BrokenRetry time.Duration // next attempt after a stored chain failed verification (default 1h, at least MinPoll)
 	// StoreTimeout bounds every call to the leg source, the addendum store's reads and the status store; a call that ignores
 	// its context is abandoned at the deadline (default 30s), so a hung database stalls neither the pass nor shutdown.
 	StoreTimeout time.Duration
@@ -150,10 +167,36 @@ func (c UpgraderConfig) withDefaults() UpgraderConfig {
 	def(&c.PendingRetry, 2*time.Minute)
 	def(&c.FailureRetry, 5*time.Minute)
 	def(&c.BrokenRetry, time.Hour)
+	def(&c.MaxFailureRetry, 6*time.Hour)
+	if c.Memory == nil {
+		c.Memory = NewMemoryBudget(DefaultMemoryBudget)
+	}
+	if c.HeapInUse == nil {
+		hs := &heapSampler{every: time.Second}
+		c.HeapInUse = hs.read
+		if c.GC == nil {
+			c.GC = func() { runtime.GC(); hs.reset() }
+		}
+	}
+	if c.GC == nil {
+		c.GC = runtime.GC
+	}
+	if c.SuspectSlots <= 0 {
+		c.SuspectSlots = c.Concurrency / 2
+	}
+	if c.SuspectSlots < 1 {
+		c.SuspectSlots = 1
+	}
+	if c.SuspectSlots > c.Concurrency {
+		c.SuspectSlots = c.Concurrency
+	}
 	for _, d := range []*time.Duration{&c.Interval, &c.PendingRetry, &c.FailureRetry, &c.BrokenRetry} {
 		if *d < MinPoll {
 			*d = MinPoll
 		}
+	}
+	if c.MaxFailureRetry < c.FailureRetry {
+		c.MaxFailureRetry = c.FailureRetry
 	}
 	if c.Logf == nil {
 		c.Logf = func(string, ...any) {}
@@ -206,6 +249,16 @@ type Upgrader struct {
 	quiet       map[string]uint64      // proof id -> chain, for the legs that are quiet because their bundle holds no execution proof
 	unrecorded  map[string]uint64      // proof id -> chain, for the legs whose settlement evidence was last served before the proof row recorded the settlement
 	noProverAt  map[uint64]bool        // chains whose no-prover gauge is currently non-zero (reset when they drop out)
+	fails       map[levelKey]int       // (proof id, level) -> consecutive failed asks (the back-off exponent); a leg with any is a suspect
+	inflight    map[string]bool        // proof ids whose attempt is running (a suspect's attempt outlives the pass that started it)
+	late        PassReport             // results of detached attempts that finished after their pass returned, merged into the next report
+
+	slots   chan struct{} // the Concurrency slots, shared by every pass
+	suspect chan struct{} // the SuspectSlots a suspect must also hold
+	bg      sync.WaitGroup
+
+	gcAt     time.Time // when the memory gate last collected
+	heapHigh bool      // whether the heap in use was at or above half of the gate at the last pass
 
 	// the counts Run last announced (Run is the only writer)
 	lastNoSettlement, lastUnrecorded int
@@ -226,11 +279,14 @@ func NewUpgrader(src LegSource, store AddendumStore, reg *Registry, pins *Pins, 
 	if src == nil || store == nil || reg == nil {
 		return nil, errors.New("finality: an upgrader needs a leg source, an addendum store and a registry")
 	}
+	c := cfg.withDefaults()
 	return &Upgrader{
-		src: src, store: store, reg: reg, pins: pins, cfg: cfg.withDefaults(),
+		src: src, store: store, reg: reg, pins: pins, cfg: c,
+		slots: make(chan struct{}, c.Concurrency), suspect: make(chan struct{}, c.SuspectSlots),
 		next: map[string]time.Time{}, levelAt: map[levelKey]time.Time{}, disabled: map[uint64]bool{},
 		complete: map[string]Level{}, stand: map[string]legStand{}, noProver: map[uint64]bool{},
 		noComponent: newBundleMemo(noComponentMemoCap), quiet: map[string]uint64{}, unrecorded: map[string]uint64{}, noProverAt: map[uint64]bool{},
+		fails: map[levelKey]int{}, inflight: map[string]bool{},
 	}, nil
 }
 
@@ -250,6 +306,9 @@ type PassReport struct {
 	Unusable     int // legs whose L6 evidence could not be loaded
 	NoSettlement int // legs whose newest bundle holds no execution proof (finality_included_unavailable): not a failure, not logged per leg, not read again until the proof has a newer bundle
 	Unrecorded   int // attempted legs whose settlement evidence was served while the proof row has no settlement_tx_hash or settlement_block_number yet
+	Deferred     int // suspect legs (an earlier ask failed) left for the next pass because every suspect slot was taken
+	MemoryHeld   int // due legs not started because the heap in use was above the memory gate (finality_memory_budget_exceeded, what=attempt)
+	InFlight     int // legs skipped because an attempt started by an earlier pass is still running
 	// SourceErr is a failure listing legs (the pass ended early).
 	SourceErr error
 }
@@ -258,35 +317,45 @@ type PassReport struct {
 func (u *Upgrader) Run(ctx context.Context) {
 	t := time.NewTimer(0)
 	defer t.Stop()
+	defer u.bg.Wait() // the attempts a pass detached stop with ctx (each is bounded by BuildTimeout and by ctx)
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
 		}
-		rep := u.RunOnce(ctx)
+		rep := u.runPass(ctx, true)
 		if rep.SourceErr != nil && ctx.Err() == nil {
 			u.cfg.Logf("[FINALITY] pass could not list settled legs: %v", rep.SourceErr)
 		}
 		if rep.Appended > 0 || rep.Failed > 0 || rep.Broken > 0 || rep.Unusable > 0 {
-			u.cfg.Logf("[FINALITY] pass: listed=%d attempts=%d appended=%d pending=%d failed=%d broken=%d conflict=%d unusable=%d complete=%d no_settlement=%d unrecorded=%d no_prover=%d",
-				rep.Listed, rep.Attempts, rep.Appended, rep.Pending, rep.Failed, rep.Broken, rep.Conflict, rep.Unusable, rep.Complete, rep.NoSettlement, rep.Unrecorded, rep.NoProver)
+			u.cfg.Logf("[FINALITY] pass: listed=%d attempts=%d appended=%d pending=%d failed=%d broken=%d conflict=%d unusable=%d complete=%d no_settlement=%d unrecorded=%d no_prover=%d deferred=%d in_flight=%d memory_held=%d heap_in_use=%d",
+				rep.Listed, rep.Attempts, rep.Appended, rep.Pending, rep.Failed, rep.Broken, rep.Conflict, rep.Unusable, rep.Complete, rep.NoSettlement, rep.Unrecorded, rep.NoProver, rep.Deferred, rep.InFlight, rep.MemoryHeld, u.cfg.HeapInUse())
 		}
 		u.announceGaps(rep)
 		t.Reset(u.cfg.Interval)
 	}
 }
 
-// RunOnce makes one pass over the settled legs. It honours ctx: when it is cancelled no new leg starts and the pass returns
-// as soon as the legs in flight have returned (each is bounded by BuildTimeout, StoreTimeout and by ctx).
-func (u *Upgrader) RunOnce(ctx context.Context) PassReport {
+// RunOnce makes one pass over the settled legs and returns when every attempt it started has finished. It honours ctx: when it
+// is cancelled no new leg starts and the pass returns as soon as the legs in flight have returned (each is bounded by BuildTimeout,
+// StoreTimeout and by ctx).
+func (u *Upgrader) RunOnce(ctx context.Context) PassReport { return u.runPass(ctx, false) }
+
+// runPass is one pass. With detach set (the Run loop), an attempt on a SUSPECT leg (an earlier ask of it failed or timed out) is not
+// waited for: it keeps its slots after the pass returns, the next pass skips that leg (InFlight) and lists the legs that appeared
+// meanwhile, so a leg whose evidence cannot be built inside BuildTimeout (RB12-F1) delays no other leg by more than the interval.
+// A suspect never takes more than SuspectSlots of the Concurrency slots (it is left for the next pass otherwise: Deferred), and the
+// legs are visited newest first, so a leg that has not failed always finds a slot ahead of the older legs behind it.
+func (u *Upgrader) runPass(ctx context.Context, detach bool) PassReport {
 	start := u.cfg.Now()
+	ctx = WithMemoryBudget(ctx, u.cfg.Memory) // every build of the pass reserves what it holds against the process budget
 	var rep PassReport
 	var mu sync.Mutex
 	var wg sync.WaitGroup
-	sem := make(chan struct{}, u.cfg.Concurrency)
 	listed := map[string]bool{}
 	noProver := map[uint64]int{}
+	u.mergeLate(&rep)
 
 	after := ""
 page:
@@ -322,33 +391,68 @@ page:
 				continue
 			case u.examinedWithoutComponent(ref):
 				// this very bundle was read and holds no execution proof: it is not fetched again until the proof has a newer one
+				mu.Lock()
 				rep.NoSettlement++
+				mu.Unlock()
 				continue
 			case !u.due(ref.ProofID):
 				rep.NotDue++
 				continue
+			case u.running(ref.ProofID):
+				rep.InFlight++
+				continue
+			case u.heapOver():
+				rep.MemoryHeld++ // the leg stays due; it is asked when the heap has come down
+				metrics.IncFinalityMemoryRefused(ref.Chain, "attempt")
+				continue
+			}
+			suspect := u.isSuspect(ref.ProofID)
+			if suspect {
+				select {
+				case u.suspect <- struct{}{}:
+				default:
+					rep.Deferred++ // every suspect slot is taken: the leg stays due and is asked in a later pass
+					continue
+				}
 			}
 			select {
-			case sem <- struct{}{}:
+			case u.slots <- struct{}{}:
 			case <-ctx.Done():
+				if suspect {
+					<-u.suspect
+				}
 				break page
 			}
-			wg.Add(1)
-			go func(ref LegRef) {
-				defer wg.Done()
-				defer func() { <-sem }()
+			u.setRunning(ref.ProofID, true)
+			rep.Attempts++
+			run := func(ref LegRef, suspect bool) legResult {
 				res := u.upgradeLeg(ctx, ref)
+				u.setRunning(ref.ProofID, false)
+				<-u.slots
+				if suspect {
+					<-u.suspect
+				}
+				return res
+			}
+			if suspect && detach {
+				u.bg.Add(1)
+				go func(ref LegRef) {
+					defer u.bg.Done()
+					res := run(ref, true)
+					u.mu.Lock()
+					addResult(&u.late, res)
+					u.mu.Unlock()
+				}(ref)
+				continue
+			}
+			wg.Add(1)
+			go func(ref LegRef, suspect bool) {
+				defer wg.Done()
+				res := run(ref, suspect)
 				mu.Lock()
-				rep.Attempts++
-				rep.Appended += res.appended
-				rep.Pending += b2i(res.pending != nil)
-				rep.Failed += b2i(res.failed)
-				rep.Broken += b2i(res.broken)
-				rep.Conflict += b2i(res.conflict)
-				rep.Unusable += b2i(res.unusable)
-				rep.NoSettlement += b2i(res.noSettlement)
+				addResult(&rep, res)
 				mu.Unlock()
-			}(ref)
+			}(ref, suspect)
 		}
 		if len(refs) < u.cfg.PageSize {
 			break
@@ -363,6 +467,7 @@ page:
 	rep.Unrecorded = len(u.unrecorded)
 	u.mu.Unlock()
 	u.publishGauges()
+	u.publishMemory(rep.MemoryHeld)
 	if g, ok := u.cfg.Recorder.(GapRecorder); ok {
 		g.UnrecordedSettlements(rep.Unrecorded)
 		if complete {
@@ -371,6 +476,153 @@ page:
 	}
 	u.cfg.Recorder.Pass(u.cfg.Now().Sub(start), u.cfg.Now())
 	return rep
+}
+
+// heapSampler reads runtime.MemStats.HeapInuse at most once per interval (ReadMemStats stops the world).
+type heapSampler struct {
+	every time.Duration
+	mu    sync.Mutex
+	at    time.Time
+	last  uint64
+}
+
+func (h *heapSampler) read() uint64 {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if now := time.Now(); h.at.IsZero() || now.Sub(h.at) >= h.every {
+		var m runtime.MemStats
+		runtime.ReadMemStats(&m)
+		h.last, h.at = m.HeapInuse, now
+	}
+	return h.last
+}
+
+func (h *heapSampler) reset() {
+	h.mu.Lock()
+	h.at = time.Time{}
+	h.mu.Unlock()
+}
+
+// heapOver reports whether the heap in use is above the memory gate (twice the budget). Before holding legs back it collects (at most
+// once a second) and reads again, because what is counted may be garbage.
+func (u *Upgrader) heapOver() bool {
+	gate := HeapGate(u.cfg.Memory.Limit())
+	if u.cfg.HeapInUse() <= gate {
+		return false
+	}
+	u.mu.Lock()
+	due := u.cfg.Now().Sub(u.gcAt) >= MinPoll
+	if due {
+		u.gcAt = u.cfg.Now()
+	}
+	u.mu.Unlock()
+	if !due {
+		return true
+	}
+	u.cfg.GC()
+	return u.cfg.HeapInUse() > gate
+}
+
+// publishMemory reports the heap in use, the budget and what is reserved to the metrics. It logs only when something is to be seen:
+// attempts were held back (the named state finality_memory_budget_exceeded, what=attempt), or the heap crossed half of the gate in
+// either direction. A routine pass with a small heap stays quiet; the figure is in the pass summary line and in the gauge.
+func (u *Upgrader) publishMemory(held int) {
+	heap := uint64(u.cfg.HeapInUse())
+	budget, used := u.cfg.Memory.Limit(), u.cfg.Memory.Used()
+	metrics.SetFinalityHeap(heap, budget, used)
+	high := heap >= HeapGate(budget)/2
+	u.mu.Lock()
+	changed := high != u.heapHigh
+	u.heapHigh = high
+	u.mu.Unlock()
+	switch {
+	case held > 0:
+		u.cfg.Logf("[FINALITY] %s{what=attempt,heap_in_use=%d,gate=%d,budget=%d,reserved=%d}: %d due legs were not started and stay due",
+			CodeMemoryBudget, heap, HeapGate(budget), budget, used, held)
+	case changed:
+		u.cfg.Logf("[FINALITY] memory: heap_in_use=%d reserved=%d budget=%d gate=%d high=%t", heap, used, budget, HeapGate(budget), high)
+	}
+}
+
+// addResult folds one attempt's outcome into a report (Attempts is counted when the attempt starts).
+func addResult(rep *PassReport, res legResult) {
+	rep.Appended += res.appended
+	rep.Pending += b2i(res.pending != nil)
+	rep.Failed += b2i(res.failed)
+	rep.Broken += b2i(res.broken)
+	rep.Conflict += b2i(res.conflict)
+	rep.Unusable += b2i(res.unusable)
+	rep.NoSettlement += b2i(res.noSettlement)
+}
+
+// mergeLate adds the outcomes of attempts that finished after the pass which started them had returned.
+func (u *Upgrader) mergeLate(rep *PassReport) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	l := u.late
+	u.late = PassReport{}
+	rep.Appended += l.Appended
+	rep.Pending += l.Pending
+	rep.Failed += l.Failed
+	rep.Broken += l.Broken
+	rep.Conflict += l.Conflict
+	rep.Unusable += l.Unusable
+	rep.NoSettlement += l.NoSettlement
+}
+
+func (u *Upgrader) running(id string) bool {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.inflight[id]
+}
+
+func (u *Upgrader) setRunning(id string, on bool) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if on {
+		u.inflight[id] = true
+		return
+	}
+	delete(u.inflight, id)
+}
+
+// isSuspect reports whether an earlier ask of the leg failed (and no later ask has succeeded or stated a pending).
+func (u *Upgrader) isSuspect(id string) bool {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	for _, l := range Levels {
+		if u.fails[levelKey{id, l}] > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// failDelay is the wait after the next failure of (leg, level): FailureRetry doubled once per earlier consecutive failure, never
+// above MaxFailureRetry. attempt is that failure's ordinal (1 for the first). Nothing is recorded until commitFail.
+func (u *Upgrader) failDelay(id string, target Level) (wait time.Duration, attempt int) {
+	u.mu.Lock()
+	n := u.fails[levelKey{id, target}]
+	u.mu.Unlock()
+	wait = u.cfg.FailureRetry
+	for i := 0; i < n && wait < u.cfg.MaxFailureRetry; i++ {
+		wait *= 2
+	}
+	if wait > u.cfg.MaxFailureRetry {
+		wait = u.cfg.MaxFailureRetry
+	}
+	return wait, n + 1
+}
+
+// commitFail records the outcome of one ask of (leg, level): a failure raises the back-off exponent, anything else clears it.
+func (u *Upgrader) commitFail(id string, target Level, failed bool, attempt int) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if failed {
+		u.fails[levelKey{id, target}] = attempt
+		return
+	}
+	delete(u.fails, levelKey{id, target})
 }
 
 func b2i(b bool) int {
@@ -467,10 +719,12 @@ func (u *Upgrader) levelDue(id string, target Level) bool {
 }
 
 // scheduleLevel sets the earliest next ask of one level to now+after (jitter only adds time).
-func (u *Upgrader) scheduleLevel(id string, target Level, after time.Duration) {
+func (u *Upgrader) scheduleLevel(id string, target Level, after time.Duration) time.Time {
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	u.levelAt[levelKey{id, target}] = u.cfg.Now().Add(u.cfg.Jitter(after))
+	at := u.cfg.Now().Add(u.cfg.Jitter(after))
+	u.levelAt[levelKey{id, target}] = at
+	return at
 }
 
 // scheduleLeg sets the leg's next attempt to the earliest next ask over the levels it still lacks; a missing level with no
@@ -513,6 +767,7 @@ func (u *Upgrader) record(id string, chain uint64, level Level, done bool) {
 		delete(u.next, id)
 		for _, l := range Levels {
 			delete(u.levelAt, levelKey{id, l})
+			delete(u.fails, levelKey{id, l})
 		}
 	}
 }
@@ -702,7 +957,9 @@ func (u *Upgrader) upgradeLeg(ctx context.Context, ref LegRef) (res legResult) {
 		if !u.levelDue(ref.ProofID, target) {
 			continue // the eta rule: not asked before the stated eta (or before PendingRetry when none was stated)
 		}
-		wait := time.Duration(-1) // next ask of this level; <0 = the level was stored
+		wait := time.Duration(-1)                                 // next ask of this level; <0 = the level was stored
+		failWait, failAttempt := u.failDelay(ref.ProofID, target) // the back-off of this ask if it fails (RB12-F1)
+		failed := false
 		var status *BuilderStatus
 		for _, p := range u.reg.Provers(ref.Chain) {
 			if c, ok := p.(Ceilinged); ok && c.Ceiling() < target {
@@ -721,10 +978,10 @@ func (u *Upgrader) upgradeLeg(ctx context.Context, ref LegRef) (res legResult) {
 				}
 				u.cfg.Recorder.BuildFailed(ref.Chain, codeOf(err))
 				logf("[FINALITY] leg %s chain %d: build of %s refused: %v", ref.ProofID, ref.Chain, target, err)
-				res.failed = true
+				res.failed, failed = true, true
 				s := BuilderStatusOf(ref.ProofID, ref.Chain, target, reached(), nil, err, false, u.cfg.Now())
 				status = &s
-				wait = minWait(wait, u.cfg.FailureRetry)
+				wait = minWait(wait, failWait)
 				continue // a refusal claims no level
 			}
 			if pd != nil {
@@ -765,19 +1022,19 @@ func (u *Upgrader) upgradeLeg(ctx context.Context, ref LegRef) (res legResult) {
 					wait = minWait(wait, u.cfg.Interval)
 				case named && n.Code != CodeBuildTimeout && n.Code != CodePanic:
 					// the registered Kind (or the chain checks) refused what the prover built: nothing was stored (class R)
-					res.failed = true
+					res.failed, failed = true, true
 					u.cfg.Recorder.BuildFailed(ref.Chain, n.Code)
 					logf("[FINALITY] leg %s chain %d: built %s evidence that does not verify: %v", ref.ProofID, ref.Chain, target, err)
 					s := BuilderStatusOf(ref.ProofID, ref.Chain, target, reached(), nil, err, true, u.cfg.Now())
 					status = &s
-					wait = minWait(wait, u.cfg.FailureRetry)
+					wait = minWait(wait, failWait)
 				default:
-					res.failed = true
+					res.failed, failed = true, true
 					u.cfg.Recorder.BuildFailed(ref.Chain, "store_write")
 					logf("[FINALITY] leg %s chain %d: appending the %s addendum: %v", ref.ProofID, ref.Chain, target, err)
 					s := BuilderStatusOf(ref.ProofID, ref.Chain, target, reached(), nil, err, false, u.cfg.Now())
 					status = &s
-					wait = minWait(wait, u.cfg.FailureRetry)
+					wait = minWait(wait, failWait)
 				}
 				continue
 			}
@@ -794,14 +1051,19 @@ func (u *Upgrader) upgradeLeg(ctx context.Context, ref LegRef) (res legResult) {
 			wait = -1
 			break // one addendum per level
 		}
+		u.commitFail(ref.ProofID, target, failed, failAttempt)
+		var nextAt time.Time
+		if wait >= 0 {
+			nextAt = u.scheduleLevel(ref.ProofID, target, wait)
+		}
 		if status != nil {
 			if status.Class == BuilderPending {
 				u.cfg.Recorder.Pending(ref.Chain, current)
 			}
+			if failed && !nextAt.IsZero() && (status.Class == BuilderUnavailable || status.Class == BuilderRefused) {
+				status.noteAttempt(failAttempt, nextAt)
+			}
 			u.putStatus(ctx, *status)
-		}
-		if wait >= 0 {
-			u.scheduleLevel(ref.ProofID, target, wait)
 		}
 	}
 
@@ -840,6 +1102,11 @@ func (u *Upgrader) build(ctx context.Context, p Prover, s *ethproof.Settlement, 
 		add *Addendum
 		pd  *PendingState
 	}
+	// everything the prover reads through the generic row loaders is reserved against the process budget and given back when the
+	// attempt ends (an abandoned prover keeps its reservation no longer than its own call: the hold is released on return)
+	hold := NewHold(ctx, p.Chain(), "build")
+	defer hold.Release()
+	ctx = WithHold(ctx, hold)
 	o, err := bounded(ctx, u.cfg.BuildTimeout, p.Chain(), "building the evidence", func(c context.Context) (out, error) {
 		add, pd, err := p.Build(c, s, have, target)
 		return out{add, pd}, err
@@ -922,7 +1189,7 @@ func Launch(ctx context.Context, enabled bool, src LegSource, store AddendumStor
 			u.announceDisabled(c)
 		}
 	}
-	cfg.Logf("[FINALITY] upgrader ENABLED (%s): concurrency=%d interval=%s chains=%v switched_off=%v", EnvEnabled, cfg.Concurrency, cfg.Interval, reg.Chains(), cfg.DisabledChains)
+	cfg.Logf("[FINALITY] upgrader ENABLED (%s): concurrency=%d interval=%s chains=%v switched_off=%v memory_budget=%d memory_gate=%d", EnvEnabled, cfg.Concurrency, cfg.Interval, reg.Chains(), cfg.DisabledChains, cfg.Memory.Limit(), HeapGate(cfg.Memory.Limit()))
 	StartCapturers(ctx, reg, SupervisorConfig{DisabledChains: cfg.DisabledChains, DisabledReasons: cfg.DisabledReasons, Logf: cfg.Logf})
 	go u.Run(ctx)
 	return u, nil

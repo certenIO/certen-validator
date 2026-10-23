@@ -53,7 +53,78 @@ func sortCaptureRows(rs []CaptureRow) {
 // builders ask of the store ("which L1 blocks did the capturer record this item for"). ListByRange matches an item PREFIX, so
 // the exact name is filtered here.
 func CaptureKeysOfItem(ctx context.Context, s CaptureStore, chain uint64, item string) ([]CaptureKey, error) {
+	return CaptureKeysOfItemIn(ctx, s, chain, 0, MaxCaptureBlock, item)
+}
+
+// CaptureCursorItem is the capture row that remembers how far a capture loop has scanned: keyed at the scanned block under the zero
+// hash, written once per tick, insert-only. The lowest such row is the end of the first range the loop scanned.
+const CaptureCursorItem = "runtime/cursor"
+
+// BlockBounder is the optional fast form of CaptureCoverageOf: a store that can answer "the lowest and the highest L1 block holding
+// exactly this item" without listing every row (the database store does, with one aggregate query).
+type BlockBounder interface {
+	BlockBounds(ctx context.Context, chain uint64, item string) (lo, hi uint64, ok bool, err error)
+}
+
+// CaptureCoverage is what the capture cursor rows of a chain say: the first scan of the capture loop ended at First (so the loop
+// scanned every block from First minus its first range on, and nothing before), and the latest scan ended at Last.
+type CaptureCoverage struct{ First, Last uint64 }
+
+// CaptureCoverageOf reads the coverage of the chain's capture loop. ok is false when the store holds no cursor row (a store filled by
+// a one-shot recorder, or a loop that never ticked): nothing is then known about its coverage and no builder may conclude anything
+// from it.
+func CaptureCoverageOf(ctx context.Context, s CaptureStore, chain uint64) (CaptureCoverage, bool, error) {
+	lo, hi, ok, err := BlockBoundsOf(ctx, s, chain, CaptureCursorItem)
+	return CaptureCoverage{First: lo, Last: hi}, ok, err
+}
+
+// BlockBoundsOf is the lowest and highest L1 block of the chain's rows of exactly item (BlockBounder when the store has it, else
+// the key listing: the same answer).
+func BlockBoundsOf(ctx context.Context, s CaptureStore, chain uint64, item string) (lo, hi uint64, ok bool, err error) {
+	if e, fast := s.(BlockBounder); fast {
+		return e.BlockBounds(ctx, chain, item)
+	}
 	ks, err := s.ListByRange(ctx, chain, 0, MaxCaptureBlock, item)
+	if err != nil {
+		return 0, 0, false, err
+	}
+	for _, k := range ks {
+		if k.Item != item {
+			continue
+		}
+		if !ok || k.L1Block < lo {
+			lo = k.L1Block
+		}
+		if !ok || k.L1Block > hi {
+			hi = k.L1Block
+		}
+		ok = true
+	}
+	return lo, hi, ok, nil
+}
+
+// BlockBounds implements BlockBounder.
+func (m *MemCaptureStore) BlockBounds(_ context.Context, chain uint64, item string) (lo, hi uint64, ok bool, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for k := range m.rows {
+		if k.Chain != chain || k.Item != item {
+			continue
+		}
+		if !ok || k.L1Block < lo {
+			lo = k.L1Block
+		}
+		if !ok || k.L1Block > hi {
+			hi = k.L1Block
+		}
+		ok = true
+	}
+	return lo, hi, ok, nil
+}
+
+// CaptureKeysOfItemIn is CaptureKeysOfItem restricted to the L1 blocks [from, to].
+func CaptureKeysOfItemIn(ctx context.Context, s CaptureStore, chain, from, to uint64, item string) ([]CaptureKey, error) {
+	ks, err := s.ListByRange(ctx, chain, from, to, item)
 	if err != nil {
 		return nil, err
 	}
@@ -80,6 +151,9 @@ func CaptureRowsOfItem(ctx context.Context, s CaptureStore, chain uint64, item s
 		}
 		if !ok {
 			return nil, fmt.Errorf("finality: capture row listed but not readable: %s", k)
+		}
+		if err := ReserveRow(ctx, len(b)); err != nil {
+			return nil, err
 		}
 		out = append(out, CaptureRow{CaptureKey: k, Bytes: b})
 	}

@@ -68,7 +68,7 @@ func (s statusSink) put(ctx context.Context, chain uint64, target finality.Level
 
 // cursorItem is the capture row that remembers how far a loop has scanned. It is keyed at the scanned block under the zero hash
 // (a cursor is about no particular block hash) and is insert-only like every capture row.
-const cursorItem = "runtime/cursor"
+const cursorItem = finality.CaptureCursorItem
 
 func readCursor(ctx context.Context, store finality.CaptureStore, chain uint64) (uint64, bool, error) {
 	keys, err := store.ListByRange(ctx, chain, 0, finality.MaxCaptureBlock, cursorItem)

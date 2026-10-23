@@ -206,7 +206,7 @@ func TestFinalityCaptureStoreIsInsertOnlyAndTheTableRefusesAnyOtherWriter(t *tes
 		}
 	})
 	t.Run("the store has Put and reads, and no method that changes or removes a row", func(t *testing.T) {
-		want := map[string]bool{"Put": true, "Get": true, "ListByBlock": true, "ListByRange": true}
+		want := map[string]bool{"Put": true, "Get": true, "ListByBlock": true, "ListByRange": true, "BlockBounds": true}
 		typ := reflect.TypeOf(store)
 		for i := 0; i < typ.NumMethod(); i++ {
 			if !want[typ.Method(i).Name] {
@@ -234,4 +234,60 @@ type commonCaptureStore interface {
 var (
 	_ commonCaptureStore    = (*FinalityCaptureStore)(nil)
 	_ finality.CaptureStore = (*FinalityCaptureStore)(nil)
+	_ finality.BlockBounder = (*FinalityCaptureStore)(nil)
 )
+
+// BlockBounds is the aggregate read behind finality.CaptureCoverageOf (RB12-F2): the lowest and highest L1 block of the chain's rows of
+// EXACTLY one item. It is a read like the others (the table stays insert-only), and its SQL is tested here against the real table.
+func TestFinalityCaptureBlockBoundsAreExactPerChainAndItem(t *testing.T) {
+	ctx := context.Background()
+	store := NewFinalityCaptureStore(NewClientFromDB(testDB))
+	chain := uint64(2_000_000_000 + time.Now().UnixNano()%1_000_000_000) // a chain id this run alone uses: the database outlives a run
+	other := chain + 1
+	put := func(c uint64, block uint64, h byte, item string) {
+		t.Helper()
+		if err := store.Put(ctx, key(c, block, h, item), []byte{h}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if lo, hi, ok, err := store.BlockBounds(ctx, chain, finality.CaptureCursorItem); err != nil || ok || lo != 0 || hi != 0 {
+		t.Fatalf("a chain with no rows has no bounds: %d %d %v %v", lo, hi, ok, err)
+	}
+	if _, ok, err := finality.CaptureCoverageOf(ctx, store, chain); err != nil || ok {
+		t.Fatalf("no cursor row: the coverage is not known: %v %v", ok, err)
+	}
+
+	put(chain, 500, 0x01, finality.CaptureCursorItem)
+	put(chain, 900, 0x02, finality.CaptureCursorItem)
+	put(chain, 700, 0x03, finality.CaptureCursorItem)
+	put(chain, 100, 0x04, "runtime/cursorx") // a neighbouring item name: not the cursor
+	put(chain, 9000, 0x05, "runtime/curso")
+	put(chain, 300, 0x06, "inbox")
+	put(other, 50, 0x07, finality.CaptureCursorItem) // another chain's cursor
+	put(other, 99999, 0x08, finality.CaptureCursorItem)
+
+	lo, hi, ok, err := store.BlockBounds(ctx, chain, finality.CaptureCursorItem)
+	if err != nil || !ok || lo != 500 || hi != 900 {
+		t.Fatalf("the cursor rows of the chain span 500..900, exactly this item and no other chain: %d %d %v %v", lo, hi, ok, err)
+	}
+	if lo, hi, ok, _ := store.BlockBounds(ctx, chain, "runtime/cursorx"); !ok || lo != 100 || hi != 100 {
+		t.Fatalf("a single row bounds itself: %d %d %v", lo, hi, ok)
+	}
+	if lo, hi, ok, _ := store.BlockBounds(ctx, other, finality.CaptureCursorItem); !ok || lo != 50 || hi != 99999 {
+		t.Fatalf("the other chain keeps its own bounds: %d %d %v", lo, hi, ok)
+	}
+	if _, _, ok, err := store.BlockBounds(ctx, chain, "no/such/item"); err != nil || ok {
+		t.Fatalf("an item the chain has no rows of: %v %v", ok, err)
+	}
+
+	cov, ok, err := finality.CaptureCoverageOf(ctx, store, chain)
+	if err != nil || !ok || cov.First != 500 || cov.Last != 900 {
+		t.Fatalf("the coverage of the capture loop read through the store: %+v %v %v", cov, ok, err)
+	}
+	// the store and the generic key listing answer alike
+	lo2, hi2, ok2, err := finality.BlockBoundsOf(ctx, struct{ finality.CaptureStore }{store}, chain, finality.CaptureCursorItem)
+	if err != nil || !ok2 || lo2 != lo || hi2 != hi {
+		t.Fatalf("the aggregate query and the key listing disagree: %d %d %v %v", lo2, hi2, ok2, err)
+	}
+}

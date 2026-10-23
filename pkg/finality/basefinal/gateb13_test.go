@@ -108,15 +108,15 @@ func TestTheFactoryScanNamesAGameItCannotReadAndTheEdgesItStoppedAt(t *testing.T
 	lay := loadLive(t).bp.Layouts[LayoutAggregateV1]
 	tl := len(lay.CloneHead) + 2 + len(lay.CloneMid) + 20 + len(lay.CloneTail)
 	x := binary.BigEndian.Uint64(loadLive(t).body.GameCode[tl+84+24 : tl+84+32])
-	// a game of the walk that cannot be read (the estimate lands on index 10)
+	// a game of the search that cannot be read (the bisection probes index 10)
 	w := loadLive(t)
 	g := w.factory(30, 12, 700)
 	g.failAt = map[uint64]error{10: errors.New("rpc down")}
 	b := w.builder(t, w.store(t))
 	b.Games = g
 	_, _, err := w.built(t, b)
-	if se, ok := finality.AsNamed(err); !ok || se.Code != finality.CodeVerifierFailed || se.Fields["cause"] == nil {
-		t.Errorf("%v", err)
+	if se, ok := finality.AsNamed(err); !ok || se.Code != CodeGameSourceUnavailable || se.Fields["step"] != StepGameAt || se.Fields["cause"] == nil {
+		t.Errorf("a game that cannot be read is a named source failure, not a verifier failure: %v", err)
 	}
 	// the pending states carry the end of the game they stopped at
 	w2 := loadLive(t)
@@ -130,10 +130,9 @@ func TestTheFactoryScanNamesAGameItCannotReadAndTheEdgesItStoppedAt(t *testing.T
 		t.Errorf("above: %+v", p.Judged)
 	}
 	below := w2.leg
-	below.Number = x - 600*13 // the first block of the oldest game is the end of no game
+	below.Number = x - 600*13 // the first block of the oldest game is the end of no game, and none will ever cover it
 	_, p, err = b2.buildLeg(ctx, below, haveIncluded)
-	p = wantPendingReason(t, p, err, "no_covering_game")
-	if p.Judged["newest_l2_sequence_number"] != x-600*12 {
-		t.Errorf("below: %+v", p.Judged)
+	if se, ok := finality.AsNamed(err); !ok || p != nil || se.Code != CodeCoveringGameUnavailable || se.Fields["reason"] != ReasonBeforeFirstGame || se.Fields["game_l2_sequence_number"] != x-600*12 {
+		t.Errorf("below: %v %v", p, err)
 	}
 }

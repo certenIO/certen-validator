@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"testing"
 	"time"
 
@@ -137,7 +136,10 @@ func wantPendingReason(t *testing.T, p *finality.PendingState, err error, reason
 	return p
 }
 
-func TestTheBuilderFindsTheCoveringGameByEstimateThenWalkAndNamesTheEnds(t *testing.T) {
+// RB12-F2: the former estimate-and-walk search is replaced by a gallop from the newest game and a bisection; the table keeps every
+// world it had (the rows still name how the live game sits among regular, wider and closer games) and the probe bound is now the
+// bound of the search, named when it is hit.
+func TestTheBuilderFindsTheCoveringGameByGallopAndBisectionAndNamesTheEnds(t *testing.T) {
 	for _, c := range []struct {
 		name         string
 		n, t         int
@@ -148,11 +150,11 @@ func TestTheBuilderFindsTheCoveringGameByEstimateThenWalkAndNamesTheEnds(t *test
 	}{
 		{"the live game is the only one", 1, 0, 600, 0, true, false},
 		{"the live game is the newest of many", 30, 29, 600, 0, true, false},
-		{"the estimate is exact: the live game is in the middle of regular games", 30, 12, 600, 1, true, false},
-		{"games above are wider apart: the estimate lands below and the walk goes up", 30, 12, 700, 0, true, false},
-		{"games above are closer: the estimate lands above and the walk goes down", 30, 12, 500, 0, true, false},
-		{"the walk needs exactly two loads and may take two", 30, 12, 650, 2, true, false},
-		{"the walk needs two loads and may take one", 30, 12, 650, 1, false, true},
+		{"the live game is in the middle of regular games", 30, 12, 600, 0, true, false},
+		{"games above are wider apart", 30, 12, 700, 0, true, false},
+		{"games above are closer", 30, 12, 500, 0, true, false},
+		{"the search needs a handful of probes and may take them", 30, 12, 650, 12, true, false},
+		{"the search needs more than one probe and may take one", 30, 12, 650, 1, false, true},
 	} {
 		w := loadLive(t)
 		g := w.factory(c.n, c.t, c.after)
@@ -164,7 +166,7 @@ func TestTheBuilderFindsTheCoveringGameByEstimateThenWalkAndNamesTheEnds(t *test
 		case c.wantFound:
 			wantAddendum(t, w, ad, p, err)
 		case c.wantScanFail:
-			if err == nil || !strings.Contains(err.Error(), "did not reach the covering game") || ad != nil || p != nil {
+			if se, ok := finality.AsNamed(err); !ok || se.Code != CodeCoveringGameUnavailable || se.Fields["reason"] != ReasonProbeBound || ad != nil || p != nil {
 				t.Errorf("%s: %v %v %v", c.name, ad != nil, p, err)
 			}
 		}
@@ -184,9 +186,9 @@ func TestTheBuilderFindsTheCoveringGameByEstimateThenWalkAndNamesTheEnds(t *test
 	below := w.leg
 	below.Number -= 600*20 + 5
 	_, p, err = b.buildLeg(context.Background(), below, haveIncluded)
-	p = wantPendingReason(t, p, err, "no_covering_game")
-	if p.Judged["leg_block"] != below.Number {
-		t.Errorf("%+v", p.Judged)
+	// a block before the first game of the factory is covered by no game and never will be: a named unavailable state, not a wait
+	if se, ok := finality.AsNamed(err); !ok || p != nil || se.Code != CodeCoveringGameUnavailable || se.Fields["reason"] != ReasonBeforeFirstGame || se.Fields["leg_block"] != below.Number {
+		t.Errorf("%v %v", p, err)
 	}
 	// the end of the newest game belongs to it; the start of a game belongs to the game before
 	lay := w.bp.Layouts[LayoutAggregateV1]
@@ -208,25 +210,35 @@ func TestTheBuilderFindsTheCoveringGameByEstimateThenWalkAndNamesTheEnds(t *test
 	_, p, err = b2.buildLeg(context.Background(), startLeg, haveIncluded)
 	p = wantPendingReason(t, p, err, "l1_proof_window_unavailable") // the game before has no capture
 	_ = err
-	// a factory that is empty or unreadable is a builder-side refusal that names the cause
-	for name, mod := range map[string]func(g *scriptGames){
-		"no games":         func(g *scriptGames) { g.count = 0 },
-		"count unreadable": func(g *scriptGames) { g.countErr = errors.New("rpc down") },
-		"game unreadable":  func(g *scriptGames) { g.atErr = errors.New("rpc down") },
-		"code unreadable":  func(g *scriptGames) { g.codeErr = errors.New("rpc down") },
-		"start unreadable": func(g *scriptGames) { g.slotErr = errors.New("rpc down") },
+	// an unreadable factory is a named source failure with its step and cause (RB12-F2: never finality_verifier_failed, no evidence was
+	// built); an empty factory has no game yet, which is the pending no_covering_game
+	for name, c := range map[string]struct {
+		mod  func(g *scriptGames)
+		step string
+	}{
+		"count unreadable": {func(g *scriptGames) { g.countErr = errors.New("rpc down") }, StepGameCount},
+		"game unreadable":  {func(g *scriptGames) { g.atErr = errors.New("rpc down") }, StepGameAt},
+		"code unreadable":  {func(g *scriptGames) { g.codeErr = errors.New("rpc down") }, StepGameCode},
+		"start unreadable": {func(g *scriptGames) { g.slotErr = errors.New("rpc down") }, StepGameSlot},
 	} {
 		ww := loadLive(t)
 		gg := ww.scripted()
-		mod(gg)
+		c.mod(gg)
 		bb := ww.builder(t, ww.store(t))
 		bb.Games = gg
 		_, _, err := ww.built(t, bb)
 		se, ok := finality.AsNamed(err)
-		if !ok || se.Code != finality.CodeVerifierFailed || fmt.Sprint(se.Fields["kind"]) != KindName || se.Fields["cause"] == nil {
+		if !ok || se.Code != CodeGameSourceUnavailable || fmt.Sprint(se.Fields["kind"]) != KindName || se.Fields["cause"] == nil || se.Fields["step"] != c.step {
 			t.Errorf("%s: %v", name, err)
 		}
 	}
+	wn := loadLive(t)
+	gn := wn.scripted()
+	gn.count = 0
+	bn := wn.builder(t, wn.store(t))
+	bn.Games = gn
+	_, pn, errn := wn.built(t, bn)
+	wantPendingReason(t, pn, errn, "no_covering_game")
 }
 
 func TestTheBuilderRefusesAGameWhoseCodeOrSizeItCannotPlace(t *testing.T) {

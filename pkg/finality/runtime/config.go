@@ -96,6 +96,7 @@ type Config struct {
 	Concurrency     int
 	Interval        time.Duration
 	BuildTimeout    time.Duration
+	MemoryBudget    int64  // bytes of in-flight builder working set per process (finality.EnvMemoryBudget)
 	ArchiveOrigin   string // "set" or "unset": whether OD4 is configured (reported, never the URL)
 	ProviderSources map[string]string
 }
@@ -166,6 +167,7 @@ func ConfigFromEnv() (Config, error) {
 		func() (e error) { c.Concurrency, e = envvar.Int(EnvConcurrency, 4, 1); return },
 		func() (e error) { c.Interval, e = envvar.Seconds(EnvInterval, 60*time.Second, 1); return },
 		func() (e error) { c.BuildTimeout, e = envvar.Seconds(EnvBuildTimeout, 5*time.Minute, 1); return },
+		func() (e error) { c.MemoryBudget, e = finality.MemoryBudgetFromEnv(); return },
 	}
 	if err = envvar.Check(rd...); err != nil {
 		return Config{}, err
@@ -197,6 +199,7 @@ func (c Config) Describe() map[string]any {
 		"adiri_providers": n(c.Adiri), "adiri_proof_providers": n(c.AdiriPF), "pins_file": c.PinsFile != "",
 		"rate_rps": c.RateRPS, "max_batch": c.MaxBatch, "max_capture_bytes_per_leg": c.CaptureBytes,
 		"capture_interval": c.CaptureEvery.String(), "concurrency": c.Concurrency, "interval": c.Interval.String(),
+		"memory_budget_bytes": c.MemoryBudget, "memory_gate_bytes": finality.HeapGate(c.MemoryBudget),
 	}
 }
 
