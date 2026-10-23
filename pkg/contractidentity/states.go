@@ -184,6 +184,19 @@ type StateError struct {
 	Code   string
 	Reason string
 	Fields map[string]any
+
+	cause error // the Go error that led to the state (a parse detail); never part of the state, its canonical form or a comparison
+}
+
+// Unwrap returns the underlying cause, if any, for errors.Is / errors.As and for diagnostics.
+func (s *StateError) Unwrap() error { return s.cause }
+
+// WithCause attaches the underlying cause to a copy of the state. The cause is a diagnostic only: Canonical, Validate and every comparison
+// ignore it.
+func (s *StateError) WithCause(err error) *StateError {
+	c := *s
+	c.cause = err
+	return &c
 }
 
 func (s *StateError) Error() string {
