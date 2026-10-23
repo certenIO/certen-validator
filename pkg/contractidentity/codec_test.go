@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"math/rand"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -714,5 +715,59 @@ func TestEncodeRefusesInconsistentParts(t *testing.T) {
 	}
 	if _, err := Encode(nil, lim); err == nil {
 		t.Fatal("nil container accepted")
+	}
+}
+
+// The limits are the numbers of Freeze item 1c: the table is re-parsed from the frozen specification, so a constant that drifts (and the
+// boundary tests that read their limit from it) is caught here.
+func TestDefaultLimitsEqualSpecItem1c(t *testing.T) {
+	lim := DefaultLimits()
+	byName := map[string]int{
+		"max_container_bytes": lim.MaxContainerBytes, "max_codes": lim.MaxCodes, "max_code_bytes": lim.MaxCodeBytes, "max_nodes": lim.MaxNodes,
+		"max_node_bytes": lim.MaxNodeBytes, "max_header_bytes": lim.MaxHeaderBytes, "max_attest_hops": lim.MaxAttestHops,
+		"max_attest_spine": lim.MaxAttestSpine, "max_block_txs": lim.MaxBlockTxs, "max_block_txs_bytes": lim.MaxBlockTxsBytes,
+		"max_failures": lim.MaxFailures, "max_text": lim.MaxText, "max_validators": lim.MaxValidators, "max_string": lim.MaxString,
+		"max_batch_legs": lim.MaxBatchLegs, "max_pkc_list": lim.MaxPKCList,
+	}
+	spec := specText(t)
+	a := strings.Index(spec, "*1c Limits (name = value, basis):*")
+	b := strings.Index(spec, "*1d Goldens")
+	if a < 0 || b < a {
+		t.Fatal("item 1c not found")
+	}
+	seen := map[string]bool{}
+	for _, l := range strings.Split(spec[a:b], "\n") {
+		cells := strings.Split(l, "|")
+		if len(cells) < 4 || !strings.HasPrefix(strings.TrimSpace(cells[1]), "max_") {
+			continue
+		}
+		names := strings.Split(strings.TrimSpace(cells[1]), " / ")
+		vals := strings.Split(strings.TrimSpace(cells[2]), " / ")
+		if len(names) != len(vals) {
+			t.Fatalf("row %q", l)
+		}
+		for i, n := range names {
+			want, err := strconv.Atoi(strings.TrimSpace(vals[i]))
+			if err != nil {
+				t.Fatalf("row %q: %v", l, err)
+			}
+			got, ok := byName[n]
+			if !ok {
+				t.Fatalf("spec limit %s has no field", n)
+			}
+			if got != want {
+				t.Errorf("%s = %d, the specification says %d", n, got, want)
+			}
+			seen[n] = true
+		}
+	}
+	for n := range byName {
+		if !seen[n] {
+			t.Errorf("limit %s is not in the specification table", n)
+		}
+	}
+	// the two bounds the grammar table states outside 1c
+	if lim.MaxKindBytes != 64 || lim.MaxLeafBytes != 131072 {
+		t.Errorf("kind %d leaf %d", lim.MaxKindBytes, lim.MaxLeafBytes)
 	}
 }

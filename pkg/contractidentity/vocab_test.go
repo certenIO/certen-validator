@@ -3,6 +3,9 @@
 package contractidentity
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"sort"
 	"strings"
 	"testing"
@@ -310,6 +313,59 @@ func TestBoundFieldsEnforceTheirVocabulary(t *testing.T) {
 		}
 		if tried == 0 {
 			t.Errorf("binding %s matched no registry row/field", key)
+		}
+	}
+}
+
+// names_gen.go holds exactly the registry codes, the registry row cells and the vocabulary values (and nothing else) as string constants:
+// a hand edit of a generated constant, or a constant left behind, is caught here.
+func TestGeneratedConstantsAreTheTables(t *testing.T) {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "names_gen.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	have := map[string]bool{}
+	for _, d := range f.Decls {
+		gd, ok := d.(*ast.GenDecl)
+		if !ok || gd.Tok != token.CONST {
+			continue
+		}
+		for _, sp := range gd.Specs {
+			vs := sp.(*ast.ValueSpec)
+			for _, val := range vs.Values {
+				lit, ok := val.(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING {
+					t.Fatalf("constant %v is not a string literal", vs.Names)
+				}
+				have[strings.Trim(lit.Value, `"`)] = true
+			}
+		}
+	}
+	want := map[string]bool{SpecSHA256: true}
+	g := mustRegistry(t)
+	for _, c := range g.Codes() {
+		want[c] = true
+	}
+	for _, r := range g.Rows {
+		if r.Row != "-" && r.Row != "(wrapper)" {
+			want[r.Row] = true
+		}
+	}
+	v := mustVocab(t)
+	for _, id := range v.Names() {
+		for _, val := range v.Sets[id].Values {
+			want[val] = true
+		}
+	}
+	for x := range want {
+		if !have[x] {
+			t.Errorf("table value %q has no constant in names_gen.go", x)
+		}
+	}
+	for x := range have {
+		if !want[x] {
+			t.Errorf("names_gen.go has a constant %q that is in no table", x)
 		}
 	}
 }

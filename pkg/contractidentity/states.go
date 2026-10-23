@@ -5,7 +5,6 @@ package contractidentity
 import (
 	"bytes"
 	_ "embed"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -542,5 +541,3 @@ func maxInt(a, b int) int {
 	}
 	return b
 }
-
-func hexLower(b []byte) string { return "0x" + hex.EncodeToString(b) }

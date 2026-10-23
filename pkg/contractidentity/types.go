@@ -284,11 +284,20 @@ type Headline struct {
 	NotApplicable *StateError
 }
 
-func partIndex(part string) int {
+// numJudgedParts is len(JudgedParts); TestJudgedPartsAreEleven keeps them equal.
+const numJudgedParts = 11
+
+var partIdx = func() map[string]int {
+	m := make(map[string]int, len(JudgedParts))
 	for i, p := range JudgedParts {
-		if p == part {
-			return i
-		}
+		m[p] = i
+	}
+	return m
+}()
+
+func partIndex(part string) int {
+	if i, ok := partIdx[part]; ok {
+		return i
 	}
 	return -1
 }
@@ -379,16 +388,18 @@ func validateHeadlineInput(in HeadlineInput) error {
 // headlineAlgebra is the table of step 23 on a validated input; the exhaustive test runs it on every combination of part statuses.
 func headlineAlgebra(in HeadlineInput) (Headline, error) {
 	var h Headline
-	byPart := map[string]*PartResult{}
+	var byPart [numJudgedParts]*PartResult
 	for i := range in.Parts {
-		byPart[in.Parts[i].Part] = &in.Parts[i]
+		if k := partIndex(in.Parts[i].Part); k >= 0 {
+			byPart[k] = &in.Parts[i]
+		}
 	}
-	naPath := byPart[JudgedSettlementPath] != nil && byPart[JudgedSettlementPath].Status == StatusNotApplicable
+	naPath := byPart[0] != nil && byPart[0].Status == StatusNotApplicable
 	var refused, unprovenCore []string
 	var firstRefusal *StateError
 	var findings []Finding
-	for _, name := range JudgedParts {
-		p := byPart[name]
+	for k, name := range JudgedParts {
+		p := byPart[k]
 		if p == nil {
 			continue
 		}
@@ -404,8 +415,8 @@ func headlineAlgebra(in HeadlineInput) (Headline, error) {
 		}
 	}
 	var open []OpenEntry
-	for _, name := range JudgedParts {
-		if p := byPart[name]; p != nil {
+	for k := range JudgedParts {
+		if p := byPart[k]; p != nil {
 			open = append(open, p.Open...)
 		}
 	}
@@ -423,7 +434,7 @@ func headlineAlgebra(in HeadlineInput) (Headline, error) {
 	case len(unprovenCore) > 0:
 		return Headline{Kind: HeadlineUnproven, Parts: unprovenCore}, nil
 	case naPath:
-		return Headline{Kind: HeadlineNotApplicable, NotApplicable: byPart[JudgedSettlementPath].State}, nil
+		return Headline{Kind: HeadlineNotApplicable, NotApplicable: byPart[0].State}, nil
 	case !in.StateRootAuthenticated:
 		if in.LevelReached == "" {
 			return h, fmt.Errorf("contractidentity: headline: pending without level_reached")

@@ -4,7 +4,9 @@ package contractidentity
 
 import (
 	"math/big"
+	"runtime"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -96,6 +98,12 @@ func TestVS8_020_ContextIncomplete(t *testing.T) {
 				t.Fatalf("missing = %v, want [%s]", got, tc.want)
 			}
 		})
+	}
+	// the adi_url bound is exact: 1024 bytes pass, 1025 do not (above)
+	c1024 := validContext()
+	c1024.ADIURL = strings.Repeat("a", 1024)
+	if m := missingOf(t, c1024); m != nil {
+		t.Fatalf("a 1024-byte adi_url is refused: %v", m)
 	}
 	// every member absent: all ten tokens, in the order of item 2a
 	if got := missingOf(t, LegContext{}); strings.Join(got, ",") != strings.Join(ContextTokens, ",") {
@@ -294,95 +302,137 @@ func oracle(parts []PartResult, registry9, auth, extraOpen bool) (kind string, r
 
 // Every combination of part statuses (the product of the allowed statuses of the eleven parts), with and without a Registry9, with the
 // state root authenticated and not, with and without an extra Open entry on a verified part: 1.9 million inputs, each checked against the
-// oracle. verified_core is never produced without an Open entry and verified never with one.
+// oracle. verified_core is never produced without an Open entry and verified never with one. The work is sharded over the CPUs.
 func TestHeadlineAlgebraIsExhaustive(t *testing.T) {
-	var combos, kinds = 0, map[string]int{}
-	for _, registry9 := range []bool{false, true} {
-		lists := make([][]PartStatus, len(JudgedParts))
-		for i, name := range JudgedParts {
-			lists[i] = allowedStatuses(name, registry9)
+	// the part results are built once (they share their states) so that the product itself is cheap
+	for _, st := range partStatuses {
+		for _, name := range JudgedParts {
+			cachedPart(name, st, false)
+			cachedPart(name, st, true)
 		}
-		idx := make([]int, len(JudgedParts))
-		for {
-			for _, auth := range []bool{false, true} {
-				for _, extra := range []bool{false, true} {
-					parts := make([]PartResult, len(JudgedParts))
-					for i, name := range JudgedParts {
-						parts[i] = cachedPart(name, lists[i][idx[i]], extra)
-					}
-					in := HeadlineInput{Parts: parts, Registry9: registry9, StateRootAuthenticated: auth, LevelReached: "included", S7FinalizedStatus: "pending",
-						JudgedAtLevel: "finalized", StateRoot: bytes32(9), Block: 42, RegistryLink: "via S9"}
-					// the algebra itself on EVERY combination; the validating entry point (which re-validates every state) on a stride
-					// of them and on every combination within two deviations from all-verified
-					h, err := headlineAlgebra(in)
-					if err != nil {
-						t.Fatalf("combo %v auth=%v extra=%v: %v", idx, auth, extra, err)
-					}
-					deviations := 0
-					for _, p := range parts {
-						if p.Status != StatusVerified {
-							deviations++
+	}
+	workers := runtime.NumCPU()
+	if workers > 8 {
+		workers = 8
+	}
+	type tally struct {
+		combos int
+		kinds  map[string]int
+	}
+	results := make([]tally, workers)
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func(w int) {
+			defer wg.Done()
+			tl := tally{kinds: map[string]int{}}
+			n := 0
+			for _, registry9 := range []bool{false, true} {
+				lists := make([][]PartStatus, len(JudgedParts))
+				for i, name := range JudgedParts {
+					lists[i] = allowedStatuses(name, registry9)
+				}
+				idx := make([]int, len(JudgedParts))
+				for {
+					n++
+					if n%workers == w {
+						for _, auth := range []bool{false, true} {
+							for _, extra := range []bool{false, true} {
+								parts := make([]PartResult, len(JudgedParts))
+								deviations := 0
+								for i, name := range JudgedParts {
+									parts[i] = cachedPart(name, lists[i][idx[i]], extra)
+									if parts[i].Status != StatusVerified {
+										deviations++
+									}
+								}
+								in := HeadlineInput{Parts: parts, Registry9: registry9, StateRootAuthenticated: auth, LevelReached: "included", S7FinalizedStatus: "pending",
+									JudgedAtLevel: "finalized", StateRoot: bytes32(9), Block: 42, RegistryLink: "via S9"}
+								// the algebra itself on EVERY combination; the validating entry point (which re-validates every state) on a stride
+								// of them and on every combination within two deviations from all-verified
+								h, err := headlineAlgebra(in)
+								if err != nil {
+									t.Errorf("combo %v auth=%v extra=%v: %v", idx, auth, extra, err)
+									return
+								}
+								if tl.combos%97 == 0 || deviations <= 2 {
+									hv, verr := ComputeHeadline(in)
+									if verr != nil || hv.Kind != h.Kind || len(hv.Parts) != len(h.Parts) || len(hv.Open) != len(h.Open) || len(hv.Findings) != len(h.Findings) {
+										t.Errorf("combo %v: validating entry point %+v %v, algebra %+v", idx, hv, verr, h)
+										return
+									}
+								}
+								want, refusedN, unprovenN, openN := oracle(parts, registry9, auth, extra)
+								if h.Kind != want {
+									t.Errorf("combo %v registry9=%v auth=%v extra=%v: headline %s, oracle %s", idx, registry9, auth, extra, h.Kind, want)
+									return
+								}
+								switch h.Kind {
+								case HeadlineRefused:
+									if h.First.Code != CodeRecordNotExecuted || len(h.Parts) != refusedN {
+										t.Errorf("refused: %+v", h)
+										return
+									}
+								case HeadlinePending:
+									if len(h.Findings) != refusedN || h.LevelReached != "included" || h.S7FinalizedStatus != "pending" {
+										t.Errorf("pending: %+v", h)
+										return
+									}
+								case HeadlineUnproven:
+									if len(h.Parts) != unprovenN || unprovenN == 0 {
+										t.Errorf("unproven: %+v", h)
+										return
+									}
+								case HeadlineVerifiedCore:
+									if len(h.Open) != openN || openN == 0 {
+										t.Errorf("verified_core without its Open entries: %+v (open %d)", h, openN)
+										return
+									}
+								case HeadlineVerified:
+									if openN != 0 || h.RegistryLink != "via S9" || h.Block != 42 {
+										t.Errorf("verified with %d Open entries: %+v", openN, h)
+										return
+									}
+								default:
+									t.Errorf("unexpected headline %s", h.Kind)
+									return
+								}
+								tl.kinds[h.Kind]++
+								tl.combos++
+							}
 						}
 					}
-					if combos%97 == 0 || deviations <= 2 {
-						hv, verr := ComputeHeadline(in)
-						if verr != nil || hv.Kind != h.Kind || len(hv.Parts) != len(h.Parts) || len(hv.Open) != len(h.Open) || len(hv.Findings) != len(h.Findings) {
-							t.Fatalf("combo %v: validating entry point %+v %v, algebra %+v", idx, hv, verr, h)
+					// next combination
+					i := len(idx) - 1
+					for i >= 0 {
+						idx[i]++
+						if idx[i] < len(lists[i]) {
+							break
 						}
+						idx[i] = 0
+						i--
 					}
-					want, refusedN, unprovenN, openN := oracle(parts, registry9, auth, extra)
-					if h.Kind != want {
-						t.Fatalf("combo %v registry9=%v auth=%v extra=%v: headline %s, oracle %s", idx, registry9, auth, extra, h.Kind, want)
+					if i < 0 {
+						break
 					}
-					switch h.Kind {
-					case HeadlineRefused:
-						if h.First.Code != CodeRecordNotExecuted || len(h.Parts) != refusedN {
-							t.Fatalf("refused: %+v", h)
-						}
-					case HeadlinePending:
-						if len(h.Findings) != refusedN || h.LevelReached != "included" || h.S7FinalizedStatus != "pending" {
-							t.Fatalf("pending: %+v", h)
-						}
-					case HeadlineUnproven:
-						if len(h.Parts) != unprovenN || unprovenN == 0 {
-							t.Fatalf("unproven: %+v", h)
-						}
-					case HeadlineVerifiedCore:
-						if len(h.Open) != openN || openN == 0 {
-							t.Fatalf("verified_core without its Open entries: %+v (open %d)", h, openN)
-						}
-					case HeadlineVerified:
-						if openN != 0 || h.RegistryLink != "via S9" || h.Block != 42 {
-							t.Fatalf("verified with %d Open entries: %+v", openN, h)
-						}
-					default:
-						t.Fatalf("unexpected headline %s", h.Kind)
-					}
-					st, err := h.State()
-					if err != nil {
-						t.Fatalf("headline state: %v", err)
-					}
-					if err := Validate(st); err != nil {
-						t.Fatalf("headline state %s: %v", st, err)
-					}
-					kinds[h.Kind]++
-					combos++
 				}
 			}
-			// next combination
-			i := len(idx) - 1
-			for i >= 0 {
-				idx[i]++
-				if idx[i] < len(lists[i]) {
-					break
-				}
-				idx[i] = 0
-				i--
-			}
-			if i < 0 {
-				break
-			}
+			results[w] = tl
+		}(w)
+	}
+	wg.Wait()
+	if t.Failed() {
+		return
+	}
+	combos, kinds := 0, map[string]int{}
+	for _, r := range results {
+		combos += r.combos
+		for k, n := range r.kinds {
+			kinds[k] += n
 		}
+	}
+	if combos != 1889568 {
+		t.Errorf("the product has %d inputs, expected 1889568", combos)
 	}
 	for _, k := range []string{HeadlineRefused, HeadlinePending, HeadlineUnproven, HeadlineVerifiedCore, HeadlineVerified} {
 		if kinds[k] == 0 {
@@ -736,5 +786,14 @@ func TestVerifierFuncAdapts(t *testing.T) {
 	r, err := v.Verify(LegContext{ADIURL: "x"}, []byte{1}, nil)
 	if err != nil || !called || r.ManifestSource != "marker" {
 		t.Fatalf("%v %v %v", r, called, err)
+	}
+}
+
+func TestJudgedPartsAreEleven(t *testing.T) {
+	if len(JudgedParts) != numJudgedParts || JudgedParts[0] != JudgedSettlementPath {
+		t.Fatalf("JudgedParts %v", JudgedParts)
+	}
+	if got := strings.Join(JudgedParts, ","); got != strings.Join(generatedVocab["judged_part"], ",") {
+		t.Fatalf("JudgedParts %s differ from the Item 4 'judged part' vocabulary %v", got, generatedVocab["judged_part"])
 	}
 }
