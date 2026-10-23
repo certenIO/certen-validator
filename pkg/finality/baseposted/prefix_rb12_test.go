@@ -202,8 +202,8 @@ func TestRB12PrefixTheWindowIsOpenUntilTheLastBlockIsFilledThenThePendingStands(
 		rawFillRow(t, st, n)
 	}
 	se, err := ask()
-	if se != nil || err == nil || err.Error() != "pending l1_posted_unproven" {
-		t.Fatalf("a fully captured window with no channel is the plain pending, never a gap and never accepted: %v %v", se, err)
+	if se == nil || se.Code != "l1_posted_not_found" {
+		t.Fatalf("a fully captured window with no channel is the determinate l1_posted_not_found, never a gap and never accepted: %v %v", se, err)
 	}
 }
 
@@ -254,10 +254,16 @@ func TestRB12PrefixBackfillTakesLiveWindowsOldestFirstThenHolesThenWindowsWithAP
 			break
 		}
 	}
+	// every step of 8 is 6 live-window blocks (oldest first) and 2 hole blocks while a hole is due; what a class cannot use goes to the next:
+	// the live window ends in step 4 (2 blocks, then the 4 left holes), the window with a proven-gone block gets what remains
 	var want []uint64
-	want = append(want, rangeOf(1000, 1019)...) // oldest live window first
-	want = append(want, rangeOf(500, 509)...)   // then the holes of the live range
-	want = append(want, rangeOf(2000, 2004)...) // last: the window that cannot complete without an archive
+	for i, h := 0, uint64(500); i < 3; i++ {
+		want = append(want, rangeOf(1000+uint64(i)*6, 1005+uint64(i)*6)...)
+		want = append(want, rangeOf(h, h+1)...)
+		h += 2
+	}
+	want = append(want, 1018, 1019, 506, 507, 508, 509, 2000, 2001)
+	want = append(want, rangeOf(2002, 2004)...) // last: the window that cannot complete without an archive (2005 is proven gone)
 	want = append(want, rangeOf(2006, 2019)...)
 	if fmt.Sprint(oc.order) != fmt.Sprint(want) {
 		t.Fatalf("capture order\n got %v\nwant %v", oc.order, want)

@@ -83,6 +83,15 @@ const maxHeldMemos = 512
 const (
 	// CodeCaptureNotCovering: the L1 blocks that can hold the leg's batch were not scanned by this validator's capture loop.
 	CodeCaptureNotCovering = "l1_capture_not_covering"
+	// CodeL2BlockContentMismatch: the L2 provider's answer for the leg's block does not hash to the transactions root of the leg's own header, so
+	// nothing in it (the L1 origin of its first deposit least of all) is used: a window is never derived from an unauthenticated word.
+	CodeL2BlockContentMismatch = "l2_block_content_mismatch"
+	// CodeWindowNoChannel: every L1 block of the leg's sequencer window was captured (or is a recorded, filled prefix) and the cursor is past it,
+	// and no channel in it carries the leg's batch: the statement is determinate, not "not posted yet".
+	CodeWindowNoChannel = "l1_posted_not_found"
+	// windowCompleteMargin is how far behind the capture cursor the end of a window must lie before it is called complete: the capture loop
+	// retries a failed block for its 96-block window, and a block that near the head can still be re-orged.
+	windowCompleteMargin = 96
 )
 
 // The window of L1 blocks that can hold a leg's frames is [E, E+SeqWindowSize] with E the L1 origin of its L2 block (the verifier
@@ -402,7 +411,19 @@ func (b *Builder) search(ctx context.Context, bp *Pins, l2 finality.HeaderFields
 		return st(CodeCaptureNotCovering, append([]any{"chain", uint64(Chain), "kind", KindName, "epoch_l1_block", origin, "window_end_l1_block", end,
 			"capture_first_l1_block", cov.First, "capture_slack", slackOf(b.CursorSlack), "archive_provider", archive}, extra...)...)
 	}
+	// The L2 provider is untrusted: where its answer decides coverage BELOW the scanned region (a durable request, or the verdict that the
+	// leg predates the capture) it is the leg's block only if its transactions hash to the transactions root of the leg's own header. Elsewhere
+	// the origin only selects rows and the verifier re-proves the batch against the header.
+	authentic := func() error {
+		if [32]byte(ethproof.TrieRoot(blk.Txs)) != l2.TransactionRoot {
+			return st(CodeL2BlockContentMismatch, "block", l2.Number)
+		}
+		return nil
+	}
 	if known && end < lower {
+		if err := authentic(); err != nil {
+			return sr, err
+		}
 		if ok, extra, err := b.prefixCovers(ctx, origin, end, lower); err != nil {
 			return sr, err
 		} else if !ok {
@@ -448,6 +469,9 @@ func (b *Builder) search(ctx context.Context, bp *Pins, l2 finality.HeaderFields
 	}
 	if sr.ch == nil && known && origin < lower {
 		// part of the window was never scanned by the loop: the channel may have been posted there, unless that part is a requested prefix
+		if err := authentic(); err != nil {
+			return sr, err
+		}
 		if ok, extra, err := b.prefixCovers(ctx, origin, end, lower); err != nil {
 			return sr, err
 		} else if !ok {
@@ -475,6 +499,9 @@ func (b *Builder) search(ctx context.Context, bp *Pins, l2 finality.HeaderFields
 			b.held[hk] = heldMemo{fingerprint: fp, state: gs}
 			b.heldMu.Unlock()
 			return sr, gs
+		}
+		if known && cov.Last >= windowCompleteMargin && end <= cov.Last-windowCompleteMargin {
+			return sr, st(CodeWindowNoChannel, "chain", uint64(Chain), "kind", KindName, "from", origin, "to", end, "covered_to", cov.Last)
 		}
 	}
 	return sr, nil

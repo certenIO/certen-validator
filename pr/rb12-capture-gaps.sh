@@ -113,11 +113,11 @@ SQL
 
 echo; echo "== capture-store PREFIX windows (class capture_prefix: legs posted before the capture loop started; RB12-ARCHIVE-BACKFILL)"
 echo "   positions and counts only: window, its blocks, filled, proven unavailable / past retention, open"
-sql <<SQL
-WITH w AS (SELECT chain, l1_block AS f, split_part(item, /, 2)::bigint AS t FROM proof_finality_capture WHERE item LIKE gap/%/capture_prefix),
+sql <<'SQL'
+WITH w AS (SELECT chain, l1_block AS f, split_part(item, '/', 2)::bigint AS t FROM proof_finality_capture WHERE item LIKE 'gap/%/capture_prefix'),
      b AS (SELECT chain, f, t, generate_series(f, t) AS blk FROM w),
-     fl AS (SELECT DISTINCT chain, l1_block AS blk FROM proof_finality_capture WHERE item LIKE gapfill/%),
-     en AS (SELECT chain, l1_block AS blk, max(split_part(item, /, 3)) AS kind FROM proof_finality_capture WHERE item LIKE gapend/% GROUP BY 1, 2)
+     fl AS (SELECT DISTINCT chain, l1_block AS blk FROM proof_finality_capture WHERE item LIKE 'gapfill/%'),
+     en AS (SELECT chain, l1_block AS blk, max(split_part(item, '/', 3)) AS kind FROM proof_finality_capture WHERE item LIKE 'gapend/%' GROUP BY 1, 2)
 SELECT b.chain, b.f AS window_from, b.t AS window_to, count(*) AS blocks,
        count(*) FILTER (WHERE fl.blk IS NOT NULL) AS filled,
        count(*) FILTER (WHERE fl.blk IS NULL AND en.kind IS NOT NULL) AS gone,
@@ -126,9 +126,9 @@ SELECT b.chain, b.f AS window_from, b.t AS window_to, count(*) AS blocks,
  GROUP BY 1, 2, 3 ORDER BY 1, 2 LIMIT 60;
 SQL
 echo "   claims on prefix chunks (gapclaim rows, one per chunk and 10-minute period) and beacon-slot evidence of ended blocks (gapslot rows):"
-sql <<SQL
-SELECT chain, split_part(item, /, 1) AS kind, count(*) AS rows, min(l1_block) AS first_block, max(l1_block) AS last_block
-  FROM proof_finality_capture WHERE item LIKE gapclaim/% OR item LIKE gapslot/% GROUP BY 1, 2 ORDER BY 1, 2;
+sql <<'SQL'
+SELECT chain, split_part(item, '/', 1) AS kind, count(*) AS rows, min(l1_block) AS first_block, max(l1_block) AS last_block
+  FROM proof_finality_capture WHERE item LIKE 'gapclaim/%' OR item LIKE 'gapslot/%' GROUP BY 1, 2 ORDER BY 1, 2;
 SQL
 
 for v in "$OPEN" "$PROVEN" "$UNAUDITED"; do

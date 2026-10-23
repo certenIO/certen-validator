@@ -187,3 +187,26 @@ func TestRB12PrefixGaugesAreLiveFromTheFirstTickAndTheAlertCanFire(t *testing.T)
 		t.Errorf("after a tick over an empty store the gauge is zero: %v %v", got, ok)
 	}
 }
+
+// V-ARCHIVE D4c: the counters the alerts compare against zero exist from the first tick, at zero, so `rate(...) == 0` has a series to be
+// true of and `increase(...)` sees the first claim error as an increase.
+func TestRB12PrefixCountersExistAtZeroFromTheFirstTick(t *testing.T) {
+	metrics.RegisterMetrics()
+	l, _ := newGapLoop(t, finality.NewMemCaptureStore(), &bfFakeCap{})
+	l.ChainID = 424242 // a chain no other test touches
+	if err := l.Tick(context.Background(), 1); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		name   string
+		labels map[string]string
+	}{
+		{"certen_finality_prefix_backfilled_blocks_total", map[string]string{"chain": "424242"}},
+		{"certen_finality_prefix_lease_total", map[string]string{"chain": "424242", "outcome": "lost"}},
+		{"certen_finality_prefix_lease_total", map[string]string{"chain": "424242", "outcome": "error"}},
+	} {
+		if v, ok := gauge(t, c.name, c.labels); !ok || v != 0 {
+			t.Errorf("%s%v = %v (present %v), want a series at 0", c.name, c.labels, v, ok)
+		}
+	}
+}

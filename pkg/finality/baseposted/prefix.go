@@ -76,6 +76,13 @@ func nextPrefixBlock(pieces []finality.GapRange, wins []finality.PrefixWindow, d
 	return 0, false
 }
 
+// claimState is what one Step knows of its claims: the chunks another validator holds, the chunks it holds itself, and whether the store
+// could not take a claim (the prefix phases of the step then do nothing).
+type claimState struct {
+	lost, held map[uint64]bool
+	failed     bool
+}
+
 // Lease is the cross-validator claim on a chunk of prefix blocks. A claim is one insert-only row whose KEY holds the chunk and the time
 // bucket and whose BYTES hold the claimant: the first writer of a (chunk, bucket) wins, any other claimant meets the store's own
 // "same key, other bytes" refusal (ErrCaptureConflict) and has lost; the holder claiming again is a no-op. Nothing is updated or deleted
@@ -159,8 +166,10 @@ func (b *Backfiller) prefixPhase(ctx context.Context, pieces []finality.GapRange
 	if b.Lease != nil {
 		chunk = b.Lease.chunk()
 	}
-	lost := map[uint64]bool{}
-	held := map[uint64]bool{}
+	if b.claims.failed {
+		return // the store could not take a claim earlier in this step: no claim, no fetch
+	}
+	lost, held := b.claims.lost, b.claims.held
 	skipped := func(n uint64) bool { return skip[n] || taken[n] || lost[n-n%chunk] }
 	for rep.Attempted < max && ctx.Err() == nil {
 		n, ok := nextPrefixBlock(pieces, wins, dead, live, skipped)
@@ -172,6 +181,7 @@ func (b *Backfiller) prefixPhase(ctx context.Context, pieces []finality.GapRange
 			won, err := b.Lease.Claim(ctx, b.now(), cs)
 			if err != nil {
 				rep.LeaseErrors++
+				b.claims.failed = true
 				b.logf("[FINALITY] gap backfill chain %d: the claim on prefix blocks %d-%d could not be taken (%v): no prefix block is fetched this step", b.Chain, cs, cs+chunk-1, ethrpc.RedactError(err))
 				return
 			}

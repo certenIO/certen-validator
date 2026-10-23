@@ -126,6 +126,7 @@ type Backfiller struct {
 	// the daily re-probe of blocks proven unavailable
 	probing     map[uint64]bool
 	reopenAll   bool
+	claims      claimState // the claims of the step in progress
 	lastReprobe time.Time
 }
 
@@ -221,11 +222,13 @@ func (b *Backfiller) Step(ctx context.Context, max int) (BackfillReport, error) 
 		}
 	}
 	taken := map[uint64]bool{}
+	b.claims = claimState{lost: map[uint64]bool{}, held: map[uint64]bool{}}
+	// the holes keep a quarter of every tick (at least one block) while one is due, so a prefix of any size, failing or not, cannot starve them
+	// (V-ARCHIVE D3); what the holes do not use goes to the prefix.
 	// the prefix windows of legs that predate the capture: the windows that can still complete first (oldest block first), see prefix.go
 	var dead []bool
 	if len(wins) > 0 {
 		dead = deadWindows(pieces, wins)
-		b.prefixPhase(ctx, pieces, wins, dead, true, skip, taken, max, pol, &rep)
 	}
 	// the holes of the live range: the pieces that are not open only because of a prefix request
 	var holes []finality.GapRange
@@ -248,6 +251,20 @@ func (b *Backfiller) Step(ctx context.Context, max int) (BackfillReport, error) 
 				break
 			}
 		}
+	}
+	holesDue := eligible > 0
+	for n := range b.reopen {
+		if !skip[n] {
+			holesDue = true
+			break
+		}
+	}
+	prefixCap := max
+	if holesDue {
+		prefixCap = max - (max+3)/4
+	}
+	if len(wins) > 0 {
+		b.prefixPhase(ctx, pieces, wins, dead, true, skip, taken, prefixCap, pol, &rep)
 	}
 	for rep.Attempted < max && ctx.Err() == nil {
 		var n uint64
@@ -277,8 +294,10 @@ func (b *Backfiller) Step(ctx context.Context, max int) (BackfillReport, error) 
 		rep.Attempted++
 		b.attempt(ctx, n, pol, &rep)
 	}
-	// windows that hold a block no provider has: last, so a later archive finds the rest already captured
 	if len(wins) > 0 {
+		// what the holes did not use goes to the windows that can still complete, then (last, so a later archive finds the rest already
+		// captured) to the windows that hold a block no provider has
+		b.prefixPhase(ctx, pieces, wins, dead, true, skip, taken, max, pol, &rep)
 		b.prefixPhase(ctx, pieces, wins, dead, false, skip, taken, max, pol, &rep)
 	}
 	// the state after the step
@@ -451,7 +470,7 @@ const maxReprobes = 16
 
 // reprobe is the cadence of blocks proven unavailable: a gap that ended is not asked again by the same providers except once a day, and
 // then only the NEWEST block of each run (providers prune oldest first, so if the newest is still gone every older one is). When that
-// block is served, every block proven unavailable is asked again. The first step of a process starts the day.
+// block is served, every block proven unavailable or past retention is asked again. The first step of a process starts the day.
 func (b *Backfiller) reprobe(now time.Time, pieces []finality.GapRange, pol BackfillPolicy) {
 	if b.reopen == nil {
 		b.reopen = map[uint64]bool{}
@@ -462,7 +481,7 @@ func (b *Backfiller) reprobe(now time.Time, pieces []finality.GapRange, pol Back
 	if b.reopenAll {
 		b.reopenAll = false
 		for _, p := range pieces {
-			if p.State == finality.GapUnavailableProven {
+			if p.State == finality.GapUnavailableProven || p.State == finality.GapRetentionExpired {
 				for n := p.From; n <= p.To; n++ {
 					b.reopen[n] = true
 				}
@@ -480,7 +499,7 @@ func (b *Backfiller) reprobe(now time.Time, pieces []finality.GapRange, pol Back
 	b.lastReprobe = now
 	probes := 0
 	for i := len(pieces) - 1; i >= 0 && probes < maxReprobes; i-- {
-		if p := pieces[i]; p.State == finality.GapUnavailableProven {
+		if p := pieces[i]; p.State == finality.GapUnavailableProven || p.State == finality.GapRetentionExpired {
 			b.reopen[p.To], b.probing[p.To] = true, true
 			probes++
 		}

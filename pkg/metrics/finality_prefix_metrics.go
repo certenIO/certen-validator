@@ -36,14 +36,14 @@ func SetFinalityPrefixWindows(chain uint64, complete, open, unavailableProven, r
 
 // AddFinalityPrefixBackfilled counts prefix blocks the backfill closed.
 func AddFinalityPrefixBackfilled(chain uint64, n int) {
-	if n > 0 {
+	if n >= 0 { // a zero creates the series, so an alert on its rate has something to compare
 		finalityPrefixBackfilled.WithLabelValues(chainLabel(chain)).Add(float64(n))
 	}
 }
 
 // AddFinalityPrefixLease counts claim outcomes ("lost", "error").
 func AddFinalityPrefixLease(chain uint64, outcome string, n int) {
-	if n > 0 {
+	if n >= 0 {
 		finalityPrefixLease.WithLabelValues(chainLabel(chain), outcome).Add(float64(n))
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 )
 
 // RB12-ARCHIVE-BACKFILL: the PREFIX extension of a capture store.
@@ -150,15 +151,21 @@ func PrefixCovers(merged []PrefixWindow, from, to uint64) (covered bool, firstUn
 	return false, cur
 }
 
+// prefixMu serialises RequestPrefix within a process.
+var prefixMu sync.Mutex
+
 // RequestPrefix asks for [from, to] to be captured below the scanned region. Windows already recorded that cover it make it a no-op
 // (PrefixKnown); otherwise the policy decides, by the union of the recorded windows and this one, and a granted request is one new
-// insert-only gap row. The budget is read from the rows this validator can see: validators asking at the same instant for different
-// windows can each pass the bound, so the union can exceed MaxBlocks by at most one window per concurrent asker; it never grows
-// without a request.
+// insert-only gap row. The budget is read from the rows this validator can see, under a lock that makes the read and the write one step
+// within the process; validators (separate processes) asking at the same instant for different windows can each pass the bound, so the
+// union can exceed MaxBlocks by at most one window per other validator; it never grows without a request.
 func RequestPrefix(ctx context.Context, s CaptureStore, chain, from, to uint64, pol PrefixPolicy) (PrefixVerdict, error) {
 	if to < from || to > MaxCaptureBlock {
 		return "", fmt.Errorf("finality: bad prefix range %d-%d", from, to)
 	}
+	// the read of the union and the write of the window are one step within a process (the upgrader runs several builds at once)
+	prefixMu.Lock()
+	defer prefixMu.Unlock()
 	ws, err := PrefixWindowsOf(ctx, s, chain)
 	if err != nil {
 		return "", err

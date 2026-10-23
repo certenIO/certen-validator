@@ -226,6 +226,9 @@ func (l *GapBackfillLoop) audit(ctx context.Context) {
 // reportPrefix sets the prefix gauges from the requested windows and the unfilled pieces (every tick, so the gauges are live from the
 // first one) and names, once per change, the windows that cannot be completed without a blob archive.
 func (l *GapBackfillLoop) reportPrefix(ctx context.Context, pieces []finality.GapRange) {
+	metrics.AddFinalityPrefixBackfilled(l.ChainID, 0) // the counters exist from the first tick
+	metrics.AddFinalityPrefixLease(l.ChainID, "lost", 0)
+	metrics.AddFinalityPrefixLease(l.ChainID, "error", 0)
 	wins, err := finality.PrefixWindowsOf(ctx, l.Store, l.ChainID)
 	if err != nil {
 		l.logf("[FINALITY] gap backfill %s: the prefix windows could not be read: %v", l.Name(), ethrpc.RedactError(err))

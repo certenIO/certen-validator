@@ -198,8 +198,8 @@ func TestRB12ProductionShapeThirtyOneLegsBeforeTheCaptureAreRequestedMergedAndBa
 		t.Fatalf("the 3,601 blocks of the window, oldest first: %d", len(oc1.order))
 	}
 	_, pend, err := b1.Build(ctx, s, haveIncludedOnly, finality.LevelL1Posted)
-	if err != nil || pend == nil || pend.Reason != "l1_posted_unproven" {
-		t.Fatalf("a covered window is the plain pending, never a gap: pend=%v err=%v", pend, err)
+	if se, _ := finality.AsNamed(err); pend != nil || se == nil || se.Code != "l1_posted_not_found" {
+		t.Fatalf("a covered window with no channel is l1_posted_not_found, never a gap: pend=%v err=%v", pend, err)
 	}
 	if states := PrefixWindowStates(wins, nil); states[PrefixWindowComplete] != 26 {
 		t.Fatalf("%v", states)
