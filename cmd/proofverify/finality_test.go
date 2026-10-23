@@ -21,6 +21,7 @@ import (
 	"github.com/certen/independant-validator/pkg/database"
 	"github.com/certen/independant-validator/pkg/finality"
 	"github.com/certen/independant-validator/pkg/finality/finalitytest"
+	"github.com/certen/independant-validator/pkg/proof"
 )
 
 // fakeKind stands in for a chain package's Kind (RB11-C..F register the real ones).
@@ -172,19 +173,7 @@ func TestFinalityOfAStoredProof(t *testing.T) {
 
 	store := func(fixture string) (uuid.UUID, finality.Settlement) {
 		s := finalitytest.Settlement(t, fixture)
-		exec := map[string]any{}
-		raw, _ := json.Marshal(s.Included)
-		_ = json.Unmarshal(raw, &exec)
-		exec["chain_id"] = "84532"
-		artifact, _ := json.Marshal(map[string]any{"proof_components": map[string]any{"5_execution_proof": exec}})
-		created, err := database.NewProofArtifactRepository(db).CreateProofArtifact(ctx, &database.NewProofArtifact{
-			ProofType: database.ProofTypeCertenAnchor, AccumTxHash: "fin_" + uuid.NewString()[:8], AccountURL: "acc://finality-test.acme/tokens",
-			ProofClass: database.ProofClassOnCadence, ValidatorID: "test-validator-1", ArtifactJSON: artifact,
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		return created.ProofID, s
+		return uuid.MustParse(finalitytest.StoreProductionLeg(t, db, s)), s
 	}
 	run := func(reg *finality.Registry, id uuid.UUID) (int, string) {
 		var out bytes.Buffer
@@ -226,15 +215,61 @@ func TestFinalityOfAStoredProof(t *testing.T) {
 	}
 
 	// a proof whose bundle has no settlement evidence has nothing for finality to attach to
-	bare, err := database.NewProofArtifactRepository(db).CreateProofArtifact(ctx, &database.NewProofArtifact{
-		ProofType: database.ProofTypeCertenAnchor, AccumTxHash: "bare_" + uuid.NewString()[:8], AccountURL: "acc://finality-test.acme/tokens",
-		ProofClass: database.ProofClassOnCadence, ValidatorID: "test-validator-1", ArtifactJSON: json.RawMessage(`{"proof_components":{}}`),
-	})
+	bare := uuid.MustParse(finalitytest.StoreProductionArtifact(t, db, finality.ChainBaseSepolia, "", 0))
+	if code, out := run(finality.NewRegistry(), bare); code != exitSummaryOnly || !strings.Contains(out, "no settlement evidence") {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	// the same when the proof has a bundle that holds no execution proof
+	finalitytest.StoreBundleRow(t, db, bare.String(), finalitytest.Gzip(finalitytest.ProductionBundleJSON(nil)))
+	if code, out := run(finality.NewRegistry(), bare); code != exitSummaryOnly || !strings.Contains(out, "no settlement evidence") {
+		t.Fatalf("a bundle without component 5: exit %d\n%s", code, out)
+	}
+}
+
+// The bundle the production writer (pkg/proof CertenProofBundle.ToCompressedJSON) produces is read by the stored-proof path: the
+// test document of finalitytest is not trusted to be the writer's shape, the writer's own output is.
+func TestFinalityReadsTheBundleTheProductionWriterWrites(t *testing.T) {
+	url, err := testdb.PackageURL("proofverify")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if code, out := run(finality.NewRegistry(), bare.ProofID); code != exitSummaryOnly || !strings.Contains(out, "no settlement evidence") {
-		t.Fatalf("exit %d\n%s", code, out)
+	db, err := sql.Open("postgres", url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := (schema.Runner{DB: db}).Up(context.Background(), "proofverify-test"); err != nil {
+		t.Fatal(err)
+	}
+	s := finalitytest.Settlement(t, "base_sepolia_47368146")
+	rawExec, err := json.Marshal(finalitytest.ProductionExecutionProof(t, s))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var exec proof.ExecutionProof
+	if err := json.Unmarshal(rawExec, &exec); err != nil {
+		t.Fatal(err)
+	}
+	bundle := &proof.CertenProofBundle{Schema: proof.BundleSchemaURL, BundleVersion: proof.BundleVersion, BundleID: "bundle-writer-test"}
+	bundle.SetExecutionProof(&exec)
+	if bundle.ProofComponents.ExecutionProof == nil {
+		t.Fatal("the writer did not attach component 5")
+	}
+	gz, err := bundle.ToCompressedJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := finalitytest.StoreProductionArtifact(t, db, s.Chain, exec.TxHash, exec.BlockNumber)
+	finalitytest.StoreBundleRow(t, db, id, gz)
+
+	repo := database.NewFinalityAddendaRepository(database.NewClientFromDB(db))
+	ref, err := repo.LegRef(context.Background(), id)
+	if err != nil || ref.Chain != s.Chain {
+		t.Fatalf("LegRef: %v %+v", err, ref)
+	}
+	got, err := repo.LegSettlement(context.Background(), ref)
+	if err != nil || got.Subject != s.Subject || got.Chain != s.Chain || got.Included == nil {
+		t.Fatalf("LegSettlement: %v %+v", err, got)
 	}
 }
 

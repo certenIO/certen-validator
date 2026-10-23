@@ -19,7 +19,6 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/google/uuid"
 	_ "github.com/lib/pq"
 
 	schema "github.com/certen/independant-validator/db"
@@ -157,19 +156,10 @@ func TestRuntimeWiringEndToEndAgainstFakeProviders(t *testing.T) {
 		finality.ChainArbitrumSepolia: "arbitrum_sepolia_312921216", finality.ChainAdiri: "telcoin_adiri_498759",
 	} {
 		s := finalitytest.Settlement(t, fixture)
-		exec := map[string]any{}
-		raw, _ := json.Marshal(s.Included)
-		_ = json.Unmarshal(raw, &exec)
-		exec["chain_id"] = fmt.Sprint(chain)
-		artifact, _ := json.Marshal(map[string]any{"proof_components": map[string]any{"5_execution_proof": exec}})
-		created, err := database.NewProofArtifactRepository(db).CreateProofArtifact(ctx, &database.NewProofArtifact{
-			ProofType: database.ProofTypeCertenAnchor, AccumTxHash: "rt_" + uuid.NewString()[:8], AccountURL: "acc://finruntime-test.acme/tokens",
-			ProofClass: database.ProofClassOnCadence, ValidatorID: "test-validator-1", ArtifactJSON: artifact,
-		})
-		if err != nil {
-			t.Fatal(err)
+		if s.Chain != chain {
+			t.Fatalf("fixture %s settles on chain %d, not %d", fixture, s.Chain, chain)
 		}
-		legs[chain] = created.ProofID.String()
+		legs[chain] = finalitytest.StoreProductionLeg(t, db, s)
 	}
 
 	logs := &syncBuf{}

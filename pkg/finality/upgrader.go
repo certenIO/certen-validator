@@ -25,8 +25,9 @@ type LegRef struct {
 
 // LegSource lists the settled legs the worker upgrades and loads one leg's L6 evidence on demand.
 type LegSource interface {
-	// SettledLegs returns up to limit legs whose proof id sorts after `after` (empty for the first page), ascending by
-	// proof id. A source may leave out legs that are certainly complete (a finalized addendum exists).
+	// SettledLegs returns up to limit legs in the source's own order, continuing after the leg `after` (the proof id the previous
+	// page ended with; empty for the first page). The database source lists newest first, so a backlog of old legs does not stand in
+	// front of a new one. A source may leave out legs that are certainly complete (a finalized addendum exists).
 	SettledLegs(ctx context.Context, after string, limit int) ([]LegRef, error)
 	// LegSettlement loads the leg's settlement with its L6 evidence (Settlement.Included). A leg whose L6 evidence cannot
 	// be read is a Named state, not a zero value.
@@ -209,18 +210,19 @@ func NewUpgrader(src LegSource, store AddendumStore, reg *Registry, pins *Pins, 
 
 // PassReport counts what one pass did.
 type PassReport struct {
-	Listed   int // legs the source returned
-	NotDue   int // skipped: scheduled for later
-	Complete int // legs at the top level of their chain (not attempted)
-	Attempts int
-	Appended int // addenda appended
-	Pending  int // attempts that ended in finality_pending
-	Failed   int // attempts that ended in another named state
-	Broken   int // legs whose stored chain failed verification (nothing appended)
-	Conflict int // appends another validator won
-	NoProver int // legs of a chain with no registered prover: not loaded, not verified, not scheduled (logged once per chain)
-	Disabled int // legs of a chain whose per-chain switch is off (finality_upgrader_disabled, logged once per chain)
-	Unusable int // legs whose L6 evidence could not be loaded
+	Listed       int // legs the source returned
+	NotDue       int // skipped: scheduled for later
+	Complete     int // legs at the top level of their chain (not attempted)
+	Attempts     int
+	Appended     int // addenda appended
+	Pending      int // attempts that ended in finality_pending
+	Failed       int // attempts that ended in another named state
+	Broken       int // legs whose stored chain failed verification (nothing appended)
+	Conflict     int // appends another validator won
+	NoProver     int // legs of a chain with no registered prover: not loaded, not verified, not scheduled (logged once per chain)
+	Disabled     int // legs of a chain whose per-chain switch is off (finality_upgrader_disabled, logged once per chain)
+	Unusable     int // legs whose L6 evidence could not be loaded
+	NoSettlement int // legs whose bundle holds no execution proof (finality_included_unavailable): not a failure, not logged, asked again on the pending schedule
 	// SourceErr is a failure listing legs (the pass ended early).
 	SourceErr error
 }
@@ -308,6 +310,7 @@ page:
 				rep.Broken += b2i(res.broken)
 				rep.Conflict += b2i(res.conflict)
 				rep.Unusable += b2i(res.unusable)
+				rep.NoSettlement += b2i(res.noSettlement)
 				mu.Unlock()
 			}(ref)
 		}
@@ -482,12 +485,13 @@ func (u *Upgrader) publishGauges() {
 }
 
 type legResult struct {
-	appended int
-	pending  *PendingState
-	failed   bool
-	broken   bool
-	conflict bool
-	unusable bool
+	appended     int
+	pending      *PendingState
+	failed       bool
+	broken       bool
+	conflict     bool
+	unusable     bool
+	noSettlement bool
 }
 
 // storedOffered are the stored levels (l1_posted, finalized) the chain's profile offers, ascending.
@@ -561,6 +565,14 @@ func (u *Upgrader) upgradeLeg(ctx context.Context, ref LegRef) (res legResult) {
 		return u.src.LegSettlement(c, ref)
 	})
 	if err != nil {
+		if st, ok := AsNamed(err); ok && st.Code == CodeIncludedUnavailable {
+			// The leg has no L6 evidence (yet): its bundle holds no execution proof. Nothing is wrong and nothing is judged, so
+			// this is neither counted as a failure nor logged; the leg is asked again on the pending schedule.
+			res.noSettlement = true
+			u.record(ref.ProofID, ref.Chain, LevelNone, false)
+			u.scheduleBoth(ref.ProofID, u.cfg.PendingRetry)
+			return res
+		}
 		res.unusable = true
 		u.cfg.Recorder.BuildFailed(ref.Chain, codeOf(err))
 		logf("[FINALITY] leg %s chain %d: its L6 evidence cannot be used: %v", ref.ProofID, ref.Chain, err)
