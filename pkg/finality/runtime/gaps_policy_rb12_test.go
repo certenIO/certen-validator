@@ -6,15 +6,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math/big"
 	"testing"
 	"time"
 
-	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/crypto"
-	"github.com/ethereum/go-ethereum/rlp"
-
-	"github.com/certen/independant-validator/pkg/ethproof"
 	"github.com/certen/independant-validator/pkg/finality"
 	"github.com/certen/independant-validator/pkg/finality/baseposted"
 )
@@ -187,14 +181,10 @@ func (f *rtProvingL1) Block(_ context.Context, n uint64) (baseposted.L1BlockData
 		return b, nil
 	}
 	if n != 98 && n != 99 { // only blocks 98 and 99 hold inbox transactions
-		return baseposted.L1BlockData{Number: n}, nil
+		return rtEmptyBlock(n), nil
 	}
-	raws := [][]byte{{0x02, 0xc0, byte(n)}}
-	hdr, err := rlp.EncodeToBytes(&types.Header{Number: new(big.Int).SetUint64(n), Difficulty: big.NewInt(0), TxHash: ethproof.TrieRoot(raws)})
-	if err != nil {
-		f.t.Fatal(err)
-	}
-	h := [32]byte(crypto.Keccak256Hash(hdr))
+	raws := [][]byte{rtInboxTx(n)}
+	hdr, h := rtHeaderFor(n, raws)
 	f.hashes[n] = h
 	b := baseposted.L1BlockData{Number: n, Hash: h, HeaderRLP: hdr, Timestamp: 1_700_000_000, TxRaw: raws, TxTo: [][20]byte{rtInbox}, TxHasTo: []bool{true}, TxBlobHash: [][][32]byte{nil}}
 	f.blocks[n] = b
@@ -206,20 +196,14 @@ func (f *rtProvingL1) Proof(_ context.Context, addr [20]byte, slots [][32]byte, 
 	if f.proofAsks[block] <= f.failProofFor[block] {
 		return baseposted.StateProof{}, errors.New("eth_getProof: historical state is not available")
 	}
-	sp := baseposted.StateProof{Nodes: [][]byte{[]byte("node")}, Values: map[[32]byte][32]byte{}}
-	if len(slots) > 0 {
-		var v [32]byte
-		v[31] = 7
-		sp.Values[rtImplSlot] = v
-	}
-	return sp, nil
+	return rtProve(addr, slots), nil
 }
 
 func rtProvingLoop(t testing.TB, l1 *rtProvingL1) (*BasePostedLoop, *finality.MemCaptureStore) {
 	t.Helper()
 	mem := finality.NewMemCaptureStore()
 	lg := &rtLog{}
-	c := &baseposted.Capturer{Chain: finality.ChainBaseSepolia, Pins: &baseposted.Pins{BatchInbox: rtInbox}, L1: l1, Store: mem, SlotSeconds: 12}
+	c := &baseposted.Capturer{Chain: finality.ChainBaseSepolia, Pins: rtPins(), L1: l1, Store: mem, SlotSeconds: 12}
 	return &BasePostedLoop{Cap: c, Store: mem, Every: 12 * time.Second, StartBack: 2, Logf: lg.logf,
 		retry: map[uint64]*retryEntry{}, lastState: map[uint64]*finality.StateError{}}, mem
 }

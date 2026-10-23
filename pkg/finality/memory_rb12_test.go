@@ -80,7 +80,7 @@ func TestRB12TheMemoryBudgetEnvironmentValue(t *testing.T) {
 	for _, bad := range []string{"lots", "1024", "-5", "1.5"} {
 		t.Setenv(EnvMemoryBudget, bad)
 		if _, err := MemoryBudgetFromEnv(); err == nil {
-			t.Errorf("%q must refuse startup by name", bad)
+			t.Errorf("%q must be refused by name (the validator announces switch_invalid or setting_invalid and keeps running)", bad)
 		}
 	}
 }

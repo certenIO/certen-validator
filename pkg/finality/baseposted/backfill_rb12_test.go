@@ -390,7 +390,7 @@ func TestRB12CapturerOfReturnsTheFailureWithItsNamedStateAndTheHash(t *testing.T
 		t.Fatalf("%x %v %v", h, inbox, err)
 	}
 	h, inbox, err = bc.CaptureBlockHash(ctx, 999)
-	if err != nil || inbox || h != (L1BlockData{Number: 999}).Hash {
+	if err != nil || inbox || h != emptyBlockAt(999).Hash {
 		t.Fatalf("an empty block is scanned and reports the hash its provider gave: %x %v %v", h, inbox, err)
 	}
 	// the wrapper does not disturb the capturer's own Record hook
@@ -531,4 +531,69 @@ func (w *buildWorld) restorer(saved map[CaptureKey][]byte) BlockCapturer {
 		}
 		return hash, inbox, nil
 	}}
+}
+
+// RB12-GO-INT D7 (V-T2): "proven unavailable" is a verdict that stops the retries for ever, so it needs more than one provider's 404: the
+// blob must be gone on at least TWO DISTINCT beacon hosts (every route of each), on the usual number of attempts over the usual span.
+// With one host the gap stays open and says how many hosts answered. Past the protocol retention the blobs are pruned by rule, so
+// retention_expired needs no second host.
+func TestRB12GOINTOneBeaconHostIsNotProofThatABlobIsUnavailable(t *testing.T) {
+	ctx := context.Background()
+	st := NewMemStore()
+	_ = finality.RecordGap(ctx, st, uint64(Chain), 70, 70, finality.GapBlobUnavailable)
+	now, adv := bfClock()
+	slotNow := (uint64(bfEpoch.Unix()) - 1655733600) / 12
+	slot := slotNow - 3600
+	hosts := 1
+	sc := &scriptCap{script: func(n uint64, call int) ([32]byte, bool, error) {
+		s := finality.NewState("l1_blob_unavailable", "l1_block", n, "versioned_hashes", "0x01", "beacon_slot", slot, "http_status", uint64(404))
+		return [32]byte{}, false, &CaptureFailure{Block: n, State: s, Err: &StatusError{Status: 404, Gone: true, Endpoints: hosts}}
+	}}
+	var logged []string
+	w := &Backfiller{Chain: uint64(Chain), Store: st, Capturer: sc, Providers: []string{"beacon-a.example"}, Policy: bfPolicy(), Now: now, Pick: func(int) int { return 0 },
+		Logf: func(f string, a ...any) { logged = append(logged, fmt.Sprintf(f, a...)) }}
+	for i := 0; i < 12; i++ { // far more than the three observations over half an hour that two hosts would need
+		if _, err := w.Step(ctx, 2); err != nil {
+			t.Fatal(err)
+		}
+		adv(20 * time.Minute)
+	}
+	if ends, _ := st.ListByRange(ctx, uint64(Chain), 0, finality.MaxCaptureBlock, finality.GapEndPrefix); len(ends) != 0 {
+		t.Fatalf("one beacon host's 404 was taken as proof of unavailability: %v", ends)
+	}
+	if open, _ := finality.GapsIn(ctx, st, uint64(Chain), 70, 70); len(open) != 1 || open[0].State != finality.GapOpen {
+		t.Fatalf("the gap must stay open: %v", open)
+	}
+	notes, _ := st.ListByRange(ctx, uint64(Chain), 70, 70, finality.GapNotePrefix)
+	var text string
+	for _, k := range notes {
+		b, _, _ := st.Get(ctx, k)
+		text += string(b)
+	}
+	if !strings.Contains(text, "1 distinct") || !strings.Contains(strings.Join(logged, "\n"), "1 distinct beacon host") {
+		t.Fatalf("the open gap says how many hosts answered (note %q, log %v)", text, logged)
+	}
+	// two distinct hosts, same attempts: now it is proof
+	hosts = 2
+	w.Providers = []string{"beacon-a.example", "beacon-b.example"}
+	for i := 0; i < 12; i++ {
+		if _, err := w.Step(ctx, 2); err != nil {
+			t.Fatal(err)
+		}
+		adv(20 * time.Minute)
+	}
+	if got, _ := finality.GapsIn(ctx, st, uint64(Chain), 70, 70); len(got) != 1 || got[0].State != finality.GapUnavailableProven {
+		t.Fatalf("two distinct hosts that both say gone are proof: %v", got)
+	}
+}
+
+// BeaconHTTP counts DISTINCT hosts: two base URLs of one host (another path) are one provider.
+func TestRB12GOINTBeaconHTTPCountsDistinctHostsNotURLs(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(404) }))
+	defer srv.Close()
+	_, err := (&BeaconHTTP{Bases: []string{srv.URL + "/a", srv.URL + "/b/"}}).Blobs(context.Background(), 5)
+	gone, ok := BlobsGone(err)
+	if !ok || gone.Endpoints != 1 {
+		t.Fatalf("two URLs of one host are one distinct host: %v (%+v)", err, gone)
+	}
 }

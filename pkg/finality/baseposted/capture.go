@@ -6,13 +6,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/big"
 	"strings"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
 
 	"github.com/certen/independant-validator/pkg/ethproof"
 	"github.com/certen/independant-validator/pkg/finality"
 	"github.com/certen/independant-validator/pkg/finality/baseposted/kzgsetup"
+	"github.com/certen/independant-validator/pkg/metrics"
 )
 
 // ---- the capture store (V2_SPEC_S7 2.8) ----
@@ -107,6 +110,22 @@ func (c *Capturer) CaptureBlock(ctx context.Context, number uint64) (bool, error
 	if err != nil {
 		return false, &BlockFetchError{Block: number, Err: err}
 	}
+	// The block is verified BEFORE anything is concluded from it, also when it holds no inbox transaction: "this block holds nothing to
+	// capture" closes a capture gap, so it must be a verified statement and not a provider's word (RB12-GO-INT D7). The header must hash to
+	// the hash the block is named by, and the transactions served must be the ones the header commits to.
+	hdr, err := finality.ReadHeader(blk.HeaderRLP)
+	if err != nil {
+		return false, err
+	}
+	if hdr.Hash != blk.Hash {
+		return false, errors.New("baseposted: the re-encoded header does not hash to the block hash")
+	}
+	if len(blk.TxTo) != len(blk.TxRaw) || len(blk.TxHasTo) != len(blk.TxRaw) || len(blk.TxBlobHash) != len(blk.TxRaw) {
+		return false, errors.New("baseposted: the block's transaction columns differ in length")
+	}
+	if ethproof.TrieRoot(blk.TxRaw) != common.Hash(hdr.TransactionRoot) {
+		return false, errors.New("baseposted: the transactions served do not hash to the header's transaction root")
+	}
 	var idx []uint32
 	for i := range blk.TxRaw {
 		if blk.TxHasTo[i] && blk.TxTo[i] == c.Pins.BatchInbox {
@@ -118,13 +137,6 @@ func (c *Capturer) CaptureBlock(ctx context.Context, number uint64) (bool, error
 	}
 	key := func(item string) CaptureKey {
 		return CaptureKey{Chain: c.Chain, L1Block: blk.Number, L1Hash: blk.Hash, Item: item}
-	}
-	hdr, err := finality.ReadHeader(blk.HeaderRLP)
-	if err != nil {
-		return false, err
-	}
-	if hdr.Hash != blk.Hash {
-		return false, errors.New("baseposted: the re-encoded header does not hash to the block hash")
 	}
 	// State first: it is the item that expires (the provider window), so a failure here stores nothing.
 	var sc StateProof
@@ -152,6 +164,34 @@ func (c *Capturer) CaptureBlock(ctx context.Context, number uint64) (bool, error
 			return false, fmt.Errorf("%s: %w", s.Error(), err)
 		}
 		sc.Nodes = append(append(sc.Nodes, a.Nodes...), b.Nodes...)
+	}
+	// AUTHENTICATION (RB12-GO-INT D2). Rows are insert-only and the providers are untrusted: what is stored is what the verifier will use,
+	// so the SystemConfig proof is verified HERE under the header's own state root (the verifier's systemConfigAt: the proxy's batcherHash,
+	// the EIP-1967 implementation and its pinned code hash), and only the inbox transactions whose sender is that batcher are kept (the rule
+	// of verifyChannel, "Authentication"). A proof that does not verify stores nothing and leaves the gap open; a transaction another key
+	// sent is skipped and counted. The live capture and the backfill are this same function.
+	batcher, err := systemConfigAt(newNodeDB(sc.Nodes), c.Pins, hdr.StateRoot, blk.Number)
+	if err != nil {
+		s := finality.NewState("batcher_state_unavailable", "l1_block", blk.Number)
+		if c.Record != nil {
+			c.Record(blk.Number, s)
+		}
+		return false, fmt.Errorf("%s: the SystemConfig proof does not verify under the state root of the header (nothing stored): %w", s.Error(), err)
+	}
+	signer := types.LatestSignerForChainID(new(big.Int).SetUint64(c.Pins.L1ChainID))
+	kept := idx[:0:0]
+	for _, i := range idx {
+		var tx types.Transaction
+		if tx.UnmarshalBinary(blk.TxRaw[i]) == nil {
+			if from, err := signer.Sender(&tx); err == nil && [20]byte(from) == batcher {
+				kept = append(kept, i)
+				continue
+			}
+		}
+		metrics.IncFinalityCaptureForeignInboxTx(c.Chain)
+	}
+	if idx = kept; len(idx) == 0 {
+		return false, nil
 	}
 	var kz *kzgsetup.Context
 	type blobRow struct {

@@ -10,8 +10,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/ethereum/go-ethereum/common"
-
 	"github.com/certen/independant-validator/pkg/finality"
 	"github.com/certen/independant-validator/pkg/finality/baseposted/kzgsetup"
 )
@@ -51,7 +49,7 @@ func (f *scriptL1) Block(_ context.Context, n uint64) (L1BlockData, error) {
 		return L1BlockData{}, err
 	}
 	if n != f.blk.Number {
-		return L1BlockData{Number: n}, nil
+		return emptyBlockAt(n), nil
 	}
 	return f.blk, nil
 }
@@ -60,13 +58,12 @@ func (f *scriptL1) Proof(_ context.Context, addr [20]byte, slots [][32]byte, blo
 	if f.proofs == f.failProf {
 		return StateProof{}, errors.New("historical state is not available")
 	}
-	sp := StateProof{Nodes: [][]byte{[]byte("node-" + common.Bytes2Hex(addr[:2]))}, Values: map[[32]byte][32]byte{}}
-	if len(slots) > 0 && !f.noImpl {
-		var v [32]byte
-		if !f.zeroImpl {
-			copy(v[12:], testImpl[:])
-		}
-		sp.Values[eip1967ImplSlot] = v
+	sp := testProvable().proof(addr, slots)
+	if len(slots) > 0 && f.noImpl {
+		delete(sp.Values, eip1967ImplSlot)
+	}
+	if len(slots) > 0 && f.zeroImpl {
+		sp.Values[eip1967ImplSlot] = [32]byte{}
 	}
 	return sp, nil
 }

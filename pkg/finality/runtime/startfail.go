@@ -6,6 +6,7 @@ import (
 	"errors"
 
 	"github.com/certen/independant-validator/pkg/envvar"
+	"github.com/certen/independant-validator/pkg/ethrpc"
 	"github.com/certen/independant-validator/pkg/finality"
 )
 
@@ -63,7 +64,7 @@ func StartFailure(logf func(string, ...any), err error) *finality.StateError {
 		}
 		return finality.SettingInvalidState(first.Key, logged)
 	case errors.As(err, &we):
-		logf("[FINALITY] start failed at %s: %v", we.Stage, we)
+		logf("[FINALITY] start failed at %s: %s", we.Stage, ethrpc.RedactText(we.Error()))
 		switch we.Stage {
 		case finality.StartStagePinsFile:
 			return finality.StartFailedState(finality.DisabledPinsInvalid, we.Stage, EnvPinsFile, we.Error())
@@ -74,7 +75,7 @@ func StartFailure(logf func(string, ...any), err error) *finality.StateError {
 		}
 		return finality.StartFailedState(finality.DisabledWiringFailed, we.Stage, "", we.Error())
 	}
-	logf("[FINALITY] start failed at %s: %v", finality.StartStageStart, err)
+	logf("[FINALITY] start failed at %s: %s", finality.StartStageStart, ethrpc.RedactText(err.Error()))
 	return finality.StartFailedState(finality.DisabledWiringFailed, finality.StartStageStart, "", err.Error())
 }
 

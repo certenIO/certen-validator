@@ -11,6 +11,7 @@ import (
 	"io"
 	"math/big"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -257,14 +258,27 @@ type StatusError struct {
 	Status int
 	// Gone: every endpoint answered HTTP 404 or 410 on every blob route of this request, Endpoints being how many endpoints were asked. It is
 	// the one provider evidence that a blob is unavailable (RB12-CAPTURE-GAP); a provider error, a timeout or a single dissenting endpoint
-	// is not.
+	// is not. Endpoints counts DISTINCT HOSTS (host and port): two base URLs of one provider are one provider (RB12-GO-INT D7).
 	Gone      bool
 	Endpoints int
 }
 
+// distinctHosts is how many different providers (host and port) the base URLs name.
+func distinctHosts(bases []string) int {
+	seen := map[string]bool{}
+	for _, b := range bases {
+		h := strings.ToLower(strings.TrimSpace(b))
+		if u, err := url.Parse(strings.TrimSpace(b)); err == nil && u.Host != "" {
+			h = strings.ToLower(u.Host)
+		}
+		seen[h] = true
+	}
+	return len(seen)
+}
+
 func (e *StatusError) Error() string {
 	if e.Gone {
-		return fmt.Sprintf("beacon blob answer HTTP %d from every one of %d endpoints", e.Status, e.Endpoints)
+		return fmt.Sprintf("beacon blob answer HTTP %d from every one of %d distinct beacon hosts", e.Status, e.Endpoints)
 	}
 	return fmt.Sprintf("beacon blob answer HTTP %d", e.Status)
 }
@@ -331,7 +345,7 @@ func (b *BeaconHTTP) Blobs(ctx context.Context, slot uint64) ([][]byte, error) {
 		}
 	}
 	if se, ok := last.(*StatusError); ok && attempts > 0 && goneAnswers == attempts {
-		return nil, &StatusError{Status: se.Status, Gone: true, Endpoints: len(b.Bases)}
+		return nil, &StatusError{Status: se.Status, Gone: true, Endpoints: distinctHosts(b.Bases)}
 	}
 	return nil, last
 }
