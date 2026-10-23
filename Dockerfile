@@ -16,7 +16,7 @@
 FROM golang:1.25.14-alpine3.24@sha256:1ae0735f00daffa3aaf1363a5184c0d2dc55c78e3db4ec70241cdac97bf84b59 AS builder
 
 # Install build dependencies (versions pinned; see above)
-RUN apk add --no-cache git=2.54.0-r0 gcc=15.2.0-r5 musl-dev=1.2.6-r2
+RUN apk add --no-cache git=2.54.0-r0 gcc=15.2.0-r5 musl-dev=1.2.6-r3
 
 # Set working directory
 WORKDIR /build
