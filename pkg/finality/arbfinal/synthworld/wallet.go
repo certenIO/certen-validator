@@ -282,3 +282,6 @@ func rewriteArbSection(raw []byte, f func(sec map[string]any) bool) []byte {
 	}
 	return out
 }
+
+// WalletImplWord is the 32-byte word of the pinned implementation address, which the implementation slot of a valid wallet holds.
+func WalletImplWord() common.Hash { return word(WalletImpl) }
