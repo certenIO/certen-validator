@@ -103,6 +103,7 @@ type Indexer struct {
 	reconcilePos uint64
 	rng          *rand.Rand
 	hintMu       sync.Mutex
+	selfRes      SelfCheckResult // what the last SelfCheck did (SelfCheckReport)
 	hints        map[uint64]bool // blocks noted as captured late (NoteLate)
 }
 
@@ -776,13 +777,16 @@ func (ix *Indexer) SelfCheck(ctx context.Context, sample int) error {
 	if err != nil || !ok {
 		return err
 	}
+	ix.selfRes.Around = lo
 	span := ix.Cfg.span()
 	at := lo
 	if hi > lo+span {
 		at = lo + uint64(ix.rng.Int63n(int64(hi-lo-span+1)))
 	}
+	ix.selfRes.Around = at
 	var firstErr error
 	note := func(s *finality.StateError) {
+		ix.selfRes.Mismatches++
 		metrics.IncFinalityIndexMismatch(uint64(Chain), FamilyBaseInbox)
 		ix.state(s)
 		ix.Cfg.logf("[FINALITY] index base-inbox: self-check MISMATCH %s", s.Error())
@@ -797,6 +801,7 @@ func (ix *Indexer) SelfCheck(ctx context.Context, sample int) error {
 	}
 	ix.shuffle(len(names), func(i, j int) { names[i], names[j] = names[j], names[i] })
 	checked := 0
+	defer func() { ix.selfRes.Entries = checked }()
 	for _, k := range names {
 		if checked >= sample {
 			break
@@ -859,6 +864,7 @@ func (ix *Indexer) SelfCheck(ctx context.Context, sample int) error {
 			}
 			return err
 		}
+		ix.selfRes.Digests++
 		if !bytes.Equal(stored, want) {
 			note(finality.IndexInconsistent(uint64(Chain), FamilyBaseInbox, finality.IndexSelfCheckMismatch, "item", k.Item, "l1_block", k.L1Block))
 		}
@@ -878,6 +884,7 @@ func isBlobRaw(raw []byte) bool {
 
 // skipped records a self-check that was not run because the memory budget refused the rows it reads: counted and logged, never silent.
 func (ix *Indexer) skipped(what string, k finality.CaptureKey) error {
+	ix.selfRes.Skipped++
 	metrics.IncFinalityIndexSelfCheckSkipped(uint64(Chain), FamilyBaseInbox)
 	ix.Cfg.logf("[FINALITY] index base-inbox: self-check of the %s at L1 block %d SKIPPED: the memory budget refused its rows (certen_finality_index_selfcheck_skipped_total)", what, k.L1Block)
 	return nil
@@ -1037,4 +1044,25 @@ func (ix *Indexer) reconcileHints(ctx context.Context, rep *finality.StepReport,
 		ix.hintMu.Unlock()
 	}
 	return nil
+}
+
+// SelfCheckResult is what one self-check did: the entries and digests it recomputed and compared, the checks it skipped because the memory
+// budget refused their rows (never silent), and the mismatches it named. A result with Skipped > 0 is INCOMPLETE: nothing was judged for the
+// skipped checks.
+type SelfCheckResult struct {
+	Generation uint32
+	Around     uint64 // the L1 block the sampled region starts at
+	Entries    int
+	Digests    int
+	Skipped    int
+	Mismatches int
+}
+
+// SelfCheckReport runs SelfCheck and returns what it did (the on-demand caller, validator finality-index-selfcheck, prints it).
+func (ix *Indexer) SelfCheckReport(ctx context.Context, sample int) (SelfCheckResult, error) {
+	ix.selfRes = SelfCheckResult{Generation: ix.Gen}
+	err := ix.SelfCheck(ctx, sample)
+	res := ix.selfRes
+	res.Generation = ix.Gen
+	return res, err
 }
