@@ -63,8 +63,12 @@ func TestSet2EveryVectorVerdict(t *testing.T) {
 	for _, v := range f.Vectors {
 		groups[v.Group]++
 		got := outcome(arbfinal.New().Verify(pinsOf(t, f, v), legOf(t, v), evidenceOf(t, f, v)))
-		if got != v.Expect {
-			t.Errorf("%s (%s):\n got:  %s\n want: %s", v.Name, v.Note, got, v.Expect)
+		want := v.Expect
+		if w, ok := supersededInSet2To3[v.Name]; ok {
+			want = w
+		}
+		if got != want {
+			t.Errorf("%s (%s):\n got:  %s\n want: %s", v.Name, v.Note, got, want)
 		}
 	}
 	if len(f.Vectors) < 12 {
@@ -86,8 +90,8 @@ func TestSet2ValidVectorsThroughTheRegistry(t *testing.T) {
 	}
 	seen := 0
 	for _, v := range f.Vectors {
-		if !strings.Contains(v.Expect, `"code":"finalized"`) {
-			continue
+		if _, ok := supersededInSet2To3[v.Name]; ok || !strings.Contains(v.Expect, `"code":"finalized"`) {
+			continue // a superseded case answers indirect now (its SUPERSEDED.md): TestEveryVectorVerdict judges it, the registry path is for the accepted ones
 		}
 		seen++
 		a := finality.Addendum{Level: finality.LevelFinalized, Chain: finality.ChainArbitrumSepolia, Kind: arbfinal.KindName, Evidence: evidenceOf(t, f, v)}
@@ -99,7 +103,13 @@ func TestSet2ValidVectorsThroughTheRegistry(t *testing.T) {
 			t.Fatalf("%s: %+v", v.Name, got)
 		}
 	}
-	if seen < 5 {
+	if seen < 4 { // five were valid before the wallet proof; one is superseded (SUPERSEDED.md)
 		t.Fatalf("%d valid vectors", seen)
 	}
+}
+
+// supersededInSet2To3 is the same for finality_arb_final2 (the callee-code-is-not-examined vector states the boundary the wallet proof
+// removed). testdata/finality_arb_final2/SUPERSEDED.md records it.
+var supersededInSet2To3 = map[string]string{
+	"synth_valid_wallet_route_callee_code_is_not_examined": indirectNow("0xcb39a45c923e7e861451bc504ebe190d1dd7d9002c487ef9a564b714b7611729"),
 }

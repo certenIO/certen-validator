@@ -77,8 +77,11 @@ type WalletState struct {
 	// Omit leaves proofs out of the evidence: "account" (the callee's account proof), "slot" (the implementation slot's storage proof),
 	// "impl_account" (the implementation's account proof).
 	Omit []string
-	// AtS builds the wallet accounts in the state at S instead of the state at K (the verifier reads K).
-	AtS bool
+	// AtS builds every wallet account in the state at S instead of the state at K (the verifier reads K); CalleeAtS builds only the callee
+	// (its account and slot) there and ImplAtS only the implementation's account, the other going to K.
+	AtS       bool
+	CalleeAtS bool
+	ImplAtS   bool
 }
 
 // walletBuild is what one state gains from a WalletState.
@@ -88,37 +91,54 @@ type walletBuild struct {
 	skip   map[common.Address]bool
 }
 
-func (w *WalletState) build(to common.Address) *walletBuild {
+func (b *walletBuild) merge(o *walletBuild) *walletBuild {
+	if o == nil {
+		return b
+	}
+	if b == nil {
+		b = &walletBuild{skip: map[common.Address]bool{}}
+	}
+	b.accts = append(b.accts, o.accts...)
+	b.absent = append(b.absent, o.absent...)
+	for a := range o.skip {
+		b.skip[a] = true
+	}
+	return b
+}
+
+// build returns the callee part (the proxy account and its implementation slot) and the implementation part (the account the slot
+// names) separately, so that a world can put them in different states.
+func (w *WalletState) build(to common.Address) (callee, impl *walletBuild) {
 	if w == nil {
-		return nil
+		return nil, nil
 	}
 	addr := to
 	if w.Callee != nil {
 		addr = *w.Callee
 	}
-	out := &walletBuild{skip: map[common.Address]bool{}}
+	callee, impl = &walletBuild{skip: map[common.Address]bool{}}, &walletBuild{skip: map[common.Address]bool{}}
 	implWord := word(WalletImpl)
 	if w.ImplWord != nil {
 		implWord = *w.ImplWord
 	}
 	implAddr := common.BytesToAddress(implWord[12:])
-	callee := acct{addr: addr, code: WalletProxyCodeHash, skip: map[common.Hash]bool{}}
+	proxy := acct{addr: addr, code: WalletProxyCodeHash, skip: map[common.Hash]bool{}}
 	if w.CalleeCode != nil {
-		callee.code = *w.CalleeCode
+		proxy.code = *w.CalleeCode
 	}
 	switch {
 	case w.CalleeAbsent:
-		out.absent = append(out.absent, addr)
+		callee.absent = append(callee.absent, addr)
 	case w.CalleeEOA:
-		callee.code = types.EmptyCodeHash
-		out.accts = append(out.accts, callee)
+		proxy.code = types.EmptyCodeHash
+		callee.accts = append(callee.accts, proxy)
 	default:
 		if w.ImplZero {
-			callee.absent = []common.Hash{WalletImplSlot}
+			proxy.absent = []common.Hash{WalletImplSlot}
 		} else {
-			callee.storage = map[common.Hash]common.Hash{WalletImplSlot: implWord}
+			proxy.storage = map[common.Hash]common.Hash{WalletImplSlot: implWord}
 		}
-		out.accts = append(out.accts, callee)
+		callee.accts = append(callee.accts, proxy)
 	}
 	implCode := WalletLogicCodeHash
 	if w.ImplCode != nil {
@@ -126,28 +146,48 @@ func (w *WalletState) build(to common.Address) *walletBuild {
 	}
 	if !w.CalleeAbsent && !w.CalleeEOA && !w.ImplZero {
 		if w.ImplAbsent {
-			out.absent = append(out.absent, implAddr)
+			impl.absent = append(impl.absent, implAddr)
 		} else {
-			out.accts = append(out.accts, acct{addr: implAddr, code: implCode})
+			impl.accts = append(impl.accts, acct{addr: implAddr, code: implCode})
 		}
 	}
 	for _, o := range w.Omit {
 		switch o {
 		case "account":
-			out.skip[addr] = true
+			callee.skip[addr] = true
 		case "slot":
-			for i := range out.accts {
-				if out.accts[i].addr == addr {
-					out.accts[i].skip[WalletImplSlot] = true
+			for i := range callee.accts {
+				if callee.accts[i].addr == addr {
+					callee.accts[i].skip[WalletImplSlot] = true
 				}
 			}
 		case "impl_account":
-			out.skip[implAddr] = true
+			impl.skip[implAddr] = true
 		default:
 			panic("unknown wallet proof to omit: " + o)
 		}
 	}
-	return out
+	return callee, impl
+}
+
+// builds returns what the state at S and the state at K gain; when S == K there is one state and it gains everything.
+func (w *WalletState) builds(to common.Address, sameState bool) (forS, forK *walletBuild) {
+	if w == nil {
+		return nil, nil
+	}
+	callee, impl := w.build(to)
+	calleeS, implS := w.AtS || w.CalleeAtS || sameState, w.AtS || w.ImplAtS || sameState
+	if calleeS {
+		forS = forS.merge(callee)
+	} else {
+		forK = forK.merge(callee)
+	}
+	if implS {
+		forS = forS.merge(impl)
+	} else {
+		forK = forK.merge(impl)
+	}
+	return forS, forK
 }
 
 // WalletPinKeys are the pins the wallet route needs beyond the pins of a published set; the harness of a published set supplies them
@@ -161,14 +201,20 @@ func WalletPinKeys() (impl string, slot string, proxyHash string, logicHash stri
 // The rest of the file is returned in the same key order and number text as it came.
 func WithWalletPins(raw []byte) []byte {
 	impl, slot, proxyHash, logicHash := WalletPinKeys()
-	return rewriteArbSection(raw, func(sec map[string]any) {
-		cp := sec["confirm_path"].(map[string]any)
+	return rewriteArbSection(raw, func(sec map[string]any) bool {
+		cp, ps, lp, ok := sectionsOf(sec)
+		if !ok {
+			return false
+		}
+		if cp["validator_wallet_impl"] == impl && ps["wallet_impl"] == slot &&
+			lp[strings.ToLower(proxyHash)] == "validator_wallet_proxy" && lp[strings.ToLower(logicHash)] == "validator_wallet_logic" {
+			return false // already carries them: the file stays byte for byte as it is
+		}
 		cp["validator_wallet_impl"] = impl
-		ps := sec["proxy_slots"].(map[string]any)
 		ps["wallet_impl"] = slot
-		lp := sec["logic_pins"].(map[string]any)
 		lp[strings.ToLower(proxyHash)] = "validator_wallet_proxy"
 		lp[strings.ToLower(logicHash)] = "validator_wallet_logic"
+		return true
 	})
 }
 
@@ -176,16 +222,38 @@ func WithWalletPins(raw []byte) []byte {
 // sets use it so that they regenerate those sets byte-identically from the current embedded pins.
 func WithoutWalletPins(raw []byte) []byte {
 	_, _, proxyHash, logicHash := WalletPinKeys()
-	return rewriteArbSection(raw, func(sec map[string]any) {
-		delete(sec["confirm_path"].(map[string]any), "validator_wallet_impl")
-		delete(sec["proxy_slots"].(map[string]any), "wallet_impl")
-		lp := sec["logic_pins"].(map[string]any)
+	return rewriteArbSection(raw, func(sec map[string]any) bool {
+		cp, ps, lp, ok := sectionsOf(sec)
+		if !ok {
+			return false
+		}
+		_, a := cp["validator_wallet_impl"]
+		_, b := ps["wallet_impl"]
+		_, c := lp[strings.ToLower(proxyHash)]
+		_, d := lp[strings.ToLower(logicHash)]
+		if !a && !b && !c && !d {
+			return false // a file that never carried them stays byte for byte as it is
+		}
+		delete(cp, "validator_wallet_impl")
+		delete(ps, "wallet_impl")
 		delete(lp, strings.ToLower(proxyHash))
 		delete(lp, strings.ToLower(logicHash))
+		return true
 	})
 }
 
-func rewriteArbSection(raw []byte, f func(sec map[string]any)) []byte {
+// sectionsOf are the three objects of the arb_sepolia section that carry the wallet pins; a file that lacks one is not rewritten.
+func sectionsOf(sec map[string]any) (cp, ps, lp map[string]any, ok bool) {
+	var a, b, c bool
+	cp, a = sec["confirm_path"].(map[string]any)
+	ps, b = sec["proxy_slots"].(map[string]any)
+	lp, c = sec["logic_pins"].(map[string]any)
+	return cp, ps, lp, a && b && c
+}
+
+// rewriteArbSection applies f to the arb_sepolia section of a pins file; f reports whether it changed anything, and a file it did not
+// change is returned as it came (no re-encoding).
+func rewriteArbSection(raw []byte, f func(sec map[string]any) bool) []byte {
 	var doc map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		panic(err)
@@ -200,7 +268,9 @@ func rewriteArbSection(raw []byte, f func(sec map[string]any)) []byte {
 	if err := d.Decode(&s); err != nil {
 		panic(err)
 	}
-	f(s)
+	if !f(s) {
+		return raw
+	}
 	b, err := json.Marshal(s)
 	if err != nil {
 		panic(err)

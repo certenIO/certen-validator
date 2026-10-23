@@ -25,6 +25,7 @@ import (
 func generate2(out string) error {
 	mismatches = nil
 	g := newGen()
+	g.legacy = true
 	synthetic3(g)
 	if len(mismatches) > 0 {
 		return fmt.Errorf("%d vectors disagree with the verifier:\n%s", len(mismatches), strings.Join(mismatches, "\n"))

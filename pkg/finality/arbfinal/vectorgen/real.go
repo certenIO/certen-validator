@@ -14,6 +14,7 @@ import (
 
 	"github.com/certen/independant-validator/pkg/finality"
 	"github.com/certen/independant-validator/pkg/finality/arbfinal"
+	sw "github.com/certen/independant-validator/pkg/finality/arbfinal/synthworld"
 	"github.com/certen/independant-validator/pkg/finality/ethl1"
 )
 
@@ -51,7 +52,8 @@ func realVectors(g *gen, dir string) error {
 	leg.Chain, leg.Number, leg.HeaderRLP = l.Chain, l.Number, hb
 	copy(leg.Hash[:], mustHex(l.Hash))
 
-	p, err := finality.ParsePinsOverride(pins)
+	// The capture predates the wallet pins; the set stores its pins file as captured, the verifier judges it with them (g.add does the same).
+	p, err := finality.ParsePinsOverride(sw.WithWalletPins(pins))
 	if err != nil {
 		return err
 	}

@@ -14,6 +14,7 @@ import (
 
 	"github.com/certen/independant-validator/pkg/finality"
 	"github.com/certen/independant-validator/pkg/finality/arbfinal"
+	"github.com/certen/independant-validator/pkg/finality/arbfinal/synthworld"
 )
 
 // vectorDir is the published set. It is never edited: a change is a new set (finality_arb_final2) with a SUPERSEDED note.
@@ -45,9 +46,12 @@ type vVec struct {
 }
 
 type vFile struct {
-	dir     string
-	Format  string `json:"format"`
-	Vectors []vVec `json:"vectors"`
+	dir string
+	// walletPins: the set predates the wallet pins (RB11-E1-RAISE) and stores its pins files without them; the harness adds them to each
+	// stored pins file (synthworld.WithWalletPins) so the unedited set is judged by the verifier that requires them.
+	walletPins bool
+	Format     string `json:"format"`
+	Vectors    []vVec `json:"vectors"`
 }
 
 func loadSet(t testing.TB, dir string) vFile {
@@ -61,6 +65,7 @@ func loadSet(t testing.TB, dir string) vFile {
 		t.Fatal(err)
 	}
 	f.dir = dir
+	f.walletPins = dir == vectorDir || dir == vectorDir2
 	return f
 }
 
@@ -109,6 +114,9 @@ func pinsOf(t testing.TB, f vFile, v vVec) *finality.Pins {
 	raw, err := os.ReadFile(filepath.Join(f.dir, "pins", v.Pins))
 	if err != nil {
 		t.Fatal(err)
+	}
+	if f.walletPins {
+		raw = synthworld.WithWalletPins(raw)
 	}
 	p, err := finality.ParsePinsOverride(raw)
 	if err != nil {
@@ -188,8 +196,12 @@ func TestEveryVectorVerdict(t *testing.T) {
 	for _, v := range f.Vectors {
 		groups[v.Group]++
 		got := outcome(arbfinal.New().Verify(pinsOf(t, f, v), legOf(t, v), evidenceOf(t, f, v)))
-		if got != v.Expect {
-			t.Errorf("%s (%s):\n got:  %s\n want: %s", v.Name, v.Note, got, v.Expect)
+		want := v.Expect
+		if w, ok := supersededInSet3[v.Name]; ok {
+			want = w
+		}
+		if got != want {
+			t.Errorf("%s (%s):\n got:  %s\n want: %s", v.Name, v.Note, got, want)
 		}
 	}
 	if len(f.Vectors) < 80 {
@@ -214,8 +226,8 @@ func TestValidVectorsThroughTheRegistry(t *testing.T) {
 	}
 	seen := 0
 	for _, v := range f.Vectors {
-		if !strings.Contains(v.Expect, `"code":"finalized"`) {
-			continue
+		if _, ok := supersededInSet3[v.Name]; ok || !strings.Contains(v.Expect, `"code":"finalized"`) {
+			continue // a superseded case answers indirect now (its SUPERSEDED.md): TestEveryVectorVerdict judges it, the registry path is for the accepted ones
 		}
 		seen++
 		a := finality.Addendum{Level: finality.LevelFinalized, Chain: finality.ChainArbitrumSepolia, Kind: arbfinal.KindName, Evidence: evidenceOf(t, f, v)}
@@ -230,4 +242,29 @@ func TestValidVectorsThroughTheRegistry(t *testing.T) {
 	if seen < 8 {
 		t.Fatalf("%d valid vectors", seen)
 	}
+}
+
+// supersededInSet3 are the cases of finality_arb_final1 whose recorded expectation described a verifier that took the wallet route on
+// the calldata alone (RB11-E1-RAISE): the route is now taken only for a callee proven to be a ValidatorWallet, and these worlds carry no
+// proof of one. The set is not edited; testdata/finality_arb_final1/SUPERSEDED.md records the change and finality_arb_final3 carries every
+// case again with the wallet proof, under its recorded expectation. A consumer of the set judges them by this column.
+var supersededInSet3 = map[string]string{
+	"synth_valid_wallet_execute_transaction":                    indirectNow("0x5f9a2bef6769850abfa377006e84753eec4627d560fe7c557c8daf30ba564f2b"),
+	"synth_valid_wallet_execute_transactions":                   indirectNow("0x77173d1eb1ecb3d3c81b5c2fb565d3f389bad9bdec4719b128ae89f8b54d1a39"),
+	"synth_valid_wallet_execute_transaction_with_gas_refunder":  indirectNow("0x338d892032735a065ac51b55158a9fb3c2f607293f33c56b73af41c1cec09337"),
+	"synth_valid_wallet_execute_transactions_with_gas_refunder": indirectNow("0x7bf80577fe61ea4ef37f5e6fa9cf68aace22fd6ca3fbd748cb71576d68bedf84"),
+	"adv_conf_wallet_call_targets_other_contract":               indirectNow("0x6376b7f7118925c2a4e2ad89f6de24b67460500d0cbcbe6cbf3b5eccebb8247b"),
+	"adv_conf_wallet_call_other_selector":                       indirectNow("0x62001c4cfe884b267fe8e1c055b1c60d2da9c0408741c4744286f6eebe553f1d"),
+	"adv_conf_wallet_fast_call":                                 indirectNow("0x7f173f2c88f247718c011b585ca10e334bb114c3446e3f7e71d552a745af9e95"),
+	"adv_conf_wallet_force_call":                                indirectNow("0x07d6bfa77b6309da6bb20ece74fd59f96b26ad473cfe19a23ccb1a8ed3fa6b85"),
+	"adv_conf_wallet_fast_confirmer_nonzero":                    indirectNow("0x9a1986f61c5a411165fd921c1a3cd49749e4af6588ab645342c5de9500bf753e"),
+	"synth_valid_wallet_call_is_the_bare_selector":              indirectNow("0x935873569c9c16b1c4f3b6e8d8a69a60f35034c77a2cf5c1722b5db86454270d"),
+	"adv_conf_wallet_call_data_three_bytes":                     indirectNow("0x2116c8fb4d1ce9d2fbcec55912daedf84ed1f0aa4963493286f030042ca906c0"),
+	"adv_conf_wallet_fast_confirmer_slot_unproven":              indirectNow("0x5df460c5b7e0980fe14237fa7ef2db6ab8891b1a544e8a7e75c72084a08ef2b6"),
+}
+
+// indirectNow is the verdict of the worlds above under the wallet identity rule: the callee is not proven to be a ValidatorWallet, so
+// the confirmation path is confirmation_path_unproven{indirect}, judged at K (11,999,995 in the synthetic worlds).
+func indirectNow(tx string) string {
+	return `{"code":"confirmation_path_unproven","fields":{"l1_block":"11999995","reason":"indirect","tx":"` + tx + `"}}`
 }
