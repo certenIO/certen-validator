@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -152,7 +153,7 @@ func BuilderStatusOf(proofID string, chain uint64, target, reached Level, pd *Pe
 	}
 	st, named := AsNamed(err)
 	if !named {
-		st = NewState(CodeVerifierFailed, "chain", chain, "kind", "unnamed", "cause", fmt.Sprint(err))
+		st = builderErrorState(chain, err)
 	}
 	switch {
 	case st.Code == CodeNotApplicable:
@@ -164,6 +165,49 @@ func BuilderStatusOf(proofID string, chain uint64, target, reached Level, pd *Pe
 	}
 	s.State = redactedState(st)
 	return s
+}
+
+// CodeBuilderError is the named state of an error that carries no name of its own: a capture row that vanished, a database error, a
+// provider error, any plain error a prover or the addendum store returns. It is class unavailable and says WHERE it came from (stage) and
+// what it said (cause, redacted). finality_verifier_failed is NOT used for it: that code means evidence was built and failed
+// verification, which none of these is (RB12-P0LIVE-FIX D4).
+const CodeBuilderError = "finality_builder_error"
+
+// The stages of a builder error: the prover building the evidence, and the store appending what was built.
+const (
+	StageBuild  = "build"
+	StageAppend = "append"
+)
+
+// stagedError marks an unnamed error with the stage that raised it.
+type stagedError struct {
+	stage string
+	err   error
+}
+
+func (e *stagedError) Error() string { return e.err.Error() }
+func (e *stagedError) Unwrap() error { return e.err }
+
+// AtStage marks an unnamed error with the stage (StageBuild, StageAppend) it came from; BuilderStatusOf reads it. An error that already
+// has a name is returned as it is.
+func AtStage(stage string, err error) error {
+	if err == nil {
+		return nil
+	}
+	if _, named := AsNamed(err); named {
+		return err
+	}
+	return &stagedError{stage: stage, err: err}
+}
+
+// builderErrorState is the named state of an unnamed builder error (the stage is StageBuild unless the error was marked by AtStage).
+func builderErrorState(chain uint64, err error) *StateError {
+	stage := StageBuild
+	var se *stagedError
+	if errors.As(err, &se) {
+		stage = se.stage
+	}
+	return NewState(CodeBuilderError, "chain", chain, "stage", stage, "cause", fmt.Sprint(err))
 }
 
 // Field names a failed builder status adds to its named state (RB12-F1): how many consecutive asks of this (leg, level) have failed

@@ -1050,7 +1050,7 @@ func (u *Upgrader) upgradeLeg(ctx context.Context, ref LegRef) (res legResult) {
 					res.failed, failed = true, true
 					u.cfg.Recorder.BuildFailed(ref.Chain, "store_write")
 					logf("[FINALITY] leg %s chain %d: appending the %s addendum: %v", ref.ProofID, ref.Chain, target, err)
-					s := BuilderStatusOf(ref.ProofID, ref.Chain, target, reached(), nil, err, false, u.cfg.Now())
+					s := BuilderStatusOf(ref.ProofID, ref.Chain, target, reached(), nil, AtStage(StageAppend, err), false, u.cfg.Now())
 					status = &s
 					wait = minWait(wait, failWait)
 				}
@@ -1163,7 +1163,7 @@ func codeOf(err error) string {
 	if n, ok := AsNamed(err); ok {
 		return n.Code
 	}
-	return "unnamed_error"
+	return CodeBuilderError
 }
 
 // ---- the enable flags ----
