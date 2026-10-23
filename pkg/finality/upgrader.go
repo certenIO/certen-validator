@@ -657,6 +657,7 @@ func (u *Upgrader) upgradeLeg(ctx context.Context, ref LegRef) (res legResult) {
 	if len(chain) > 0 && chain[0].Chain != ref.Chain {
 		return u.brokenChain(ref, ChainBroken(1, CheckKind, "stored", chain[0].Chain, "settled_on", ref.Chain))
 	}
+	u.convergeStatus(ctx, ref, chain)
 	have := LevelsOf(chain)
 	current := Top(chain)
 	var targets []Level
@@ -743,10 +744,11 @@ func (u *Upgrader) upgradeLeg(ctx context.Context, ref LegRef) (res legResult) {
 					res.conflict = true // another validator appended first; the next pass reads its chain
 					wait = minWait(wait, u.cfg.Interval)
 				case named && n.Code != CodeBuildTimeout && n.Code != CodePanic:
-					// the registered Kind (or the chain checks) refused what the prover built: nothing was stored (class R)
+					// the append of what the prover built was refused - by the registered Kind, the store's chain checks or the table's guard, the
+					// state's code says which - and nothing was stored (the refused class)
 					res.failed = true
 					u.cfg.Recorder.BuildFailed(ref.Chain, n.Code)
-					logf("[FINALITY] leg %s chain %d: built %s evidence that does not verify: %v", ref.ProofID, ref.Chain, target, err)
+					logf("[FINALITY] leg %s chain %d: the append of the built %s evidence was refused (nothing stored): %v", ref.ProofID, ref.Chain, target, err)
 					s := BuilderStatusOf(ref.ProofID, ref.Chain, target, reached(), nil, err, true, u.cfg.Now())
 					status = &s
 					wait = minWait(wait, u.cfg.FailureRetry)
@@ -954,5 +956,42 @@ func (u *Upgrader) announceGaps(rep PassReport) {
 	if rep.Unrecorded != u.lastUnrecorded {
 		u.lastUnrecorded = rep.Unrecorded
 		u.cfg.Logf("[FINALITY] %d legs had settlement evidence served while their proof row has no settlement_tx_hash or settlement_block_number yet: the check against the recorded settlement was skipped", rep.Unrecorded)
+	}
+}
+
+// convergeStatus writes the verified status row of every level the leg's chain holds whose row is not verified (RB11-DBFIX D1). All
+// validators share one database, so a level can be stored by another validator while this one's row for it still says pending or
+// unavailable, or says nothing (the other validator crashed between its append and its status write, or its write lost a race). A
+// level the chain holds is never a build target again, so nothing else would ever correct that row. The addendum is the fact: the
+// row is derived from it (the store refuses a verified row the chain does not support), never from a judgement of the moment.
+func (u *Upgrader) convergeStatus(ctx context.Context, ref LegRef, chain []Addendum) {
+	if u.cfg.Status == nil {
+		return
+	}
+	type read struct {
+		v  BuilderStatusView
+		ok bool
+	}
+	for _, a := range chain {
+		if !a.Level.Stored() {
+			continue
+		}
+		cur, err := bounded(ctx, u.cfg.StoreTimeout, ref.Chain, "reading the builder status", func(c context.Context) (read, error) {
+			v, ok, err := u.cfg.Status.GetStatus(c, ref.ProofID, a.Level)
+			return read{v, ok}, err
+		})
+		if err != nil {
+			if ctx.Err() == nil {
+				if sr, ok := u.cfg.Recorder.(StatusRecorder); ok {
+					sr.StatusWriteFailed(ref.Chain)
+				}
+				u.cfg.Logf("[FINALITY] leg %s chain %d: the %s status row was not read: %v", ref.ProofID, ref.Chain, a.Level, err)
+			}
+			continue
+		}
+		if cur.ok && cur.v.Class == BuilderVerified {
+			continue
+		}
+		u.putStatus(ctx, VerifiedBuilderStatus(ref.ProofID, ref.Chain, a.Level, a.Seq, u.cfg.Now()))
 	}
 }
