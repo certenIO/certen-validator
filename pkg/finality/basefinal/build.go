@@ -59,7 +59,46 @@ type Builder struct {
 	Now       func() time.Time
 	Back      uint64   // capture this many blocks behind the proof provider head (default 12)
 	Providers []string // names carried by the provider-window states
-	MaxScan   int      // bound of the factory scan (default 64)
+	MaxScan   int      // bound of the probes one covering-game search may make (default 64; a gallop and a bisection need about 2*log2(games))
+}
+
+// The builder-side unavailability states of this prover (class U, go_operational scope of testdata/finality/states.json). A builder never
+// reports finality_verifier_failed for a failure that is not a verification: no evidence was built in these cases.
+const (
+	// CodeGameSourceUnavailable: a read of the factory, a game or the capture store failed (step names which, cause carries the redacted text).
+	CodeGameSourceUnavailable = "finality_game_source_unavailable"
+	// CodeCoveringGameUnavailable: the factory lists games but none of them covers the leg's block (reason names why).
+	CodeCoveringGameUnavailable = "finality_covering_game_unavailable"
+)
+
+// The steps of finality_game_source_unavailable (closed set, states.json).
+const (
+	StepGameCount   = "game_count"
+	StepGameAt      = "game_at"
+	StepGameCode    = "game_code"
+	StepGameSlot    = "game_slot"
+	StepCaptureRows = "capture_rows"
+)
+
+// The reasons of finality_covering_game_unavailable (closed set, states.json).
+const (
+	ReasonGapBetweenGames = "gap_between_games"
+	ReasonBeforeFirstGame = "before_first_game"
+	ReasonProbeBound      = "probe_bound"
+)
+
+// The expected time of the game that covers a block that is newer than the newest game (V2_SPEC_S7 section 7 Base named states, annex
+// R11-base-sepolia "Named states": the game is created about 30-70 minutes after the block; Q8: one game per 1164 s at the median and
+// 1536 s at p90). The eta is the late end of that window; once it has passed, the next game slot at the p90 gap.
+const (
+	noGameLag       = 70 * time.Minute
+	noGameNextSlot  = 1536 * time.Second
+	etaBasisLag     = "annex_base_sepolia_game_lag_70min"
+	etaBasisNextGap = "annex_base_sepolia_game_create_gap_p90_1536s"
+)
+
+func sourceUnavailable(step string, err error) *finality.StateError {
+	return redactState(CodeGameSourceUnavailable, err, "chain", uint64(Chain), "kind", KindName, "step", step)
 }
 
 func (b *Builder) Chain() uint64 { return uint64(Chain) }
@@ -165,18 +204,21 @@ func (b *Builder) build(ctx context.Context, leg finality.BlockRef, have finalit
 	startOf := func(proxy [20]byte) (uint64, error) {
 		w, err := b.Games.Slot(ctx, proxy, be32(slotGameStartL2Seq))
 		if err != nil {
-			return 0, redactState(finality.CodeVerifierFailed, err, "chain", uint64(Chain), "kind", KindName)
+			return 0, sourceUnavailable(StepGameSlot, err)
 		}
 		return binary.BigEndian.Uint64(w[24:]), nil
 	}
 	g, pend, err := b.covering(ctx, bp, leg.Number, startOf, have)
 	if err != nil || pend != nil {
+		if pend != nil && pend.Reason == "no_covering_game" {
+			b.stampNoGameETA(pend, leg)
+		}
 		return nil, pend, err
 	}
 	// the live view of the game decides between "wait" and "capture"
 	w0, err := b.Games.Slot(ctx, g.Info.Proxy, be32(slotGameMain))
 	if err != nil {
-		return nil, nil, redactState(finality.CodeVerifierFailed, err, "chain", uint64(Chain), "kind", KindName)
+		return nil, nil, sourceUnavailable(StepGameSlot, err)
 	}
 	created, resolved, status := u64Of(w0, 0), u64Of(w0, 8), w0[15]
 	switch status {
@@ -194,7 +236,7 @@ func (b *Builder) build(ctx context.Context, leg finality.BlockRef, have finalit
 	}
 	rows, err := Rows(ctx, b.Store, uint64(Chain), ItemGame(g.Info.Proxy))
 	if err != nil {
-		return nil, nil, redactState(finality.CodeVerifierFailed, err, "chain", uint64(Chain), "kind", KindName)
+		return nil, nil, sourceUnavailable(StepCaptureRows, err)
 	}
 	for _, row := range rows {
 		c, err := DecodeGameCapture(row.Data)
@@ -249,30 +291,66 @@ func (b *Builder) l2Headers(ctx context.Context, from, to uint64) ([][]byte, err
 	}
 }
 
-// covering scans the factory for the game whose range (start, l2seq] holds the leg block.
+// stampNoGameETA gives the pending no_covering_game its eta from the spec (see noGameLag): the block's time plus the late end of the
+// 30-70 minute window; once that has passed, the next game slot at the p90 creation gap. The basis is carried so the figure is never
+// mistaken for a measurement of this leg.
+func (b *Builder) stampNoGameETA(p *finality.PendingState, leg finality.BlockRef) {
+	h, err := finality.ReadHeader(leg.HeaderRLP)
+	if err != nil {
+		return // a leg without a readable header was refused at level 1; there is no time to count from
+	}
+	now := b.now()
+	eta := time.Unix(int64(h.Timestamp), 0).Add(noGameLag)
+	basis := etaBasisLag
+	if !eta.After(now) {
+		eta, basis = now.Add(noGameNextSlot), etaBasisNextGap
+	}
+	p.ETA = eta.UTC()
+	if p.Judged == nil {
+		p.Judged = map[string]any{}
+	}
+	p.Judged["eta_basis"] = basis
+}
+
+// covering finds the game whose range (start, l2seq] holds the leg block. The factory lists games in creation order and their
+// l2SequenceNumber grows with it, so the first game whose sequence number reaches the block is searched for, galloping back from the
+// newest game (a recent leg is a few probes away) and then bisecting. The distance in games cannot be estimated from one game's
+// range: it is 600 L2 blocks before the Denim fork and 6000 after it (RB12-F2). Nothing here is evidence; the capture and the
+// verifier judge the game found.
 func (b *Builder) covering(ctx context.Context, bp *Pins, leg uint64, startOf uint64Reader, have finality.LevelSet) (gameFacts, *finality.PendingState, error) {
-	maxScan := b.MaxScan
-	if maxScan == 0 {
-		maxScan = 64
-	}
 	count, err := b.Games.GameCount(ctx)
-	if err != nil || count == 0 {
-		if err == nil {
-			err = fmt.Errorf("the factory lists no game")
-		}
-		return gameFacts{}, nil, redactState(finality.CodeVerifierFailed, err, "chain", uint64(Chain), "kind", KindName)
+	if err != nil {
+		return gameFacts{}, nil, sourceUnavailable(StepGameCount, err)
 	}
+	if count == 0 {
+		return gameFacts{}, b.pending(have, "no_covering_game", time.Time{}, "leg_block", leg, "game_count", uint64(0)), nil
+	}
+	maxProbes := b.MaxScan
+	if maxProbes == 0 {
+		maxProbes = 64
+	}
+	loaded := map[uint64]gameFacts{}
+	probes := 0
 	load := func(i uint64) (gameFacts, error) {
+		if f, ok := loaded[i]; ok {
+			return f, nil
+		}
+		if probes++; probes > maxProbes {
+			return gameFacts{}, st(CodeCoveringGameUnavailable, "chain", uint64(Chain), "kind", KindName, "reason", ReasonProbeBound, "leg_block", leg, "probes", uint64(maxProbes), "game_count", count)
+		}
 		info, err := b.Games.GameAt(ctx, i)
 		if err != nil {
-			return gameFacts{}, redactState(finality.CodeVerifierFailed, err, "chain", uint64(Chain), "kind", KindName)
+			return gameFacts{}, sourceUnavailable(StepGameAt, err)
 		}
 		code, err := b.Games.Code(ctx, info.Proxy)
 		if err != nil {
-			return gameFacts{}, redactState(finality.CodeVerifierFailed, err, "chain", uint64(Chain), "kind", KindName)
+			return gameFacts{}, sourceUnavailable(StepGameCode, err)
 		}
 		f, err := b.facts(bp, info, code, startOf)
 		f.Index = i
+		if err == nil {
+			loaded[i] = f
+		}
 		return f, err
 	}
 	newest, err := load(count - 1)
@@ -280,34 +358,60 @@ func (b *Builder) covering(ctx context.Context, bp *Pins, leg uint64, startOf ui
 		return gameFacts{}, nil, err
 	}
 	if leg > newest.L2Seq {
-		return gameFacts{}, b.pending(have, "no_covering_game", time.Time{}, "leg_block", leg, "newest_l2_sequence_number", newest.L2Seq), nil
+		return gameFacts{}, b.pending(have, "no_covering_game", time.Time{}, "leg_block", leg, "newest_l2_sequence_number", newest.L2Seq, "game_count", count), nil
 	}
-	// games are 600 blocks apart and ordered: estimate, then walk
-	idx := count - 1
-	if d := (newest.L2Seq - leg) / (newest.L2Seq - newest.Start); d < idx {
-		idx -= d
-	}
-	for step := 0; step < maxScan; step++ {
-		f, err := load(idx)
+	// gallop: hi always holds a game that reaches the block, lo is the first index that may still be the answer
+	hi, lo := count-1, uint64(0)
+	for step := uint64(1); hi > 0; step *= 2 {
+		j := uint64(0)
+		if (count - 1) > step {
+			j = count - 1 - step
+		}
+		f, err := load(j)
 		if err != nil {
 			return gameFacts{}, nil, err
 		}
-		switch {
-		case leg > f.L2Seq:
-			if idx+1 >= count {
-				return gameFacts{}, b.pending(have, "no_covering_game", time.Time{}, "leg_block", leg, "newest_l2_sequence_number", f.L2Seq), nil
+		if f.L2Seq >= leg {
+			hi = j
+			if j == 0 {
+				break
 			}
-			idx++
-		case leg <= f.Start:
-			if idx == 0 {
-				return gameFacts{}, b.pending(have, "no_covering_game", time.Time{}, "leg_block", leg, "newest_l2_sequence_number", f.L2Seq), nil
-			}
-			idx--
-		default:
-			return f, nil, nil
+			continue
+		}
+		lo = j + 1
+		break
+	}
+	for lo < hi {
+		mid := lo + (hi-lo)/2
+		f, err := load(mid)
+		if err != nil {
+			return gameFacts{}, nil, err
+		}
+		if f.L2Seq >= leg {
+			hi = mid
+		} else {
+			lo = mid + 1
 		}
 	}
-	return gameFacts{}, nil, st(finality.CodeVerifierFailed, "chain", uint64(Chain), "kind", KindName, "cause", "the factory scan did not reach the covering game within its bound")
+	f, err := load(hi)
+	if err != nil {
+		return gameFacts{}, nil, err
+	}
+	if leg > f.Start {
+		return f, nil, nil
+	}
+	// the first game that reaches the block starts at or above it: the block lies between two games' ranges, or before the first game
+	var prev uint64
+	reason := ReasonBeforeFirstGame
+	if hi > 0 {
+		p, err := load(hi - 1)
+		if err != nil {
+			return gameFacts{}, nil, err
+		}
+		prev, reason = p.L2Seq, ReasonGapBetweenGames
+	}
+	return gameFacts{}, nil, st(CodeCoveringGameUnavailable, "chain", uint64(Chain), "kind", KindName, "reason", reason, "leg_block", leg,
+		"game_index", hi, "game_start", f.Start, "game_l2_sequence_number", f.L2Seq, "previous_l2_sequence_number", prev, "game_count", count)
 }
 
 // unresolved is the pending state of a game still IN_PROGRESS: the upper bound of its resolution time and what the proofs on it

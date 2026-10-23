@@ -219,7 +219,7 @@ func Wire(cfg Config, d Deps) (*Wiring, error) {
 		}
 	}
 	w.Upgrader = finality.UpgraderConfig{
-		Concurrency: cfg.Concurrency, Interval: cfg.Interval, BuildTimeout: cfg.BuildTimeout,
+		Concurrency: cfg.Concurrency, Interval: cfg.Interval, BuildTimeout: cfg.BuildTimeout, Memory: finality.NewMemoryBudget(cfg.MemoryBudget),
 		Status: d.Status, DisabledChains: disabled, DisabledReasons: reasons, Logf: logf, Now: d.Now,
 	}
 	chains := make([]uint64, 0, len(w.Disabled))
@@ -244,7 +244,8 @@ func wireBase(reg *finality.Registry, env Env, d Deps, clock loopClock, logf fun
 	l1 := &baseposted.JSONRPCSource{BlockURLs: env.L1Block, ProofURLs: env.L1Proof, Client: env.HTTP}
 	cache := env.LC.(*lcCache)
 	if err := reg.RegisterProver(&baseposted.Builder{Pins: env.Pins, Store: env.Store, L1: l1, Headers: l1,
-		L2: &baseposted.L2JSONRPC{URLs: cfg.BaseL2}, LC: lcPlain{cache}, Now: d.Now}); err != nil {
+		L2: &baseposted.L2JSONRPC{URLs: cfg.BaseL2}, LC: lcPlain{cache}, Now: d.Now,
+		CursorSlack: captureSlack(cfg), HasArchive: len(cfg.Archive) > 0}); err != nil {
 		return err
 	}
 	rpc := &basefinal.RPC{BlockURLs: env.L1Block, ProofURLs: env.L1Proof, L2URLs: cfg.BaseL2, Client: env.HTTP}
@@ -256,6 +257,16 @@ func wireBase(reg *finality.Registry, env Env, d Deps, clock loopClock, logf fun
 		Store: env.Store, GenesisTime: capture.BeaconGenesisTime, SlotSeconds: 12}
 	return reg.RegisterCapturer(&BasePostedLoop{Cap: capt, Store: env.Store, Status: d.Status, Every: cfg.CaptureEvery, MaxPerTick: cfg.CaptureBlocks,
 		StartBack: 32, HasArchive: len(cfg.Archive) > 0, Logf: logf, Clock: clock})
+}
+
+// captureSlack is how many blocks before its first cursor row the Base capture loop may have started scanning: its first range ends
+// at the head and reaches back by the larger of its start-back (32) and its per-tick block bound.
+func captureSlack(cfg Config) uint64 {
+	n := uint64(cfg.CaptureBlocks)
+	if n < 32 {
+		n = 32
+	}
+	return n
 }
 
 func wireArb(reg *finality.Registry, env Env, d Deps, clock loopClock, logf func(string, ...any), cache *lcCache) error {

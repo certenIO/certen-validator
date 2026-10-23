@@ -134,6 +134,22 @@ var (
 		Name: "certen_finality_capture_refused_total",
 		Help: "Captures refused by a named state (a byte budget, a missed provider window ...), by chain and state code.",
 	}, []string{"chain", "code"})
+	finalityHeapInUse = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "certen_finality_heap_inuse_bytes",
+		Help: "Go heap in use by this validator process, sampled once per upgrader pass (the figure the finality memory gate compares with its budget).",
+	})
+	finalityMemoryBudget = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "certen_finality_memory_budget_bytes",
+		Help: "CERTEN_FINALITY_MEMORY_BUDGET_BYTES: the bytes of in-flight working set the finality builders may hold at once in this process.",
+	})
+	finalityMemoryReserved = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "certen_finality_memory_reserved_bytes",
+		Help: "Bytes of in-flight working set currently reserved by finality builders (never above the budget).",
+	})
+	finalityMemoryRefused = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "certen_finality_memory_refused_total",
+		Help: "Reservations or leg attempts refused by the finality memory budget (named state finality_memory_budget_exceeded), by chain and what was refused (a load, or an attempt held back by the heap gate).",
+	}, []string{"chain", "what"})
 )
 
 func chainLabel(chain uint64) string { return strconv.FormatUint(chain, 10) }
@@ -391,6 +407,18 @@ func IncFinalityCaptureRefused(chain uint64, code string) {
 	finalityCaptureRefused.WithLabelValues(chainLabel(chain), code).Inc()
 }
 
+// SetFinalityHeap reports the process heap in use, the memory budget and the bytes currently reserved against it.
+func SetFinalityHeap(heapInUse uint64, budget, reserved int64) {
+	finalityHeapInUse.Set(float64(heapInUse))
+	finalityMemoryBudget.Set(float64(budget))
+	finalityMemoryReserved.Set(float64(reserved))
+}
+
+// IncFinalityMemoryRefused counts a reservation (or an attempt) refused by the memory budget; chain 0 is a refusal about no chain.
+func IncFinalityMemoryRefused(chain uint64, what string) {
+	finalityMemoryRefused.WithLabelValues(chainLabel(chain), what).Inc()
+}
+
 // ObserveFinalityPass records one finished pass.
 func ObserveFinalityPass(d time.Duration, finished time.Time) {
 	finalityPassSeconds.Observe(d.Seconds())
@@ -420,4 +448,8 @@ func registerFinalityMetrics() {
 	prometheus.MustRegister(finalityUpgraderDisabled)
 	prometheus.MustRegister(finalityProviderThrottled)
 	prometheus.MustRegister(finalityCaptureRefused)
+	prometheus.MustRegister(finalityHeapInUse)
+	prometheus.MustRegister(finalityMemoryBudget)
+	prometheus.MustRegister(finalityMemoryReserved)
+	prometheus.MustRegister(finalityMemoryRefused)
 }

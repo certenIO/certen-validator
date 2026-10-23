@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
-	"strings"
 	"testing"
 
 	"github.com/certen/independant-validator/pkg/finality"
@@ -69,29 +68,32 @@ func TestTheBuilderDoesNotChooseAnIncompleteGameImplementationRow(t *testing.T) 
 	}
 }
 
-// The factory scan starts at the estimate and walks; where it starts and where it gives up are observable.
-func TestTheFactoryScanStartsAtTheEstimateAndNamesAGapBetweenGames(t *testing.T) {
+// The covering-game search gallops back from the newest game and bisects; where it gives up and what it names are observable
+// (RB12-F2: the former estimate-and-walk scan is replaced, and its two failures are named unavailable states, no longer a
+// finality_verifier_failed).
+func TestTheFactoryScanIsBoundedByItsProbesAndNamesAGapBetweenGames(t *testing.T) {
 	lay := loadLive(t).bp.Layouts[LayoutAggregateV1]
 	tl := len(lay.CloneHead) + 2 + len(lay.CloneMid) + 20 + len(lay.CloneTail)
 	x := binary.BigEndian.Uint64(loadLive(t).body.GameCode[tl+84+24 : tl+84+32])
-	// the estimate equals the index: the scan starts at the newest game and needs five loads to reach the oldest; two are allowed
+	// the live game is the oldest of five: reaching it takes more than the two probes allowed
 	w := loadLive(t)
 	b := w.builder(t, w.store(t))
 	b.Games = w.factory(5, 0, 600)
 	b.MaxScan = 2
 	_, p, err := w.built(t, b)
-	if err == nil || !strings.Contains(err.Error(), "did not reach the covering game") || p != nil {
+	if se, ok := finality.AsNamed(err); !ok || se.Code != CodeCoveringGameUnavailable || se.Fields["reason"] != ReasonProbeBound || se.Fields["probes"] != uint64(2) || p != nil {
 		t.Errorf("%v %v", p, err)
 	}
-	// a block between two games is covered by neither: the scan flips between them until its bound, it does not claim there is no
-	// game above
+	// a block between two games is covered by neither: it is named as a gap, with the two games it lies between, and it is not
+	// claimed that a game above will cover it
 	w2 := loadLive(t)
 	b2 := w2.builder(t, w2.store(t))
 	b2.Games = w2.factory(30, 28, 700)
 	gap := w2.leg
 	gap.Number = x + 50
 	_, p, err = b2.buildLeg(context.Background(), gap, haveIncluded)
-	if err == nil || !strings.Contains(err.Error(), "did not reach the covering game") || p != nil {
+	if se, ok := finality.AsNamed(err); !ok || se.Code != CodeCoveringGameUnavailable || se.Fields["reason"] != ReasonGapBetweenGames || se.Fields["game_index"] != uint64(29) ||
+		se.Fields["previous_l2_sequence_number"] != x || se.Fields["game_start"] != x+100 || p != nil {
 		t.Errorf("%v %v", p, err)
 	}
 }

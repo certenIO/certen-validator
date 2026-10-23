@@ -48,7 +48,28 @@ type Builder struct {
 	L2      L2Source
 	LC      LCSource
 	Now     func() time.Time
+	// CursorSlack is how many blocks before its first cursor row the capture loop may have started scanning (the loop's first range:
+	// its per-tick block bound or its start-back, whichever is larger; default 64). A leg whose frames all lie below the first cursor
+	// row minus this slack was posted before the capture existed.
+	CursorSlack uint64
+	// HasArchive is whether an archive provider (OD4) is configured; it is carried by the capture-not-covering state so an operator can
+	// see whether a deeper source exists.
+	HasArchive bool
 }
+
+// Codes of this builder that are not verifier refusals (class U, go_operational scope of testdata/finality/states.json).
+const (
+	// CodeCaptureNotCovering: the L1 blocks that can hold the leg's batch were not scanned by this validator's capture loop.
+	CodeCaptureNotCovering = "l1_capture_not_covering"
+)
+
+// The window of L1 blocks that can hold a leg's frames is [E, E+SeqWindowSize] with E the L1 origin of its L2 block (the verifier
+// refuses a frame outside it: batch_outside_sequencing_window). A leg is searched in widening parts of that window.
+var searchSteps = []uint64{96, 384, 1536}
+
+// memoryPerStoredByte is the heap a loaded row costs per stored byte (measured 1.43 on blob rows: the row, the decoded frame data and
+// the frames it carries), rounded to 3/2.
+func rowCost(n int) int64 { return int64(n) * 3 / 2 }
 
 func (b *Builder) Chain() uint64           { return uint64(Chain) }
 func (b *Builder) Ceiling() finality.Level { return finality.LevelL1Posted }
@@ -62,8 +83,22 @@ type capturedTx struct {
 	frames []Frame
 }
 
+// load reads every captured inbox block (the diagnostic listing of Channels). A build never calls it: it reads the window of its leg.
 func (b *Builder) load(ctx context.Context, bp *Pins) ([]capturedTx, error) {
-	blocks, err := finality.CaptureKeysOfItem(ctx, b.Store, uint64(Chain), ItemInbox)
+	return b.loadRange(ctx, bp, 0, finality.MaxCaptureBlock, nil)
+}
+
+// loadRange reads the captured inbox blocks in [from, to] with their transactions and blobs. Every row read is reserved against the
+// memory budget through hold first (nil hold: unbounded, tests and the listing); a refusal is the named state
+// finality_memory_budget_exceeded and nothing more is read.
+func (b *Builder) loadRange(ctx context.Context, bp *Pins, from, to uint64, hold *finality.Hold) ([]capturedTx, error) {
+	reserve := func(n int) error {
+		if hold == nil {
+			return nil
+		}
+		return hold.Add(rowCost(n))
+	}
+	blocks, err := finality.CaptureKeysOfItemIn(ctx, b.Store, uint64(Chain), from, to, ItemInbox)
 	if err != nil {
 		return nil, err
 	}
@@ -72,6 +107,9 @@ func (b *Builder) load(ctx context.Context, bp *Pins) ([]capturedTx, error) {
 		raw, ok, err := b.Store.Get(ctx, k)
 		if err != nil || !ok {
 			return nil, fmt.Errorf("baseposted: capture row %s vanished", k.Item)
+		}
+		if err := reserve(len(raw)); err != nil {
+			return nil, err
 		}
 		r := finality.NewReader(raw, finality.DefaultLimits())
 		n, err := r.Count("inbox", 4096, 4)
@@ -89,6 +127,9 @@ func (b *Builder) load(ctx context.Context, bp *Pins) ([]capturedTx, error) {
 			if err != nil || !ok {
 				return nil, fmt.Errorf("baseposted: capture row %s missing", tk.Item)
 			}
+			if err := reserve(len(txb)); err != nil {
+				return nil, err
+			}
 			ct := capturedTx{key: k, index: idx, raw: txb}
 			var datas [][]byte
 			var tx txView
@@ -105,6 +146,9 @@ func (b *Builder) load(ctx context.Context, bp *Pins) ([]capturedTx, error) {
 					}
 					if !ok {
 						break
+					}
+					if err := reserve(len(bb)); err != nil {
+						return nil, err
 					}
 					br := finality.NewReader(bb, finality.DefaultLimits())
 					var bl Blob
@@ -163,13 +207,15 @@ func (b *Builder) Build(ctx context.Context, s *ethproof.Settlement, have finali
 	pend := func(reason string, kv map[string]any) (*finality.Addendum, *finality.PendingState, error) {
 		return nil, &finality.PendingState{Chain: uint64(Chain), LevelReached: finality.LevelIncluded, NextLevel: finality.LevelL1Posted, Reason: reason, Judged: kv}, nil
 	}
-	txs, err := b.load(ctx, bp)
+	hold := finality.NewHold(ctx, uint64(Chain), "base_posted_window")
+	defer hold.Release()
+	sr, err := b.search(ctx, bp, l2, hold)
 	if err != nil {
 		return nil, nil, err
 	}
-	ch, frameTxs, bt, lastScanned := findChannel(txs, bp, l2.Timestamp)
+	ch, frameTxs, bt, l2blk := sr.ch, sr.frameTxs, sr.bt, sr.l2blk
 	if ch == nil {
-		return pend("l1_posted_unproven", map[string]any{"l2_timestamp": l2.Timestamp, "last_scanned_l1": lastScanned})
+		return pend("l1_posted_unproven", map[string]any{"l2_timestamp": l2.Timestamp, "last_scanned_l1": sr.lastScanned})
 	}
 	// L1 finality: the pending state when the spine of the finalized head does not yet reach the frame blocks.
 	lc, err := b.LC.Finalized(ctx)
@@ -217,9 +263,12 @@ func (b *Builder) Build(ctx context.Context, s *ethproof.Settlement, have finali
 		}
 	}
 	// Body.
-	l2blk, err := b.L2.Block(ctx, l2.Number)
-	if err != nil {
-		return nil, nil, st("l2_header_unavailable", "block", l2.Number)
+	if l2blk == nil { // a builder without the window's L2 read (the whole-store search) reads the block now
+		blk, err := b.L2.Block(ctx, l2.Number)
+		if err != nil {
+			return nil, nil, st("l2_header_unavailable", "block", l2.Number)
+		}
+		l2blk = &blk
 	}
 	body := Body{LC: lc, L1Spine: spine, ChannelID: ch.ID, Deposits: leadingDeposits(l2blk.Txs)}
 	seenSys := map[CaptureKey]bool{}
@@ -262,6 +311,111 @@ func (b *Builder) Build(ctx context.Context, s *ethproof.Settlement, have finali
 		return nil, nil, err
 	}
 	return &finality.Addendum{Level: finality.LevelL1Posted, Chain: uint64(Chain), Kind: KindName, Evidence: evidence}, nil, nil
+}
+
+// searched is what search found: the channel (nil when none), the transactions that carry it, its batch, the highest L1 block the
+// capture is known to have scanned, and the L2 block when the search read it.
+type searched struct {
+	ch          *channelRef
+	frameTxs    []capturedTx
+	bt          *Batch
+	lastScanned uint64
+	l2blk       *L2BlockData
+}
+
+// search finds the channel that carries the batch of the leg's L2 block in the captured rows, reading the window of the store the leg
+// can need and no more (RB12-F1/F3). The frames of a batch lie in [E, E+SeqWindowSize], E being the L1 origin that the L2 block's first
+// deposit names (the verifier refuses a frame outside it), and the rows are read in widening parts of that window, so the cost of a
+// leg is the rows after its origin and not the whole table. When the capture cursor shows that the window lies wholly below the first
+// block this validator's capture scanned, nothing is read at all: the evidence cannot be built from this store and the state says so
+// (l1_capture_not_covering), instead of a 300 s build that ends in a timeout. A builder without an L2 source has no origin to
+// start from and reads the whole range, still under the memory budget.
+func (b *Builder) search(ctx context.Context, bp *Pins, l2 finality.HeaderFields, hold *finality.Hold) (searched, error) {
+	var sr searched
+	if b.L2 == nil {
+		txs, err := b.loadRange(ctx, bp, 0, finality.MaxCaptureBlock, hold)
+		if err != nil {
+			return sr, err
+		}
+		sr.ch, sr.frameTxs, sr.bt, sr.lastScanned = findChannel(txs, bp, l2.Timestamp)
+		return sr, nil
+	}
+	blk, err := b.L2.Block(ctx, l2.Number)
+	if err != nil {
+		return sr, st("l2_header_unavailable", "block", l2.Number)
+	}
+	sr.l2blk = &blk
+	deps := leadingDeposits(blk.Txs)
+	if len(deps) == 0 {
+		return sr, st(CodeBatchBindingMismatch, "field", "l1_info_deposit")
+	}
+	origin, _, ok := l1Info(deps[0])
+	if !ok {
+		return sr, st(CodeBatchBindingMismatch, "field", "l1_info_deposit")
+	}
+	end := origin + bp.SeqWindowSize
+	if end < origin {
+		end = finality.MaxCaptureBlock
+	}
+	cov, known, err := finality.CaptureCoverageOf(ctx, b.Store, uint64(Chain))
+	if err != nil {
+		return sr, err
+	}
+	var lower uint64 // the first block the capture loop may have scanned
+	if known {
+		slack := b.CursorSlack
+		if slack == 0 {
+			slack = 64
+		}
+		if cov.First > slack {
+			lower = cov.First - slack
+		}
+		sr.lastScanned = cov.Last
+	}
+	notCovering := func() error {
+		archive := "unset"
+		if b.HasArchive {
+			archive = "set"
+		}
+		return st(CodeCaptureNotCovering, "chain", uint64(Chain), "kind", KindName, "epoch_l1_block", origin, "window_end_l1_block", end,
+			"capture_first_l1_block", cov.First, "capture_slack", slackOf(b.CursorSlack), "archive_provider", archive)
+	}
+	if known && end < lower {
+		return sr, notCovering()
+	}
+	var all []capturedTx
+	next := origin
+	for i := 0; ; i++ {
+		hi := end
+		if i < len(searchSteps) && origin+searchSteps[i] < end {
+			hi = origin + searchSteps[i]
+		}
+		part, err := b.loadRange(ctx, bp, next, hi, hold)
+		if err != nil {
+			return sr, err
+		}
+		all = append(all, part...)
+		var last uint64
+		sr.ch, sr.frameTxs, sr.bt, last = findChannel(all, bp, l2.Timestamp)
+		if !known && last > sr.lastScanned {
+			sr.lastScanned = last
+		}
+		if sr.ch != nil || hi >= end {
+			break
+		}
+		next = hi + 1
+	}
+	if sr.ch == nil && known && origin < lower {
+		return sr, notCovering() // part of the window was never scanned: the channel may have been posted there
+	}
+	return sr, nil
+}
+
+func slackOf(v uint64) uint64 {
+	if v == 0 {
+		return 64
+	}
+	return v
 }
 
 // frameBlockRange is the lowest and the highest L1 block the evidence cites: the blocks of the frame transactions and, for a span batch,

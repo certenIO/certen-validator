@@ -95,6 +95,19 @@ func (s *FinalityCaptureStore) ListByBlock(ctx context.Context, chain, l1Block u
 	return out, rows.Err()
 }
 
+// BlockBounds is the lowest and highest L1 block of the chain's rows of exactly this item (finality.BlockBounder): one aggregate query,
+// no row listing and no bytes read.
+func (s *FinalityCaptureStore) BlockBounds(ctx context.Context, chain uint64, item string) (uint64, uint64, bool, error) {
+	var lo, hi sql.NullInt64
+	if err := s.client.DB().QueryRowContext(ctx, `SELECT min(l1_block), max(l1_block) FROM proof_finality_capture WHERE chain = $1 AND item = $2`, int64(chain), item).Scan(&lo, &hi); err != nil {
+		return 0, 0, false, err
+	}
+	if !lo.Valid || !hi.Valid || lo.Int64 < 0 {
+		return 0, 0, false, nil
+	}
+	return uint64(lo.Int64), uint64(hi.Int64), true, nil
+}
+
 // ListByRange returns the keys of a chain whose L1 block is in [from, to] and whose item starts with itemPrefix (empty = all),
 // ascending by (l1Block, l1Hash, item). The bytes are fetched with Get, so a range scan never loads the blobs.
 func (s *FinalityCaptureStore) ListByRange(ctx context.Context, chain, from, to uint64, itemPrefix string) ([]finality.CaptureKey, error) {

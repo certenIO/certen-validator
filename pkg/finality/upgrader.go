@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"runtime"
 	"sync"
 	"time"
 
@@ -119,7 +120,16 @@ type UpgraderConfig struct {
 	// SuspectSlots bounds how many of the Concurrency slots legs with a failed earlier attempt (suspects) may hold at once (default
 	// Concurrency/2, at least 1), so a backlog of legs that time out can never take every slot from a leg that has not failed.
 	SuspectSlots int
-	BrokenRetry  time.Duration // next attempt after a stored chain failed verification (default 1h, at least MinPoll)
+	// Memory is the per-process budget of the builders' in-flight working sets (EnvMemoryBudget; default DefaultMemoryBudget). Every build
+	// runs under it: a reservation it cannot cover is the named state finality_memory_budget_exceeded. New attempts also wait while the
+	// Go heap in use is above HeapGate(budget) (a pass-level state, logged and counted), so the process cannot be driven to the host's
+	// OOM killer by legs it has not started yet.
+	Memory *MemoryBudget
+	// HeapInUse reads the Go heap in use (default: runtime.MemStats.HeapInuse, sampled at most once a second); GC is run (default
+	// runtime.GC) once before a pass is held back, because the figure may be garbage that has not been collected. Tests replace both.
+	HeapInUse   func() uint64
+	GC          func()
+	BrokenRetry time.Duration // next attempt after a stored chain failed verification (default 1h, at least MinPoll)
 	// StoreTimeout bounds every call to the leg source, the addendum store's reads and the status store; a call that ignores
 	// its context is abandoned at the deadline (default 30s), so a hung database stalls neither the pass nor shutdown.
 	StoreTimeout time.Duration
@@ -158,6 +168,19 @@ func (c UpgraderConfig) withDefaults() UpgraderConfig {
 	def(&c.FailureRetry, 5*time.Minute)
 	def(&c.BrokenRetry, time.Hour)
 	def(&c.MaxFailureRetry, 6*time.Hour)
+	if c.Memory == nil {
+		c.Memory = NewMemoryBudget(DefaultMemoryBudget)
+	}
+	if c.HeapInUse == nil {
+		hs := &heapSampler{every: time.Second}
+		c.HeapInUse = hs.read
+		if c.GC == nil {
+			c.GC = func() { runtime.GC(); hs.reset() }
+		}
+	}
+	if c.GC == nil {
+		c.GC = runtime.GC
+	}
 	if c.SuspectSlots <= 0 {
 		c.SuspectSlots = c.Concurrency / 2
 	}
@@ -234,6 +257,9 @@ type Upgrader struct {
 	suspect chan struct{} // the SuspectSlots a suspect must also hold
 	bg      sync.WaitGroup
 
+	gcAt     time.Time // when the memory gate last collected
+	heapHigh bool      // whether the heap in use was at or above half of the gate at the last pass
+
 	// the counts Run last announced (Run is the only writer)
 	lastNoSettlement, lastUnrecorded int
 }
@@ -281,6 +307,7 @@ type PassReport struct {
 	NoSettlement int // legs whose newest bundle holds no execution proof (finality_included_unavailable): not a failure, not logged per leg, not read again until the proof has a newer bundle
 	Unrecorded   int // attempted legs whose settlement evidence was served while the proof row has no settlement_tx_hash or settlement_block_number yet
 	Deferred     int // suspect legs (an earlier ask failed) left for the next pass because every suspect slot was taken
+	MemoryHeld   int // due legs not started because the heap in use was above the memory gate (finality_memory_budget_exceeded, what=attempt)
 	InFlight     int // legs skipped because an attempt started by an earlier pass is still running
 	// SourceErr is a failure listing legs (the pass ended early).
 	SourceErr error
@@ -302,8 +329,8 @@ func (u *Upgrader) Run(ctx context.Context) {
 			u.cfg.Logf("[FINALITY] pass could not list settled legs: %v", rep.SourceErr)
 		}
 		if rep.Appended > 0 || rep.Failed > 0 || rep.Broken > 0 || rep.Unusable > 0 {
-			u.cfg.Logf("[FINALITY] pass: listed=%d attempts=%d appended=%d pending=%d failed=%d broken=%d conflict=%d unusable=%d complete=%d no_settlement=%d unrecorded=%d no_prover=%d deferred=%d in_flight=%d",
-				rep.Listed, rep.Attempts, rep.Appended, rep.Pending, rep.Failed, rep.Broken, rep.Conflict, rep.Unusable, rep.Complete, rep.NoSettlement, rep.Unrecorded, rep.NoProver, rep.Deferred, rep.InFlight)
+			u.cfg.Logf("[FINALITY] pass: listed=%d attempts=%d appended=%d pending=%d failed=%d broken=%d conflict=%d unusable=%d complete=%d no_settlement=%d unrecorded=%d no_prover=%d deferred=%d in_flight=%d memory_held=%d heap_in_use=%d",
+				rep.Listed, rep.Attempts, rep.Appended, rep.Pending, rep.Failed, rep.Broken, rep.Conflict, rep.Unusable, rep.Complete, rep.NoSettlement, rep.Unrecorded, rep.NoProver, rep.Deferred, rep.InFlight, rep.MemoryHeld, u.cfg.HeapInUse())
 		}
 		u.announceGaps(rep)
 		t.Reset(u.cfg.Interval)
@@ -322,6 +349,7 @@ func (u *Upgrader) RunOnce(ctx context.Context) PassReport { return u.runPass(ct
 // legs are visited newest first, so a leg that has not failed always finds a slot ahead of the older legs behind it.
 func (u *Upgrader) runPass(ctx context.Context, detach bool) PassReport {
 	start := u.cfg.Now()
+	ctx = WithMemoryBudget(ctx, u.cfg.Memory) // every build of the pass reserves what it holds against the process budget
 	var rep PassReport
 	var mu sync.Mutex
 	var wg sync.WaitGroup
@@ -372,6 +400,10 @@ page:
 				continue
 			case u.running(ref.ProofID):
 				rep.InFlight++
+				continue
+			case u.heapOver():
+				rep.MemoryHeld++ // the leg stays due; it is asked when the heap has come down
+				metrics.IncFinalityMemoryRefused(ref.Chain, "attempt")
 				continue
 			}
 			suspect := u.isSuspect(ref.ProofID)
@@ -435,6 +467,7 @@ page:
 	rep.Unrecorded = len(u.unrecorded)
 	u.mu.Unlock()
 	u.publishGauges()
+	u.publishMemory(rep.MemoryHeld)
 	if g, ok := u.cfg.Recorder.(GapRecorder); ok {
 		g.UnrecordedSettlements(rep.Unrecorded)
 		if complete {
@@ -443,6 +476,72 @@ page:
 	}
 	u.cfg.Recorder.Pass(u.cfg.Now().Sub(start), u.cfg.Now())
 	return rep
+}
+
+// heapSampler reads runtime.MemStats.HeapInuse at most once per interval (ReadMemStats stops the world).
+type heapSampler struct {
+	every time.Duration
+	mu    sync.Mutex
+	at    time.Time
+	last  uint64
+}
+
+func (h *heapSampler) read() uint64 {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if now := time.Now(); h.at.IsZero() || now.Sub(h.at) >= h.every {
+		var m runtime.MemStats
+		runtime.ReadMemStats(&m)
+		h.last, h.at = m.HeapInuse, now
+	}
+	return h.last
+}
+
+func (h *heapSampler) reset() {
+	h.mu.Lock()
+	h.at = time.Time{}
+	h.mu.Unlock()
+}
+
+// heapOver reports whether the heap in use is above the memory gate (twice the budget). Before holding legs back it collects (at most
+// once a second) and reads again, because what is counted may be garbage.
+func (u *Upgrader) heapOver() bool {
+	gate := HeapGate(u.cfg.Memory.Limit())
+	if u.cfg.HeapInUse() <= gate {
+		return false
+	}
+	u.mu.Lock()
+	due := u.cfg.Now().Sub(u.gcAt) >= MinPoll
+	if due {
+		u.gcAt = u.cfg.Now()
+	}
+	u.mu.Unlock()
+	if !due {
+		return true
+	}
+	u.cfg.GC()
+	return u.cfg.HeapInUse() > gate
+}
+
+// publishMemory reports the heap in use, the budget and what is reserved to the metrics. It logs only when something is to be seen:
+// attempts were held back (the named state finality_memory_budget_exceeded, what=attempt), or the heap crossed half of the gate in
+// either direction. A routine pass with a small heap stays quiet; the figure is in the pass summary line and in the gauge.
+func (u *Upgrader) publishMemory(held int) {
+	heap := uint64(u.cfg.HeapInUse())
+	budget, used := u.cfg.Memory.Limit(), u.cfg.Memory.Used()
+	metrics.SetFinalityHeap(heap, budget, used)
+	high := heap >= HeapGate(budget)/2
+	u.mu.Lock()
+	changed := high != u.heapHigh
+	u.heapHigh = high
+	u.mu.Unlock()
+	switch {
+	case held > 0:
+		u.cfg.Logf("[FINALITY] %s{what=attempt,heap_in_use=%d,gate=%d,budget=%d,reserved=%d}: %d due legs were not started and stay due",
+			CodeMemoryBudget, heap, HeapGate(budget), budget, used, held)
+	case changed:
+		u.cfg.Logf("[FINALITY] memory: heap_in_use=%d reserved=%d budget=%d gate=%d high=%t", heap, used, budget, HeapGate(budget), high)
+	}
 }
 
 // addResult folds one attempt's outcome into a report (Attempts is counted when the attempt starts).
@@ -1003,6 +1102,11 @@ func (u *Upgrader) build(ctx context.Context, p Prover, s *ethproof.Settlement, 
 		add *Addendum
 		pd  *PendingState
 	}
+	// everything the prover reads through the generic row loaders is reserved against the process budget and given back when the
+	// attempt ends (an abandoned prover keeps its reservation no longer than its own call: the hold is released on return)
+	hold := NewHold(ctx, p.Chain(), "build")
+	defer hold.Release()
+	ctx = WithHold(ctx, hold)
 	o, err := bounded(ctx, u.cfg.BuildTimeout, p.Chain(), "building the evidence", func(c context.Context) (out, error) {
 		add, pd, err := p.Build(c, s, have, target)
 		return out{add, pd}, err
@@ -1085,7 +1189,7 @@ func Launch(ctx context.Context, enabled bool, src LegSource, store AddendumStor
 			u.announceDisabled(c)
 		}
 	}
-	cfg.Logf("[FINALITY] upgrader ENABLED (%s): concurrency=%d interval=%s chains=%v switched_off=%v", EnvEnabled, cfg.Concurrency, cfg.Interval, reg.Chains(), cfg.DisabledChains)
+	cfg.Logf("[FINALITY] upgrader ENABLED (%s): concurrency=%d interval=%s chains=%v switched_off=%v memory_budget=%d memory_gate=%d", EnvEnabled, cfg.Concurrency, cfg.Interval, reg.Chains(), cfg.DisabledChains, cfg.Memory.Limit(), HeapGate(cfg.Memory.Limit()))
 	StartCapturers(ctx, reg, SupervisorConfig{DisabledChains: cfg.DisabledChains, DisabledReasons: cfg.DisabledReasons, Logf: cfg.Logf})
 	go u.Run(ctx)
 	return u, nil

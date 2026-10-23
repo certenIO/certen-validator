@@ -510,6 +510,9 @@ func LoadBatches(ctx context.Context, s CaptureStore, chain uint64) ([]BatchReco
 		if err != nil || !ok {
 			return nil, fmt.Errorf("capture: row %s unreadable: %v", k, err)
 		}
+		if err := finality.ReserveRow(ctx, len(b)); err != nil {
+			return nil, err
+		}
 		rec, err := DecodeBatchRecord(b)
 		if err != nil {
 			return nil, fmt.Errorf("capture: row %s: %w", k, err)
@@ -550,6 +553,9 @@ func LoadBlobs(ctx context.Context, s CaptureStore, chain uint64, rec BatchRecor
 		if !ok {
 			return out, nil
 		}
+		if err := finality.ReserveRow(ctx, len(b)); err != nil {
+			return nil, err
+		}
 		br, err := DecodeBlobRecord(b)
 		if err != nil {
 			return nil, err
@@ -573,6 +579,9 @@ func LoadProofs(ctx context.Context, s CaptureStore, chain uint64, n uint64) ([]
 		b, ok, err := s.Get(ctx, k)
 		if err != nil || !ok {
 			return nil, fmt.Errorf("capture: row %s unreadable: %v", k, err)
+		}
+		if err := finality.ReserveRow(ctx, len(b)); err != nil {
+			return nil, err
 		}
 		p, err := DecodeProofRecord(b)
 		if err != nil {
