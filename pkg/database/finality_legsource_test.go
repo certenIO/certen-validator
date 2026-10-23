@@ -10,7 +10,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"runtime"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -238,26 +240,66 @@ func TestFinalityLegSourceListsEveryProofWithABundleAndNamesItsNewestBundle(t *t
 	wantState(t, "another proof's bundle", errOf(repo.LegSettlement(ctx, other)), finality.CodeIncludedUnavailable, "reason", string(finality.IncludedNoExecutionProof))
 }
 
-// Unavailable is exactly: no bundle, or a bundle whose component 5 is absent, null or {}. Nothing is wrong and nothing was served.
+// Unavailable is: no bundle, a bundle whose component 5 is absent, null or {} (no_execution_proof_component), or a non-empty
+// component 5 whose block_header_rlp is absent, null or empty (no_block_header, what the legacy bundles hold). Nothing is wrong and
+// nothing was served.
 func TestFinalityLegSourceNamesABundleWithoutASettlement(t *testing.T) {
 	ctx := context.Background()
 	repo := NewFinalityAddendaRepository(NewClientFromDB(testDB))
-	for name, mutate := range map[string]func(doc map[string]any){
-		"no component 5":      func(doc map[string]any) { delete(components(doc), "5_execution_proof") },
-		"component 5 is null": func(doc map[string]any) { components(doc)["5_execution_proof"] = nil },
-		"component 5 is {}":   func(doc map[string]any) { components(doc)["5_execution_proof"] = map[string]any{} },
+	noComponent := string(finality.IncludedNoExecutionProof)
+	noHeader := string(finality.IncludedNoBlockHeader)
+	for name, c := range map[string]struct {
+		reason string
+		mutate func(doc map[string]any)
+	}{
+		"no component 5":                          {noComponent, func(doc map[string]any) { delete(components(doc), "5_execution_proof") }},
+		"component 5 is null":                     {noComponent, func(doc map[string]any) { components(doc)["5_execution_proof"] = nil }},
+		"component 5 is {}":                       {noComponent, func(doc map[string]any) { components(doc)["5_execution_proof"] = map[string]any{} }},
+		"evidence without a block_header_rlp":     {noHeader, func(doc map[string]any) { delete(comp5(doc), "block_header_rlp") }},
+		"evidence with an empty block_header_rlp": {noHeader, func(doc map[string]any) { comp5(doc)["block_header_rlp"] = "" }},
+		"evidence with a null block_header_rlp":   {noHeader, func(doc map[string]any) { comp5(doc)["block_header_rlp"] = nil }},
 	} {
 		t.Run(name, func(t *testing.T) {
 			l := newLeg(t, "base_sepolia_47368146")
-			storeBundleAt(t, l.id, finalitytest.Gzip(bundleDoc(t, l, mutate)), time.Now())
+			storeBundleAt(t, l.id, finalitytest.Gzip(bundleDoc(t, l, c.mutate)), time.Now())
 			ref, ok := listed(t, repo)[l.id]
 			if !ok {
-				t.Fatal("a settled leg with a bundle is listed, whatever the bundle holds: the prefilter cannot read gzip")
+				t.Fatal("a settled leg with a bundle is listed, whatever the bundle holds: the listing cannot read gzip")
 			}
-			wantState(t, "LegSettlement", errOf(repo.LegSettlement(ctx, ref)), finality.CodeIncludedUnavailable, "reason", string(finality.IncludedNoExecutionProof))
-			wantState(t, "LegRef", errOf(repo.LegRef(ctx, l.id)), finality.CodeIncludedUnavailable, "reason", string(finality.IncludedNoExecutionProof))
+			wantState(t, "LegSettlement", errOf(repo.LegSettlement(ctx, ref)), finality.CodeIncludedUnavailable, "reason", c.reason)
+			wantState(t, "LegRef", errOf(repo.LegRef(ctx, l.id)), finality.CodeIncludedUnavailable, "reason", c.reason)
 		})
 	}
+}
+
+// The legacy bundles of production (component 5 written before the header was captured: 191 of 782, exactly the keys below, tx,
+// block, chain and custody consistent with the proof row) are the named unavailable{no_block_header} state, not a failure.
+func TestFinalityLegSourceLegacyBundleWithoutABlockHeaderIsUnavailable(t *testing.T) {
+	ctx := context.Background()
+	repo := NewFinalityAddendaRepository(NewClientFromDB(testDB))
+	l := newLeg(t, "base_sepolia_47368146")
+	legacy := finalitytest.ProductionLegacyExecutionProof(t, l.s)
+	keys := make([]string, 0, len(legacy))
+	for k := range legacy {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	if want := append([]string(nil), finalitytest.LegacyExecutionProofKeys...); !reflect.DeepEqual(keys, sortedCopy(want)) {
+		t.Fatalf("the fixture's keys are not the live legacy key set:\n got %v\nwant %v", keys, sortedCopy(want))
+	}
+	storeBundleAt(t, l.id, finalitytest.Gzip(finalitytest.ProductionBundleJSON(l.id, legacy)), time.Now())
+	ref, ok := listed(t, repo)[l.id]
+	if !ok {
+		t.Fatal("the legacy leg is not listed")
+	}
+	reason := string(finality.IncludedNoBlockHeader)
+	wantState(t, "LegSettlement", errOf(repo.LegSettlement(ctx, ref)), finality.CodeIncludedUnavailable, "reason", reason)
+	wantState(t, "LegRef", errOf(repo.LegRef(ctx, l.id)), finality.CodeIncludedUnavailable, "reason", reason)
+}
+
+func sortedCopy(in []string) []string {
+	sort.Strings(in)
+	return in
 }
 
 func gzipBomb(t *testing.T, size int) []byte {
@@ -318,14 +360,17 @@ func TestFinalityLegSourceRefusesAnUnusableBundleByName(t *testing.T) {
 		{"component 5 that is an array", "certen_v1", func(l leg) []byte {
 			return gz(l, func(doc map[string]any) { components(doc)["5_execution_proof"] = []any{1} })
 		}, []string{"not a JSON object"}, 128},
-		{"evidence without a block_header_rlp", "certen_v1", func(l leg) []byte {
-			return gz(l, func(doc map[string]any) { delete(comp5(doc), "block_header_rlp") })
+		{"a block_header_rlp of whitespace", "certen_v1", func(l leg) []byte {
+			return gz(l, func(doc map[string]any) { comp5(doc)["block_header_rlp"] = "  " })
 		}, []string{"block_header_rlp"}, 128},
-		{"evidence with an empty block_header_rlp", "certen_v1", func(l leg) []byte {
-			return gz(l, func(doc map[string]any) { comp5(doc)["block_header_rlp"] = "" })
+		{"a block_header_rlp that is only 0x", "certen_v1", func(l leg) []byte {
+			return gz(l, func(doc map[string]any) { comp5(doc)["block_header_rlp"] = "0x" })
 		}, []string{"block_header_rlp"}, 128},
-		{"evidence with a null block_header_rlp", "certen_v1", func(l leg) []byte {
-			return gz(l, func(doc map[string]any) { comp5(doc)["block_header_rlp"] = nil })
+		{"a block_header_rlp of odd length", "certen_v1", func(l leg) []byte {
+			return gz(l, func(doc map[string]any) { comp5(doc)["block_header_rlp"] = "0xabc" })
+		}, []string{"block_header_rlp"}, 128},
+		{"a block_header_rlp that is not hex", "certen_v1", func(l leg) []byte {
+			return gz(l, func(doc map[string]any) { comp5(doc)["block_header_rlp"] = "0xzz" })
 		}, []string{"block_header_rlp"}, 128},
 		{"a block_header_rlp that is a number", "certen_v1", func(l leg) []byte {
 			return gz(l, func(doc map[string]any) { comp5(doc)["block_header_rlp"] = 5 })
@@ -415,11 +460,10 @@ func TestFinalityLegSourceChainDisagreementIsNamed(t *testing.T) {
 	if got, err := repo.LegRef(ctx, id); err != nil || got.Chain != finality.ChainBaseSepolia {
 		t.Fatalf("LegRef: %v %+v", err, got)
 	}
-	// a reference that names no chain takes the execution proof's
-	got, err := repo.LegSettlement(ctx, finality.LegRef{ProofID: id})
-	if err != nil || got.Chain != finality.ChainBaseSepolia {
-		t.Fatalf("a reference without a chain: %v %+v", err, got)
-	}
+	// a reference that names no chain (the summary's chain_id was missing or unusable) for a bundle that HAS an execution proof is a
+	// loud named state, not a silent no-prover and not a settlement judged on a chain nobody stated
+	_, err = repo.LegSettlement(ctx, finality.LegRef{ProofID: id})
+	wantInvalid(t, "a reference without a chain", id, err, "no usable chain_id", fmt.Sprint(finality.ChainBaseSepolia))
 }
 
 // The evidence served for a proof is for THAT proof: the bundle names it (custody_chain_hash is the proof id the writer sets) and

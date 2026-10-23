@@ -164,3 +164,19 @@ func StoreProductionLeg(t testing.TB, db *sql.DB, s finality.Settlement) string 
 	StoreBundleRow(t, db, id, Gzip(ProductionBundleJSON(id, exec)))
 	return id
 }
+
+// LegacyExecutionProofKeys are the members of a component 5 written before the block header was captured (bundles created
+// 2026-09-06..2026-10-04, 191 of the 782 in production): the execution proof of ProductionExecutionProof without block_header_rlp.
+var LegacyExecutionProofKeys = []string{
+	"block_hash", "block_number", "chain_id", "logs", "raw_receipt", "receipt_inclusion_proof", "receipts_root", "status",
+	"transactions_root", "tx_hash", "tx_inclusion_proof", "verified_at", "verified_by",
+}
+
+// ProductionLegacyExecutionProof is component 5 as those legacy bundles hold it: every member of ProductionExecutionProof except
+// block_header_rlp. Its tx, block and chain are those of the settlement, so it is consistent with the proof row and the custody hash.
+func ProductionLegacyExecutionProof(t testing.TB, s finality.Settlement) map[string]any {
+	t.Helper()
+	exec := ProductionExecutionProof(t, s)
+	delete(exec, "block_header_rlp")
+	return exec
+}
