@@ -20,16 +20,32 @@
 --      (V2_SPEC_S7 2.2, pkg/finality OwnHash) with the builtin sha256(), where lp(x) = u32be(length(x)) || x. A row whose own_hash
 --      differs is refused (SQLSTATE 23001, the same class as every other refusal of this table).
 --
--- What this does NOT claim: the trigger cannot judge the evidence itself (that is the registered Kind's job, run inside
--- FinalityAddendaRepository.Append and again by every verifier) and cannot know that the header's block is the proof's own
--- Settlement block (a verifier compares D0 with the Settlement it verified; a chain about another block fails there). It makes the
--- stored hashes internally consistent with the stored evidence, so a garbage row can no longer be linked into a chain.
+-- What this binds and what it does not:
+--   * The header's leg block NUMBER is bound to proof_artifacts.settlement_block_number whenever the proof records one (the writer sets it
+--     from the same observation as the bundle's component 5, and FinalityAddendaRepository.LegSettlement refuses a leg whose bundle proves
+--     another block), so a self-consistent row naming a bogus block is refused here for every proof that records its settlement. The
+--     binding applies to every row, not only to the first.
+--   * It cannot bind a proof that records no settlement yet (the writer records it right after the bundle), a proof with no artifact
+--     row, or the block HASH (the column the hash would live in, settlement_block_hash, is not written by the writer; the hash is in the
+--     gzip bundle only). Those rows are stored if they are self-consistent, and are judged where the Settlement is: every reader and the
+--     repository's Append compare the chain with finality.CheckLegChain under the Settlement's own leg binding D0 and refuse it by name
+--     (finality_chain_broken{own_hash}). The trigger cannot judge the evidence itself (that is the registered Kind's job, run inside
+--     Append and again by every verifier).
+-- It makes the stored hashes internally consistent with the stored evidence, so a garbage row can no longer be linked into a chain.
 --
--- Expand-only: two new functions and a replaced trigger function body; the triggers themselves are unchanged. Existing rows are
+-- Name resolution: all three functions are created with the function attribute search_path = pg_catalog, pg_temp (written on the LANGUAGE
+-- line: the runner's lint rejects any line that starts with the session command SET), and the trigger calls the one function
+-- of the builtin it needs as pg_catalog.sha256. A writer holding only INSERT on the table but CREATE on a schema it puts first in its
+-- own search_path could otherwise define a function of the same name there and forge any own_hash; with pg_catalog,public in the path
+-- an overload in public still wins for an unknown-typed literal (convert_to(text, text) over convert_to(text, name)), which is why
+-- public is not in the path. Every table and function of this schema that the functions use is qualified with public. The guard reads
+-- proof_artifacts, so a role that may INSERT into the table needs SELECT on proof_artifacts too (the application role owns both).
+--
+-- Expand-only: two new functions and a replaced trigger function body (which reads proof_artifacts); the triggers themselves are unchanged. Existing rows are
 -- not touched (they were all written by Append, which forms the hash exactly this way).
 
 CREATE FUNCTION public.proof_finality_lp(field bytea) RETURNS bytea
-    LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
+    LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path = pg_catalog, pg_temp
     AS $$ SELECT int4send(length(field)) || field $$;
 
 COMMENT ON FUNCTION public.proof_finality_lp(bytea) IS 'lp(x) of the finality hash preimages: u32be(length(x)) || x';
@@ -43,7 +59,7 @@ CREATE FUNCTION public.proof_finality_evidence_header(
     OUT leg_number bytea,
     OUT leg_hash bytea
 ) RETURNS record
-    LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE
+    LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE SET search_path = pg_catalog, pg_temp
     AS $$
 DECLARE
     klen bigint;
@@ -71,7 +87,7 @@ $$;
 COMMENT ON FUNCTION public.proof_finality_evidence_header(bytea) IS 'Reads the CFE1 container header of finality evidence (V2_SPEC_S7 3.1); well_formed is false when it is not one';
 
 CREATE OR REPLACE FUNCTION public.proof_finality_addenda_guard() RETURNS trigger
-    LANGUAGE plpgsql
+    LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp
     AS $$
 DECLARE
     previous public.proof_finality_addenda%ROWTYPE;
@@ -79,6 +95,7 @@ DECLARE
     prev_h record;
     d0 bytea;
     want bytea;
+    recorded bigint;
 BEGIN
     IF TG_OP <> 'INSERT' THEN
         RAISE EXCEPTION 'proof_finality_addenda is append-only: % refused', TG_OP USING ERRCODE = 'restrict_violation';
@@ -119,6 +136,10 @@ BEGIN
     IF h.level <> NEW.level THEN
         RAISE EXCEPTION 'addendum % of %: the evidence header names another level than the row', NEW.seq, NEW.proof_id USING ERRCODE = 'restrict_violation';
     END IF;
+    SELECT a.settlement_block_number INTO recorded FROM public.proof_artifacts a WHERE a.proof_id = NEW.proof_id;
+    IF FOUND AND recorded IS NOT NULL AND h.leg_number <> int8send(recorded) THEN
+        RAISE EXCEPTION 'addendum % of %: the evidence is about a block other than the settlement block the proof records (%)', NEW.seq, NEW.proof_id, recorded USING ERRCODE = 'restrict_violation';
+    END IF;
     IF NEW.seq > 1 THEN
         SELECT * INTO prev_h FROM public.proof_finality_evidence_header(previous.evidence);
         IF NOT prev_h.well_formed OR prev_h.leg_number <> h.leg_number OR prev_h.leg_hash <> h.leg_hash THEN
@@ -126,12 +147,12 @@ BEGIN
         END IF;
     END IF;
 
-    d0 := sha256(
+    d0 := pg_catalog.sha256(
         public.proof_finality_lp(convert_to('certen:finality:d0/v1', 'UTF8')) ||
         public.proof_finality_lp(h.chain) ||
         public.proof_finality_lp(h.leg_number) ||
         public.proof_finality_lp(h.leg_hash));
-    want := sha256(
+    want := pg_catalog.sha256(
         public.proof_finality_lp(convert_to('certen:finality:v1', 'UTF8')) ||
         public.proof_finality_lp(d0) ||
         public.proof_finality_lp(NEW.prev_hash) ||
@@ -139,7 +160,7 @@ BEGIN
         public.proof_finality_lp(set_byte('\x00'::bytea, 0, NEW.level::int)) ||
         public.proof_finality_lp(int8send(NEW.chain)) ||
         public.proof_finality_lp(convert_to(NEW.kind, 'UTF8')) ||
-        public.proof_finality_lp(sha256(NEW.evidence)));
+        public.proof_finality_lp(pg_catalog.sha256(NEW.evidence)));
     IF NEW.own_hash <> want THEN
         RAISE EXCEPTION 'addendum % of % carries an own_hash that is not sha256 of its link, kind and evidence under the leg binding', NEW.seq, NEW.proof_id USING ERRCODE = 'restrict_violation';
     END IF;
