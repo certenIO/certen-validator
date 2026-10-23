@@ -1011,7 +1011,7 @@ func (u *Upgrader) upgradeLeg(ctx context.Context, ref LegRef) (res legResult) {
 					wait = u.cfg.BrokenRetry
 					continue // the chain does not have that level: nothing to build, nothing wrong
 				}
-				if st, ok := AsNamed(err); ok && IsEnvironmentState(st.Code) {
+				if st, ok := AsNamed(err); ok && IsEnvironmentStateError(st) {
 					// The state is a fact about THIS process or its capture store, not a verdict on the leg (state_class.go): the process
 					// memory budget could not cover the build even after waiting for another build to release (RB12-P0LIVE-FIX D2), or the
 					// capture store has a recorded hole in the window of the leg, which the backfill closes (RB12-GO-INT F17). No failure
@@ -1124,7 +1124,7 @@ func (u *Upgrader) upgradeLeg(ctx context.Context, ref LegRef) (res legResult) {
 			}
 			if failed && !nextAt.IsZero() && (status.Class == BuilderUnavailable || status.Class == BuilderRefused) {
 				status.noteAttempt(failAttempt, nextAt)
-			} else if held && !nextAt.IsZero() && status.State != nil && IsEnvironmentState(status.State.Code) {
+			} else if held && !nextAt.IsZero() && status.State != nil && IsEnvironmentStateError(status.State) {
 				if status.Class == BuilderPending {
 					status.noteRetry(nextAt)
 				} else {

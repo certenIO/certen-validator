@@ -44,8 +44,8 @@ func TestRB12F17TheEnvironmentClassIsExactlyTheProcessAndStoreStates(t *testing.
 		}
 	}
 	sort.Strings(got)
-	want := []string{"finality_memory_budget_exceeded", "l1_capture_gap"}
-	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+	want := []string{"finality_index_disabled", "finality_memory_budget_exceeded", "l1_capture_gap"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
 		t.Fatalf("environment states: %v, want %v", got, want)
 	}
 	for _, code := range want {
@@ -74,5 +74,41 @@ func TestRB12F17AnUnknownCodeIsAFailureAndSaysItIsUnknown(t *testing.T) {
 func TestRB12F17TheMemoryCodeConstantIsInTheTable(t *testing.T) {
 	if c, ok := ClassOfState(CodeMemoryBudget); !ok || c != ClassEnvironment {
 		t.Fatalf("%s: (%q, %v)", CodeMemoryBudget, c, ok)
+	}
+}
+
+// Train 3: index_inconsistent is classified by its REASON. Only a missing row can clear by a retry (reconcile or a capture backfill writes
+// it); a corrupt, quarantined, overflowing, re-pinned or disagreeing row is persistent until a new index generation, so it keeps the
+// failure back-off. Every reason of the registry's closed set must be decided by name.
+func TestRB12F17IndexInconsistentIsClassifiedByItsReason(t *testing.T) {
+	reg := loadRegistry(t)
+	set := reg.States["index_inconsistent"].Enums["reason"]
+	by := StateReasonClasses()["index_inconsistent"]
+	if len(set) == 0 || len(by) != len(set) {
+		t.Fatalf("every reason of the closed set %v must have a class, the table has %v", set, by)
+	}
+	for _, reason := range set {
+		want, ok := by[reason]
+		if !ok {
+			t.Errorf("reason %s has no class", reason)
+			continue
+		}
+		st := IndexInconsistent(84532, "bi", reason)
+		got, known := ClassOfStateError(st)
+		if !known || got != want {
+			t.Errorf("%s: class %q, want %q", reason, got, want)
+		}
+		wantEnv := reason == IndexRowMissing
+		if IsEnvironmentStateError(st) != wantEnv {
+			t.Errorf("%s: environment=%v, want %v (only row_missing clears by a retry)", reason, IsEnvironmentStateError(st), wantEnv)
+		}
+	}
+	// a reason the table does not know keeps the failure back-off (the stronger protection)
+	if c, _ := ClassOfStateError(NewState("index_inconsistent", "chain", uint64(84532), "family", "bi", "reason", "unheard_of")); c != ClassFailure {
+		t.Errorf("an unknown reason keeps the failure back-off, got %q", c)
+	}
+	// a code that is not refined keeps its own class
+	if c, _ := ClassOfStateError(NewState("l1_capture_gap", "chain", uint64(84532), "gap_state", "open")); c != ClassEnvironment {
+		t.Errorf("l1_capture_gap is an environment state, got %q", c)
 	}
 }

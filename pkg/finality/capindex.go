@@ -128,22 +128,28 @@ const CodeCaptureGap = "l1_capture_gap"
 // reads the window (go_operational). The reason is the class of the fault; the value of the setting is never part of the state.
 const CodeIndexDisabled = "finality_index_disabled"
 
-// Reasons of finality_index_disabled.
+// Reasons of finality_index_disabled: the closed names of finality_upgrader_disabled (RB12-GO-INT F14) that apply to one setting. A refused
+// number also says which way (refused), never the value.
 const (
-	IndexSettingSwitchInvalid = "switch_invalid" // the switch is not true/false, 1/0, yes/no or on/off
-	IndexSettingNotInteger    = "not_an_integer"
-	IndexSettingOutOfRange    = "out_of_range" // below the minimum or above the maximum the setting allows
+	IndexSettingSwitchInvalid = "switch_invalid"  // the switch is not true/false, 1/0, yes/no or on/off
+	IndexSettingInvalid       = "setting_invalid" // a number the setting cannot take
+	IndexRefusedNotInteger    = "not_an_integer"
+	IndexRefusedOutOfRange    = "out_of_range" // below the minimum or above the maximum the setting allows
 )
 
-// IndexDisabledState builds finality_index_disabled for the setting key.
-func IndexDisabledState(chain uint64, key, reason string) *StateError {
-	return NewState(CodeIndexDisabled, "chain", chain, "key", key, "reason", reason)
+// IndexDisabledState builds finality_index_disabled for the setting variable (refused: only with setting_invalid).
+func IndexDisabledState(chain uint64, variable, reason, refused string) *StateError {
+	kv := []any{"chain", chain, "variable", variable, "reason", reason}
+	if refused != "" {
+		kv = append(kv, "refused", refused)
+	}
+	return NewState(CodeIndexDisabled, kv...)
 }
 
 // AnnounceIndexDisabled logs the state, sets the gauge certen_finality_index_disabled and records it for /health/detailed.
 func AnnounceIndexDisabled(logf func(format string, args ...any), st *StateError) {
 	chain, _ := st.Fields["chain"].(uint64)
-	key, _ := st.Fields["key"].(string)
+	key, _ := st.Fields["variable"].(string)
 	reason, _ := st.Fields["reason"].(string)
 	logf("[FINALITY] capture index DISABLED, the window reader serves: %s", st.Error())
 	metrics.SetFinalityIndexDisabled(chain, "bi", key, reason)

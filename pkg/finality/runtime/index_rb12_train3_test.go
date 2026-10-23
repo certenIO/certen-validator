@@ -17,18 +17,18 @@ import (
 
 func TestRTBadIndexSettingsAreANamedDisabledStateNotAFatalStartup(t *testing.T) {
 	for _, c := range []struct {
-		key, val, reason string
+		key, val, reason, refused string
 	}{
-		{EnvBaseIndex, "maybe", "switch_invalid"},
-		{finality.EnvIndexGeneration, "0", "out_of_range"},
-		{finality.EnvIndexGeneration, "-3", "out_of_range"},
-		{finality.EnvIndexGeneration, "4294967296", "out_of_range"}, // uint32(2^32) is 0 (the default): must not wrap
-		{finality.EnvIndexGeneration, "4294967297", "out_of_range"}, // uint32 wraps to generation 1
-		{finality.EnvIndexGeneration, "one", "not_an_integer"},
-		{EnvIndexBlocks, "0", "out_of_range"},
-		{EnvIndexBlocks, "many", "not_an_integer"},
-		{EnvIndexStepSecond, "0", "out_of_range"},
-		{EnvIndexStepSecond, "soon", "not_an_integer"},
+		{EnvBaseIndex, "maybe", "switch_invalid", ""},
+		{finality.EnvIndexGeneration, "0", "setting_invalid", "out_of_range"},
+		{finality.EnvIndexGeneration, "-3", "setting_invalid", "out_of_range"},
+		{finality.EnvIndexGeneration, "4294967296", "setting_invalid", "out_of_range"}, // uint32(2^32) is 0 (the default): must not wrap
+		{finality.EnvIndexGeneration, "4294967297", "setting_invalid", "out_of_range"}, // uint32 wraps to generation 1
+		{finality.EnvIndexGeneration, "one", "setting_invalid", "not_an_integer"},
+		{EnvIndexBlocks, "0", "setting_invalid", "out_of_range"},
+		{EnvIndexBlocks, "many", "setting_invalid", "not_an_integer"},
+		{EnvIndexStepSecond, "0", "setting_invalid", "out_of_range"},
+		{EnvIndexStepSecond, "soon", "setting_invalid", "not_an_integer"},
 	} {
 		t.Run(c.key+"="+c.val, func(t *testing.T) {
 			t.Setenv(c.key, c.val)
@@ -40,7 +40,7 @@ func TestRTBadIndexSettingsAreANamedDisabledStateNotAFatalStartup(t *testing.T) 
 				t.Fatalf("the index must be off while a setting is bad")
 			}
 			d, ok := cfg.Describe()["index_disabled"].(string)
-			if !ok || !strings.Contains(d, "finality_index_disabled") || !strings.Contains(d, c.key) || !strings.Contains(d, c.reason) {
+			if !ok || !strings.Contains(d, "finality_index_disabled") || !strings.Contains(d, c.key) || !strings.Contains(d, c.reason) || !strings.Contains(d, c.refused) {
 				t.Fatalf("the secret-free description names the state, the key and the reason: %v", cfg.Describe()["index_disabled"])
 			}
 			if strings.Contains(d, c.val) && len(c.val) > 3 {

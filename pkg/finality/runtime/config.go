@@ -492,36 +492,36 @@ func (c Config) Missing() map[uint64][]string {
 func (c *Config) readIndexSettings() {
 	c.BaseIndex, c.IndexGeneration, c.IndexBlocks, c.IndexStep = true, finality.DefaultIndexGeneration, 128, 15*time.Second
 	c.IndexDisabled = nil
-	off := func(key, reason string) {
+	off := func(variable, reason, refused string) {
 		c.BaseIndex = false
 		if c.IndexDisabled == nil {
-			c.IndexDisabled = finality.IndexDisabledState(finality.ChainBaseSepolia, key, reason)
+			c.IndexDisabled = finality.IndexDisabledState(finality.ChainBaseSepolia, variable, reason, refused)
 		}
 	}
 	on, err := envvar.Bool(EnvBaseIndex, true)
 	if err != nil {
-		off(EnvBaseIndex, finality.IndexSettingSwitchInvalid)
+		off(EnvBaseIndex, finality.IndexSettingSwitchInvalid, "")
 	} else {
 		c.BaseIndex = on
 	}
-	if v, reason := indexInt(finality.EnvIndexGeneration, int64(finality.DefaultIndexGeneration), 1, math.MaxUint32); reason != "" {
-		off(finality.EnvIndexGeneration, reason)
+	if v, refused := indexInt(finality.EnvIndexGeneration, int64(finality.DefaultIndexGeneration), 1, math.MaxUint32); refused != "" {
+		off(finality.EnvIndexGeneration, finality.IndexSettingInvalid, refused)
 	} else {
 		c.IndexGeneration = uint32(v)
 	}
-	if v, reason := indexInt(EnvIndexBlocks, 128, 1, math.MaxInt32); reason != "" {
-		off(EnvIndexBlocks, reason)
+	if v, refused := indexInt(EnvIndexBlocks, 128, 1, math.MaxInt32); refused != "" {
+		off(EnvIndexBlocks, finality.IndexSettingInvalid, refused)
 	} else {
 		c.IndexBlocks = int(v)
 	}
-	if v, reason := indexInt(EnvIndexStepSecond, 15, 1, 86400); reason != "" {
-		off(EnvIndexStepSecond, reason)
+	if v, refused := indexInt(EnvIndexStepSecond, 15, 1, 86400); refused != "" {
+		off(EnvIndexStepSecond, finality.IndexSettingInvalid, refused)
 	} else {
 		c.IndexStep = time.Duration(v) * time.Second
 	}
 }
 
-// indexInt reads an integer setting in [lo, hi]; reason is empty when it is, else the class of the fault (never the value).
+// indexInt reads an integer setting in [lo, hi]; the second result is empty when it is, else which way it is refused (never the value).
 func indexInt(key string, def, lo, hi int64) (int64, string) {
 	raw := strings.TrimSpace(os.Getenv(key))
 	if raw == "" {
@@ -529,10 +529,10 @@ func indexInt(key string, def, lo, hi int64) (int64, string) {
 	}
 	v, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil {
-		return def, finality.IndexSettingNotInteger
+		return def, finality.IndexRefusedNotInteger
 	}
 	if v < lo || v > hi {
-		return def, finality.IndexSettingOutOfRange
+		return def, finality.IndexRefusedOutOfRange
 	}
 	return v, ""
 }

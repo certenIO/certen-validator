@@ -116,12 +116,12 @@ func TestRTConfigReadsTheIndexSettingsAndRefusesBadOnes(t *testing.T) {
 	}
 	// a bad setting is a named disabled state of the index and the validator keeps running (TestRTBadIndexSettings... pins every class)
 	t.Setenv(finality.EnvIndexGeneration, "0")
-	if c, err = ConfigFromEnv(); err != nil || c.BaseIndex || c.IndexDisabled == nil || c.IndexDisabled.Code != "finality_index_disabled" || c.IndexDisabled.Fields["key"] != finality.EnvIndexGeneration {
+	if c, err = ConfigFromEnv(); err != nil || c.BaseIndex || c.IndexDisabled == nil || c.IndexDisabled.Code != "finality_index_disabled" || c.IndexDisabled.Fields["variable"] != finality.EnvIndexGeneration {
 		t.Fatalf("generation 0 is the named disabled state, not a fatal startup: %+v %v", c.IndexDisabled, err)
 	}
 	t.Setenv(finality.EnvIndexGeneration, "1")
 	t.Setenv(EnvBaseIndex, "maybe")
-	if c, err = ConfigFromEnv(); err != nil || c.BaseIndex || c.IndexDisabled == nil || c.IndexDisabled.Fields["key"] != EnvBaseIndex {
+	if c, err = ConfigFromEnv(); err != nil || c.BaseIndex || c.IndexDisabled == nil || c.IndexDisabled.Fields["variable"] != EnvBaseIndex {
 		t.Fatalf("a switch that is not a boolean is the named disabled state, not a fatal startup: %+v %v", c.IndexDisabled, err)
 	}
 }
