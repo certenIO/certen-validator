@@ -577,6 +577,7 @@ func (u *Upgrader) putStatus(ctx context.Context, st BuilderStatus) {
 		return
 	}
 	st.JudgedAt = u.cfg.Now()
+	st = st.WithPins(u.pins) // every row names the pins this builder judged under
 	_, err := bounded(ctx, u.cfg.StoreTimeout, st.Chain, "writing the builder status", func(c context.Context) (struct{}, error) {
 		return struct{}{}, u.cfg.Status.UpsertStatus(c, st)
 	})

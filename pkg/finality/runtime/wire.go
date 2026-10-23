@@ -254,7 +254,7 @@ func wireBase(reg *finality.Registry, env Env, d Deps, clock loopClock, logf fun
 	}
 	capt := &baseposted.Capturer{Chain: finality.ChainBaseSepolia, Pins: bp, L1: l1, Beacon: &baseposted.BeaconHTTP{Bases: cfg.Beacon, Client: env.HTTP},
 		Store: env.Store, GenesisTime: capture.BeaconGenesisTime, SlotSeconds: 12}
-	return reg.RegisterCapturer(&BasePostedLoop{Cap: capt, Store: env.Store, Status: d.Status, Every: cfg.CaptureEvery, MaxPerTick: cfg.CaptureBlocks,
+	return reg.RegisterCapturer(&BasePostedLoop{Cap: capt, Store: env.Store, Status: d.Status, Pins: env.Pins, Every: cfg.CaptureEvery, MaxPerTick: cfg.CaptureBlocks,
 		StartBack: 32, HasArchive: len(cfg.Archive) > 0, Logf: logf, Clock: clock})
 }
 
@@ -277,7 +277,7 @@ func wireArb(reg *finality.Registry, env Env, d Deps, clock loopClock, logf func
 	bc := capture.NewHTTPBeacon(cfg.Beacon...)
 	bc.Client = env.HTTP
 	cp := capture.NewCapturer(env.Store, l1, bc, capture.Config{Logf: logf, StartBack: 32})
-	return reg.RegisterCapturer(&ArbPostedLoop{Cap: cp, Providers: Hosts(providers), Status: d.Status, Every: cfg.CaptureEvery, Logf: logf, Clock: clock})
+	return reg.RegisterCapturer(&ArbPostedLoop{Cap: cp, Providers: Hosts(providers), Status: d.Status, Pins: env.Pins, Every: cfg.CaptureEvery, Logf: logf, Clock: clock})
 }
 
 // wireSepolia registers the Ethereum Sepolia finalized prover: the light-client objects come from the ordered CERTEN_FINALITY_LC_URLS

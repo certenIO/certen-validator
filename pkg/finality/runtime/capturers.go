@@ -48,6 +48,7 @@ type statusSink struct {
 	store finality.BuilderStatusStore
 	logf  func(string, ...any)
 	now   func() time.Time
+	pins  *finality.Pins // the pins the builder runs under: every row records their hash (nil = nothing recorded)
 }
 
 func (s statusSink) put(ctx context.Context, chain uint64, target finality.Level, st *finality.StateError) {
@@ -59,7 +60,7 @@ func (s statusSink) put(ctx context.Context, chain uint64, target finality.Level
 	if s.now != nil {
 		at = s.now()
 	}
-	row := finality.BuilderStatusOf(CaptureStatusProofID(chain), chain, target, finality.LevelNone, nil, st, false, at)
+	row := finality.BuilderStatusOf(CaptureStatusProofID(chain), chain, target, finality.LevelNone, nil, st, false, at).WithPins(s.pins)
 	if err := s.store.UpsertStatus(ctx, row); err != nil && ctx.Err() == nil {
 		metrics.IncFinalityStatusWriteFailure(chain)
 		s.logf("[FINALITY] capture status of chain %d (%s) was not written: %v", chain, st.Code, ethrpc.RedactError(err))
@@ -101,6 +102,7 @@ type BasePostedLoop struct {
 	Cap          *baseposted.Capturer
 	Store        finality.CaptureStore
 	Status       finality.BuilderStatusStore
+	Pins         *finality.Pins // the pins the loop's status rows record the hash of
 	Every        time.Duration
 	MaxPerTick   int
 	StartBack    uint64
@@ -186,7 +188,7 @@ func (l *BasePostedLoop) Run(ctx context.Context) error {
 func (l *BasePostedLoop) Tick(ctx context.Context, tick int) error {
 	l.init()
 	chain := l.Chain()
-	sink := statusSink{store: l.Status, logf: l.Logf, now: l.Clock.Now}
+	sink := statusSink{store: l.Status, logf: l.Logf, now: l.Clock.Now, pins: l.Pins}
 	head, err := l.Cap.L1.Head(ctx)
 	if err != nil {
 		return fmt.Errorf("the Sepolia head is unavailable: %w", err)
@@ -316,6 +318,7 @@ type ArbPostedLoop struct {
 	Cap       *capture.Capturer
 	Providers []string // host labels of the L1 providers, for the state's providers field
 	Status    finality.BuilderStatusStore
+	Pins      *finality.Pins // the pins the loop's status rows record the hash of
 	Every     time.Duration
 	Logf      func(string, ...any)
 	Clock     loopClock
@@ -335,7 +338,7 @@ func (l *ArbPostedLoop) Run(ctx context.Context) error {
 	if every < finality.MinPoll {
 		every = finality.MinPoll
 	}
-	sink := statusSink{store: l.Status, logf: l.Logf, now: l.Clock.Now}
+	sink := statusSink{store: l.Status, logf: l.Logf, now: l.Clock.Now, pins: l.Pins}
 	for ctx.Err() == nil {
 		rep, err := l.Cap.Tick(ctx)
 		switch {

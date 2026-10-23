@@ -49,6 +49,33 @@ type BuilderStatus struct {
 	Seq          uint64    // the addendum's seq, BuilderVerified only
 	State        *StateError
 	JudgedAt     time.Time
+	// PinsSHA256 is the hash of the pins the builder judged under (hex, 64 lowercase characters; Pins.Identity). It is recorded in the
+	// document as pinsSha256 so that a consumer, who verifies under the pins IT trusts, can see whether the builder's pins differ from
+	// its own. Empty = not recorded (a row written before the member existed, or by a writer that holds no pins).
+	PinsSHA256 string
+}
+
+// WithPins is the status with the identity of the pins the builder judged under (a nil Pins records nothing).
+func (s BuilderStatus) WithPins(p *Pins) BuilderStatus {
+	h, _ := p.Identity()
+	s.PinsSHA256 = h
+	return s
+}
+
+// checkPinsSHA256 accepts an absent identity or 64 lowercase hex characters.
+func checkPinsSHA256(h string) error {
+	if h == "" {
+		return nil
+	}
+	if len(h) != 64 {
+		return fmt.Errorf("finality: status pinsSha256 %q is not 64 lowercase hex characters", h)
+	}
+	for i := 0; i < len(h); i++ {
+		if c := h[i]; !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+			return fmt.Errorf("finality: status pinsSha256 %q is not 64 lowercase hex characters", h)
+		}
+	}
+	return nil
 }
 
 // statusDoc is the stored form. Members are written in this fixed order; the named state is its Canonical form.
@@ -60,6 +87,8 @@ type statusDoc struct {
 	ETA          string          `json:"eta,omitempty"`
 	Seq          uint64          `json:"seq,omitempty"`
 	State        json.RawMessage `json:"state,omitempty"`
+	// PinsSHA256 is additive (RB12-DBFIX): last, omitted when not recorded, so a document without it is what it always was.
+	PinsSHA256 string `json:"pinsSha256,omitempty"`
 }
 
 // Document renders the jsonb `state` of the row.
@@ -67,7 +96,10 @@ func (s BuilderStatus) Document() ([]byte, error) {
 	if !s.TargetLevel.Stored() {
 		return nil, fmt.Errorf("finality: a status row targets l1_posted or finalized, not %s", s.TargetLevel)
 	}
-	d := statusDoc{Format: BuilderStatusFormat, Class: s.Class, LevelReached: s.LevelReached.String(), NextLevel: s.NextLevel.String(), Seq: s.Seq}
+	if err := checkPinsSHA256(s.PinsSHA256); err != nil {
+		return nil, err
+	}
+	d := statusDoc{Format: BuilderStatusFormat, Class: s.Class, LevelReached: s.LevelReached.String(), NextLevel: s.NextLevel.String(), Seq: s.Seq, PinsSHA256: s.PinsSHA256}
 	if !s.ETA.IsZero() {
 		d.ETA = s.ETA.UTC().Format(time.RFC3339)
 	}
@@ -112,7 +144,10 @@ func ParseBuilderStatusDocument(raw []byte) (BuilderStatusView, error) {
 	if d.Format != BuilderStatusFormat {
 		return BuilderStatusView{}, fmt.Errorf("finality: status document format %q", d.Format)
 	}
-	v := BuilderStatusView{Class: d.Class, Seq: d.Seq, State: d.State}
+	if err := checkPinsSHA256(d.PinsSHA256); err != nil {
+		return BuilderStatusView{}, err
+	}
+	v := BuilderStatusView{Class: d.Class, Seq: d.Seq, State: d.State, PinsSHA256: d.PinsSHA256}
 	var err error
 	if v.LevelReached, err = ParseLevelOrNone(d.LevelReached); err != nil {
 		return BuilderStatusView{}, err
@@ -148,6 +183,7 @@ type BuilderStatusView struct {
 	Seq          uint64
 	State        json.RawMessage // {"code":...,"fields":{...}} canonical, nil for verified
 	JudgedAt     time.Time
+	PinsSHA256   string // the pins the builder judged under (see BuilderStatus.PinsSHA256); empty = not recorded
 }
 
 // BuilderStatusStore holds the builder status rows: mutable, a later pass replaces the row of the same (proof, target level).
