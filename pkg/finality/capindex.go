@@ -124,6 +124,32 @@ func IndexInconsistent(chain uint64, family, reason string, extra ...any) *State
 // the capture has a hole (go_operational, class U).
 const CodeCaptureGap = "l1_capture_gap"
 
+// CodeIndexDisabled is the named state of a capture index that a bad setting switched off: the validator keeps running and the builder
+// reads the window (go_operational). The reason is the class of the fault; the value of the setting is never part of the state.
+const CodeIndexDisabled = "finality_index_disabled"
+
+// Reasons of finality_index_disabled.
+const (
+	IndexSettingSwitchInvalid = "switch_invalid" // the switch is not true/false, 1/0, yes/no or on/off
+	IndexSettingNotInteger    = "not_an_integer"
+	IndexSettingOutOfRange    = "out_of_range" // below the minimum or above the maximum the setting allows
+)
+
+// IndexDisabledState builds finality_index_disabled for the setting key.
+func IndexDisabledState(chain uint64, key, reason string) *StateError {
+	return NewState(CodeIndexDisabled, "chain", chain, "key", key, "reason", reason)
+}
+
+// AnnounceIndexDisabled logs the state, sets the gauge certen_finality_index_disabled and records it for /health/detailed.
+func AnnounceIndexDisabled(logf func(format string, args ...any), st *StateError) {
+	chain, _ := st.Fields["chain"].(uint64)
+	key, _ := st.Fields["key"].(string)
+	reason, _ := st.Fields["reason"].(string)
+	logf("[FINALITY] capture index DISABLED, the window reader serves: %s", st.Error())
+	metrics.SetFinalityIndexDisabled(chain, "bi", key, reason)
+	metrics.SetFinalityChainIndexDisabledReason(chain, st.Error())
+}
+
 // GapStateUnrecorded is the gap_state of an l1_capture_gap the index INFERS: no durable gap record names the hole, but captured channels of
 // later L2 time exist past the capture retry window and none covers the leg. The record-backed states are GapOpen, GapUnavailableProven and
 // GapRetentionExpired (gaps.go); the registry (testdata/finality/states.json) requires each producer's own fields by this discriminator.

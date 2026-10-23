@@ -203,7 +203,7 @@ func (ix *Indexer) digestBlock(ctx context.Context, bk finality.CaptureKey, rep 
 	hold, done := ix.hold(ctx, "base_index_block")
 	defer done()
 	bk.Item = ""
-	txs, err := loadBlockTxs(ctx, ix.Store, bk, hold)
+	txs, err := loadBlockTxs(ctx, ix.Store, bk, ix.Pins, hold)
 	if err != nil {
 		return nil, err
 	}
@@ -273,7 +273,7 @@ func (ix *Indexer) ensureEntry(ctx context.Context, tbl *frameTable, id [16]byte
 	defer done()
 	var lts []loadedTx
 	for _, t := range txsOf(fr) {
-		lt, err := loadTxRows(ctx, ix.Store, finality.CaptureKey{Chain: uint64(Chain), L1Block: t.Block, L1Hash: t.Hash}, t.Index, hold, true)
+		lt, err := loadTxRows(ctx, ix.Store, finality.CaptureKey{Chain: uint64(Chain), L1Block: t.Block, L1Hash: t.Hash}, t.Index, hold, true, nil)
 		if err != nil {
 			return false, err
 		}
@@ -319,7 +319,7 @@ func entryFromFrames(bp *Pins, id [16]byte, fr []frameRef, lts []loadedTx, hold 
 		}
 		stream = append(stream, f.Data...)
 	}
-	e := &chanEntry{Status: entryDecoded, Pins: pinsDigest(bp), ID: id, FirstBlock: fr[0].Block, FirstHash: fr[0].Hash, FirstTx: fr[0].TxIndex,
+	e := &chanEntry{Status: entryDecoded, Pins: pinsDigest(bp), ID: id, FirstBlock: fr[0].Block, FirstHash: fr[0].Hash, FirstTx: fr[0].TxIndex, FirstFrame: uint32(fr[0].FrameIdx),
 		NFrames: uint32(len(fr)), Txs: txsOf(fr)}
 	if hold != nil {
 		if err := hold.Add(int64(len(stream))); err != nil {
@@ -753,13 +753,20 @@ func (ix *Indexer) SelfCheck(ctx context.Context, sample int) error {
 		}
 		want, err := ix.referenceEntry(ctx, n)
 		if err != nil {
+			if st, named := finality.AsNamed(err); named && st.Fields["reason"] == finality.IndexSelfCheckMismatch {
+				note(st) // the rows no longer give the channel the entry describes
+				ix.quarantine(ctx, k, n.ID)
+				checked++
+				continue
+			}
 			if memoryRefusal(err) {
-				return nil
+				return ix.skipped("entry", k)
 			}
 			return err
 		}
 		if !bytes.Equal(stored, want) {
 			note(finality.IndexInconsistent(uint64(Chain), FamilyBaseInbox, finality.IndexSelfCheckMismatch, "item", k.Item, "l1_block", k.L1Block))
+			ix.quarantine(ctx, k, n.ID) // every build of every validator that would use this entry refuses it by name
 		}
 		checked++
 	}
@@ -782,23 +789,14 @@ func (ix *Indexer) SelfCheck(ctx context.Context, sample int) error {
 		}
 		bk := k
 		bk.Item = ""
-		hold, done := ix.hold(ctx, "base_index_selfcheck")
-		b := &Builder{Store: ix.Store}
-		all, err := b.loadRange(ctx, ix.Pins, bk.L1Block, bk.L1Block, hold)
-		done()
+		want, err := ix.referenceDigest(ctx, bk)
 		if err != nil {
 			if memoryRefusal(err) {
-				return nil
+				return ix.skipped("digest", k)
 			}
 			return err
 		}
-		var lts []loadedTx
-		for _, ct := range all {
-			if ct.key.L1Hash == bk.L1Hash {
-				lts = append(lts, loadedTx{index: ct.index, blobs: ct.blobs, frames: ct.frames, isBlob: isBlobRaw(ct.raw)})
-			}
-		}
-		if want := digestOf(bk, lts).encode(); !bytes.Equal(stored, want) {
+		if !bytes.Equal(stored, want) {
 			note(finality.IndexInconsistent(uint64(Chain), FamilyBaseInbox, finality.IndexSelfCheckMismatch, "item", k.Item, "l1_block", k.L1Block))
 		}
 	}
@@ -815,13 +813,64 @@ func isBlobRaw(raw []byte) bool {
 	return tx.parse(raw) == nil && tx.isBlob
 }
 
+// skipped records a self-check that was not run because the memory budget refused the rows it reads: counted and logged, never silent.
+func (ix *Indexer) skipped(what string, k finality.CaptureKey) error {
+	metrics.IncFinalityIndexSelfCheckSkipped(uint64(Chain), FamilyBaseInbox)
+	ix.Cfg.logf("[FINALITY] index base-inbox: self-check of the %s at L1 block %d SKIPPED: the memory budget refused its rows (certen_finality_index_selfcheck_skipped_total)", what, k.L1Block)
+	return nil
+}
+
+// quarantine writes the self-check mismatch record of an entry (insert-only, at the entry's key, shared by every validator): the readers
+// refuse the channel by the name index_inconsistent{self_check_mismatch} until a new generation replaces the entry.
+func (ix *Indexer) quarantine(ctx context.Context, k finality.CaptureKey, id [16]byte) {
+	qk := k
+	qk.Item = quarantineItem(ix.Gen, id)
+	if err := finality.IndexPut(ctx, ix.Store, FamilyBaseInbox, qk, []byte("self_check_mismatch")); err != nil {
+		ix.Cfg.logf("[FINALITY] index base-inbox: the self-check mismatch record of channel %x could not be written: %v", id[:4], err)
+	}
+}
+
+// referenceDigest recomputes the stored bytes of the digest of one captured block by the reference path (the window reader's loader over
+// that block alone). The hold is released by defer.
+func (ix *Indexer) referenceDigest(ctx context.Context, bk finality.CaptureKey) ([]byte, error) {
+	hold, done := ix.hold(ctx, "base_index_selfcheck")
+	defer done()
+	b := &Builder{Store: ix.Store}
+	all, err := b.loadRange(ctx, ix.Pins, bk.L1Block, bk.L1Block, hold)
+	if err != nil {
+		return nil, err
+	}
+	var lts []loadedTx
+	for _, ct := range all {
+		if ct.key.L1Hash == bk.L1Hash {
+			lts = append(lts, loadedTx{index: ct.index, blobs: ct.blobs, frames: ct.frames, isBlob: isBlobRaw(ct.raw)})
+		}
+	}
+	return digestOf(bk, lts).encode(), nil
+}
+
 // referenceEntry recomputes the stored bytes of one channel entry by the reference path: the window reader's loader over the blocks the
-// channel spans, the same grouping findChannel does, and the shared decoding.
+// channel itself spans (from the first frame block its entry names to its closing block, never more than the sequencing window), the same
+// grouping findChannel does, and the shared decoding. What it reads is the rows of those blocks (production: one block, one channel,
+// about 1 MB), not the window. An entry that does not decode is a certain mismatch and needs no rows.
 func (ix *Indexer) referenceEntry(ctx context.Context, n entryName) ([]byte, error) {
-	// the frames of the channel lie within the sequencing window before its closing block
-	from := uint64(0)
-	if n.Key.L1Block > ix.window() {
-		from = n.Key.L1Block - ix.window()
+	stored, ok, err := ix.Store.Get(ctx, n.Key)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, nil
+	}
+	e, derr := decodeEntry(stored)
+	if derr != nil {
+		return nil, nil
+	}
+	from := e.FirstBlock
+	if lo := n.Key.L1Block - minU64(n.Key.L1Block, ix.window()); from < lo {
+		from = lo
+	}
+	if from > n.Key.L1Block {
+		from = n.Key.L1Block
 	}
 	hold, done := ix.hold(ctx, "base_index_selfcheck")
 	defer done()
@@ -851,11 +900,18 @@ func (ix *Indexer) referenceEntry(ctx context.Context, n entryName) ([]byte, err
 	if !complete(fr) {
 		return nil, finality.IndexInconsistent(uint64(Chain), FamilyBaseInbox, finality.IndexSelfCheckMismatch, "item", n.Key.Item, "l1_block", n.Key.L1Block)
 	}
-	e, err := entryFromFrames(ix.Pins, n.ID, fr, lts, hold)
+	ent, err := entryFromFrames(ix.Pins, n.ID, fr, lts, hold)
 	if err != nil {
 		return nil, err
 	}
-	return e.encode(), nil
+	return ent.encode(), nil
+}
+
+func minU64(a, b uint64) uint64 {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // IsIndexConflict reports whether err is the named conflicting-write error.

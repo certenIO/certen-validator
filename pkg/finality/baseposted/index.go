@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/certen/independant-validator/pkg/finality"
+	"github.com/certen/independant-validator/pkg/metrics"
 )
 
 // RB12-INDEX-A: the Base capture index (design/RB12_CAPTURE_INDEX.md). Rows live in the capture store under
@@ -35,11 +36,16 @@ const (
 	itemDigest  = "f"
 	itemChannel = "c"
 	itemMarker  = "x"
+	// itemQuarantine is the self-check mismatch record of a channel: written at the entry's key by the first validator whose self-check finds the
+	// entry different from what the captured rows give, shared through the table, read by every build that would use the entry.
+	itemQuarantine = "q"
 )
 
 const (
 	digestVersion = 1
-	entryVersion  = 1
+	// entryVersion 2 adds the position of the first frame inside its transaction (FirstFrame), the last part of the order between channels
+	// (RB12-INDEX-FIX D5). Generation 1 is unchanged because no entry of version 1 has shipped.
+	entryVersion = 2
 )
 
 // Entry status.
@@ -204,6 +210,7 @@ type chanEntry struct {
 	FirstBlock uint64
 	FirstHash  [32]byte
 	FirstTx    uint32
+	FirstFrame uint32 // the position of the first frame inside its transaction
 	NFrames    uint32
 	TMin, TMax uint64
 	Txs        []entryTx
@@ -219,6 +226,7 @@ func (e *chanEntry) encode() []byte {
 	w.U64(e.FirstBlock)
 	w.B32(e.FirstHash)
 	w.U32(e.FirstTx)
+	w.U32(e.FirstFrame)
 	w.U32(e.NFrames)
 	w.U64(e.TMin)
 	w.U64(e.TMax)
@@ -275,6 +283,9 @@ func decodeEntry(b []byte) (*chanEntry, error) {
 	if e.FirstTx, err = r.U32("entry.first_tx"); err != nil {
 		return nil, err
 	}
+	if e.FirstFrame, err = r.U32("entry.first_frame"); err != nil {
+		return nil, err
+	}
 	if e.NFrames, err = r.U32("entry.frames"); err != nil {
 		return nil, err
 	}
@@ -326,6 +337,11 @@ func decodeEntry(b []byte) (*chanEntry, error) {
 	}
 	if err := r.End("entry"); err != nil {
 		return nil, err
+	}
+	// a channel has at least one frame and every transaction of the entry carries at least one of them: anything else is corruption that a
+	// valid checksum does not excuse (a build would otherwise index an empty list)
+	if e.NFrames == 0 || len(e.Txs) == 0 || uint32(len(e.Txs)) > e.NFrames {
+		return nil, fmt.Errorf("entry with %d frames and %d transactions", e.NFrames, len(e.Txs))
 	}
 	return e, nil
 }
@@ -389,6 +405,10 @@ func markerItem(gen uint32, id [16]byte) string {
 	return finality.IndexItem(gen, FamilyBaseInbox, itemMarker, hex.EncodeToString(id[:]))
 }
 
+func quarantineItem(gen uint32, id [16]byte) string {
+	return finality.IndexItem(gen, FamilyBaseInbox, itemQuarantine, hex.EncodeToString(id[:]))
+}
+
 // entryName is a channel entry key as the key listing shows it.
 type entryName struct {
 	Key        finality.CaptureKey
@@ -421,19 +441,20 @@ func parseEntryName(gen uint32, k finality.CaptureKey) (entryName, bool) {
 
 // loadedTx is one batch-inbox transaction with its blob rows (and, when asked, the frames it carries).
 type loadedTx struct {
-	key    finality.CaptureKey // (chain, block, hash, ItemInbox): the same key loadRange gives its capturedTx
-	index  uint32
-	raw    []byte
-	blobs  []Blob
-	frames []Frame
-	isBlob bool
-	read   int64 // stored bytes read
+	key     finality.CaptureKey // (chain, block, hash, ItemInbox): the same key loadRange gives its capturedTx
+	index   uint32
+	raw     []byte
+	blobs   []Blob
+	frames  []Frame
+	isBlob  bool
+	foreign bool  // the batcher of the block did not send it: no blob row was read and no frame taken (F19)
+	read    int64 // stored bytes read
 }
 
 // loadTxRows reads the rows of one inbox transaction of the captured block bk (chain, block, hash): the transaction and, for a blob
 // transaction, every blob row. It is the per-transaction body of loadRange (the reference), with the frames parsed only when asked.
 // Every row read is reserved against hold first (nil: unbounded).
-func loadTxRows(ctx context.Context, store finality.CaptureStore, bk finality.CaptureKey, idx uint32, hold *finality.Hold, parse bool) (loadedTx, error) {
+func loadTxRows(ctx context.Context, store finality.CaptureStore, bk finality.CaptureKey, idx uint32, hold *finality.Hold, parse bool, flt *senderFilter) (loadedTx, error) {
 	chain := bk.Chain
 	reserve := func(n int) error {
 		if hold == nil {
@@ -462,6 +483,10 @@ func loadTxRows(ctx context.Context, store finality.CaptureStore, bk finality.Ca
 		return lt, err
 	}
 	lt.isBlob = tx.isBlob
+	if flt.foreign(txb) {
+		lt.foreign = true
+		return lt, nil
+	}
 	var datas [][]byte
 	if tx.isBlob {
 		for j := 0; ; j++ {
@@ -512,7 +537,7 @@ func loadTxRows(ctx context.Context, store finality.CaptureStore, bk finality.Ca
 
 // loadBlockTxs reads every inbox transaction of one captured block (chain, number, hash) with its frames: the digest of the block is
 // built from it. A block whose inbox row is absent is a block without the capturer's completion row.
-func loadBlockTxs(ctx context.Context, store finality.CaptureStore, bk finality.CaptureKey, hold *finality.Hold) ([]loadedTx, error) {
+func loadBlockTxs(ctx context.Context, store finality.CaptureStore, bk finality.CaptureKey, bp *Pins, hold *finality.Hold) ([]loadedTx, error) {
 	ik := bk
 	ik.Item = ItemInbox
 	raw, ok, err := store.Get(ctx, ik)
@@ -527,6 +552,10 @@ func loadBlockTxs(ctx context.Context, store finality.CaptureStore, bk finality.
 			return nil, err
 		}
 	}
+	flt, err := loadSenderFilter(ctx, store, bk, bp, hold)
+	if err != nil {
+		return nil, err
+	}
 	r := finality.NewReader(raw, finality.DefaultLimits())
 	n, err := r.Count("inbox", 4096, 4)
 	if err != nil {
@@ -538,9 +567,13 @@ func loadBlockTxs(ctx context.Context, store finality.CaptureStore, bk finality.
 		if err != nil {
 			return nil, err
 		}
-		lt, err := loadTxRows(ctx, store, bk, idx, hold, true)
+		lt, err := loadTxRows(ctx, store, bk, idx, hold, true, flt)
 		if err != nil {
 			return nil, err
+		}
+		if lt.foreign {
+			metrics.AddFinalityCaptureForeignTxs(bk.Chain, 1)
+			continue
 		}
 		out = append(out, lt)
 	}

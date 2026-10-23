@@ -14,6 +14,7 @@ import (
 	"github.com/certen/independant-validator/pkg/finality"
 	"github.com/certen/independant-validator/pkg/finality/ethl1"
 	"github.com/certen/independant-validator/pkg/finality/l1adapt"
+	"github.com/certen/independant-validator/pkg/metrics"
 )
 
 // L2BlockData is a Base Sepolia block as the builder needs it: its transactions (EIP-2718 encodings, deposits first).
@@ -114,6 +115,10 @@ func (b *Builder) loadRange(ctx context.Context, bp *Pins, from, to uint64, hold
 		if err := reserve(len(raw)); err != nil {
 			return nil, err
 		}
+		flt, err := loadSenderFilter(ctx, b.Store, k, bp, hold) // F19: only the batcher's transactions carry channels
+		if err != nil {
+			return nil, err
+		}
 		r := finality.NewReader(raw, finality.DefaultLimits())
 		n, err := r.Count("inbox", 4096, 4)
 		if err != nil {
@@ -138,6 +143,10 @@ func (b *Builder) loadRange(ctx context.Context, bp *Pins, from, to uint64, hold
 			var tx txView
 			if err := tx.parse(txb); err != nil {
 				return nil, err
+			}
+			if flt.foreign(txb) {
+				metrics.AddFinalityCaptureForeignTxs(uint64(Chain), 1)
+				continue // not the batcher's: no blob row is read and no frame is taken
 			}
 			if tx.isBlob {
 				for j := 0; ; j++ {

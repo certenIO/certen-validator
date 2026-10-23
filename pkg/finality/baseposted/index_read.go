@@ -85,6 +85,13 @@ func (r *IndexReader) getEntry(ctx context.Context, n entryName, io *ioCount) (*
 	} else if marked {
 		return nil, r.inconsistent(finality.IndexDuplicateAfterOpen, "item", n.Key.Item, "l1_block", n.Key.L1Block)
 	}
+	qk := n.Key
+	qk.Item = quarantineItem(r.Gen, n.ID)
+	if _, quarantined, err := r.Store.Get(ctx, qk); err != nil {
+		return nil, err
+	} else if quarantined {
+		return nil, r.inconsistent(finality.IndexSelfCheckMismatch, "item", n.Key.Item, "l1_block", n.Key.L1Block)
+	}
 	return e, nil
 }
 
@@ -97,14 +104,33 @@ func (c *ioCount) add(n int) {
 	}
 }
 
-// Find looks for the channel that carries the batch of timestamp t among the entries that close in [origin, end], in the same widening
-// parts findChannel's window is read in. names is every entry name listed (the caller classifies a miss from it). A hit is the first
-// channel, by position of its first frame, whose coverage holds t in the first part that has one: exactly the choice findChannel makes.
+// Find is the first candidate of FindAll (nil: none).
 func (r *IndexReader) Find(ctx context.Context, t, origin, end uint64, io *ioCount) (hit *indexHit, names []entryName, err error) {
+	hits, names, err := r.FindAll(ctx, t, origin, end, io)
+	if err != nil || len(hits) == 0 {
+		return nil, names, err
+	}
+	return hits[0], names, nil
+}
+
+// FindAll looks for the channels that carry the batch of timestamp t among the entries that close in [origin, end], in the same widening
+// parts findChannel's window is read in. names is every entry name listed (the caller classifies a miss from it). The candidates are the
+// channels, in the first part that has any, whose coverage holds t, ordered by the position of their first frame: the first is exactly the
+// choice findChannel makes, and a caller that cannot assemble it tries the next. A candidate that cannot be judged (an overflowing channel,
+// a damaged or quarantined entry, a channel broken by a late frame) never hides another: its failure is remembered and is the answer only
+// when no candidate in any part holds t (RB12-INDEX-FIX D1: one junk channel must not deny every honest leg).
+func (r *IndexReader) FindAll(ctx context.Context, t, origin, end uint64, io *ioCount) (hits []*indexHit, names []entryName, err error) {
 	step := r.Pins.L2BlockTime
 	prefix := r.item(itemChannel) + "/"
 	chain := uint64(Chain)
 	got := map[finality.CaptureKey]*chanEntry{}
+	failed := map[finality.CaptureKey]bool{}
+	var firstFailure error
+	fail := func(e error) {
+		if firstFailure == nil {
+			firstFailure = e
+		}
+	}
 	next := origin
 	for i := 0; ; i++ {
 		hi := end
@@ -122,57 +148,50 @@ func (r *IndexReader) Find(ctx context.Context, t, origin, end uint64, io *ioCou
 			}
 			names = append(names, n)
 		}
-		var cands []*chanEntry
-		var keysOf []finality.CaptureKey
 		for _, n := range names {
-			if n.TMin == 0 || t < n.TMin || t > n.TMax {
+			if n.TMin == 0 || t < n.TMin || t > n.TMax || failed[n.Key] {
 				continue
 			}
 			e, have := got[n.Key]
 			if !have {
 				if e, err = r.getEntry(ctx, n, io); err != nil {
-					return nil, nil, err
+					if _, named := finality.AsNamed(err); !named {
+						return nil, nil, err // the store failed: nothing can be said
+					}
+					failed[n.Key] = true
+					fail(err)
+					continue
 				}
 				got[n.Key] = e
 			}
 			if e.Status == entryCoverageOverflow {
-				return nil, nil, r.inconsistent(finality.IndexCoverageOverflow, "item", n.Key.Item, "l1_block", n.Key.L1Block)
+				failed[n.Key] = true
+				fail(r.inconsistent(finality.IndexCoverageOverflow, "item", n.Key.Item, "l1_block", n.Key.L1Block))
+				continue
 			}
 			if e.Status != entryDecoded {
 				continue
 			}
-			cands = append(cands, e)
-			keysOf = append(keysOf, n.Key)
-		}
-		var best int = -1
-		var bestRun covRun
-		for j, e := range cands {
-			var run covRun
-			found := false
 			for _, c := range e.Runs {
-				if c.covers(t, step) {
-					run, found = c, true
-					break // runs are in decode order: the first run holding t holds the first batch at t
+				if c.covers(t, step) { // runs are in decode order: the first run holding t holds the first batch at t
+					hits = append(hits, &indexHit{entry: e, key: n.Key, run: c})
+					break
 				}
 			}
-			if !found {
-				continue
-			}
-			if best < 0 || firstLess(e, cands[best]) {
-				best, bestRun = j, run
-			}
 		}
-		if best >= 0 {
-			return &indexHit{entry: cands[best], key: keysOf[best], run: bestRun}, names, nil
+		if len(hits) > 0 {
+			sort.SliceStable(hits, func(i, j int) bool { return firstLess(hits[i].entry, hits[j].entry) })
+			return hits, names, nil
 		}
 		if hi >= end {
-			return nil, names, nil
+			return nil, names, firstFailure
 		}
 		next = hi + 1
 	}
 }
 
-// firstLess orders channels by the position of their first frame in capture order: findChannel's order of first appearance.
+// firstLess orders channels by the position of their first frame in capture order: findChannel's order of first appearance (block, hash,
+// transaction, frame inside the transaction).
 func firstLess(a, b *chanEntry) bool {
 	if a.FirstBlock != b.FirstBlock {
 		return a.FirstBlock < b.FirstBlock
@@ -180,7 +199,10 @@ func firstLess(a, b *chanEntry) bool {
 	if c := bytes.Compare(a.FirstHash[:], b.FirstHash[:]); c != 0 {
 		return c < 0
 	}
-	return a.FirstTx < b.FirstTx
+	if a.FirstTx != b.FirstTx {
+		return a.FirstTx < b.FirstTx
+	}
+	return a.FirstFrame < b.FirstFrame
 }
 
 // Assemble loads the transactions of the hit's channel, with all their blob rows, in the order findChannel returns them.
@@ -188,7 +210,7 @@ func (r *IndexReader) Assemble(ctx context.Context, h *indexHit, hold *finality.
 	out := make([]capturedTx, 0, len(h.entry.Txs))
 	for _, t := range h.entry.Txs {
 		bk := finality.CaptureKey{Chain: uint64(Chain), L1Block: t.Block, L1Hash: t.Hash}
-		lt, err := loadTxRows(ctx, r.Store, bk, t.Index, hold, false)
+		lt, err := loadTxRows(ctx, r.Store, bk, t.Index, hold, false, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -288,21 +310,33 @@ func (b *Builder) searchIndexed(ctx context.Context, bp *Pins, l2 finality.Heade
 	r := b.Index
 	io := &ioCount{}
 	defer func() { metrics.ObserveFinalityIndexLookupBytes(uint64(Chain), FamilyBaseInbox, io.n) }()
-	hit, names, err := r.Find(ctx, l2.Timestamp, origin, end, io)
+	hits, names, err := r.FindAll(ctx, l2.Timestamp, origin, end, io)
 	if err != nil {
 		metrics.IncFinalityIndexLookup(uint64(Chain), FamilyBaseInbox, "inconsistent")
 		return err
 	}
-	if hit != nil {
+	// the candidates in order of their first frame: one that cannot be assembled (a lost row) does not stop the search, the next is tried; when
+	// none assembles the first failure is the named answer
+	var firstFailure error
+	for _, hit := range hits {
 		txs, err := r.Assemble(ctx, hit, hold, io)
 		if err != nil {
-			metrics.IncFinalityIndexLookup(uint64(Chain), FamilyBaseInbox, "inconsistent")
-			return err
+			if _, named := finality.AsNamed(err); !named {
+				return err
+			}
+			if firstFailure == nil {
+				firstFailure = err
+			}
+			continue
 		}
 		sr.ch, sr.frameTxs = &channelRef{ID: hit.entry.ID}, txs
 		sr.bt = &Batch{Type: hit.run.Type, EpochNum: hit.run.Epoch, Timestamp: l2.Timestamp}
 		metrics.IncFinalityIndexLookup(uint64(Chain), FamilyBaseInbox, "hit")
 		return nil
+	}
+	if firstFailure != nil {
+		metrics.IncFinalityIndexLookup(uint64(Chain), FamilyBaseInbox, "inconsistent")
+		return firstFailure
 	}
 	if known && origin < lower {
 		metrics.IncFinalityIndexLookup(uint64(Chain), FamilyBaseInbox, "miss")

@@ -164,6 +164,7 @@ type finalityChainHealth struct {
 	enabledKnown   bool
 	enabled        bool
 	disabledReason string
+	indexReason    string            // the named state of a capture index switched off by a bad setting (RB12-INDEX-FIX D2)
 	captured       map[string]uint64 // capturer -> last captured parent-chain block
 	lag            map[string]uint64 // capturer -> lag in parent-chain blocks
 	legs           map[string]int    // level -> settled legs standing there
@@ -223,6 +224,9 @@ func FinalityHealth() map[string]any {
 			"disabled_reason":      c.disabledReason,
 			"last_append_unixtime": c.lastAppend,
 			"capturer_restarts":    c.restarts,
+		}
+		if c.indexReason != "" {
+			m["index_disabled_reason"] = c.indexReason
 		}
 		if c.enabledKnown {
 			m["enabled"] = c.enabled
@@ -354,6 +358,14 @@ func SetFinalityChainEnabled(chain uint64, on bool) {
 func SetFinalityChainDisabledReason(chain uint64, reason string) {
 	finalityHealth.mu.Lock()
 	finalityChain(chain).disabledReason = reason
+	finalityHealth.mu.Unlock()
+}
+
+// SetFinalityChainIndexDisabledReason records, for the health block, the named state of a capture index that a bad setting switched off
+// (the chain itself keeps running with the window reader).
+func SetFinalityChainIndexDisabledReason(chain uint64, reason string) {
+	finalityHealth.mu.Lock()
+	finalityChain(chain).indexReason = reason
 	finalityHealth.mu.Unlock()
 }
 

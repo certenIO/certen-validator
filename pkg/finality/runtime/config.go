@@ -19,8 +19,10 @@ package runtime
 import (
 	"errors"
 	"fmt"
+	"math"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -107,12 +109,13 @@ type Config struct {
 	Concurrency     int
 	Interval        time.Duration
 	BuildTimeout    time.Duration
-	MemoryBudget    int64         // bytes of in-flight builder working set per process (finality.EnvMemoryBudget)
-	BaseIndex       bool          // the Base capture index is built and used (EnvBaseIndex)
-	IndexGeneration uint32        // the index generation (finality.EnvIndexGeneration); a new one rebuilds
-	IndexBlocks     int           // captured blocks one index step digests at most
-	IndexStep       time.Duration // wall time after which an index step stops
-	ArchiveOrigin   string        // "set" or "unset": whether OD4 is configured (reported, never the URL)
+	MemoryBudget    int64                // bytes of in-flight builder working set per process (finality.EnvMemoryBudget)
+	BaseIndex       bool                 // the Base capture index is built and used (EnvBaseIndex)
+	IndexDisabled   *finality.StateError // set when a bad index setting switched the index off: finality_index_disabled{chain, key, reason}
+	IndexGeneration uint32               // the index generation (finality.EnvIndexGeneration); a new one rebuilds
+	IndexBlocks     int                  // captured blocks one index step digests at most
+	IndexStep       time.Duration        // wall time after which an index step stops
+	ArchiveOrigin   string               // "set" or "unset": whether OD4 is configured (reported, never the URL)
 	ProviderSources map[string]string
 }
 
@@ -391,18 +394,12 @@ func ConfigFromEnv() (Config, error) {
 		func() (e error) { c.Interval, e = envvar.Seconds(EnvInterval, 60*time.Second, 1); return },
 		func() (e error) { c.BuildTimeout, e = envvar.Seconds(EnvBuildTimeout, 5*time.Minute, 1); return },
 		func() (e error) { c.MemoryBudget, e = finality.MemoryBudgetFromEnv(); return },
-		func() (e error) { c.BaseIndex, e = envvar.Bool(EnvBaseIndex, true); return },
-		func() (e error) {
-			g, e := envvar.Int(finality.EnvIndexGeneration, int(finality.DefaultIndexGeneration), 1)
-			c.IndexGeneration = uint32(g)
-			return e
-		},
-		func() (e error) { c.IndexBlocks, e = envvar.Int(EnvIndexBlocks, 128, 1); return },
-		func() (e error) { c.IndexStep, e = envvar.Seconds(EnvIndexStepSecond, 15*time.Second, 1); return },
 	}
 	if err = envvar.Check(rd...); err != nil {
 		return Config{}, err
 	}
+	// the capture index settings are NOT checked with the rest: a bad one never stops a consensus node (RB12-INDEX-FIX D2)
+	c.readIndexSettings()
 	if c.MaxBatch > 100 {
 		return Config{}, fmt.Errorf("%s=%d: public providers answer 429 to 100-request batches; the largest accepted value is 100", EnvMaxBatch, c.MaxBatch)
 	}
@@ -424,7 +421,7 @@ func (c Config) proofURLs() []string {
 // Describe is the secret-free view of the configuration for logs and the health endpoint: counts and host labels only.
 func (c Config) Describe() map[string]any {
 	n := func(l []string) int { return len(l) }
-	return map[string]any{
+	out := map[string]any{
 		"l1_rpc_providers": n(c.L1RPC), "l1_proof_providers": n(c.L1Proof), "archive_provider": c.ArchiveOrigin,
 		"lc_endpoints": Hosts(c.LC), "beacon_endpoints": Hosts(c.Beacon), "base_l2_providers": n(c.BaseL2), "arb_l2_providers": n(c.ArbL2),
 		"adiri_providers": n(c.Adiri), "adiri_proof_providers": n(c.AdiriPF), "pins_file": c.PinsFile != "",
@@ -434,6 +431,10 @@ func (c Config) Describe() map[string]any {
 		"gap_blocks_per_tick": c.GapBlocks, "gap_audit_spacing": c.GapAuditSpacing,
 		"base_index": c.BaseIndex, "index_generation": c.IndexGeneration, "index_blocks_per_step": c.IndexBlocks,
 	}
+	if c.IndexDisabled != nil {
+		out["index_disabled"] = c.IndexDisabled.Error()
+	}
+	return out
 }
 
 // Missing returns, for each chain, the settings whose absence makes the chain's builders impossible (no provider at all). A chain
@@ -465,4 +466,56 @@ func (c Config) Missing() map[uint64][]string {
 		add(finality.ChainAdiri, EnvAdiriURLs)
 	}
 	return out
+}
+
+// readIndexSettings reads the four capture index settings. A setting that is not what it must be switches the index OFF by the registered
+// named state finality_index_disabled{chain, key, reason} (announced at wiring: log, metric, /health/detailed) and the validator runs on
+// with the window reader: finality is not an input of consensus and the settings are shared by all seven validators, so a refusal that ended
+// the process would take them all down at one roll. The state names the setting and the class of the fault, never the value.
+func (c *Config) readIndexSettings() {
+	c.BaseIndex, c.IndexGeneration, c.IndexBlocks, c.IndexStep = true, finality.DefaultIndexGeneration, 128, 15*time.Second
+	c.IndexDisabled = nil
+	off := func(key, reason string) {
+		c.BaseIndex = false
+		if c.IndexDisabled == nil {
+			c.IndexDisabled = finality.IndexDisabledState(finality.ChainBaseSepolia, key, reason)
+		}
+	}
+	on, err := envvar.Bool(EnvBaseIndex, true)
+	if err != nil {
+		off(EnvBaseIndex, finality.IndexSettingSwitchInvalid)
+	} else {
+		c.BaseIndex = on
+	}
+	if v, reason := indexInt(finality.EnvIndexGeneration, int64(finality.DefaultIndexGeneration), 1, math.MaxUint32); reason != "" {
+		off(finality.EnvIndexGeneration, reason)
+	} else {
+		c.IndexGeneration = uint32(v)
+	}
+	if v, reason := indexInt(EnvIndexBlocks, 128, 1, math.MaxInt32); reason != "" {
+		off(EnvIndexBlocks, reason)
+	} else {
+		c.IndexBlocks = int(v)
+	}
+	if v, reason := indexInt(EnvIndexStepSecond, 15, 1, 86400); reason != "" {
+		off(EnvIndexStepSecond, reason)
+	} else {
+		c.IndexStep = time.Duration(v) * time.Second
+	}
+}
+
+// indexInt reads an integer setting in [lo, hi]; reason is empty when it is, else the class of the fault (never the value).
+func indexInt(key string, def, lo, hi int64) (int64, string) {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return def, ""
+	}
+	v, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return def, finality.IndexSettingNotInteger
+	}
+	if v < lo || v > hi {
+		return def, finality.IndexSettingOutOfRange
+	}
+	return v, ""
 }

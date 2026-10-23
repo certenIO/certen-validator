@@ -16,6 +16,10 @@
 //	certen_finality_index_lookups_total{chain,family,result}   build lookups: hit, miss, gap, behind, inconsistent
 //	certen_finality_index_lookup_bytes{chain,family}      capture bytes a build read to assemble its channel (histogram)
 //	certen_finality_index_step_seconds{chain,family}      wall time of one indexer step (histogram)
+//	certen_finality_index_selfcheck_skipped_total{chain,family}  self-checks not run because the memory budget refused the rows (never silent)
+//	certen_finality_index_disabled{chain,family,key,reason}      1 while a bad setting has switched the index off (finality_index_disabled)
+//	certen_finality_capture_foreign_txs_total{chain}      batch-inbox transactions skipped because the batcher of their block did not send them (F19)
+//	certen_finality_capture_batcher_unestablished_total{chain}   blocks whose captured rows cannot establish the batcher (their frames are not filtered)
 package metrics
 
 import "github.com/prometheus/client_golang/prometheus"
@@ -57,6 +61,22 @@ var (
 		Name: "certen_finality_index_conflicts_total",
 		Help: "Index writes refused because the row exists with different bytes (rows are a pure function of the captured bytes).",
 	}, []string{"chain", "family"})
+	finalityIndexSelfCheckSkipped = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "certen_finality_index_selfcheck_skipped_total",
+		Help: "Index self-checks not run because the memory budget refused the rows they read (a skipped check is counted, never silent).",
+	}, []string{"chain", "family"})
+	finalityIndexDisabled = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "certen_finality_index_disabled",
+		Help: "1 while a bad index setting has switched the capture index off (finality_index_disabled); the window reader serves.",
+	}, []string{"chain", "family", "key", "reason"})
+	finalityForeignTxs = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "certen_finality_capture_foreign_txs_total",
+		Help: "Batch-inbox transactions skipped because the SystemConfig batcher of their block did not send them.",
+	}, []string{"chain"})
+	finalityBatcherUnestablished = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "certen_finality_capture_batcher_unestablished_total",
+		Help: "Captured blocks whose rows cannot establish the batcher: their frames are kept as candidates and the verifier names the fault.",
+	}, []string{"chain"})
 	finalityIndexLookups = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "certen_finality_index_lookups_total",
 		Help: "Build lookups in the capture index by result (hit, miss, gap, behind, inconsistent).",
@@ -86,6 +106,10 @@ func registerFinalityIndexMetrics() {
 	prometheus.MustRegister(finalityIndexLookups)
 	prometheus.MustRegister(finalityIndexLookupBytes)
 	prometheus.MustRegister(finalityIndexStepSeconds)
+	prometheus.MustRegister(finalityIndexSelfCheckSkipped)
+	prometheus.MustRegister(finalityIndexDisabled)
+	prometheus.MustRegister(finalityForeignTxs)
+	prometheus.MustRegister(finalityBatcherUnestablished)
 }
 
 // SetFinalityIndexProgress reports the index cursor, how far behind the capture cursor it is and how many channels are open.
@@ -142,4 +166,25 @@ func ObserveFinalityIndexLookupBytes(chain uint64, family string, n int64) {
 // ObserveFinalityIndexStep records the wall time of one indexer step.
 func ObserveFinalityIndexStep(chain uint64, family string, seconds float64) {
 	finalityIndexStepSeconds.WithLabelValues(chainLabel(chain), family).Observe(seconds)
+}
+
+// IncFinalityIndexSelfCheckSkipped counts a self-check that was not run because the memory budget refused the rows it reads.
+func IncFinalityIndexSelfCheckSkipped(chain uint64, family string) {
+	finalityIndexSelfCheckSkipped.WithLabelValues(chainLabel(chain), family).Inc()
+}
+
+// SetFinalityIndexDisabled marks the capture index of a chain as switched off by the bad setting key (reason: switch_invalid,
+// not_an_integer, out_of_range).
+func SetFinalityIndexDisabled(chain uint64, family, key, reason string) {
+	finalityIndexDisabled.WithLabelValues(chainLabel(chain), family, key, reason).Set(1)
+}
+
+// AddFinalityCaptureForeignTxs counts batch-inbox transactions skipped because the batcher of their block did not send them.
+func AddFinalityCaptureForeignTxs(chain uint64, n int) {
+	finalityForeignTxs.WithLabelValues(chainLabel(chain)).Add(float64(n))
+}
+
+// IncFinalityBatcherUnestablished counts a captured block whose rows cannot establish the batcher.
+func IncFinalityBatcherUnestablished(chain uint64) {
+	finalityBatcherUnestablished.WithLabelValues(chainLabel(chain)).Inc()
 }

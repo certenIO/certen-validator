@@ -242,6 +242,9 @@ func wireBase(reg *finality.Registry, env Env, d Deps, clock loopClock, logf fun
 	if err != nil {
 		return err
 	}
+	if cfg.IndexDisabled != nil {
+		finality.AnnounceIndexDisabled(logf, cfg.IndexDisabled)
+	}
 	fp, err := basefinal.ParsePins(env.Pins)
 	if err != nil {
 		return err
