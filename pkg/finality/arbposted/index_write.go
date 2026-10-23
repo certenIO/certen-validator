@@ -472,11 +472,11 @@ func (ix *Indexer) indexGroup(ctx context.Context, g blockGroup, rep *finality.S
 // authorizedRecord applies THE authorization (capture.AuthorizeBatch) to a record the indexer is about to index: a record a verified proof
 // contradicts is foreign and gets no entry. Unproven records are indexed (the leg's verifier decides).
 func (ix *Indexer) authorizedRecord(ctx context.Context, rec capture.BatchRecord) (bool, error) {
-	views, err := capture.LoadProofViews(ctx, ix.Store, ix.Chain(), rec.N, rec.L1Block)
+	verdict, err := capture.AuthorizeStored(ctx, ix.Store, ix.Chain(), rec, ix.arb.bridge, ix.arb.Layout.AccArraySlot)
 	if err != nil {
 		return false, err
 	}
-	if capture.AuthorizeBatch(rec, ix.arb.bridge, ix.arb.Layout.AccArraySlot, views) == capture.AuthForeign {
+	if verdict == capture.AuthForeign {
 		metrics.AddFinalityCaptureForeignTxs(ix.Chain(), 1)
 		return false, nil
 	}

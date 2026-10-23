@@ -429,13 +429,19 @@ func (r *IndexReader) unindexableIn(ctx context.Context, from, to uint64) (*fina
 	return nil, nil
 }
 
-// holeIn reports the capture hole of the window, if any: two consecutive captured batch numbers that are not consecutive. The interval it
-// names is the L1 time (the timestamps of the digests of the two batches around the first hole) during which the missing batches were posted;
-// partial_frames counts the captured batches of the window that have no entry (their data rows are not all stored).
+// maxHoleChecks bounds how many apparent gaps of the batch numbers one lookup tests against the Bridge.
+const maxHoleChecks = 8
+
+// holeIn reports the capture hole of the window, if any: two consecutive captured batch numbers that are not consecutive AND that the Bridge
+// holds both (capture.AuthorizeStored: a verified proof shows each record's accumulator). The authorization comes BEFORE the hole: a record
+// that is forged (an invented event, a huge batch number) is unproven or foreign and bounds no hole, so it cannot make a leg that is simply
+// not posted yet look like a capture gap. The interval it names is the L1 time (the timestamps of the digests of the two batches around the
+// first hole) during which the missing batches were posted; partial_frames counts the captured batches of the window that have no entry.
+// At most maxHoleChecks apparent gaps are tested; a hole whose neighbours have no captured proof is not claimed (the leg stays pending).
 func (r *IndexReader) holeIn(ctx context.Context, ts uint64, batchKeys []finality.CaptureKey, entries map[[40]byte]map[uint64]bool) (*finality.StateError, error) {
 	type bn struct {
-		n     uint64
-		block uint64
+		n   uint64
+		key finality.CaptureKey
 	}
 	var all []bn
 	partial := uint64(0)
@@ -444,7 +450,7 @@ func (r *IndexReader) holeIn(ctx context.Context, ts uint64, batchKeys []finalit
 		if !ok {
 			continue
 		}
-		all = append(all, bn{n, k.L1Block})
+		all = append(all, bn{n, k})
 		if !entries[blockID(k)][n] {
 			partial++
 		}
@@ -453,24 +459,55 @@ func (r *IndexReader) holeIn(ctx context.Context, ts uint64, batchKeys []finalit
 		if all[i].n != all[j].n {
 			return all[i].n < all[j].n
 		}
-		return all[i].block < all[j].block
+		return all[i].key.L1Block < all[j].key.L1Block
 	})
-	for i := 1; i < len(all); i++ {
-		if all[i].n > all[i-1].n+1 {
-			lo, hi := all[i-1].block, all[i].block
-			tl, err := r.digestTime(ctx, lo)
-			if err != nil {
-				return nil, err
-			}
-			th, err := r.digestTime(ctx, hi)
-			if err != nil {
-				return nil, err
-			}
-			return finality.NewState(finality.CodeCaptureGap, "chain", r.chain(), "gap_state", finality.GapStateUnrecorded, "l2_timestamp", ts, "l2_from", tl, "l2_to", th,
-				"from_l1", lo, "to_l1", hi, "partial_frames", partial), nil
+	checks := 0
+	for i := 1; i < len(all) && checks < maxHoleChecks; i++ {
+		if all[i].n <= all[i-1].n+1 {
+			continue
 		}
+		checks++
+		below, err := r.proven(ctx, all[i-1].key)
+		if err != nil {
+			return nil, err
+		}
+		if !below {
+			continue
+		}
+		above, err := r.proven(ctx, all[i].key)
+		if err != nil {
+			return nil, err
+		}
+		if !above {
+			continue
+		}
+		lo, hi := all[i-1].key.L1Block, all[i].key.L1Block
+		tl, err := r.digestTime(ctx, lo)
+		if err != nil {
+			return nil, err
+		}
+		th, err := r.digestTime(ctx, hi)
+		if err != nil {
+			return nil, err
+		}
+		return finality.NewState(finality.CodeCaptureGap, "chain", r.chain(), "gap_state", finality.GapStateUnrecorded, "l2_timestamp", ts, "l2_from", tl, "l2_to", th,
+			"from_l1", lo, "to_l1", hi, "partial_frames", partial), nil
 	}
 	return nil, nil
+}
+
+// proven reports whether the batch record at key is one the Bridge holds (a verified captured proof shows its accumulator).
+func (r *IndexReader) proven(ctx context.Context, key finality.CaptureKey) (bool, error) {
+	raw, ok, err := r.Store.Get(ctx, key)
+	if err != nil || !ok {
+		return false, err
+	}
+	rec, derr := capture.DecodeBatchRecord(raw)
+	if derr != nil || rec.L1Block != key.L1Block || rec.L1Hash != key.L1Hash {
+		return false, nil
+	}
+	v, err := capture.AuthorizeStored(ctx, r.Store, r.chain(), rec, r.arb.bridge, r.arb.Layout.AccArraySlot)
+	return v == capture.AuthProven, err
 }
 
 // digestTime is the L1 timestamp in the name of the digest at block (0 when the block has none).

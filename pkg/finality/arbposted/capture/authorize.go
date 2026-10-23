@@ -100,50 +100,142 @@ func AuthorizeBatch(rec BatchRecord, bridge [20]byte, accSlot uint64, views []Pr
 	return AuthUnproven
 }
 
-// LoadProofViews returns the captured accumulator proofs of batch n stored at or after fromBlock, each with the state root of its proof
-// block. A proof whose header row is absent, does not hash to the key, or names another height is left out (it judges nothing). Rows are
-// reserved against the hold ctx carries.
-func LoadProofViews(ctx context.Context, s CaptureStore, chain, n, fromBlock uint64) ([]ProofView, error) {
-	keys, err := s.ListByRange(ctx, chain, fromBlock, finality.MaxCaptureBlock, ItemProof(n))
+// proofSteps are the widening upper bounds, in blocks above the batch's own block, of the proof listings: a proof is taken near the head when the
+// batch is captured, so it lies within a few blocks of the batch's block; a retry after an outage can put it later. The listing is a range
+// scan of the table's primary key (chain, l1_block, ...) over at most steps+1 blocks with the item prefix as a filter, never the whole table,
+// unless no proof exists nearer.
+var proofSteps = []uint64{64, 1024, 1 << 14}
+
+// proofKeys lists the proof/n keys of [from, to].
+func proofKeys(ctx context.Context, s CaptureStore, chain, n, from, to uint64) ([]Key, error) {
+	keys, err := s.ListByRange(ctx, chain, from, to, ItemProof(n))
 	if err != nil {
 		return nil, err
 	}
-	var out []ProofView
+	out := keys[:0:0]
 	for _, k := range keys {
-		if k.Item != ItemProof(n) {
-			continue
+		if k.Item == ItemProof(n) {
+			out = append(out, k)
 		}
-		b, ok, err := s.Get(ctx, k)
-		if err != nil || !ok {
-			return nil, fmt.Errorf("capture: row %s unreadable: %v", k, err)
-		}
-		if err := finality.ReserveRow(ctx, len(b)); err != nil {
-			return nil, err
-		}
-		p, err := DecodeProofRecord(b)
-		if err != nil {
-			return nil, fmt.Errorf("capture: row %s: %w", k, err)
-		}
-		hk := k
-		hk.Item = ItemHeader
-		hb, ok, err := s.Get(ctx, hk)
-		if err != nil {
-			return nil, err
-		}
-		if !ok {
-			continue
-		}
-		if err := finality.ReserveRow(ctx, len(hb)); err != nil {
-			return nil, err
-		}
-		if crypto.Keccak256Hash(hb) != common.Hash(k.L1Hash) {
-			continue
-		}
-		hf, err := finality.ReadHeader(hb)
-		if err != nil || hf.Number != k.L1Block {
-			continue
-		}
-		out = append(out, ProofView{Rec: p, Block: k.L1Block, StateRoot: hf.StateRoot})
 	}
 	return out, nil
+}
+
+// widening calls visit with the proof keys of the successive ranges [from, from+64], (.., from+1024], (.., from+16384], (.., Max], each
+// listing only blocks not listed before; it stops when visit says so or the last range is done.
+func widening(ctx context.Context, s CaptureStore, chain, n, from uint64, visit func(keys []Key) (stop bool, err error)) error {
+	lo := from
+	for i := 0; ; i++ {
+		hi := finality.MaxCaptureBlock
+		if i < len(proofSteps) && from+proofSteps[i] < hi {
+			hi = from + proofSteps[i]
+		}
+		keys, err := proofKeys(ctx, s, chain, n, lo, hi)
+		if err != nil {
+			return err
+		}
+		if stop, err := visit(keys); err != nil || stop || hi >= finality.MaxCaptureBlock {
+			return err
+		}
+		lo = hi + 1
+	}
+}
+
+// LoadProofsFrom returns the ProofRecords of batch n stored at or after block from (a proof taken below the batch's own block shows an empty
+// slot and is not evidence about it), ascending by proof block, from the nearest range that holds any.
+func LoadProofsFrom(ctx context.Context, s CaptureStore, chain, n, from uint64) ([]ProofRecord, error) {
+	var out []ProofRecord
+	err := widening(ctx, s, chain, n, from, func(keys []Key) (bool, error) {
+		for _, k := range keys {
+			b, ok, err := s.Get(ctx, k)
+			if err != nil || !ok {
+				return false, fmt.Errorf("capture: row %s unreadable: %v", k, err)
+			}
+			if err := finality.ReserveRow(ctx, len(b)); err != nil {
+				return false, err
+			}
+			p, err := DecodeProofRecord(b)
+			if err != nil {
+				return false, fmt.Errorf("capture: row %s: %w", k, err)
+			}
+			out = append(out, p)
+		}
+		return len(out) > 0, nil
+	})
+	return out, err
+}
+
+func proofView(ctx context.Context, s CaptureStore, k Key) (*ProofView, error) {
+	b, ok, err := s.Get(ctx, k)
+	if err != nil || !ok {
+		return nil, fmt.Errorf("capture: row %s unreadable: %v", k, err)
+	}
+	if err := finality.ReserveRow(ctx, len(b)); err != nil {
+		return nil, err
+	}
+	p, err := DecodeProofRecord(b)
+	if err != nil {
+		return nil, fmt.Errorf("capture: row %s: %w", k, err)
+	}
+	hk := k
+	hk.Item = ItemHeader
+	hb, ok, err := s.Get(ctx, hk)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, nil
+	}
+	if err := finality.ReserveRow(ctx, len(hb)); err != nil {
+		return nil, err
+	}
+	if crypto.Keccak256Hash(hb) != common.Hash(k.L1Hash) {
+		return nil, nil
+	}
+	hf, err := finality.ReadHeader(hb)
+	if err != nil || hf.Number != k.L1Block {
+		return nil, nil
+	}
+	return &ProofView{Rec: p, Block: k.L1Block, StateRoot: hf.StateRoot}, nil
+}
+
+// AuthorizeStored is AuthorizeBatch over the proofs the store holds for rec, read from the batch's own block outward in widening ranges: it
+// returns at the first range whose proofs make the record PROVEN, and the verdict of all the proofs otherwise. A proof whose header row is
+// absent or does not hash to its key judges nothing.
+func AuthorizeStored(ctx context.Context, s CaptureStore, chain uint64, rec BatchRecord, bridge [20]byte, accSlot uint64) (Authorization, error) {
+	var views []ProofView
+	verdict := AuthUnproven
+	err := widening(ctx, s, chain, rec.N, rec.L1Block, func(keys []Key) (bool, error) {
+		for _, k := range keys {
+			v, err := proofView(ctx, s, k)
+			if err != nil {
+				return false, err
+			}
+			if v != nil {
+				views = append(views, *v)
+			}
+		}
+		verdict = AuthorizeBatch(rec, bridge, accSlot, views)
+		return verdict == AuthProven, nil
+	})
+	return verdict, err
+}
+
+// LoadProofViews returns the captured accumulator proofs of batch n stored at or after fromBlock, each with the state root of its proof
+// block (all ranges). A proof whose header row is absent, does not hash to the key, or names another height is left out.
+func LoadProofViews(ctx context.Context, s CaptureStore, chain, n, fromBlock uint64) ([]ProofView, error) {
+	var out []ProofView
+	err := widening(ctx, s, chain, n, fromBlock, func(keys []Key) (bool, error) {
+		for _, k := range keys {
+			v, err := proofView(ctx, s, k)
+			if err != nil {
+				return false, err
+			}
+			if v != nil {
+				out = append(out, *v)
+			}
+		}
+		return false, nil
+	})
+	return out, err
 }

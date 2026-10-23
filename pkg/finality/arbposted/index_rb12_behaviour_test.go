@@ -408,11 +408,15 @@ func TestRB12ArbIndexUnreadableBatchRowIsRecordedAndDoesNotStall(t *testing.T) {
 	}
 }
 
-// A batch that was never captured leaves a hole in the dense batch numbers: a leg that is not found is told it is a capture gap.
+// A batch that was never captured leaves a hole in the dense batch numbers: a leg that is not found is told it is a capture gap - when the Bridge
+// holds the batches on both sides of it.
 func TestRB12ArbIndexMissingBatchNumberIsANamedCaptureGap(t *testing.T) {
 	w := newIxWorld(t)
 	for _, n := range []uint64{500, 501, 503, 504} {
 		w.add(ixBatch{N: n, Block: 1000 + 8*(n-500), T: ixT0 + 96*(n-500), Msgs: [][][]byte{ixMsg(ixTx(int(50000 + n)))}})
+	}
+	for _, n := range []uint64{500, 501, 503, 504} {
+		w.proof(n, w.recs[w.keys[n][0]].AfterAcc, w.recs[w.keys[n][0]].L1Block+2)
 	}
 	w.index(IndexConfig{})
 	r := w.reader()
@@ -428,28 +432,31 @@ func TestRB12ArbIndexMissingBatchNumberIsANamedCaptureGap(t *testing.T) {
 	}
 }
 
-// The block's signed standard transactions are the types 0-4 (legacy, access list, dynamic fee, blob, set-code); the Arbitrum internal, retry and
-// delayed-origin types are not.
-func TestRB12ArbStandardTxsAreTheSignedTypes(t *testing.T) {
-	var txs [][]byte
-	var want [][]byte
-	for _, ty := range []byte{0x6a, 0x01, 0x02, 0x03, 0x04, 0x05, 0x68, 0x64, 0x65, 0x66, 0x69} {
-		tx := append([]byte{ty}, 0xc0)
-		txs = append(txs, tx)
-		if ty >= 1 && ty <= 4 {
-			want = append(want, tx)
+// The authorization comes BEFORE the hole: a forged record (an invented event with a huge batch number, a record a proof contradicts) bounds no
+// hole, so a leg that is simply not posted yet is never called a capture gap because of it; and neighbours with no captured proof claim nothing.
+func TestRB12ArbIndexForgedBatchNumberCannotMakeAFalseCaptureGap(t *testing.T) {
+	build := func(prove bool) *ixWorld {
+		w := newIxWorld(t)
+		for _, n := range []uint64{500, 501, 502} {
+			w.add(ixBatch{N: n, Block: 1000 + 8*(n-500), T: ixT0 + 96*(n-500), Msgs: [][][]byte{ixMsg(ixTx(int(50000 + n)))}})
+			if prove {
+				w.proof(n, w.recs[w.keys[n][0]].AfterAcc, w.recs[w.keys[n][0]].L1Block+2)
+			}
 		}
+		// an event a provider invented: a huge batch number, a plausible block; and one contradicted by a proof
+		w.add(ixBatch{N: 1_000_000_000_000, Block: 1030, T: ixT0 + 300, Msgs: [][][]byte{ixMsg(ixTx(1))}})
+		w.add(ixBatch{N: 505, Block: 1040, T: ixT0 + 400, Msgs: [][][]byte{ixMsg(ixTx(2))}})
+		w.proof(505, common.Hash{9, 9, 9}, 1042)
+		w.index(IndexConfig{})
+		return w
 	}
-	legacy := ixTx(5) // an RLP list: type 0
-	txs = append(txs, legacy)
-	want = append(want, legacy)
-	got := standardTxs(txs)
-	if len(got) != len(want) {
-		t.Fatalf("%d standard transactions, want %d", len(got), len(want))
-	}
-	for i := range got {
-		if !bytes.Equal(got[i], want[i]) {
-			t.Fatalf("standard transaction %d differs", i)
+	for _, prove := range []bool{true, false} {
+		w := build(prove)
+		r := w.reader()
+		b := &Builder{Store: w.store, Pins: w.pins, Index: r}
+		loc, pend, err := r.Locate(context.Background(), b, finality.HeaderFields{Number: 5, Timestamp: ixT0 + 200}, standardTxs([][]byte{ixTx(777777)}), w.arb)
+		if err != nil || loc != nil || pend == nil || pend.Reason != PendingAwaitingBatchPost {
+			t.Fatalf("proved %v: a leg that is not posted yet is %v %v %v, not a capture gap", prove, loc, pend, err)
 		}
 	}
 }

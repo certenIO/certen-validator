@@ -149,7 +149,9 @@ func (b *Builder) BuildFor(ctx context.Context, ref finality.BlockRef) (*finalit
 	rec := found.rec
 
 	// the near-head proof the capture phase stored for this batch
-	proofs, err := capture.LoadProofs(ctx, b.Store, b.Chain(), rec.N)
+	// the proofs at or after the batch's own block: one taken below it (the capturer tries the head and the two blocks under it) shows the slot still
+	// empty, so it is no proof of this batch and is never the one used
+	proofs, err := capture.LoadProofsFrom(ctx, b.Store, b.Chain(), rec.N, rec.L1Block)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -320,11 +322,11 @@ func (b *Builder) matchCandidate(ctx context.Context, rec capture.BatchRecord, s
 // accumulator): false only for a FOREIGN record, one a verified proof contradicts. An unproven record is kept; the verifier of the leg
 // decides what it can prove.
 func (b *Builder) authorized(ctx context.Context, rec capture.BatchRecord, arb *arbPins) (bool, error) {
-	views, err := capture.LoadProofViews(ctx, b.Store, b.Chain(), rec.N, rec.L1Block)
+	verdict, err := capture.AuthorizeStored(ctx, b.Store, b.Chain(), rec, arb.bridge, arb.Layout.AccArraySlot)
 	if err != nil {
 		return false, err
 	}
-	if capture.AuthorizeBatch(rec, arb.bridge, arb.Layout.AccArraySlot, views) == capture.AuthForeign {
+	if verdict == capture.AuthForeign {
 		metrics.AddFinalityCaptureForeignTxs(b.Chain(), 1)
 		return false, nil
 	}
