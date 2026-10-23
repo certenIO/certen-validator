@@ -335,3 +335,18 @@ func (m *MemCaptureStore) PutBlock(_ context.Context, rows []CaptureRow) error {
 	}
 	return nil
 }
+
+var _ BlockSizer = (*MemCaptureStore)(nil)
+
+// BlockSizes implements BlockSizer.
+func (m *MemCaptureStore) BlockSizes(_ context.Context, chain, l1Block uint64, l1Hash [32]byte) (map[string]int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := map[string]int64{}
+	for k, b := range m.rows {
+		if k.Chain == chain && k.L1Block == l1Block && k.L1Hash == l1Hash {
+			out[k.Item] = int64(len(b))
+		}
+	}
+	return out, nil
+}

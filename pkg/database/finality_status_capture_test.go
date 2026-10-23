@@ -208,8 +208,8 @@ func TestFinalityCaptureStoreIsInsertOnlyAndTheTableRefusesAnyOtherWriter(t *tes
 			t.Fatal("the row changed")
 		}
 	})
-	t.Run("the store has Put and reads, and no method that changes or removes a row", func(t *testing.T) {
-		want := map[string]bool{"Put": true, "Get": true, "ListByBlock": true, "ListByRange": true}
+	t.Run("the store has Put, PutBlock (insert-only, one transaction) and reads (including BlockSizes), and no method that changes or removes a row", func(t *testing.T) {
+		want := map[string]bool{"Put": true, "PutBlock": true, "Get": true, "ListByBlock": true, "ListByRange": true, "BlockSizes": true}
 		typ := reflect.TypeOf(store)
 		for i := 0; i < typ.NumMethod(); i++ {
 			if !want[typ.Method(i).Name] {

@@ -217,3 +217,28 @@ func (s *FinalityCaptureStore) PutBlock(ctx context.Context, rows []finality.Cap
 	}
 	return tx.Commit()
 }
+
+var _ finality.BlockSizer = (*FinalityCaptureStore)(nil)
+
+// BlockSizes returns the size in bytes of every row stored under (chain, l1Block, l1Hash), by item, without transferring the bytes.
+func (s *FinalityCaptureStore) BlockSizes(ctx context.Context, chain, l1Block uint64, l1Hash [32]byte) (map[string]int64, error) {
+	out := map[string]int64{}
+	if !holdable(chain, l1Block) {
+		return out, nil
+	}
+	rows, err := s.client.DB().QueryContext(ctx, `SELECT item, octet_length(bytes)::bigint FROM proof_finality_capture
+		WHERE chain = $1 AND l1_block = $2 AND l1_hash = $3`, int64(chain), int64(l1Block), l1Hash[:])
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var item string
+		var n int64
+		if err := rows.Scan(&item, &n); err != nil {
+			return nil, err
+		}
+		out[item] = n
+	}
+	return out, rows.Err()
+}

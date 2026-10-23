@@ -142,24 +142,32 @@ func TestRTBudgetReadsPassThroughToTheInnerStore(t *testing.T) {
 	}
 }
 
-func TestRTBudgetTheAccountingIsBoundedAndEvictionDoesNotPanic(t *testing.T) {
+// The accounting is read from the store at every call and the process keeps only what its in-flight calls reserved, so it cannot
+// grow with the number of blocks (the previous per-block cache was bounded by an eviction rule; there is nothing left to evict).
+func TestRTBudgetKeepsNoAccountingBetweenCallsSoItCannotGrowWithTheNumberOfBlocks(t *testing.T) {
 	s, _, p := rtNewBudget(100)
 	ctx := context.Background()
-	n := maxBudgetGroups + 50
+	n := 1500
 	for i := 0; i < n; i++ {
 		if err := s.Put(ctx, rtKey(uint64(i), 1, "r"), []byte{1}); err != nil {
 			t.Fatalf("block %d: %v", i, err)
 		}
 	}
-	if s.lru.Len() > maxBudgetGroups || len(s.groups) > maxBudgetGroups {
-		t.Fatalf("accounting holds %d/%d groups, bound %d", s.lru.Len(), len(s.groups), maxBudgetGroups)
+	s.mu.Lock()
+	held := len(s.inflight)
+	s.mu.Unlock()
+	if held != 0 {
+		t.Fatalf("%d blocks still hold in-flight reservations after every call returned", held)
 	}
 	if len(p.puts) != n {
 		t.Fatalf("%d stored rows counted, want %d", len(p.puts), n)
 	}
-	// the oldest group was evicted: its account starts again (the durable store's insert-only key is the bound that survives)
+	// the first block's account is exact: it holds 1 byte, so 99 more fit and 100 do not
+	if err := s.Put(ctx, rtKey(0, 1, "s"), make([]byte, 100)); err == nil {
+		t.Fatal("a row that crosses the bound of a block stored long ago was accepted")
+	}
 	if err := s.Put(ctx, rtKey(0, 1, "s"), make([]byte, 99)); err != nil {
-		t.Fatalf("an evicted block's account restarts: %v", err)
+		t.Fatalf("a row that fits the remaining budget of a block stored long ago: %v", err)
 	}
 }
 

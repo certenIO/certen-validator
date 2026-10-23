@@ -222,16 +222,11 @@ func (c *Capturer) CaptureBlock(ctx context.Context, number uint64) (bool, error
 	}
 	// Everything is known: the rows of the block are written as ONE unit (finality.PutBlock). The inbox row names the block as
 	// captured and lists its transactions, so it must never be stored without the rows it lists: a budget that does not fit the
-	// whole block, or a store failure, stores nothing (RB11-DBFIX D7).
+	// whole block, or a store failure, stores nothing (RB11-DBFIX D7). The inbox row is listed LAST: a store that can only write row
+	// by row (finality.PutBlock writes them in this order) is then cut at worst between rows nothing names yet.
 	var rows []finality.CaptureRow
 	add := func(item string, b []byte) { rows = append(rows, finality.CaptureRow{CaptureKey: key(item), Bytes: b}) }
 	add(ItemHeader, blk.HeaderRLP)
-	var w finality.Writer
-	w.Count(len(idx))
-	for _, i := range idx {
-		w.U32(i)
-	}
-	add(ItemInbox, w.Bytes())
 	for _, i := range idx {
 		add(ItemTx(i), blk.TxRaw[i])
 		var pw finality.Writer
@@ -248,6 +243,12 @@ func (c *Capturer) CaptureBlock(ctx context.Context, number uint64) (bool, error
 	var sw finality.Writer
 	sw.LPList(sc.Nodes)
 	add(ItemSysCfg, sw.Bytes())
+	var w finality.Writer
+	w.Count(len(idx))
+	for _, i := range idx {
+		w.U32(i)
+	}
+	add(ItemInbox, w.Bytes())
 	if err := finality.PutBlock(ctx, c.Store, rows); err != nil {
 		return false, err
 	}

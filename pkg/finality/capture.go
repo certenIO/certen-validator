@@ -71,9 +71,11 @@ type BlockPutter interface {
 	PutBlock(ctx context.Context, rows []CaptureRow) error
 }
 
-// PutBlock stores the rows of one captured block through the store's own all-or-nothing PutBlock. A store without one (the in-memory
-// and directory stores of tests and the one-shot recorder) has no admission bound to cross, so its rows are written in order and the
-// first error is returned; the stores the validator runs on do implement BlockPutter.
+// PutBlock stores the rows of one captured block through the store's own all-or-nothing PutBlock. A store without one (the directory
+// store of the one-shot recorder, and doubles) has no admission bound to cross, so its rows are written in the order given and the
+// first error is returned: a caller lists the row that NAMES the block (the inbox row, the batch record) LAST, so a cut leaves rows
+// nothing names yet and never a name without its rows. The stores the validator runs on (the database store and the budgeted store
+// in front of it) do implement BlockPutter, and a test pins that.
 func PutBlock(ctx context.Context, s CaptureStore, rows []CaptureRow) error {
 	if bp, ok := s.(BlockPutter); ok {
 		return bp.PutBlock(ctx, rows)
@@ -84,4 +86,10 @@ func PutBlock(ctx context.Context, s CaptureStore, rows []CaptureRow) error {
 		}
 	}
 	return nil
+}
+
+// BlockSizer is an optional read of a CaptureStore: the size in bytes of every row stored under (chain, l1Block, l1Hash), by item, without
+// the bytes. The budgeted store reads it at every admission, so a block that other writers have grown is counted as it stands.
+type BlockSizer interface {
+	BlockSizes(ctx context.Context, chain, l1Block uint64, l1Hash [32]byte) (map[string]int64, error)
 }
