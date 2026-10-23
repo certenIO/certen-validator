@@ -75,6 +75,8 @@ type GapRecorder interface {
 	// UnrecordedSettlements is the number of legs attempted in the last pass whose evidence was served while the proof row has
 	// no settlement_tx_hash or settlement_block_number yet.
 	UnrecordedSettlements(n int)
+	// LegsWithoutProver is the number of listed legs of a chain for which no prover is registered (counted as no_prover, not attempted).
+	LegsWithoutProver(chain uint64, n int)
 }
 
 // MetricsRecorder reports to pkg/metrics (the series are listed in pkg/metrics/finality_metrics.go).
@@ -202,6 +204,8 @@ type Upgrader struct {
 	noProver    map[uint64]bool        // chains already announced as having no registered prover
 	noComponent *bundleMemo            // proofs whose listed bundle was examined and holds no execution proof (bounded by noComponentMemoCap)
 	quiet       map[string]uint64      // proof id -> chain, for the legs that are quiet because their bundle holds no execution proof
+	unrecorded  map[string]uint64      // proof id -> chain, for the legs whose settlement evidence was last served before the proof row recorded the settlement
+	noProverAt  map[uint64]bool        // chains whose no-prover gauge is currently non-zero (reset when they drop out)
 
 	// the counts Run last announced (Run is the only writer)
 	lastNoSettlement, lastUnrecorded int
@@ -226,7 +230,7 @@ func NewUpgrader(src LegSource, store AddendumStore, reg *Registry, pins *Pins, 
 		src: src, store: store, reg: reg, pins: pins, cfg: cfg.withDefaults(),
 		next: map[string]time.Time{}, levelAt: map[levelKey]time.Time{}, disabled: map[uint64]bool{},
 		complete: map[string]Level{}, stand: map[string]legStand{}, noProver: map[uint64]bool{},
-		noComponent: newBundleMemo(noComponentMemoCap), quiet: map[string]uint64{},
+		noComponent: newBundleMemo(noComponentMemoCap), quiet: map[string]uint64{}, unrecorded: map[string]uint64{}, noProverAt: map[uint64]bool{},
 	}, nil
 }
 
@@ -265,8 +269,8 @@ func (u *Upgrader) Run(ctx context.Context) {
 			u.cfg.Logf("[FINALITY] pass could not list settled legs: %v", rep.SourceErr)
 		}
 		if rep.Appended > 0 || rep.Failed > 0 || rep.Broken > 0 || rep.Unusable > 0 {
-			u.cfg.Logf("[FINALITY] pass: listed=%d attempts=%d appended=%d pending=%d failed=%d broken=%d conflict=%d unusable=%d complete=%d no_settlement=%d unrecorded=%d",
-				rep.Listed, rep.Attempts, rep.Appended, rep.Pending, rep.Failed, rep.Broken, rep.Conflict, rep.Unusable, rep.Complete, rep.NoSettlement, rep.Unrecorded)
+			u.cfg.Logf("[FINALITY] pass: listed=%d attempts=%d appended=%d pending=%d failed=%d broken=%d conflict=%d unusable=%d complete=%d no_settlement=%d unrecorded=%d no_prover=%d",
+				rep.Listed, rep.Attempts, rep.Appended, rep.Pending, rep.Failed, rep.Broken, rep.Conflict, rep.Unusable, rep.Complete, rep.NoSettlement, rep.Unrecorded, rep.NoProver)
 		}
 		u.announceGaps(rep)
 		t.Reset(u.cfg.Interval)
@@ -281,6 +285,8 @@ func (u *Upgrader) RunOnce(ctx context.Context) PassReport {
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, u.cfg.Concurrency)
+	listed := map[string]bool{}
+	noProver := map[uint64]int{}
 
 	after := ""
 page:
@@ -298,15 +304,17 @@ page:
 		after = refs[len(refs)-1].ProofID
 		for _, ref := range refs {
 			rep.Listed++
+			listed[ref.ProofID] = true
 			switch {
 			case u.cfg.DisabledChains[ref.Chain]:
 				rep.Disabled++
 				u.announceDisabled(ref.Chain)
 				continue
-			case len(u.reg.Provers(ref.Chain)) == 0:
+			case ref.Chain != 0 && len(u.reg.Provers(ref.Chain)) == 0:
 				// nothing can be built for this chain until a prover is registered: its L6 evidence is not reloaded and
 				// re-verified on every retry. Counted in every pass and announced once per chain.
 				rep.NoProver++
+				noProver[ref.Chain]++
 				u.announceNoProver(ref.Chain)
 				continue
 			case u.isComplete(ref.ProofID):
@@ -339,7 +347,6 @@ page:
 				rep.Conflict += b2i(res.conflict)
 				rep.Unusable += b2i(res.unusable)
 				rep.NoSettlement += b2i(res.noSettlement)
-				rep.Unrecorded += b2i(res.unrecorded)
 				mu.Unlock()
 			}(ref)
 		}
@@ -348,9 +355,19 @@ page:
 		}
 	}
 	wg.Wait()
+	complete := rep.SourceErr == nil && ctx.Err() == nil
+	if complete {
+		u.forgetUnlisted(listed)
+	}
+	u.mu.Lock()
+	rep.Unrecorded = len(u.unrecorded)
+	u.mu.Unlock()
 	u.publishGauges()
 	if g, ok := u.cfg.Recorder.(GapRecorder); ok {
 		g.UnrecordedSettlements(rep.Unrecorded)
+		if complete {
+			u.publishNoProver(g, noProver)
+		}
 	}
 	u.cfg.Recorder.Pass(u.cfg.Now().Sub(start), u.cfg.Now())
 	return rep
@@ -533,7 +550,6 @@ type legResult struct {
 	conflict     bool
 	unusable     bool
 	noSettlement bool
-	unrecorded   bool
 }
 
 // storedOffered are the stored levels (l1_posted, finalized) the chain's profile offers, ascending.
@@ -586,6 +602,9 @@ func (u *Upgrader) upgradeLeg(ctx context.Context, ref LegRef) (res legResult) {
 			u.scheduleBoth(ref.ProofID, u.cfg.FailureRetry)
 		}
 	}()
+	if ref.Chain == 0 {
+		return u.upgradeChainless(ctx, ref)
+	}
 	profile, err := u.reg.Profile(ref.Chain)
 	if err != nil {
 		res.failed = true
@@ -622,12 +641,13 @@ func (u *Upgrader) upgradeLeg(ctx context.Context, ref LegRef) (res legResult) {
 		res.unusable = true
 		u.cfg.Recorder.BuildFailed(ref.Chain, codeOf(err))
 		logf("[FINALITY] leg %s chain %d: its L6 evidence cannot be used: %v", ref.ProofID, ref.Chain, err)
+		u.setUnrecorded(ref, false)
 		u.record(ref.ProofID, ref.Chain, LevelNone, false)
 		u.scheduleBoth(ref.ProofID, u.cfg.BrokenRetry)
 		return res
 	}
 	u.clearQuiet(ref.ProofID)
-	res.unrecorded = settlement.Unrecorded
+	u.setUnrecorded(ref, settlement.Unrecorded)
 	// The leg's block is DERIVED from the verified L6 evidence (level 1): never taken from the source's Subject, which is a
 	// stored claim. D0 is the binding of the derived block.
 	block, err := DeriveIncluded(ref.Chain, settlement.Included)
@@ -635,6 +655,7 @@ func (u *Upgrader) upgradeLeg(ctx context.Context, ref LegRef) (res legResult) {
 		res.unusable = true
 		u.cfg.Recorder.BuildFailed(ref.Chain, codeOf(err))
 		logf("[FINALITY] leg %s chain %d: its L6 evidence cannot be used: %v", ref.ProofID, ref.Chain, err)
+		u.setUnrecorded(ref, false)
 		u.record(ref.ProofID, ref.Chain, LevelNone, false)
 		u.scheduleBoth(ref.ProofID, u.cfg.BrokenRetry)
 		return res
@@ -925,6 +946,7 @@ func (u *Upgrader) markQuiet(ref LegRef) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	u.quiet[ref.ProofID] = ref.Chain
+	delete(u.unrecorded, ref.ProofID)
 	delete(u.stand, ref.ProofID)
 	if ref.BundleID != "" {
 		u.noComponent.put(ref.ProofID, ref.BundleID)
@@ -943,6 +965,9 @@ func (MetricsRecorder) LegsWithoutSettlement(chain uint64, n int) {
 	metrics.SetFinalityLegsWithoutSettlement(chain, n)
 }
 func (MetricsRecorder) UnrecordedSettlements(n int) { metrics.SetFinalityUnrecordedSettlements(n) }
+func (MetricsRecorder) LegsWithoutProver(chain uint64, n int) {
+	metrics.SetFinalityLegsWithoutProver(chain, n)
+}
 
 // announceGaps logs, when it changes, how many legs are held back for want of evidence and how many were served before their proof
 // row recorded the settlement. The two are also in every pass summary line and in the metrics.
@@ -955,4 +980,80 @@ func (u *Upgrader) announceGaps(rep PassReport) {
 		u.lastUnrecorded = rep.Unrecorded
 		u.cfg.Logf("[FINALITY] %d legs had settlement evidence served while their proof row has no settlement_tx_hash or settlement_block_number yet: the check against the recorded settlement was skipped", rep.Unrecorded)
 	}
+}
+
+// setUnrecorded records whether the settlement evidence last served for the leg was served before its proof row recorded the
+// settlement. The set persists across passes: a leg waiting for a later level is skipped between attempts and stays in it (until a later
+// serve is recorded, the leg turns quiet or unusable, or a complete pass no longer lists it), so the
+// gauge and the log line follow the legs and not the attempts.
+func (u *Upgrader) setUnrecorded(ref LegRef, on bool) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if on {
+		u.unrecorded[ref.ProofID] = ref.Chain
+		return
+	}
+	delete(u.unrecorded, ref.ProofID)
+}
+
+// forgetUnlisted drops the quiet and unrecorded entries of proofs a complete pass did not list (finalized elsewhere, or gone):
+// they are no longer legs of this upgrader, and a stale entry would hold a gauge up forever.
+func (u *Upgrader) forgetUnlisted(listed map[string]bool) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	for id := range u.unrecorded {
+		if !listed[id] {
+			delete(u.unrecorded, id)
+		}
+	}
+	for id := range u.quiet {
+		if !listed[id] {
+			delete(u.quiet, id)
+		}
+	}
+}
+
+// publishNoProver sets the no-prover gauge of every chain that had legs this pass, and resets the chains that had them before and
+// have none now.
+func (u *Upgrader) publishNoProver(g GapRecorder, counts map[uint64]int) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	for chain, n := range counts {
+		g.LegsWithoutProver(chain, n)
+		u.noProverAt[chain] = true
+	}
+	for chain := range u.noProverAt {
+		if counts[chain] == 0 {
+			g.LegsWithoutProver(chain, 0)
+			delete(u.noProverAt, chain)
+		}
+	}
+}
+
+// upgradeChainless judges a leg whose proof row names no usable chain: there is nothing to build for it, but it is not simply
+// "no prover". Its bundle is read (once, like any other) to say what it is. A bundle with no execution proof is the quiet
+// finality_included_unavailable state. A bundle WITH one is a settled leg whose chain the proof row does not know, which the
+// source names (finality_included_invalid) and which is reported loudly on the broken schedule until the row is repaired.
+func (u *Upgrader) upgradeChainless(ctx context.Context, ref LegRef) (res legResult) {
+	_, err := bounded(ctx, u.cfg.StoreTimeout, 0, "loading the leg's settlement", func(c context.Context) (Settlement, error) {
+		return u.src.LegSettlement(c, ref)
+	})
+	if st, ok := AsNamed(err); ok && st.Code == CodeIncludedUnavailable {
+		res.noSettlement = true
+		u.markQuiet(ref)
+		if ref.BundleID == "" {
+			u.scheduleBoth(ref.ProofID, u.cfg.PendingRetry)
+		}
+		return res
+	}
+	if err == nil {
+		err = NewState(CodeIncludedInvalid, "proof_id", ref.ProofID, "cause", "the proof row names no usable chain, so the settlement it holds cannot be upgraded")
+	}
+	res.unusable = true
+	u.cfg.Recorder.BuildFailed(0, codeOf(err))
+	u.cfg.Logf("[FINALITY] leg %s: it names no usable chain and cannot be upgraded: %v", ref.ProofID, err)
+	u.setUnrecorded(ref, false)
+	u.record(ref.ProofID, 0, LevelNone, false)
+	u.scheduleBoth(ref.ProofID, u.cfg.BrokenRetry)
+	return res
 }
