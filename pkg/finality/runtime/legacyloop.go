@@ -4,7 +4,6 @@ package runtime
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	goruntime "runtime"
 	"sort"
@@ -19,10 +18,10 @@ import (
 
 // The states of a legacy leg in the loop (the `state` label of certen_finality_legacy_headers).
 const (
-	LegacyPending       = "pending"
-	LegacyReconstructed = "reconstructed"
-	LegacyUnserved      = "unserved"
-	LegacyInvalid       = "invalid"
+	LegacyPending       = legacyhdr.StatePending
+	LegacyReconstructed = legacyhdr.StateReconstructed
+	LegacyUnserved      = legacyhdr.StateUnserved
+	LegacyInvalid       = legacyhdr.StateInvalid
 )
 
 // The working set one leg may hold while it is judged: the provider response (bounded by legacyhdr.DefaultMaxResponse) three times
@@ -295,7 +294,9 @@ func (l *LegacyHeaderLoop) judge(ctx context.Context, id string) (stop bool) {
 	return false
 }
 
-// reconstruct is the judgement of one leg: its state, a log-safe cause, and the named state of an unserved or invalid leg.
+// reconstruct is the judgement of one leg: its state, a log-safe cause, and the named state of an unserved or invalid leg. A
+// candidate the lister could not read as a leg is invalid by the state it carries and is never asked of a provider; every other leg
+// is legacyhdr.Judge (the code the offline command runs too).
 func (l *LegacyHeaderLoop) reconstruct(ctx context.Context, g *legacyLeg) (state, cause string, st *finality.StateError) {
 	leg := g.cand.Leg
 	if g.cand.Err != nil {
@@ -305,51 +306,9 @@ func (l *LegacyHeaderLoop) reconstruct(ctx context.Context, g *legacyLeg) (state
 		}
 		return LegacyInvalid, named.Error(), named
 	}
-	key := leg.Key()
-	hdr, have, err := l.Store.Get(ctx, key)
-	if err != nil {
-		if ctx.Err() == nil {
-			l.logf("[FINALITY] %s: %s: reading the capture store: %s (asked again next tick)", l.Name(), leg, ethrpc.RedactText(err.Error()))
-		}
-		return LegacyPending, "capture store unreadable", nil
-	}
-	if !have {
-		hdr, err = l.Source.HeaderByHash(ctx, leg.Chain, leg.BlockHash)
-		if err != nil {
-			if ctx.Err() != nil {
-				return LegacyPending, "", nil
-			}
-			var un *legacyhdr.Unserved
-			if errors.As(err, &un) {
-				named := un.State(leg)
-				return LegacyUnserved, un.Error(), named
-			}
-			// a source answers with *Unserved or a context error; anything else is judged nothing and asked again next tick
-			l.logf("[FINALITY] %s: %s: %s", l.Name(), leg, legacyhdr.Describe(err))
-			return LegacyPending, "header source failed", nil
-		}
-		// the source returned a header that hashes to the block hash: it is the block's own, whatever the stored component says, so it
-		// is kept (and not fetched again); the leg is judged below.
-		if err := l.Store.Put(ctx, key, hdr); err != nil {
-			if ctx.Err() == nil {
-				l.logf("[FINALITY] %s: %s: storing the header: %s", l.Name(), leg, ethrpc.RedactText(err.Error()))
-			}
-			if errors.Is(err, finality.ErrCaptureConflict) {
-				named := finality.NewState(finality.CodeIncludedInvalid, "proof_id", leg.ProofID, "chain", leg.Chain, "block", leg.BlockNumber,
-					"check", "store_conflict", "cause", "the capture store holds other bytes under this header's key")
-				return LegacyInvalid, named.Error(), named
-			}
-			return LegacyPending, "capture store write failed", nil
-		}
-	}
-	if err := leg.Verify(hdr); err != nil {
-		named, ok := finality.AsNamed(err)
-		if !ok {
-			named = finality.NewState(finality.CodeIncludedInvalid, "proof_id", leg.ProofID, "cause", err.Error())
-		}
-		return LegacyInvalid, named.Error(), named
-	}
-	return LegacyReconstructed, "", nil
+	logf := func(format string, args ...any) { l.logf("[FINALITY] "+l.Name()+": "+format, args...) }
+	out := legacyhdr.Judge(ctx, leg, l.Store, l.Source, logf)
+	return out.State, out.Cause, out.Named
 }
 
 // putStatus writes the leg's named state as a builder status row for each stored level the chain offers. A write that fails is
