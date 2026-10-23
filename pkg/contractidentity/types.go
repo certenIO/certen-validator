@@ -266,8 +266,8 @@ type HeadlineInput struct {
 type Headline struct {
 	// Kind is one of the headline vocabulary: refused, pending, unproven, verified_core, verified, not_applicable.
 	Kind string
-	// First and Parts: refused{first,parts} (First is the code of the first refusal); unproven{parts} (the core parts that are unproven).
-	First string
+	// First and Parts: refused{first,parts} (First is the first refusal state; Parts the refused part names); unproven{parts} (the core parts that are unproven).
+	First *StateError
 	Parts []string
 	// pending
 	LevelReached      string
@@ -412,9 +412,9 @@ func headlineAlgebra(in HeadlineInput) (Headline, error) {
 	sortOpen(open)
 	switch {
 	case in.Framework != nil:
-		return Headline{Kind: HeadlineRefused, First: in.Framework.Code, Parts: refused}, nil
+		return Headline{Kind: HeadlineRefused, First: in.Framework, Parts: refused}, nil
 	case len(refused) > 0 && in.StateRootAuthenticated:
-		return Headline{Kind: HeadlineRefused, First: firstRefusal.Code, Parts: refused}, nil
+		return Headline{Kind: HeadlineRefused, First: firstRefusal, Parts: refused}, nil
 	case len(refused) > 0:
 		if in.LevelReached == "" {
 			return h, fmt.Errorf("contractidentity: headline: pending without level_reached")
@@ -514,7 +514,10 @@ func validatePartResult(p *PartResult, registry9 bool) error {
 func (h Headline) State() (*StateError, error) {
 	switch h.Kind {
 	case HeadlineRefused:
-		return New(CodeRefused, "", map[string]any{"first": h.First, "parts": nonNil(h.Parts)})
+		if h.First == nil {
+			return nil, fmt.Errorf("contractidentity: refused headline without its first refusal")
+		}
+		return New(CodeRefused, "", map[string]any{"first": map[string]any{"code": h.First.Code, "fields": h.First.Fields}, "parts": nonNil(h.Parts)})
 	case HeadlineUnproven:
 		return New(CodeUnproven, "(wrapper)", map[string]any{"parts": nonNil(h.Parts)})
 	case HeadlinePending:

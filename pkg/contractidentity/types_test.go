@@ -336,7 +336,7 @@ func TestHeadlineAlgebraIsExhaustive(t *testing.T) {
 					}
 					switch h.Kind {
 					case HeadlineRefused:
-						if h.First != CodeRecordNotExecuted || len(h.Parts) != refusedN {
+						if h.First.Code != CodeRecordNotExecuted || len(h.Parts) != refusedN {
 							t.Fatalf("refused: %+v", h)
 						}
 					case HeadlinePending:
@@ -502,7 +502,7 @@ func TestHeadlineFrameworkRefusals(t *testing.T) {
 				if err != nil {
 					t.Fatalf("%s: %v", fw, err)
 				}
-				if h.Kind != HeadlineRefused || h.First != fw.Code {
+				if h.Kind != HeadlineRefused || h.First.Code != fw.Code {
 					t.Fatalf("%s auth=%v: %+v", fw, auth, h)
 				}
 				if st, err := h.State(); err != nil || Validate(st) != nil {

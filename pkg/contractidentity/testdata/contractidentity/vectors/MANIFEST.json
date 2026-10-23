@@ -1,0 +1,2057 @@
+{
+ "format": "certen-contract-identity-vectors/1",
+ "spec": {
+  "file": "V2_SPEC_S8.md",
+  "revision": "r3.1",
+  "sha256": "a08baa07eafc96d2b2dcff15635f11cb5f6a2b37e748fc7e77af1476f0a3766c"
+ },
+ "note": "one entry per row of Freeze inventory item 5; set is null and status spec_only until a published set (see FORMAT.md) contains the vector; expected entries with code null are tokens that are not registry rows (a headline word, a generator verdict)",
+ "vectors": [
+  {
+   "id": "VS8-001",
+   "step": "0",
+   "mutation": "embedded manifest bytes altered by one byte",
+   "expectedText": "`manifest_corrupt`",
+   "expected": [
+    {
+     "code": "contract_identity_manifest_corrupt",
+     "reason": null,
+     "fields": null
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-002",
+   "step": "0",
+   "mutation": "settlement chain id absent from `chains[]`",
+   "expectedText": "`manifest_unknown{chain}`",
+   "expected": [
+    {
+     "code": "contract_identity_manifest_unknown",
+     "reason": null,
+     "fields": "chain"
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-003",
+   "step": "0",
+   "mutation": "extension redefines `policy.blsThreshold`, an `eip2935` row, a `selectors` key, a `txScan` chain, a `policy.rules` row",
+   "expectedText": "`manifest_shadow{table,key}` (one vector each)",
+   "expected": [
+    {
+     "code": "contract_identity_manifest_shadow",
+     "reason": null,
+     "fields": "table,key"
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-004",
+   "step": "0",
+   "mutation": "extension appends a `setRootHistory` row after the last one / a `policy.owner` row with `validFromBlock` before the last row's",
+   "expectedText": "accepted, `manifest_source extension:<sha>` / `manifest_shadow`",
+   "expected": [
+    {
+     "code": "contract_identity_manifest_shadow",
+     "reason": null,
+     "fields": null
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-010",
+   "step": "1",
+   "mutation": "magic `CIE2`",
+   "expectedText": "`evidence_malformed{magic,bad_magic}`",
+   "expected": [
+    {
+     "code": "contract_identity_evidence_malformed",
+     "reason": null,
+     "fields": "magic,bad_magic"
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-011",
+   "step": "1",
+   "mutation": "kind `contract-identity/v9`",
+   "expectedText": "`evidence_unrecognised{kind,version}`",
+   "expected": [
+    {
+     "code": "contract_identity_evidence_unrecognised",
+     "reason": null,
+     "fields": "kind,version"
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-012",
+   "step": "1",
+   "mutation": "trailing byte; truncation at each field boundary (one vector per boundary)",
+   "expectedText": "`evidence_malformed{container,trailing_bytes}` / `{...,truncated}`",
+   "expected": [
+    {
+     "code": "contract_identity_evidence_malformed",
+     "reason": null,
+     "fields": "container,trailing_bytes"
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-013",
+   "step": "1",
+   "mutation": "`nodes` descending; duplicate; `codes` descending; duplicate",
+   "expectedText": "`nodes_not_ascending`, `nodes_duplicate`, `codes_not_ascending`, `codes_duplicate`",
+   "expected": [],
+   "other_tokens": [
+    "nodes_not_ascending",
+    "nodes_duplicate",
+    "codes_not_ascending",
+    "codes_duplicate"
+   ],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-014",
+   "step": "1",
+   "mutation": "part tag 3; link 3; Stated `state` other than `contract_identity_unproven`; Stated reason with upper case; non-ASCII / NUL in a `STR`",
+   "expectedText": "`unknown_part_tag`, `unknown_link`, `bad_stated_state`, `bad_stated_reason`, `string_not_ascii`",
+   "expected": [],
+   "other_tokens": [
+    "unknown_part_tag",
+    "unknown_link",
+    "bad_stated_state",
+    "bad_stated_reason",
+    "string_not_ascii"
+   ],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-015",
+   "step": "1",
+   "mutation": "17 codes; 17 hop headers; 4097 spine headers; 4097 block txs; 16385 nodes; 65 failures",
+   "expectedText": "`evidence_too_large{part,count,limit}` (one each)",
+   "expected": [
+    {
+     "code": "contract_identity_evidence_too_large",
+     "reason": null,
+     "fields": "part,count,limit"
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-016",
+   "step": "1",
+   "mutation": "code 262145 B; node 131073 B; block txs total 1048577 B; container 4194305 B; header 4097 B",
+   "expectedText": "`evidence_too_large` (one each)",
+   "expected": [
+    {
+     "code": "contract_identity_evidence_too_large",
+     "reason": null,
+     "fields": null
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-017",
+   "step": "1",
+   "mutation": "non-canonical encoding: `encode(decode(x)) != x` constructions (length prefix longer than the content, count prefix with extra bytes)",
+   "expectedText": "`evidence_malformed`",
+   "expected": [
+    {
+     "code": "contract_identity_evidence_malformed",
+     "reason": null,
+     "fields": null
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-018",
+   "step": "22b",
+   "mutation": "`nodes` carries one extra byte string that no walk visits (a valid-looking but unreferenced node, sorted and unique) in an otherwise honest container",
+   "expectedText": "`evidence_malformed{part:nodes,reason:nodes_unreferenced}`",
+   "expected": [
+    {
+     "code": "contract_identity_evidence_malformed",
+     "reason": null,
+     "fields": "part:nodes,reason:nodes_unreferenced"
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-019",
+   "step": "1c",
+   "mutation": "no container for the leg",
+   "expectedText": "`unproven{part:all,reason:no_evidence_in_file}`, headline `unproven`, steps 2-24 not run",
+   "expected": [
+    {
+     "code": "contract_identity_unproven",
+     "reason": null,
+     "fields": "part:all,reason:no_evidence_in_file"
+    },
+    {
+     "code": "contract_identity_unproven",
+     "reason": null,
+     "fields": null
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-020",
+   "step": "1b",
+   "mutation": "each of settlement, tx, receipt, adi_url, batch.batchRoot, batch.batchOperationID, batch.accSetRoot, batch.incarnation, s7 absent / zero; `s6_proven` with `S6` nil",
+   "expectedText": "`context_incomplete{missing:[<name>]}` (one each)",
+   "expected": [
+    {
+     "code": "contract_identity_context_incomplete",
+     "reason": null,
+     "fields": "missing:[<name>]"
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-021",
+   "step": "1b",
+   "mutation": "`s6_silent` with `S6` present and garbage",
+   "expectedText": "ignored, same verdict as `S6` nil",
+   "expected": [],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-022",
+   "step": "1c",
+   "mutation": "`settle` part `Stated` with each reason (`capture_not_attempted_in_window`, `state_unavailable`); the attest part captured and honest",
+   "expectedText": "the settle-dependent parts `unproven{reason}` (code_identity, account_provenance, pointer, record, authority_level, state_at_settlement), the attest parts judged normally; headline `unproven`, never above",
+   "expected": [
+    {
+     "code": "contract_identity_unproven",
+     "reason": null,
+     "fields": "reason"
+    },
+    {
+     "code": "contract_identity_unproven",
+     "reason": null,
+     "fields": null
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-023",
+   "step": "1c",
+   "mutation": "`settle` part `Stated` and `S6.ProvenAt.hash == Leg.blockHash`; the same with a later `ProvenAt`",
+   "expectedText": "`s6_link` judged; `s6_link` `unproven{reason}`",
+   "expected": [
+    {
+     "code": "contract_identity_unproven",
+     "reason": null,
+     "fields": "reason"
+    }
+   ],
+   "other_tokens": [
+    "s6_link"
+   ],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-030",
+   "step": "2",
+   "mutation": "leg number != header number; leg hash != keccak256(header); chain != catalogue chain",
+   "expectedText": "`block_mismatch{number/hash/chain}`",
+   "expected": [
+    {
+     "code": "contract_identity_block_mismatch",
+     "reason": null,
+     "fields": "number/hash/chain"
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-040",
+   "step": "3a",
+   "mutation": "receipt status 0",
+   "expectedText": "`unproven settlement_not_executed`",
+   "expected": [],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-041",
+   "step": "3",
+   "mutation": "`s6_proven`, one candidate, emitter == `tx.to`",
+   "expectedText": "continues",
+   "expected": [],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-042",
+   "step": "3",
+   "mutation": "`s6_proven`, no candidate but a foreign `LeafConsumed` (wrapper / relayer / anchor-mediated path)",
+   "expectedText": "`settlement_path_unsupported{reason:not_direct_call}`",
+   "expected": [
+    {
+     "code": "contract_identity_unproven",
+     "reason": "settlement_path_unsupported",
+     "fields": "reason:not_direct_call"
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-043",
+   "step": "3",
+   "mutation": "`s6_proven`, no `LeafConsumed` at all",
+   "expectedText": "`settlement_event_missing{count:0}`",
+   "expected": [
+    {
+     "code": "contract_identity_unproven",
+     "reason": "settlement_event_missing",
+     "fields": "count:0"
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-044",
+   "step": "3",
+   "mutation": "`s6_proven`, two candidates with the same leaf key",
+   "expectedText": "`settlement_path_unsupported{reason:multiple_leaf_consumed}`",
+   "expected": [
+    {
+     "code": "contract_identity_unproven",
+     "reason": "settlement_path_unsupported",
+     "fields": "reason:multiple_leaf_consumed"
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-045",
+   "step": "3",
+   "mutation": "`s6_proven`, the settled leg itself settles another account (a foreign log next to the candidate); batch tx with two logs of different keys",
+   "expectedText": "the candidate selected by emitter and `S6.Slot.Key`",
+   "expected": [],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-046",
+   "step": "3",
+   "mutation": "`s6_silent`, one log, V7 code (catalogued row)",
+   "expectedText": "`account_generation_unpinned{kind:catalogued}`",
+   "expected": [
+    {
+     "code": "contract_identity_unproven",
+     "reason": "account_generation_unpinned",
+     "fields": "kind:catalogued"
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-047",
+   "step": "3",
+   "mutation": "`s6_silent`, one log, V7 code (observed row)",
+   "expectedText": "`account_generation_unpinned{kind:observed}`",
+   "expected": [
+    {
+     "code": "contract_identity_unproven",
+     "reason": "account_generation_unpinned",
+     "fields": "kind:observed"
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-048",
+   "step": "3",
+   "mutation": "`s6_silent`, one log, code in no row",
+   "expectedText": "`code_not_published`",
+   "expected": [
+    {
+     "code": "contract_identity_code_not_published",
+     "reason": null,
+     "fields": null
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-049",
+   "step": "3",
+   "mutation": "`s6_silent`, one log, pinned V7_3 code; the SAME world with `S6Status = s6_not_proven{state}`",
+   "expectedText": "`s6_silent`: continues, `s6_link` `not_applicable{s6_silent}`, headline can be `verified`; `s6_not_proven`: continues, `s6_link` `not_applicable{s6_not_proven}`, headline `verified_core{open:[not_checked{s6_link,s6_not_proven,state}]}` - **`verified` must NOT stand beside an S6 non-proof state**",
+   "expected": [
+    {
+     "code": "contract_identity_not_applicable",
+     "reason": null,
+     "fields": "s6_silent"
+    },
+    {
+     "code": "contract_identity_verified",
+     "reason": null,
+     "fields": null
+    },
+    {
+     "code": "contract_identity_not_checked",
+     "reason": "s6_not_proven",
+     "fields": null
+    },
+    {
+     "code": "contract_identity_not_applicable",
+     "reason": null,
+     "fields": "s6_not_proven"
+    },
+    {
+     "code": "contract_identity_verified_core",
+     "reason": null,
+     "fields": "open:[not_checked{s6_link,s6_not_proven,state}]"
+    },
+    {
+     "code": "contract_identity_verified",
+     "reason": null,
+     "fields": null
+    }
+   ],
+   "other_tokens": [
+    "s6_silent",
+    "s6_link"
+   ],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-050",
+   "step": "3",
+   "mutation": "`s6_silent`, no log, `tx.to` = the chain's anchor row, no account event",
+   "expectedText": "`not_applicable{certen_infrastructure_call}`",
+   "expected": [
+    {
+     "code": "contract_identity_not_applicable",
+     "reason": null,
+     "fields": "certen_infrastructure_call"
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-051",
+   "step": "3",
+   "mutation": "`s6_silent`, no log, `tx.to` unknown address",
+   "expectedText": "`settlement_event_missing{count:0}`",
+   "expected": [
+    {
+     "code": "contract_identity_unproven",
+     "reason": "settlement_event_missing",
+     "fields": "count:0"
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-052",
+   "step": "3",
+   "mutation": "`s6_silent`, no log, `tx.to` = anchor row but a `GovernanceOperationExecuted` log present",
+   "expectedText": "`settlement_event_missing{count:0}`",
+   "expected": [
+    {
+     "code": "contract_identity_unproven",
+     "reason": "settlement_event_missing",
+     "fields": "count:0"
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-053",
+   "step": "3",
+   "mutation": "`s6_silent`, two candidates; `s6_silent`, no candidate but a foreign log",
+   "expectedText": "`settlement_path_unsupported{reason:multiple_leaf_consumed}`; `{reason:not_direct_call}`",
+   "expected": [
+    {
+     "code": "contract_identity_unproven",
+     "reason": "settlement_path_unsupported",
+     "fields": "reason:multiple_leaf_consumed"
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-054",
+   "step": "3e",
+   "mutation": "V7_3 account called with a selector outside `selectors.account.V7_3`",
+   "expectedText": "`settlement_path_unsupported{reason:selector_not_pinned}`",
+   "expected": [
+    {
+     "code": "contract_identity_unproven",
+     "reason": "settlement_path_unsupported",
+     "fields": "reason:selector_not_pinned"
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-055",
+   "step": "4",
+   "mutation": "`S6.Contract` != emitter; `S6.SettlementBlock` != Leg",
+   "expectedText": "`s6_link_mismatch{account}` / `{block}`",
+   "expected": [
+    {
+     "code": "contract_identity_s6_link_mismatch",
+     "reason": null,
+     "fields": "account"
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-056",
+   "step": "4",
+   "mutation": "`ProvenAt.hash` == Leg hash with a different number; later `ProvenAt` with a wrong `CodeHash`; later `ProvenAt` with the right `CodeHash`",
+   "expectedText": "`s6_link_mismatch{proven_at}` / `{code_hash}` / passes",
+   "expected": [
+    {
+     "code": "contract_identity_s6_link_mismatch",
+     "reason": null,
+     "fields": "proven_at"
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-057",
+   "step": "3",
+   "mutation": "each of the four `s6_silent or s6_not_proven` rows (one candidate; no candidate with a foreign log; no candidate and no foreign log; two candidates) run with `s6_not_proven{state}` and with `s6_silent`",
+   "expectedText": "identical results, plus the Open entry `not_checked{s6_link,s6_not_proven,state}` for `s6_not_proven` only",
+   "expected": [
+    {
+     "code": "contract_identity_not_checked",
+     "reason": null,
+     "fields": "s6_link,s6_not_proven,state"
+    },
+    {
+     "code": "contract_identity_not_checked",
+     "reason": "s6_not_proven",
+     "fields": null
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-060",
+   "step": "5",
+   "mutation": "EIP-1967-style proxy bytes at the account; right length wrong body; truncated / padded code; CBOR trailer altered",
+   "expectedText": "`code_not_published`",
+   "expected": [
+    {
+     "code": "contract_identity_code_not_published",
+     "reason": null,
+     "fields": null
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-061",
+   "step": "5",
+   "mutation": "carried bytes that do not hash to the proven codeHash",
+   "expectedText": "`code_unproven_bytes`",
+   "expected": [
+    {
+     "code": "contract_identity_code_unproven_bytes",
+     "reason": null,
+     "fields": null
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-062",
+   "step": "5",
+   "mutation": "account absent (exclusion proof); empty storage root with a non-empty proof",
+   "expectedText": "`account_absent`; `proof_invalid`",
+   "expected": [
+    {
+     "code": "contract_identity_account_absent",
+     "reason": null,
+     "fields": null
+    },
+    {
+     "code": "contract_identity_proof_invalid",
+     "reason": null,
+     "fields": null
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-063",
+   "step": "5-22",
+   "mutation": "proof under the parent's root; under N+1; slot-key swap; value-equal slot; mapping base off by one; array element by the wrong formula `floor(index*20/32)`",
+   "expectedText": "`proof_invalid{root,address,slot}`",
+   "expected": [
+    {
+     "code": "contract_identity_proof_invalid",
+     "reason": null,
+     "fields": "root,address,slot"
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-064",
+   "step": "6",
+   "mutation": "`adiURL` / `governingBook` short and long string forms; wrong length word; missing data word",
+   "expectedText": "verifies / `proof_invalid`",
+   "expected": [
+    {
+     "code": "contract_identity_proof_invalid",
+     "reason": null,
+     "fields": null
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-065",
+   "step": "6",
+   "mutation": "`adiURL` differs from the context; book is not the governing book of the ADI",
+   "expectedText": "`account_not_canonical{adi_url}` / `{governing_book}`",
+   "expected": [
+    {
+     "code": "contract_identity_account_not_canonical",
+     "reason": null,
+     "fields": "adi_url"
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-066",
+   "step": "7",
+   "mutation": "`owner` not ADI-derived; `governingBookHash` != keccak(book); `_entryPoint` wrong; one of several references differs",
+   "expectedText": "`immutable_mismatch`",
+   "expected": [
+    {
+     "code": "contract_identity_immutable_mismatch",
+     "reason": null,
+     "fields": null
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-067",
+   "step": "8",
+   "mutation": "impostor account (same code and adiURL, other address); factory maps the ADI to another account; `_deployedAccounts` 0; factory code != pin",
+   "expectedText": "`account_not_canonical{create2}` / `{registry}` / `{deployed_flag}`; `code_not_published{role:accountFactory}`",
+   "expected": [
+    {
+     "code": "contract_identity_account_not_canonical",
+     "reason": null,
+     "fields": "create2"
+    },
+    {
+     "code": "contract_identity_code_not_published",
+     "reason": null,
+     "fields": "role:accountFactory"
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-070",
+   "step": "9",
+   "mutation": "pointer to a decoy anchor with identical code; pointer zero; pointer to a V8.1 anchor",
+   "expectedText": "`pointer_mismatch`; `pointer_mismatch`; `anchor_generation_unpinned`",
+   "expected": [
+    {
+     "code": "contract_identity_pointer_mismatch",
+     "reason": null,
+     "fields": null
+    },
+    {
+     "code": "contract_identity_pointer_mismatch",
+     "reason": null,
+     "fields": null
+    },
+    {
+     "code": "contract_identity_unproven",
+     "reason": "anchor_generation_unpinned",
+     "fields": null
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-071",
+   "step": "10",
+   "mutation": "one of the nine `DEPLOYMENT_CHAIN_ID` references of another chain; anchor code != r5",
+   "expectedText": "`immutable_mismatch`; `code_not_published`",
+   "expected": [
+    {
+     "code": "contract_identity_immutable_mismatch",
+     "reason": null,
+     "fields": null
+    },
+    {
+     "code": "contract_identity_code_not_published",
+     "reason": null,
+     "fields": null
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-072",
+   "step": "11",
+   "mutation": "`valid` 0 or `proofExecuted` 0 at N",
+   "expectedText": "`record_not_executed`",
+   "expected": [
+    {
+     "code": "contract_identity_record_not_executed",
+     "reason": null,
+     "fields": null
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-073",
+   "step": "11",
+   "mutation": "`isBatchAnchor` 0",
+   "expectedText": "`anchor_not_batch`",
+   "expected": [
+    {
+     "code": "contract_identity_unproven",
+     "reason": "anchor_not_batch",
+     "fields": null
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-074",
+   "step": "11",
+   "mutation": "bundle-id derivation broken (leaf count, batch root altered); each of the four `Batch` values mutated",
+   "expectedText": "`record_inconsistent{bundle_id}`; `{merkle_root/operation_id/acc_set_root/incarnation}`",
+   "expected": [
+    {
+     "code": "contract_identity_record_inconsistent",
+     "reason": null,
+     "fields": "bundle_id"
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-075",
+   "step": "12",
+   "mutation": "verifier address not a manifest row; the three `groth16Verifier` references differ; generated verifier code != its row's build",
+   "expectedText": "`address_not_published`; `immutable_mismatch`; `code_not_published`",
+   "expected": [
+    {
+     "code": "contract_identity_address_not_published",
+     "reason": null,
+     "fields": null
+    },
+    {
+     "code": "contract_identity_immutable_mismatch",
+     "reason": null,
+     "fields": null
+    },
+    {
+     "code": "contract_identity_code_not_published",
+     "reason": null,
+     "fields": null
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-076",
+   "step": "13",
+   "mutation": "at N: binding 0; thresholds != policy; enabled 0; owner not in rows; `_paused` 1; `governanceVerifier` != 0; `minimumGovernanceLevel` 0; a key / set-root rotation after the attestation",
+   "expectedText": "`alert{field,at:settle}` / `drift{field}`; headline `verified_core`",
+   "expected": [
+    {
+     "code": "contract_identity_alert",
+     "reason": null,
+     "fields": "field,at:settle"
+    },
+    {
+     "code": "contract_identity_drift",
+     "reason": null,
+     "fields": "field"
+    },
+    {
+     "code": "contract_identity_verified_core",
+     "reason": null,
+     "fields": null
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-080",
+   "step": "14",
+   "mutation": "governing book, page 1 / 2 / 3, no stored level",
+   "expectedText": "`authority_level` verified, level ROOT / ADMIN / OPERATOR, source `governing_default`",
+   "expected": [],
+   "other_tokens": [
+    "authority_level",
+    "governing_default"
+   ],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-081",
+   "step": "14",
+   "mutation": "stored page level overrides the governing default",
+   "expectedText": "verified, source `stored`",
+   "expected": [],
+   "other_tokens": [
+    "stored"
+   ],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-082",
+   "step": "14",
+   "mutation": "non-governing book without a stored level",
+   "expectedText": "`authority_level_unproven{level_below_required_at_N}`",
+   "expected": [
+    {
+     "code": "contract_identity_unproven",
+     "reason": "authority_level_unproven",
+     "fields": "level_below_required_at_N"
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-083",
+   "step": "14",
+   "mutation": "non-governing book with a stored level >= required",
+   "expectedText": "verified, source `stored`",
+   "expected": [],
+   "other_tokens": [
+    "stored"
+   ],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-084",
+   "step": "14",
+   "mutation": "`_operationRequirements[selector]` above the level; value >= 10 ether with an OPERATOR page",
+   "expectedText": "`authority_level_unproven{level_below_required_at_N}`",
+   "expected": [
+    {
+     "code": "contract_identity_unproven",
+     "reason": "authority_level_unproven",
+     "fields": "level_below_required_at_N"
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-085",
+   "step": "14",
+   "mutation": "a leg whose target is the account itself; a batch with one failing leg",
+   "expectedText": "`authority_level_unproven{self_call_leg}`; `{level_below_required_at_N,leg}`",
+   "expected": [
+    {
+     "code": "contract_identity_unproven",
+     "reason": "authority_level_unproven",
+     "fields": "self_call_leg"
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-086",
+   "step": "14",
+   "mutation": "calldata undecodable (offset out of range, non-zero upper bits of `authorityPage`); 65 legs",
+   "expectedText": "`authority_level_unproven{calldata_undecodable}`; `{too_many_legs}`",
+   "expected": [
+    {
+     "code": "contract_identity_unproven",
+     "reason": "authority_level_unproven",
+     "fields": "calldata_undecodable"
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-087",
+   "step": "14",
+   "mutation": "stored `_pageLevel` value 5; `bytes4` key encoded left-padded (proof for the wrong slot)",
+   "expectedText": "`authority_level_invalid{page_level,5}`; `proof_invalid`",
+   "expected": [
+    {
+     "code": "contract_identity_authority_level_invalid",
+     "reason": null,
+     "fields": "page_level,5"
+    },
+    {
+     "code": "contract_identity_proof_invalid",
+     "reason": null,
+     "fields": null
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-088",
+   "step": "14",
+   "mutation": "the page-level words rewritten by a LATER transaction of block N, so the recomputed level differs from the logged one; the same by a later self-call leg of the same transaction",
+   "expectedText": "`authority_level_unproven{level_differs_from_logged,logged,computed}` (U, never R)",
+   "expected": [
+    {
+     "code": "contract_identity_unproven",
+     "reason": "authority_level_unproven",
+     "fields": "level_differs_from_logged,logged,computed"
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-089",
+   "step": "14",
+   "mutation": "single selector with no `GovernanceOperationExecuted` of the account in the receipt; a batch with `len` legs but `len-1` per-leg logs, or `callCount != len`, or two different logged levels, or a logged level above 4",
+   "expectedText": "`authority_level_unproven{level_log_missing}`",
+   "expected": [
+    {
+     "code": "contract_identity_unproven",
+     "reason": "authority_level_unproven",
+     "fields": "level_log_missing"
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-100",
+   "step": "15",
+   "mutation": "`attest` part `Stated` (each reason)",
+   "expectedText": "`authorization_attest` U with the carried reason + `intra_block_window{attest_absent}`; never above `unproven`",
+   "expected": [
+    {
+     "code": "contract_identity_unproven",
+     "reason": null,
+     "fields": null
+    }
+   ],
+   "other_tokens": [
+    "authorization_attest",
+    "intra_block_window"
+   ],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-101",
+   "step": "16",
+   "mutation": "link 0 with `txIndex >= Tx.index`; link 1 or 2 with `B_v >= N`",
+   "expectedText": "`attest_mismatch{order}`",
+   "expected": [
+    {
+     "code": "contract_identity_attest_mismatch",
+     "reason": null,
+     "fields": "order"
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-102",
+   "step": "16",
+   "mutation": "gap exactly W passes; W+1 without a hop; one hop across a Base-sized gap (8,600-15,000 blocks)",
+   "expectedText": "verifies; `attest_block_out_of_reach{gap,window,hops_carried,last_hop}`; verifies",
+   "expected": [
+    {
+     "code": "contract_identity_unproven",
+     "reason": "attest_block_out_of_reach",
+     "fields": "gap,window,hops_carried,last_hop"
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-103",
+   "step": "16",
+   "mutation": "hop headers out of order or duplicated; hop slot holds another block's hash; 2935 code != pin; 8191 applied on Arbitrum, 393168 on Sepolia",
+   "expectedText": "`header_unlinked{hops,gap_out_of_range or numbers_not_consecutive}`; `{slot_mismatch}`; `{history_code_mismatch}`; `{slot_mismatch}`",
+   "expected": [
+    {
+     "code": "contract_identity_header_unlinked",
+     "reason": null,
+     "fields": "hops,gap_out_of_range or numbers_not_consecutive"
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-104",
+   "step": "16",
+   "mutation": "spine broken, reordered, too long; `headerVParent` not the parent",
+   "expectedText": "`header_unlinked{spine,hash_chain_broken}`; `{parent_mismatch}`",
+   "expected": [
+    {
+     "code": "contract_identity_header_unlinked",
+     "reason": null,
+     "fields": "spine,hash_chain_broken"
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-110",
+   "step": "17",
+   "mutation": "tx of another transaction; receipt without `ProofExecuted`; status 0",
+   "expectedText": "`attest_mismatch{tx_to/log/status}`",
+   "expected": [
+    {
+     "code": "contract_identity_attest_mismatch",
+     "reason": null,
+     "fields": "tx_to/log/status"
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-111",
+   "step": "17",
+   "mutation": "`tx.to` a wrapper; type-3 tx",
+   "expectedText": "`attest_indirect_call`; `attest_tx_type_unsupported{type}`",
+   "expected": [
+    {
+     "code": "contract_identity_unproven",
+     "reason": "attest_indirect_call",
+     "fields": null
+    },
+    {
+     "code": "contract_identity_unproven",
+     "reason": "attest_tx_type_unsupported",
+     "fields": "type"
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-112",
+   "step": "17",
+   "mutation": "blob shorter than 576 B; word 12 != M; `pkc` zero",
+   "expectedText": "`attest_mismatch{blob_layout}`",
+   "expected": [
+    {
+     "code": "contract_identity_attest_mismatch",
+     "reason": null,
+     "fields": "blob_layout"
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-113",
+   "step": "17",
+   "mutation": "`anchorId` in calldata != log topic1",
+   "expectedText": "`attest_mismatch{anchor_id}`",
+   "expected": [
+    {
+     "code": "contract_identity_attest_mismatch",
+     "reason": null,
+     "fields": "anchor_id"
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-120",
+   "step": "18",
+   "mutation": "each AUTH word of rows A01-A21, V01-V03, C01 differs pre vs post (one vector per row)",
+   "expectedText": "`state_changed_in_block{field:<row id>}`",
+   "expected": [
+    {
+     "code": "contract_identity_unproven",
+     "reason": "state_changed_in_block",
+     "fields": "field:<row id>"
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-121",
+   "step": "18",
+   "mutation": "`usedCommitments` already 1 at pre; `proofExecuted` already 1 at pre; B_v chosen without the flip",
+   "expectedText": "`attest_mismatch{flip}`",
+   "expected": [
+    {
+     "code": "contract_identity_attest_mismatch",
+     "reason": null,
+     "fields": "flip"
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-122",
+   "step": "18",
+   "mutation": "b22 0 to 1 post (passes, reported); b22 already 1 at pre; bytes 24-31 non-zero; validator bytes differ; `governanceLevel` post != decoded level; the other 12 words altered",
+   "expectedText": "passes; `attest_mismatch{flip}`; per byte rule",
+   "expected": [
+    {
+     "code": "contract_identity_attest_mismatch",
+     "reason": null,
+     "fields": "flip"
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-123",
+   "step": "18",
+   "mutation": "`b23` pre = 1 [n3]",
+   "expectedText": "`attest_mismatch{flip}`",
+   "expected": [
+    {
+     "code": "contract_identity_attest_mismatch",
+     "reason": null,
+     "fields": "flip"
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-124",
+   "step": "18",
+   "mutation": "record not valid at pre (created in B_v) [n1]",
+   "expectedText": "`unproven record_created_in_block{block}`",
+   "expected": [],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-125",
+   "step": "18b",
+   "mutation": "recreated record (`proofExecuted` 0 at N)",
+   "expectedText": "`record_not_executed`",
+   "expected": [
+    {
+     "code": "contract_identity_record_not_executed",
+     "reason": null,
+     "fields": null
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-130",
+   "step": "19",
+   "mutation": "binding 0; thresholds changed (anchor 15/16, verifier 0/1); `enabled` 0; commitment not authorized; `pkc` changed in calldata",
+   "expectedText": "`authorization_mismatch{binding/threshold/verifier_threshold/enabled}`; `commitment_not_authorized`",
+   "expected": [
+    {
+     "code": "contract_identity_authorization_mismatch",
+     "reason": null,
+     "fields": "binding/threshold/verifier_threshold/enabled"
+    },
+    {
+     "code": "contract_identity_commitment_not_authorized",
+     "reason": null,
+     "fields": null
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-131",
+   "step": "19e",
+   "mutation": "set root != recomputed from the registry",
+   "expectedText": "`authorization_mismatch{set_root}`",
+   "expected": [
+    {
+     "code": "contract_identity_authorization_mismatch",
+     "reason": null,
+     "fields": "set_root"
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-132",
+   "step": "19f",
+   "mutation": "total 10 at 2/3: outer.signed 6 passes f1, inner 6 fails f2, inner 7 passes; total 9: signed 6 passes both; verifier overflow guard; `inner != outer`; `outer.signed != Σ listed`; duplicate validator",
+   "expectedText": "per rule; `alert inner_outer_differ`",
+   "expected": [],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-133",
+   "step": "19h",
+   "mutation": "`_paused` 1 at pre and post [S2-3]",
+   "expectedText": "`authorization_mismatch{paused}`",
+   "expected": [
+    {
+     "code": "contract_identity_authorization_mismatch",
+     "reason": null,
+     "fields": "paused"
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-134",
+   "step": "19h",
+   "mutation": "`governanceVerifier` != 0 [S2-3]",
+   "expectedText": "`governance_verifier_unpinned{address,at}`",
+   "expected": [
+    {
+     "code": "contract_identity_unproven",
+     "reason": "governance_verifier_unpinned",
+     "fields": "address,at"
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-135",
+   "step": "19h",
+   "mutation": "`minimumGovernanceLevel` 0; decoded `authorityLevel` < `minimumGovernanceLevel` [S2-3]",
+   "expectedText": "`authorization_mismatch{minimum_governance_level}`; `attest_mismatch{authority_level}`",
+   "expected": [
+    {
+     "code": "contract_identity_authorization_mismatch",
+     "reason": null,
+     "fields": "minimum_governance_level"
+    },
+    {
+     "code": "contract_identity_attest_mismatch",
+     "reason": null,
+     "fields": "authority_level"
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-136",
+   "step": "19",
+   "mutation": "binding 1 to 0 in B_v AFTER the attestation (pre compliant, post violating)",
+   "expectedText": "`state_changed_in_block{field:A08}` (U), never `authorization_mismatch`",
+   "expected": [
+    {
+     "code": "contract_identity_unproven",
+     "reason": "state_changed_in_block",
+     "fields": "field:A08"
+    },
+    {
+     "code": "contract_identity_authorization_mismatch",
+     "reason": null,
+     "fields": null
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-137",
+   "step": "19",
+   "mutation": "binding 0 to 1 in B_v BEFORE the attestation (pre violating, post compliant); same for `_paused` 1 to 0",
+   "expectedText": "`state_changed_in_block` (U)",
+   "expected": [
+    {
+     "code": "contract_identity_unproven",
+     "reason": "state_changed_in_block",
+     "fields": null
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-138",
+   "step": "19",
+   "mutation": "binding 0 at pre and at post, but the owner toggled it 1 and back to 0 inside B_v (owner nonce differs)",
+   "expectedText": "`owner_active_in_block` (U) on `intra_block_window` and on `authorization_attest`, never `authorization_mismatch`",
+   "expected": [
+    {
+     "code": "contract_identity_unproven",
+     "reason": "owner_active_in_block",
+     "fields": null
+    },
+    {
+     "code": "contract_identity_authorization_mismatch",
+     "reason": null,
+     "fields": null
+    }
+   ],
+   "other_tokens": [
+    "intra_block_window",
+    "authorization_attest"
+   ],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-139",
+   "step": "19",
+   "mutation": "binding 0 at pre and post, owner untouched, rule IB `verified`; the same with IB `U` for `tx_type_unsupported`",
+   "expectedText": "`authorization_mismatch{binding}` (R); `tx_type_unsupported` (U)",
+   "expected": [
+    {
+     "code": "contract_identity_authorization_mismatch",
+     "reason": null,
+     "fields": "binding"
+    },
+    {
+     "code": "contract_identity_unproven",
+     "reason": "tx_type_unsupported",
+     "fields": null
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-140",
+   "step": "20",
+   "mutation": "set-root component of the signed message altered",
+   "expectedText": "`attest_mismatch{message_hash}`",
+   "expected": [
+    {
+     "code": "contract_identity_attest_mismatch",
+     "reason": null,
+     "fields": "message_hash"
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-150",
+   "step": "21b",
+   "mutation": "anchor owner in no row; a row not yet valid at B_v; verifier owner differs",
+   "expectedText": "`authorization_mismatch{anchor_owner/verifier_owner}`",
+   "expected": [
+    {
+     "code": "contract_identity_authorization_mismatch",
+     "reason": null,
+     "fields": "anchor_owner/verifier_owner"
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-151",
+   "step": "21c",
+   "mutation": "`Registry9`: one key byte differs; an extra / missing validator; a power differs; threshold or set root differs",
+   "expectedText": "`registry_mismatch{field}`",
+   "expected": [
+    {
+     "code": "contract_identity_registry_mismatch",
+     "reason": null,
+     "fields": "field"
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-152",
+   "step": "21c",
+   "mutation": "a key rotated between B_v and N",
+   "expectedText": "`drift`; headline `verified_core`",
+   "expected": [
+    {
+     "code": "contract_identity_drift",
+     "reason": null,
+     "fields": null
+    },
+    {
+     "code": "contract_identity_verified_core",
+     "reason": null,
+     "fields": null
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-153",
+   "step": "21c",
+   "mutation": "no `Registry9`, no row",
+   "expectedText": "`verified_core{open:[not_checked registry_link no_registry_in_file]}`",
+   "expected": [
+    {
+     "code": "contract_identity_verified_core",
+     "reason": null,
+     "fields": "open:[not_checked registry_link no_registry_in_file]"
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-154",
+   "step": "21c",
+   "mutation": "honest `setRootHistory` row (keysDigest, pkcCount, pkcList)",
+   "expectedText": "`registry_link: via manifest_history{keys:digest,pkc:exact_set}`; headline `verified`",
+   "expected": [
+    {
+     "code": "contract_identity_verified",
+     "reason": null,
+     "fields": null
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-155",
+   "step": "21c",
+   "mutation": "owner swaps one BLS key, root unchanged [S2-1]",
+   "expectedText": "`not_checked{registry_keys,keys_digest_mismatch}`; never `verified`",
+   "expected": [
+    {
+     "code": "contract_identity_not_checked",
+     "reason": null,
+     "fields": "registry_keys,keys_digest_mismatch"
+    },
+    {
+     "code": "contract_identity_verified",
+     "reason": null,
+     "fields": null
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-156",
+   "step": "21c",
+   "mutation": "owner authorizes one extra pkc (count + 1) [S2-1]",
+   "expectedText": "`not_checked{registry_keys,pkc_count_mismatch}`",
+   "expected": [
+    {
+     "code": "contract_identity_not_checked",
+     "reason": null,
+     "fields": "registry_keys,pkc_count_mismatch"
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-157",
+   "step": "21c",
+   "mutation": "owner replaces one authorized pkc (count equal) [S2-1]",
+   "expectedText": "`not_checked{registry_keys,pkc_set_mismatch{entry}}`",
+   "expected": [
+    {
+     "code": "contract_identity_not_checked",
+     "reason": null,
+     "fields": "registry_keys,pkc_set_mismatch{entry}"
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-158",
+   "step": "21c",
+   "mutation": "row without `keysDigest` / `pkcCount` / `pkcList`; `keysDigest` computed in another address order; threshold differs",
+   "expectedText": "`row_without_keys_digest` / `row_without_pkc_count` / `pkc_list_absent`; `keys_digest_mismatch`; `threshold_mismatch`",
+   "expected": [
+    {
+     "code": "contract_identity_not_checked",
+     "reason": "row_without_keys_digest",
+     "fields": null
+    },
+    {
+     "code": "contract_identity_not_checked",
+     "reason": "row_without_pkc_count",
+     "fields": null
+    },
+    {
+     "code": "contract_identity_not_checked",
+     "reason": "pkc_list_absent",
+     "fields": null
+    },
+    {
+     "code": "contract_identity_not_checked",
+     "reason": "keys_digest_mismatch",
+     "fields": null
+    },
+    {
+     "code": "contract_identity_not_checked",
+     "reason": "threshold_mismatch",
+     "fields": null
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-159",
+   "step": "21c",
+   "mutation": "`pkcList` unsorted or with a duplicate; 257 entries",
+   "expectedText": "`pkc_list_malformed{index}`; `pkc_list_too_large{count,limit}`",
+   "expected": [
+    {
+     "code": "contract_identity_not_checked",
+     "reason": "pkc_list_malformed",
+     "fields": "index"
+    },
+    {
+     "code": "contract_identity_not_checked",
+     "reason": "pkc_list_too_large",
+     "fields": "count,limit"
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-160",
+   "step": "21d",
+   "mutation": "`SignerCommitment` != `pkc`",
+   "expectedText": "`pkc_mismatch{s9,onchain}`",
+   "expected": [
+    {
+     "code": "contract_identity_pkc_mismatch",
+     "reason": null,
+     "fields": "s9,onchain"
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-161",
+   "step": "21d",
+   "mutation": "`Registry9` present, `SignerCommitment` zero [S2-2]",
+   "expectedText": "`verified_core{open:[pkc_signer_check]}`",
+   "expected": [
+    {
+     "code": "contract_identity_verified_core",
+     "reason": null,
+     "fields": "open:[pkc_signer_check]"
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-162",
+   "step": "21a",
+   "mutation": "registry object complete and equal pre / post; key compare insensitive to case and `0x`; `expected_subset_count` 29 for n = 7, equal powers, 2/3",
+   "expectedText": "passes; 29",
+   "expected": [],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-170",
+   "step": "22",
+   "mutation": "honest block, owner untouched",
+   "expectedText": "`intra_block_window` verified",
+   "expected": [],
+   "other_tokens": [
+    "intra_block_window"
+   ],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-171",
+   "step": "22",
+   "mutation": "owner has code at pre or post; owner nonce differs; the owner itself sent the attestation",
+   "expectedText": "`owner_not_eoa`; `owner_active_in_block`; `owner_active_in_block` (unproven, not refused)",
+   "expected": [
+    {
+     "code": "contract_identity_unproven",
+     "reason": "owner_not_eoa",
+     "fields": null
+    },
+    {
+     "code": "contract_identity_unproven",
+     "reason": "owner_active_in_block",
+     "fields": null
+    },
+    {
+     "code": "contract_identity_unproven",
+     "reason": "owner_active_in_block",
+     "fields": null
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-172",
+   "step": "22",
+   "mutation": "owner sends `setBLSZKVerificationEnabled(false)` before and `(true)` after the attestation (negative control `NaivePrePost` accepts)",
+   "expectedText": "`owner_active_in_block`",
+   "expected": [
+    {
+     "code": "contract_identity_unproven",
+     "reason": "owner_active_in_block",
+     "fields": null
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-173",
+   "step": "22",
+   "mutation": "EIP-7702 delegation set and cleared inside B_v; a persistent `setThreshold`",
+   "expectedText": "`owner_active_in_block`; `state_changed_in_block`",
+   "expected": [
+    {
+     "code": "contract_identity_unproven",
+     "reason": "owner_active_in_block",
+     "fields": null
+    },
+    {
+     "code": "contract_identity_unproven",
+     "reason": "state_changed_in_block",
+     "fields": null
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-174",
+   "step": "22",
+   "mutation": "`blockTxs` whose rebuilt root != `transactionsRoot`; `blockTxs[txIndex]` != `txLeaf`",
+   "expectedText": "`attest_mismatch{block_txs}`",
+   "expected": [
+    {
+     "code": "contract_identity_attest_mismatch",
+     "reason": null,
+     "fields": "block_txs"
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-175",
+   "step": "22",
+   "mutation": "each row of the table \"Transaction types per chain\" in a synthetic block, per chain: every `covered` / `system` type of the chain's `txScan` (Arbitrum `0x0 0x2 0x4 0x65 0x66 0x68` covered, `0x64 0x69 0x6a` system)",
+   "expectedText": "passes (no `tx_type_unsupported`)",
+   "expected": [
+    {
+     "code": "contract_identity_unproven",
+     "reason": "tx_type_unsupported",
+     "fields": null
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-176",
+   "step": "22",
+   "mutation": "attest part `Stated{block_too_large}`",
+   "expectedText": "`block_too_large{bytes,limit}`",
+   "expected": [
+    {
+     "code": "contract_identity_unproven",
+     "reason": "block_too_large",
+     "fields": "bytes,limit"
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-177",
+   "step": "22",
+   "mutation": "anchor or verifier build row without `authWriters`, with `status` != `pass`, or with an `authWriterAllowList` wider than the verifier's frozen allow-list",
+   "expectedText": "`build_without_writer_proof{condition: status_missing / allowlist_not_frozen / a-f}`",
+   "expected": [
+    {
+     "code": "contract_identity_unproven",
+     "reason": "build_without_writer_proof",
+     "fields": "condition: status_missing / allowlist_not_frozen / a-f"
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-178",
+   "step": "22",
+   "mutation": "a block of the chain containing a type that is NOT in the chain's lists: `0x05` on every chain; Arbitrum `0x1`, `0x78`; Base Sepolia `0x1`, `0x3`; Adiri `0x1`, `0x3`, `0x4`",
+   "expectedText": "`tx_type_unsupported{type,index}` (`U intra_block_window`), one vector per (chain, type)",
+   "expected": [
+    {
+     "code": "contract_identity_unproven",
+     "reason": "tx_type_unsupported",
+     "fields": "type,index"
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-179",
+   "step": "22",
+   "mutation": "manifest build: a `txScan` row that lists a type without `evidence.source` or without `evidence.observation`; an observation whose `nonceAfter` does not exceed `nonceBefore` (covered) or differs from `nonceBefore` (system)",
+   "expectedText": "the manifest build fails (generator and `--onchain` check)",
+   "expected": [],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-180",
+   "step": "23",
+   "mutation": "all core parts verified plus one `alert`; plus one `drift`; plus both",
+   "expectedText": "`verified_core{open}`",
+   "expected": [
+    {
+     "code": "contract_identity_verified_core",
+     "reason": null,
+     "fields": "open"
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-181",
+   "step": "23",
+   "mutation": "each `Stated` part and each Open entry tried against \"raises status\"",
+   "expectedText": "never above its class",
+   "expected": [],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-182",
+   "step": "23",
+   "mutation": "a judgement R with the state root authenticated; the same R with it not authenticated [n2]",
+   "expectedText": "headline `refused`; headline `pending` with `findings`",
+   "expected": [
+    {
+     "code": "contract_identity_refused",
+     "reason": null,
+     "fields": null
+    },
+    {
+     "code": "contract_identity_pending",
+     "reason": null,
+     "fields": null
+    }
+   ],
+   "other_tokens": [
+    "findings"
+   ],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-183",
+   "step": "23",
+   "mutation": "a framework R while not authenticated",
+   "expectedText": "headline `refused`",
+   "expected": [
+    {
+     "code": "contract_identity_refused",
+     "reason": null,
+     "fields": null
+    }
+   ],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-184",
+   "step": "23",
+   "mutation": "`rules_judged` / `rules_not_judged` in a verified, verified_core, pending, unproven and refused outcome [S2-3]",
+   "expectedText": "present and identical in content",
+   "expected": [],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-190",
+   "step": "24",
+   "mutation": "S7 `finalized` verified for another block; S7 `finalized` refused; chain not in the S7 table",
+   "expectedText": "`pending` with `s7_finalized_status`; `pending`; `unproven{part:all, reason:s7_chain_unsupported}` with `s7_finalized_status` set to the S7 refusal of `[S7]` R5",
+   "expected": [
+    {
+     "code": "contract_identity_pending",
+     "reason": null,
+     "fields": null
+    },
+    {
+     "code": "contract_identity_pending",
+     "reason": null,
+     "fields": null
+    },
+    {
+     "code": "contract_identity_unproven",
+     "reason": null,
+     "fields": "part:all, reason:s7_chain_unsupported"
+    }
+   ],
+   "other_tokens": [
+    "s7_finalized_status"
+   ],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-200",
+   "step": "M",
+   "mutation": "generator on a build with a non-owner writer of an AUTH word; an allow-listed function that writes one more MEMBER (`anchors[].valid`) or the whole record; a guard on another key, not first, or with a reassigned key parameter; a returned, conditional, reassigned or parameter storage pointer; `delegatecall`; assembly `sstore`; a changed `onlyOwner` body; a new state variable on the attestation read path; an exempt variable assigned a non-literal; `owner` written elsewhere",
+   "expectedText": "the manifest build fails with the stated condition (`design/vectors/s8/negctl/negctl.mjs`: the honest contract passes and the 16 seeded defects each fail exactly the stated one, M32)",
+   "expected": [],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-201",
+   "step": "M",
+   "mutation": "README, generator and JSON array formulas agree (`address[]` and `bytes32[]` one per slot, `uint128[]` two per slot); two-level mapping slot of step 14 equals `SlotProbe.t.sol`",
+   "expectedText": "CI check passes",
+   "expected": [],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-210",
+   "step": "G",
+   "mutation": "G-S8-0, G-S8-1, G-S8-2 reproduce; the 12-case malformed corpus of `cie1.mjs`",
+   "expectedText": "identical bytes / codes in Go and TS",
+   "expected": [],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-220",
+   "step": "N",
+   "mutation": "`NaiveSettlementOnly` on the N-only hole (binding disabled at B_v, re-enabled before N)",
+   "expectedText": "naive accepts, S8 refuses",
+   "expected": [],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-230",
+   "step": "P",
+   "mutation": "every vector above run in Go and TS, `StateError` canonical JSON compared",
+   "expectedText": "identical verdicts on every row (stop-the-line on any difference)",
+   "expected": [],
+   "other_tokens": [],
+   "set": null,
+   "status": "spec_only"
+  }
+ ]
+}
