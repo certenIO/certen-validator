@@ -295,7 +295,9 @@ func (b *Backfiller) attempt(ctx context.Context, n uint64, pol BackfillPolicy, 
 		delete(b.entries, n)
 		delete(b.reopen, n)
 		rep.Filled++
-		rep.FilledBlocks = append(rep.FilledBlocks, n)
+		if inbox {
+			rep.FilledBlocks = append(rep.FilledBlocks, n) // a block with no inbox transactions has no rows and nothing to digest
+		}
 		return
 	}
 	if ctx.Err() != nil {

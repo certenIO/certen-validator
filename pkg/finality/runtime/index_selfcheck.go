@@ -21,6 +21,7 @@ const (
 	IndexSelfCheckNotRunning = 2 // the index is switched off (or a bad setting switched it off): there is nothing to check
 	IndexSelfCheckIncomplete = 3 // some checks were skipped (the memory budget refused their rows): nothing was judged for those
 	IndexSelfCheckFailed     = 4 // the check could not run (the store failed)
+	IndexSelfCheckUsage      = 5 // the arguments are wrong: no check was started (never confused with a mismatch)
 )
 
 // IndexSelfChecker is the indexer as the on-demand caller sees it.

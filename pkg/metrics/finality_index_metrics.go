@@ -18,6 +18,7 @@
 //	certen_finality_index_step_seconds{chain,family}      wall time of one indexer step (histogram)
 //	certen_finality_index_selfcheck_skipped_total{chain,family}  self-checks not run because the memory budget refused the rows (never silent)
 //	certen_finality_index_unindexable_blocks_total{chain,family,reason}  captured blocks the indexer could not read (index_block_unindexable)
+//	certen_finality_index_notes_dropped_total{chain,family}  late-block notes dropped because the set of pending notes was full (the rotation still reaches the block)
 //	certen_finality_index_disabled{chain,family,key,reason}      1 while a bad setting has switched the index off (finality_index_disabled)
 //	certen_finality_capture_foreign_txs_total{chain}      batch-inbox transactions skipped because the batcher of their block did not send them (F19)
 //	certen_finality_capture_batcher_unestablished_total{chain}   blocks whose captured rows cannot establish the batcher (their frames are not filtered)
@@ -66,6 +67,10 @@ var (
 		Name: "certen_finality_index_unindexable_blocks_total",
 		Help: "Captured blocks the indexer could not read, recorded as index_block_unindexable by reason (a leg whose window holds one and whose channel is missing is told by name).",
 	}, []string{"chain", "family", "reason"})
+	finalityIndexNotesDropped = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "certen_finality_index_notes_dropped_total",
+		Help: "Late-block notes dropped because the set of pending notes was full; the rotating walk still reaches the block, later.",
+	}, []string{"chain", "family"})
 	finalityIndexSelfCheckSkipped = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "certen_finality_index_selfcheck_skipped_total",
 		Help: "Index self-checks not run because the memory budget refused the rows they read (a skipped check is counted, never silent).",
@@ -112,6 +117,7 @@ func registerFinalityIndexMetrics() {
 	prometheus.MustRegister(finalityIndexLookupBytes)
 	prometheus.MustRegister(finalityIndexStepSeconds)
 	prometheus.MustRegister(finalityIndexSelfCheckSkipped)
+	prometheus.MustRegister(finalityIndexNotesDropped)
 	prometheus.MustRegister(finalityIndexUnindexable)
 	prometheus.MustRegister(finalityIndexDisabled)
 	prometheus.MustRegister(finalityForeignTxs)
@@ -198,4 +204,9 @@ func IncFinalityBatcherUnestablished(chain uint64) {
 // IncFinalityIndexUnindexable counts a captured block recorded as unindexable.
 func IncFinalityIndexUnindexable(chain uint64, family, reason string) {
 	finalityIndexUnindexable.WithLabelValues(chainLabel(chain), family, reason).Inc()
+}
+
+// IncFinalityIndexNoteDropped counts a late-block note dropped because the set of pending notes was full.
+func IncFinalityIndexNoteDropped(chain uint64, family string) {
+	finalityIndexNotesDropped.WithLabelValues(chainLabel(chain), family).Inc()
 }

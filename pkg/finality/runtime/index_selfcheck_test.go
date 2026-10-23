@@ -50,3 +50,17 @@ func TestRTIndexSelfCheckOnDemandNamesItsResult(t *testing.T) {
 		})
 	}
 }
+
+// N2: every exit code has one meaning; a bad argument is never the code of a mismatch.
+func TestRTIndexSelfCheckExitCodesAreDistinct(t *testing.T) {
+	codes := map[int]string{}
+	for name, c := range map[string]int{"ok": IndexSelfCheckOK, "mismatch": IndexSelfCheckMismatch, "not running": IndexSelfCheckNotRunning, "incomplete": IndexSelfCheckIncomplete, "failed": IndexSelfCheckFailed, "usage": IndexSelfCheckUsage} {
+		if other, dup := codes[c]; dup {
+			t.Errorf("exit code %d means both %s and %s", c, other, name)
+		}
+		codes[c] = name
+	}
+	if IndexSelfCheckUsage != 5 {
+		t.Errorf("the usage code is pinned at 5, got %d", IndexSelfCheckUsage)
+	}
+}

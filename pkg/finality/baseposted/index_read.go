@@ -292,6 +292,9 @@ func (r *IndexReader) partialFrames(ctx context.Context, from, to uint64, covere
 		if err != nil {
 			return 0, r.inconsistent(finality.IndexEntryCorrupt, "item", k.Item, "l1_block", k.L1Block)
 		}
+		if d.Pins != pinsDigest(r.Pins) {
+			return 0, r.inconsistent(finality.IndexPinsChanged, "item", k.Item, "l1_block", k.L1Block)
+		}
 		for _, tx := range d.Txs {
 			for _, f := range tx.Frames {
 				if !covered[f.ID] {
@@ -310,7 +313,25 @@ func (r *IndexReader) unindexableIn(ctx context.Context, origin, end uint64) (*f
 	if err != nil || len(keys) == 0 {
 		return nil, err
 	}
-	k := keys[0]
+	// the record is insert-only and cannot be withdrawn, so a block that has a digest (written by a roll that can read it) is readable and
+	// its record is history: the lowest record WITHOUT a digest is the answer
+	var k finality.CaptureKey
+	found := false
+	for _, cand := range keys {
+		dk := cand
+		dk.Item = r.item(itemDigest)
+		_, has, err := r.Store.Get(ctx, dk)
+		if err != nil {
+			return nil, err
+		}
+		if !has {
+			k, found = cand, true
+			break
+		}
+	}
+	if !found {
+		return nil, nil
+	}
 	b, ok, err := r.Store.Get(ctx, k)
 	if err != nil {
 		return nil, err

@@ -38,13 +38,13 @@ func parseFinalityIndexSelfCheckArgs(args []string) (sample int, ok bool) {
 // runFinalityIndexSelfCheck is `validator finality-index-selfcheck [--sample N]` (RB12-INDEX-FIX D3): it recomputes N stored Base capture
 // index entries and N block digests from the captured rows by the reference path and compares bytes, under the process memory budget. It
 // prints one named result line and exits 0 (ok), 1 (a mismatch: the channel is quarantined by name for every validator), 2 (the index is off),
-// 3 (some checks were skipped: incomplete) or 4 (the check could not run). It reads the capture table and writes only the quarantine record of
+// 3 (some checks were skipped: incomplete), 4 (the check could not run) or 5 (the arguments are wrong: usage, nothing was started). It reads the capture table and writes only the quarantine record of
 // a mismatched entry (insert-only); it needs the database settings of the validator and nothing else.
 func runFinalityIndexSelfCheck(args []string, out, errw io.Writer) int {
 	sample, ok := parseFinalityIndexSelfCheckArgs(args)
 	if !ok {
 		fmt.Fprintln(errw, finalityIndexSelfCheckUsage)
-		return 1
+		return finruntime.IndexSelfCheckUsage
 	}
 	fcfg, err := finruntime.ConfigFromEnv()
 	if err != nil {

@@ -9,7 +9,7 @@ import (
 )
 
 // RB12-INDEX-FIX D3: `validator finality-index-selfcheck [--sample N]` reads its arguments strictly (a sample outside 1..1024, a stray word or
-// a missing value is the usage text and exit 1, before anything is opened).
+// a missing value is the usage text and exit 5, before anything is opened).
 func TestFinalityIndexSelfCheckArguments(t *testing.T) {
 	for _, c := range []struct {
 		args   []string
@@ -31,7 +31,7 @@ func TestFinalityIndexSelfCheckArguments(t *testing.T) {
 		}
 	}
 	var out, errw bytes.Buffer
-	if code := runFinalityIndexSelfCheck([]string{"--sample", "0"}, &out, &errw); code != 1 || !strings.Contains(errw.String(), "usage: certen-validator finality-index-selfcheck") {
-		t.Fatalf("a bad argument is the usage and exit 1: %d %q", code, errw.String())
+	if code := runFinalityIndexSelfCheck([]string{"--sample", "0"}, &out, &errw); code != 5 || !strings.Contains(errw.String(), "usage: certen-validator finality-index-selfcheck") {
+		t.Fatalf("a bad argument is the usage and its own exit code 5 (1 is a mismatch): %d %q", code, errw.String())
 	}
 }

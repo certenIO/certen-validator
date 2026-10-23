@@ -105,6 +105,7 @@ type Indexer struct {
 	hintMu       sync.Mutex
 	selfRes      SelfCheckResult // what the last SelfCheck did (SelfCheckReport)
 	hints        map[uint64]bool // blocks noted as captured late (NoteLate)
+	dropLogged   bool            // the first dropped note has been logged
 }
 
 var _ finality.CaptureIndexer = (*Indexer)(nil)
@@ -193,6 +194,11 @@ func (ix *Indexer) loadDigests(ctx context.Context, tbl *frameTable, from, to ui
 			ix.state(s)
 			return n, s
 		}
+		if d.Pins != pinsDigest(ix.Pins) {
+			s := finality.IndexInconsistent(uint64(Chain), FamilyBaseInbox, finality.IndexPinsChanged, "item", k.Item, "l1_block", k.L1Block)
+			ix.state(s)
+			return n, s
+		}
 		tbl.add(uint64(Chain), d)
 		n++
 	}
@@ -228,6 +234,7 @@ func (ix *Indexer) digestBlock(ctx context.Context, bk finality.CaptureKey, rep 
 		rep.BytesRead += t.read
 	}
 	d := digestOf(bk, txs)
+	d.Pins = pinsDigest(ix.Pins)
 	dk := bk
 	dk.Item = ix.item(itemDigest)
 	if err := finality.IndexPut(ctx, ix.Store, FamilyBaseInbox, dk, d.encode()); err != nil {
@@ -258,6 +265,11 @@ func (ix *Indexer) getOrMakeDigest(ctx context.Context, bk finality.CaptureKey, 
 		d, err := decodeDigest(bk, b)
 		if err != nil {
 			s := finality.IndexInconsistent(uint64(Chain), FamilyBaseInbox, finality.IndexEntryCorrupt, "item", dk.Item, "l1_block", bk.L1Block)
+			ix.state(s)
+			return nil, false, s
+		}
+		if d.Pins != pinsDigest(ix.Pins) {
+			s := finality.IndexInconsistent(uint64(Chain), FamilyBaseInbox, finality.IndexPinsChanged, "item", dk.Item, "l1_block", bk.L1Block)
 			ix.state(s)
 			return nil, false, s
 		}
@@ -470,13 +482,16 @@ func (ix *Indexer) Step(ctx context.Context, upTo uint64) (rep finality.StepRepo
 		}
 		rep.Through = ix.cursor
 	}
+	lateDone := 0 // heights of late work this step has done: the free pass of the first height is spent once, by whichever comes first
 	if ix.haveCursor && rep.StoppedByCap == "" {
-		if err := ix.reconcileHints(ctx, &rep, deadline); err != nil && !memoryRefusal(err) {
+		n, err := ix.reconcileHints(ctx, &rep, deadline)
+		if err != nil && !memoryRefusal(err) {
 			return rep, err
 		}
+		lateDone = n
 	}
 	if ix.haveCursor && (ix.steps-1)%ix.Cfg.every() == 0 && rep.StoppedByCap == "" {
-		if err := ix.reconcile(ctx, &rep, deadline); err != nil && !memoryRefusal(err) {
+		if err := ix.reconcile(ctx, &rep, deadline, lateDone); err != nil && !memoryRefusal(err) {
 			return rep, err
 		}
 	}
@@ -576,7 +591,7 @@ func (ix *Indexer) evalGroup(ctx context.Context, tbl *frameTable, ds []*blockDi
 // reconcile walks one chunk of the whole captured range, finds captured blocks that have no digest (they arrived after the cursor passed
 // them: a retried capture, a block captured by another validator, a hole filled later) and indexes them: the digest, then the channels
 // they touch re-evaluated over the stored digests within the sequencing window either side.
-func (ix *Indexer) reconcile(ctx context.Context, rep *finality.StepReport, deadline time.Time) error {
+func (ix *Indexer) reconcile(ctx context.Context, rep *finality.StepReport, deadline time.Time, done int) error {
 	lo, _, ok, err := finality.BlockBoundsOf(ctx, ix.Store, uint64(Chain), ItemSysCfg)
 	if err != nil || !ok {
 		return err
@@ -589,9 +604,11 @@ func (ix *Indexer) reconcile(ctx context.Context, rep *finality.StepReport, dead
 		rf = ix.cursor + 1 - recent
 	}
 	if rf <= ix.cursor {
-		if _, err := ix.reconcileRange(ctx, rep, deadline, rf, ix.cursor); err != nil {
+		_, g, err := ix.reconcileRange(ctx, rep, deadline, rf, ix.cursor, done)
+		if err != nil {
 			return err
 		}
+		done += g
 	}
 	if ix.reconcilePos < lo || ix.reconcilePos > ix.cursor {
 		ix.reconcilePos = lo
@@ -604,7 +621,7 @@ func (ix *Indexer) reconcile(ctx context.Context, rep *finality.StepReport, dead
 	if from > to {
 		return nil
 	}
-	next, err := ix.reconcileRange(ctx, rep, deadline, from, to)
+	next, _, err := ix.reconcileRange(ctx, rep, deadline, from, to, done)
 	if err != nil {
 		return err
 	}
@@ -615,18 +632,30 @@ func (ix *Indexer) reconcile(ctx context.Context, rep *finality.StepReport, dead
 // reconcileRange indexes the captured blocks of [from, to] that have no digest (and are not recorded as unindexable) and the channels they
 // touch. It returns the block it stopped at (to+1 when it covered the range); at the end of a fully covered range it repairs the entries
 // that close in it.
-func (ix *Indexer) reconcileRange(ctx context.Context, rep *finality.StepReport, deadline time.Time, from, to uint64) (uint64, error) {
+func (ix *Indexer) reconcileRange(ctx context.Context, rep *finality.StepReport, deadline time.Time, from, to uint64, done int) (uint64, int, error) {
+	next, groups, err := ix.reconcileBlocks(ctx, rep, deadline, from, to, done)
+	if err != nil || next <= to {
+		return next, groups, err // the range ended early (limits); the repair waits for a round that covers its range
+	}
+	return next, groups, ix.repairEntries(ctx, from, to, rep)
+}
+
+// reconcileBlocks is reconcileRange without the repair: it digests the blocks of [from, to] that have no digest and evaluates the channels they
+// touch. done is the number of heights the step has already worked on (the first height of a step is free, the rest obey the limits); it
+// returns the block it stopped at (to+1 when it covered the range) and the heights it worked on.
+func (ix *Indexer) reconcileBlocks(ctx context.Context, rep *finality.StepReport, deadline time.Time, from, to uint64, done int) (uint64, int, error) {
+	groups := done
 	sys, err := finality.CaptureKeysOfItemIn(ctx, ix.Store, uint64(Chain), from, to, ItemSysCfg)
 	if err != nil {
-		return from, err
+		return from, groups - done, err
 	}
 	have, err := finality.CaptureKeysOfItemIn(ctx, ix.Store, uint64(Chain), from, to, ix.item(itemDigest))
 	if err != nil {
-		return from, err
+		return from, groups - done, err
 	}
 	unread, err := finality.CaptureKeysOfItemIn(ctx, ix.Store, uint64(Chain), from, to, unindexableItem(ix.Gen))
 	if err != nil {
-		return from, err
+		return from, groups - done, err
 	}
 	digested := map[[40]byte]bool{}
 	for _, k := range have {
@@ -644,7 +673,6 @@ func (ix *Indexer) reconcileRange(ctx context.Context, rep *finality.StepReport,
 	var tmp *frameTable
 	var tmpLo, tmpHi uint64
 	next := to + 1
-	groups := 0
 	for i := 0; i < len(missing); groups++ {
 		j := i
 		for j < len(missing) && missing[j].L1Block == missing[i].L1Block {
@@ -662,7 +690,7 @@ func (ix *Indexer) reconcileRange(ctx context.Context, rep *finality.StepReport,
 				next = group[0].L1Block
 				break
 			}
-			return from, err
+			return from, groups - done, err
 		}
 		rep.Late += len(group)
 		metrics.AddFinalityIndexWritten(uint64(Chain), FamilyBaseInbox, 0, 0, len(group))
@@ -676,7 +704,7 @@ func (ix *Indexer) reconcileRange(ctx context.Context, rep *finality.StepReport,
 			}
 			tmpHi = h + 3*ix.window()
 			if _, err := ix.loadDigests(ctx, tmp, tmpLo, tmpHi); err != nil {
-				return from, err
+				return from, groups - done, err
 			}
 		}
 		for _, d := range ds {
@@ -690,13 +718,10 @@ func (ix *Indexer) reconcileRange(ctx context.Context, rep *finality.StepReport,
 				next = h
 				break
 			}
-			return from, err
+			return from, groups - done, err
 		}
 	}
-	if next <= to {
-		return next, nil // the round ended early (limits); the repair pass waits for a round that covers its range
-	}
-	return next, ix.repairEntries(ctx, from, to, rep)
+	return next, groups - done, nil
 }
 
 // repairEntries makes sure that every channel that closes in [from, to] and is complete over the stored digests has its entry: a crash between
@@ -916,7 +941,9 @@ func (ix *Indexer) referenceDigest(ctx context.Context, bk finality.CaptureKey) 
 			lts = append(lts, loadedTx{index: ct.index, blobs: ct.blobs, frames: ct.frames, isBlob: isBlobRaw(ct.raw)})
 		}
 	}
-	return digestOf(bk, lts).encode(), nil
+	ref := digestOf(bk, lts)
+	ref.Pins = pinsDigest(ix.Pins)
+	return ref.encode(), nil
 }
 
 // referenceEntry recomputes the stored bytes of one channel entry by the reference path: the window reader's loader over the blocks the
@@ -1012,16 +1039,25 @@ func (ix *Indexer) NoteLate(block uint64) {
 	if ix.hints == nil {
 		ix.hints = map[uint64]bool{}
 	}
-	if len(ix.hints) < maxHints {
-		ix.hints[block] = true
+	if _, noted := ix.hints[block]; !noted && len(ix.hints) >= maxHints {
+		// a note is a speed-up, the rotating walk still reaches the block: the drop is counted, and logged once
+		metrics.IncFinalityIndexNoteDropped(uint64(Chain), FamilyBaseInbox)
+		if !ix.dropLogged {
+			ix.dropLogged = true
+			ix.Cfg.logf("[FINALITY] index base-inbox: %d late-block notes are pending, further notes are dropped and counted (certen_finality_index_notes_dropped_total); the rotating walk reaches those blocks", maxHints)
+		}
+		return
 	}
+	ix.hints[block] = true
 }
 
 var _ finality.LateBlockNoter = (*Indexer)(nil)
 
-// reconcileHints indexes the noted blocks at or below the cursor, lowest first; a block above the cursor stays noted (the forward step takes it),
-// and one the step ran out of limits for stays noted too.
-func (ix *Indexer) reconcileHints(ctx context.Context, rep *finality.StepReport, deadline time.Time) error {
+// reconcileHints indexes the noted blocks at or below the cursor, lowest first, under the SAME limits as the rest of the step (BlocksPerStep,
+// StepBudget): a note the step runs out of limits for stays noted for the next step, a note for a block that holds no captured inbox row is
+// dropped at the cost of one key listing, and the entries that close near the processed blocks are repaired ONCE for the whole batch (not once
+// per note). A note above the cursor stays (the forward step takes the block). It returns the number of heights it worked on.
+func (ix *Indexer) reconcileHints(ctx context.Context, rep *finality.StepReport, deadline time.Time) (int, error) {
 	ix.hintMu.Lock()
 	var todo []uint64
 	for b := range ix.hints {
@@ -1031,19 +1067,50 @@ func (ix *Indexer) reconcileHints(ctx context.Context, rep *finality.StepReport,
 	}
 	ix.hintMu.Unlock()
 	sort.Slice(todo, func(i, j int) bool { return todo[i] < todo[j] })
-	for _, b := range todo {
-		next, err := ix.reconcileRange(ctx, rep, deadline, b, b)
-		if err != nil {
-			return err
-		}
-		if next <= b {
-			return nil // the limits of the step ended it; the note stays
-		}
+	drop := func(b uint64) {
 		ix.hintMu.Lock()
 		delete(ix.hints, b)
 		ix.hintMu.Unlock()
 	}
-	return nil
+	work := 0
+	var lo, hi uint64
+	for _, b := range todo {
+		if work > 0 && (ix.stopCause(ctx, work, rep.Late, deadline) != "" || work >= ix.Cfg.blocks()) {
+			break
+		}
+		keys, err := finality.CaptureKeysOfItemIn(ctx, ix.Store, uint64(Chain), b, b, ItemSysCfg)
+		if err != nil {
+			return work, err
+		}
+		if len(keys) == 0 {
+			drop(b) // not a captured block (no inbox transactions): nothing to index
+			continue
+		}
+		next, _, err := ix.reconcileBlocks(ctx, rep, deadline, b, b, work)
+		if err != nil {
+			if memoryRefusal(err) {
+				break
+			}
+			return work, err
+		}
+		if next <= b {
+			break // the limits of the step ended it; the note stays
+		}
+		drop(b)
+		if work == 0 || b < lo {
+			lo = b
+		}
+		if work == 0 || b > hi {
+			hi = b
+		}
+		work++
+	}
+	if work > 0 {
+		if err := ix.repairEntries(ctx, lo, hi, rep); err != nil && !memoryRefusal(err) {
+			return work, err
+		}
+	}
+	return work, nil
 }
 
 // SelfCheckResult is what one self-check did: the entries and digests it recomputed and compared, the checks it skipped because the memory

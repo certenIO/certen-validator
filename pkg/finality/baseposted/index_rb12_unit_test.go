@@ -187,11 +187,18 @@ func TestRB12IndexPinsDigestChangesWithEveryPinThatDecidesDecoding(t *testing.T)
 			t.Fatalf("%s does not change the digest", name)
 		}
 	}
-	// the pins that do not decide decoding do not change it
-	p := *bp
-	p.SeqWindowSize++
-	if pinsDigest(&p) != base {
-		t.Fatal("the sequencing window does not decide how a channel is decoded")
+	// the pins that decide which frames are the batcher's and which channels have an entry (RB12-INDEX-FIX): a roll of any of them is the named
+	// stale-pins state and a new generation, never a conflicting write or a silent change of coverage
+	for name, mut := range map[string]func(p Pins) Pins{
+		"sequencing window": func(p Pins) Pins { p.SeqWindowSize++; return p },
+		"l1 chain id":       func(p Pins) Pins { p.L1ChainID++; return p },
+		"system config":     func(p Pins) Pins { p.SystemConfig[0] ^= 1; return p },
+		"implementations":   func(p Pins) Pins { p.SystemConfigImplHashes = map[[32]byte]bool{{7}: true}; return p },
+	} {
+		p := mut(*bp)
+		if pinsDigest(&p) == base {
+			t.Fatalf("%s does not change the digest", name)
+		}
 	}
 }
 

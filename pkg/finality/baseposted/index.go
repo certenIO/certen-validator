@@ -44,7 +44,10 @@ const (
 )
 
 const (
-	digestVersion = 1
+	// digestVersion 2 carries the pins digest in the row (RB12-INDEX-FIX): the digest bytes depend on the SystemConfig, its implementation hashes
+	// and the L1 chain id (the batcher filter), so a digest written under other pins is the named stale-pins state, never a conflicting write.
+	// Nothing of version 1 has shipped, so generation 1 is unchanged.
+	digestVersion = 2
 	// entryVersion 2 adds the position of the first frame inside its transaction (FirstFrame), the last part of the order between channels
 	// (RB12-INDEX-FIX D5). Generation 1 is unchanged because no entry of version 1 has shipped.
 	entryVersion = 2
@@ -86,6 +89,7 @@ type digestTx struct {
 type blockDigest struct {
 	Block uint64
 	Hash  [32]byte
+	Pins  [8]byte
 	Txs   []digestTx
 }
 
@@ -97,6 +101,7 @@ func sumTrailer(body []byte) []byte {
 func (d *blockDigest) encode() []byte {
 	var w finality.Writer
 	w.U8(digestVersion)
+	w.Fixed(d.Pins[:])
 	w.Count(len(d.Txs))
 	for _, t := range d.Txs {
 		w.U32(t.Index)
@@ -139,6 +144,11 @@ func decodeDigest(k finality.CaptureKey, b []byte) (*blockDigest, error) {
 		return nil, fmt.Errorf("digest version %d", v)
 	}
 	d := &blockDigest{Block: k.L1Block, Hash: k.L1Hash}
+	p, err := r.Fixed("digest.pins", 8)
+	if err != nil {
+		return nil, err
+	}
+	copy(d.Pins[:], p)
 	n, err := r.Count("digest.txs", 1<<16, 13)
 	if err != nil {
 		return nil, err
@@ -359,7 +369,18 @@ func (c covRun) covers(t, step uint64) bool {
 
 // pinsDigest binds an index row to the pins that decide how a channel is decoded.
 func pinsDigest(bp *Pins) [8]byte {
-	s := sha256.Sum256([]byte(fmt.Sprintf("certen/baseposted-index/1|%d|%d|%d|%d", bp.ChainID, bp.L2GenesisTime, bp.L2BlockTime, bp.MaxRLPBytesPerChannel)))
+	// every pin the bytes of the digests and entries depend on: how a channel is decoded (chain, genesis, block time, size bound), which
+	// frames belong to the batcher (the L1 chain id of the signer, the SystemConfig and the implementations it may run) and which channels
+	// have an entry (the sequencing window)
+	impls := make([]string, 0, len(bp.SystemConfigImplHashes))
+	for h, ok := range bp.SystemConfigImplHashes {
+		if ok {
+			impls = append(impls, hex.EncodeToString(h[:]))
+		}
+	}
+	sort.Strings(impls)
+	s := sha256.Sum256([]byte(fmt.Sprintf("certen/baseposted-index/2|chain=%d|l1=%d|genesis=%d|blocktime=%d|maxrlp=%d|seqwin=%d|syscfg=%x|impls=%s",
+		bp.ChainID, bp.L1ChainID, bp.L2GenesisTime, bp.L2BlockTime, bp.MaxRLPBytesPerChannel, bp.SeqWindowSize, bp.SystemConfig, strings.Join(impls, ","))))
 	var out [8]byte
 	copy(out[:], s[:8])
 	return out
