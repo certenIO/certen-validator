@@ -46,6 +46,10 @@ type Settlement struct {
 	Subject
 	// Included is today's L6 evidence for the settlement: the block header and the transaction and receipt MPT proofs.
 	Included *ethproof.Settlement
+	// Unrecorded is set by a source whose proof row does not yet record the settlement (settlement_tx_hash or
+	// settlement_block_number is NULL): the evidence is served, and the check that it is for the recorded settlement could not
+	// be made. The upgrader counts and reports such legs; the writer records the settlement right after the bundle.
+	Unrecorded bool
 }
 
 // Block is the leg's BlockRef (header included when the L6 evidence is held).

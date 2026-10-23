@@ -16,20 +16,26 @@ import (
 	"github.com/certen/independant-validator/pkg/metrics"
 )
 
-// LegRef names a settled leg cheaply: its stored proof (one leg per proof_artifacts row) and the chain it settled on. The leg's
-// binding D0 is computed from its Settlement block, not carried here.
+// LegRef names a stored proof's leg cheaply: its stored proof (one leg per proof_artifacts row), the chain it settled on and the
+// newest bundle the source listed for it. The leg's binding D0 is computed from its Settlement block, not carried here.
 type LegRef struct {
 	ProofID string
 	Chain   uint64
+	// BundleID names the newest bundle of the proof at listing time ("" for a source that does not name bundles). LegSettlement
+	// reads exactly that bundle, and the upgrader remembers "this bundle holds no execution proof" against it, so a bundle that
+	// was examined is not fetched again until the proof has a newer one.
+	BundleID string
 }
 
 // LegSource lists the settled legs the worker upgrades and loads one leg's L6 evidence on demand.
 type LegSource interface {
 	// SettledLegs returns up to limit legs in the source's own order, continuing after the leg `after` (the proof id the previous
-	// page ended with; empty for the first page). The database source lists newest first, so a backlog of old legs does not stand in
-	// front of a new one. A source may leave out legs that are certainly complete (a finalized addendum exists).
+	// page ended with; empty for the first page). The database source lists every proof that has a bundle, newest first, so a
+	// backlog of old legs does not stand in front of a new one, and names each proof's newest bundle in LegRef.BundleID. A source
+	// may leave out legs that are certainly complete (a finalized addendum exists).
 	SettledLegs(ctx context.Context, after string, limit int) ([]LegRef, error)
-	// LegSettlement loads the leg's settlement with its L6 evidence (Settlement.Included). A leg whose L6 evidence cannot
+	// LegSettlement loads the leg's settlement with its L6 evidence (Settlement.Included) from the bundle LegRef.BundleID names (the
+	// newest when it is empty). A leg whose L6 evidence cannot
 	// be read is a Named state, not a zero value.
 	LegSettlement(ctx context.Context, ref LegRef) (Settlement, error)
 }
@@ -59,6 +65,16 @@ type Recorder interface {
 type StatusRecorder interface {
 	Status(chain uint64, target Level, state string)
 	StatusWriteFailed(chain uint64)
+}
+
+// GapRecorder is the optional half of a Recorder that reports the legs the upgrader holds back for want of evidence, so that
+// "quiet" is a number someone can alert on and not an absence.
+type GapRecorder interface {
+	// LegsWithoutSettlement is the number of legs of the chain whose newest bundle holds no execution proof (quiet, not failed).
+	LegsWithoutSettlement(chain uint64, n int)
+	// UnrecordedSettlements is the number of legs attempted in the last pass whose evidence was served while the proof row has
+	// no settlement_tx_hash or settlement_block_number yet.
+	UnrecordedSettlements(n int)
 }
 
 // MetricsRecorder reports to pkg/metrics (the series are listed in pkg/metrics/finality_metrics.go).
@@ -177,13 +193,18 @@ type Upgrader struct {
 	pins  *Pins
 	cfg   UpgraderConfig
 
-	mu       sync.Mutex
-	next     map[string]time.Time   // proof id -> earliest next attempt of any level
-	levelAt  map[levelKey]time.Time // (proof id, target level) -> earliest next ask of the provers for that level
-	disabled map[uint64]bool        // chains announced as switched off
-	complete map[string]Level       // proof id -> level it completed at (skipped from now on)
-	stand    map[string]legStand    // proof id -> where its chain stood at the last attempt, for the gauges
-	noProver map[uint64]bool        // chains already announced as having no registered prover
+	mu          sync.Mutex
+	next        map[string]time.Time   // proof id -> earliest next attempt of any level
+	levelAt     map[levelKey]time.Time // (proof id, target level) -> earliest next ask of the provers for that level
+	disabled    map[uint64]bool        // chains announced as switched off
+	complete    map[string]Level       // proof id -> level it completed at (skipped from now on)
+	stand       map[string]legStand    // proof id -> where its chain stood at the last attempt, for the gauges
+	noProver    map[uint64]bool        // chains already announced as having no registered prover
+	noComponent *bundleMemo            // proofs whose listed bundle was examined and holds no execution proof (bounded by noComponentMemoCap)
+	quiet       map[string]uint64      // proof id -> chain, for the legs that are quiet because their bundle holds no execution proof
+
+	// the counts Run last announced (Run is the only writer)
+	lastNoSettlement, lastUnrecorded int
 }
 
 type levelKey struct {
@@ -205,6 +226,7 @@ func NewUpgrader(src LegSource, store AddendumStore, reg *Registry, pins *Pins, 
 		src: src, store: store, reg: reg, pins: pins, cfg: cfg.withDefaults(),
 		next: map[string]time.Time{}, levelAt: map[levelKey]time.Time{}, disabled: map[uint64]bool{},
 		complete: map[string]Level{}, stand: map[string]legStand{}, noProver: map[uint64]bool{},
+		noComponent: newBundleMemo(noComponentMemoCap), quiet: map[string]uint64{},
 	}, nil
 }
 
@@ -222,7 +244,8 @@ type PassReport struct {
 	NoProver     int // legs of a chain with no registered prover: not loaded, not verified, not scheduled (logged once per chain)
 	Disabled     int // legs of a chain whose per-chain switch is off (finality_upgrader_disabled, logged once per chain)
 	Unusable     int // legs whose L6 evidence could not be loaded
-	NoSettlement int // legs whose bundle holds no execution proof (finality_included_unavailable): not a failure, not logged, asked again on the pending schedule
+	NoSettlement int // legs whose newest bundle holds no execution proof (finality_included_unavailable): not a failure, not logged per leg, not read again until the proof has a newer bundle
+	Unrecorded   int // attempted legs whose settlement evidence was served while the proof row has no settlement_tx_hash or settlement_block_number yet
 	// SourceErr is a failure listing legs (the pass ended early).
 	SourceErr error
 }
@@ -242,9 +265,10 @@ func (u *Upgrader) Run(ctx context.Context) {
 			u.cfg.Logf("[FINALITY] pass could not list settled legs: %v", rep.SourceErr)
 		}
 		if rep.Appended > 0 || rep.Failed > 0 || rep.Broken > 0 || rep.Unusable > 0 {
-			u.cfg.Logf("[FINALITY] pass: listed=%d attempts=%d appended=%d pending=%d failed=%d broken=%d conflict=%d unusable=%d complete=%d",
-				rep.Listed, rep.Attempts, rep.Appended, rep.Pending, rep.Failed, rep.Broken, rep.Conflict, rep.Unusable, rep.Complete)
+			u.cfg.Logf("[FINALITY] pass: listed=%d attempts=%d appended=%d pending=%d failed=%d broken=%d conflict=%d unusable=%d complete=%d no_settlement=%d unrecorded=%d",
+				rep.Listed, rep.Attempts, rep.Appended, rep.Pending, rep.Failed, rep.Broken, rep.Conflict, rep.Unusable, rep.Complete, rep.NoSettlement, rep.Unrecorded)
 		}
+		u.announceGaps(rep)
 		t.Reset(u.cfg.Interval)
 	}
 }
@@ -288,6 +312,10 @@ page:
 			case u.isComplete(ref.ProofID):
 				rep.Complete++
 				continue
+			case u.examinedWithoutComponent(ref):
+				// this very bundle was read and holds no execution proof: it is not fetched again until the proof has a newer one
+				rep.NoSettlement++
+				continue
 			case !u.due(ref.ProofID):
 				rep.NotDue++
 				continue
@@ -311,6 +339,7 @@ page:
 				rep.Conflict += b2i(res.conflict)
 				rep.Unusable += b2i(res.unusable)
 				rep.NoSettlement += b2i(res.noSettlement)
+				rep.Unrecorded += b2i(res.unrecorded)
 				mu.Unlock()
 			}(ref)
 		}
@@ -320,6 +349,9 @@ page:
 	}
 	wg.Wait()
 	u.publishGauges()
+	if g, ok := u.cfg.Recorder.(GapRecorder); ok {
+		g.UnrecordedSettlements(rep.Unrecorded)
+	}
 	u.cfg.Recorder.Pass(u.cfg.Now().Sub(start), u.cfg.Now())
 	return rep
 }
@@ -457,6 +489,8 @@ func (u *Upgrader) record(id string, chain uint64, level Level, done bool) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	u.stand[id] = legStand{chain, level}
+	delete(u.quiet, id)
+	u.noComponent.forget(id)
 	if done {
 		u.complete[id] = level
 		delete(u.next, id)
@@ -476,10 +510,17 @@ func (u *Upgrader) publishGauges() {
 		}
 		counts[s.chain][s.level]++
 	}
+	quiet := map[uint64]int{}
+	for _, chain := range u.quiet {
+		quiet[chain]++
+	}
 	u.mu.Unlock()
 	for _, chain := range u.reg.Chains() {
 		for _, l := range append([]Level{LevelNone}, Levels...) {
 			u.cfg.Recorder.LegsAt(chain, l, counts[chain][l])
+		}
+		if g, ok := u.cfg.Recorder.(GapRecorder); ok {
+			g.LegsWithoutSettlement(chain, quiet[chain])
 		}
 	}
 }
@@ -492,6 +533,7 @@ type legResult struct {
 	conflict     bool
 	unusable     bool
 	noSettlement bool
+	unrecorded   bool
 }
 
 // storedOffered are the stored levels (l1_posted, finalized) the chain's profile offers, ascending.
@@ -567,10 +609,14 @@ func (u *Upgrader) upgradeLeg(ctx context.Context, ref LegRef) (res legResult) {
 	if err != nil {
 		if st, ok := AsNamed(err); ok && st.Code == CodeIncludedUnavailable {
 			// The leg has no L6 evidence (yet): its bundle holds no execution proof. Nothing is wrong and nothing is judged, so
-			// this is neither counted as a failure nor logged; the leg is asked again on the pending schedule.
+			// this is neither counted as a failure nor logged per leg. A source that names its bundles gets the examined bundle
+			// remembered, so it is not read again until the proof has a newer one; a source that does not is asked again on the
+			// pending schedule.
 			res.noSettlement = true
-			u.record(ref.ProofID, ref.Chain, LevelNone, false)
-			u.scheduleBoth(ref.ProofID, u.cfg.PendingRetry)
+			u.markQuiet(ref)
+			if ref.BundleID == "" {
+				u.scheduleBoth(ref.ProofID, u.cfg.PendingRetry)
+			}
 			return res
 		}
 		res.unusable = true
@@ -580,6 +626,8 @@ func (u *Upgrader) upgradeLeg(ctx context.Context, ref LegRef) (res legResult) {
 		u.scheduleBoth(ref.ProofID, u.cfg.BrokenRetry)
 		return res
 	}
+	u.clearQuiet(ref.ProofID)
+	res.unrecorded = settlement.Unrecorded
 	// The leg's block is DERIVED from the verified L6 evidence (level 1): never taken from the source's Subject, which is a
 	// stored claim. D0 is the binding of the derived block.
 	block, err := DeriveIncluded(ref.Chain, settlement.Included)
@@ -857,4 +905,54 @@ func Launch(ctx context.Context, enabled bool, src LegSource, store AddendumStor
 	StartCapturers(ctx, reg, SupervisorConfig{DisabledChains: cfg.DisabledChains, DisabledReasons: cfg.DisabledReasons, Logf: cfg.Logf})
 	go u.Run(ctx)
 	return u, nil
+}
+
+// examinedWithoutComponent reports whether exactly this listed bundle of the leg was read and found to hold no execution proof,
+// and keeps the leg counted as quiet when it was.
+func (u *Upgrader) examinedWithoutComponent(ref LegRef) bool {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if !u.noComponent.has(ref.ProofID, ref.BundleID) {
+		return false
+	}
+	u.quiet[ref.ProofID] = ref.Chain
+	return true
+}
+
+// markQuiet records a leg whose bundle holds no execution proof: counted by the quiet gauge, not at any level, and (when the
+// source names its bundles) remembered against that bundle so it is not read again.
+func (u *Upgrader) markQuiet(ref LegRef) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.quiet[ref.ProofID] = ref.Chain
+	delete(u.stand, ref.ProofID)
+	if ref.BundleID != "" {
+		u.noComponent.put(ref.ProofID, ref.BundleID)
+	}
+}
+
+// clearQuiet forgets a leg's quiet state: its bundle holds an execution proof now.
+func (u *Upgrader) clearQuiet(id string) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	delete(u.quiet, id)
+	u.noComponent.forget(id)
+}
+
+func (MetricsRecorder) LegsWithoutSettlement(chain uint64, n int) {
+	metrics.SetFinalityLegsWithoutSettlement(chain, n)
+}
+func (MetricsRecorder) UnrecordedSettlements(n int) { metrics.SetFinalityUnrecordedSettlements(n) }
+
+// announceGaps logs, when it changes, how many legs are held back for want of evidence and how many were served before their proof
+// row recorded the settlement. The two are also in every pass summary line and in the metrics.
+func (u *Upgrader) announceGaps(rep PassReport) {
+	if rep.NoSettlement != u.lastNoSettlement {
+		u.lastNoSettlement = rep.NoSettlement
+		u.cfg.Logf("[FINALITY] %d legs have no execution proof in their newest bundle (finality_included_unavailable): they are not read again until the proof has a newer bundle", rep.NoSettlement)
+	}
+	if rep.Unrecorded != u.lastUnrecorded {
+		u.lastUnrecorded = rep.Unrecorded
+		u.cfg.Logf("[FINALITY] %d legs had settlement evidence served while their proof row has no settlement_tx_hash or settlement_block_number yet: the check against the recorded settlement was skipped", rep.Unrecorded)
+	}
 }

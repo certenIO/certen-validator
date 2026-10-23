@@ -18,6 +18,8 @@ func TestRegisterMetricsHoldsTheFinalitySeriesBesideEveryOtherCollector(t *testi
 	SetFinalityLegs(84532, "finalized", 2)
 	IncFinalityBuildFailure(421614, "finality_build_timeout")
 	IncFinalityPending(2017, "included")
+	SetFinalityLegsWithoutSettlement(2017, 1)
+	SetFinalityUnrecordedSettlements(1)
 	IncFinalityChainBroken(11155111)
 
 	families, err := prometheus.DefaultGatherer.Gather()
@@ -30,6 +32,7 @@ func TestRegisterMetricsHoldsTheFinalitySeriesBesideEveryOtherCollector(t *testi
 	}
 	for _, name := range []string{
 		"certen_finality_upgrader_enabled", "certen_finality_legs", "certen_finality_addenda_appended_total",
+		"certen_finality_legs_without_settlement", "certen_finality_unrecorded_settlements",
 		"certen_finality_build_failures_total", "certen_finality_pending_total", "certen_finality_chain_broken_total",
 	} {
 		if !have[name] {
