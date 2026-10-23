@@ -45,3 +45,15 @@ func TestTheOffSwitchCarriesItsReasonInTheHealthBlock(t *testing.T) {
 		t.Fatalf("%v", h)
 	}
 }
+
+func TestUpgraderDisabledEnvIsTheRefusedVariableElseTheSwitch(t *testing.T) {
+	if got := upgraderDisabledEnv(ConfigInvalidState("BASE_SEPOLIA_RPC_URL", 0, "bad_port")); got != "BASE_SEPOLIA_RPC_URL" {
+		t.Fatalf("%q", got)
+	}
+	if got := upgraderDisabledEnv(NewState(CodeUpgraderDisabled, "env", EnvEnabled, "value", "false", "effect", "x")); got != EnvEnabled {
+		t.Fatalf("%q", got)
+	}
+	if got := upgraderDisabledEnv(NewState(CodeUpgraderDisabled)); got != "" {
+		t.Fatalf("%q", got)
+	}
+}

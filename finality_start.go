@@ -13,6 +13,13 @@ import (
 	finruntime "github.com/certen/independant-validator/pkg/finality/runtime"
 )
 
+// genesisLinkCheck is the load-time check of the embedded Adiri genesis link (a variable so a test can make it fail).
+var genesisLinkCheck = adiri.CheckEmbeddedGenesisLink
+
+// finalityRegistry is the registry the finality kinds are registered into: the process-wide one (a variable so each test can use its own,
+// since a kind can be registered once).
+var finalityRegistry = finality.Default
+
 // startFinality starts the staged-finality upgrader (RB11, PROOF_V2 S7, certen:finality:v1). For every settled leg the upgrader
 // appends the strongest finality level now buildable (l1_posted, finalized; included is derived and never stored) to the leg's
 // append-only, hash-linked addendum chain, beside the stored proof, and re-schedules until the chain's top level. It runs on its own
@@ -51,7 +58,7 @@ func startFinality(ctx context.Context, dbClient *database.Client, logf func(str
 	}
 	repo := database.NewFinalityAddendaRepository(dbClient)
 	wire, err := finruntime.Wire(cfg, finruntime.Deps{
-		Registry: finality.Default, Store: database.NewFinalityCaptureStore(dbClient),
+		Registry: finalityRegistry, Store: database.NewFinalityCaptureStore(dbClient),
 		Status: database.NewFinalityStatusRepository(dbClient), Logf: logf,
 	})
 	if err != nil {
@@ -59,7 +66,7 @@ func startFinality(ctx context.Context, dbClient *database.Client, logf func(str
 	}
 	// The Adiri genesis link is embedded and hash-pinned by the pins the runtime built under; it is checked once here, at startup,
 	// never per proof.
-	if err := adiri.CheckEmbeddedGenesisLink(wire.Pins); err != nil {
+	if err := genesisLinkCheck(wire.Pins); err != nil {
 		return fmt.Errorf("finality pins: %w", err)
 	}
 	if _, err := finality.Launch(ctx, on, repo, repo, wire.Registry, wire.Pins, wire.Upgrader); err != nil {

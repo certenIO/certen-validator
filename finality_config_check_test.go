@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -251,5 +253,51 @@ func TestProviderURLCheckScriptPrintsOnlyPositionsAndClassesAndFailsWhatTheRunti
 	}
 	if code, out = run("VALIDATORS=5", "CHECK_IMAGE=certen/validator:test"); code != 2 || !strings.Contains(out, "FAIL  certen-validator-5: container not found") {
 		t.Fatalf("a missing container: exit %d\n%s", code, out)
+	}
+}
+
+// The bound of what the check reads: exactly the bound is accepted, one byte more is refused, and a read error after valid bytes is
+// not judged as an environment.
+func TestFinalityConfigCheckBoundsItsInputExactly(t *testing.T) {
+	pad := func(n int) string { // a JSON array of one string, n bytes in all
+		overhead := len(`["X="]`)
+		return `["X=` + strings.Repeat("a", n-overhead) + `"]`
+	}
+	if code, _, errw := runCheck(t, pad(maxFinalityConfigInput)); code != 0 || errw != "" {
+		t.Fatalf("an input of exactly the bound: exit %d %q", code, errw)
+	}
+	if code, out, _ := runCheck(t, pad(maxFinalityConfigInput+1)); code != 2 || out != "" {
+		t.Fatalf("an input one byte over the bound: exit %d %q", code, out)
+	}
+	if code, out, _ := runFinalityConfigCheckWith(errReader{data: `["BASE_SEPOLIA_RPC_URL=https://h.example/"]`}); code != 2 || out != "" {
+		t.Fatalf("a read error after valid bytes: exit %d %q", code, out)
+	}
+}
+
+type errReader struct{ data string }
+
+func (e errReader) Read(p []byte) (int, error) {
+	n := copy(p, e.data)
+	return n, errors.New("connection reset")
+}
+
+func runFinalityConfigCheckWith(r io.Reader) (int, string, string) {
+	var out, errw bytes.Buffer
+	code := runFinalityConfigCheck(r, &out, &errw)
+	return code, out.String(), errw.String()
+}
+
+// Only provider variables are ever set in the process, and a refused variable is not also reported ok.
+func TestFinalityConfigCheckSetsNothingButProviderVariablesAndNeverCallsARefusedOneOk(t *testing.T) {
+	t.Setenv("FOO_VARIABLE_OF_THE_TEST", "")
+	code, out, _ := runCheck(t, envJSON(t, "FOO_VARIABLE_OF_THE_TEST=set-by-the-input", "BASE_SEPOLIA_RPC_URL=https://h:abc/", "BARE_ENTRY_WITHOUT_EQUALS"))
+	if code != 1 {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if got := os.Getenv("FOO_VARIABLE_OF_THE_TEST"); got != "" {
+		t.Fatalf("the check set a variable that is not a provider variable: %q", got)
+	}
+	if strings.Contains(out, "ok      BASE_SEPOLIA_RPC_URL") || !strings.Contains(out, "REFUSED BASE_SEPOLIA_RPC_URL entry 0 bad_port\n") {
+		t.Fatalf("%s", out)
 	}
 }

@@ -905,14 +905,17 @@ func ConfigInvalidState(variable string, entry int, class string) *StateError {
 // certen_finality_upgrader_enabled gauge, certen_finality_upgrader_disabled_total{chain="0",env} (env: the switch, or the refused
 // variable of a config_invalid state) and the health block's upgrader_disabled_reason. The state carries no secret.
 func AnnounceUpgraderDisabled(logf func(format string, args ...any), st *StateError) {
-	env, _ := st.Fields["variable"].(string)
-	if env == "" {
-		env, _ = st.Fields["env"].(string)
-	}
 	logf("[FINALITY] upgrader DISABLED: %s", st.Error())
 	metrics.SetFinalityUpgraderEnabled(false)
-	metrics.IncFinalityUpgraderDisabled(0, env)
+	metrics.IncFinalityUpgraderDisabled(0, upgraderDisabledEnv(st))
 	metrics.SetFinalityUpgraderDisabledReason(st.Error())
+}
+
+// upgraderDisabledEnv is the setting that caused a whole-upgrader off state: the switch, or the refused variable of a config_invalid state
+// (ConfigInvalidState carries it as env too).
+func upgraderDisabledEnv(st *StateError) string {
+	env, _ := st.Fields["env"].(string)
+	return env
 }
 
 // Launch starts the upgrader and the registered capture loops on their own goroutines, or, when it is switched off, reports
