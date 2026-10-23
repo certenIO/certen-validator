@@ -753,6 +753,63 @@ EOF
   fi
 else rec FAIL C7 "capture query" "query answers" "failed: $(errline)"; fi
 
+# C8: the capture cursor rows (item runtime/cursor) that finality.CaptureCoverageOf reads (RB12-F2, checked here by RB12-P0LIVE-FIX D7).
+# The Base l1_posted builder decides a leg whose whole window lies below the first block the capture loop scanned as
+# l1_capture_not_covering (a named unavailable state); that decision rests on three stored-data assumptions, each checked below:
+#   (1) the item is named exactly runtime/cursor and chain 84532 has rows of it;
+#   (2) a cursor row is keyed at the scanned block under the ZERO hash and holds that block as 8 big-endian bytes;
+#   (3) min(l1_block) over the chain's cursor rows is the end of the loop's first range (the loop scanned every block from there minus its
+#       first range on and nothing before): rows of other items below it were written before the loop ran (a one-shot recorder) and are
+#       NOT evidence of coverage; the builder keeps a slack of max(CaptureBlocks, 32) blocks below the first cursor.
+# Positions and classes are printed, never row contents. A chain with capture rows and NO cursor row has an unknown coverage: the builder
+# then concludes nothing and every leg of it stays in the window search (pending) - a named WARN, not a FAIL.
+CURSOR_ROWS=""
+if out=$(sqlro <<SQL
+WITH cur AS (
+  SELECT chain, count(*) AS n, min(l1_block) AS lo, max(l1_block) AS hi,
+    count(*) FILTER (WHERE l1_hash <> decode(repeat('00', 32), 'hex')) AS badhash,
+    count(*) FILTER (WHERE octet_length(bytes) <> 8) AS badlen,
+    count(*) FILTER (WHERE octet_length(bytes) = 8 AND ('x' || encode(bytes, 'hex'))::bit(64)::bigint <> l1_block) AS badval
+  FROM proof_finality_capture WHERE item = 'runtime/cursor' GROUP BY chain),
+ oth AS (
+  SELECT chain, count(*) AS n, min(l1_block) AS lo, max(l1_block) AS hi
+  FROM proof_finality_capture WHERE item <> 'runtime/cursor' GROUP BY chain)
+SELECT chain, COALESCE(cur.n, 0), COALESCE(cur.lo::text, '-'), COALESCE(cur.hi::text, '-'),
+  COALESCE(cur.badhash, 0), COALESCE(cur.badlen, 0), COALESCE(cur.badval, 0),
+  COALESCE(oth.n, 0), COALESCE(oth.lo::text, '-'), COALESCE(oth.hi::text, '-'),
+  (SELECT count(*) FROM proof_finality_capture o WHERE o.chain = chain_all.chain AND o.item <> 'runtime/cursor' AND cur.lo IS NOT NULL AND o.l1_block < cur.lo)
+FROM (SELECT chain FROM cur UNION SELECT chain FROM oth) chain_all
+LEFT JOIN cur USING (chain) LEFT JOIN oth USING (chain) ORDER BY chain;
+SQL
+); then
+  CURSOR_ROWS="$out"
+  base_seen=0
+  while IFS='|' read -r k_chain k_n k_lo k_hi k_bh k_bl k_bv k_on k_olo k_ohi k_below; do
+    [ -z "$k_chain" ] && continue
+    [ "$k_chain" = "84532" ] && base_seen=1
+    if [ "$((k_bh + k_bl + k_bv))" -ne 0 ]; then
+      rec FAIL C8 "chain $k_chain: runtime/cursor rows are keyed under the zero hash and hold their own block as 8 big-endian bytes" "0 violations in $k_n cursor rows" "non-zero hash $k_bh; byte length not 8: $k_bl; value differs from l1_block: $k_bv (first scan ended at $k_lo, latest at $k_hi)"
+    elif [ "$k_n" -eq 0 ]; then
+      if [ "$k_chain" = "84532" ]; then
+        rec WARN C8 "chain 84532 has a runtime/cursor row, so the Base l1_posted builder knows what the capture loop covered" "at least 1 cursor row (min = end of the loop's first range)" "no cursor row, $k_on capture rows between blocks $k_olo and $k_ohi: coverage UNKNOWN, l1_capture_not_covering is never concluded for this chain and its legs stay pending in the window search (the loop writes a cursor row once per tick: a loop that never ticked, or rows written by a one-shot recorder only)"
+      else
+        info "chain $k_chain: $k_on capture rows between blocks $k_olo and $k_ohi and no runtime/cursor row (the Base builder is the only reader of coverage)"
+      fi
+    else
+      if [ "$k_chain" = "84532" ]; then
+        rec PASS C8 "chain 84532: runtime/cursor rows exist and have the written shape; the builder reads min and max of their l1_block" "at least 1 cursor row, zero hash, 8 big-endian bytes equal to l1_block" "$k_n cursor rows; first scan ended at block $k_lo, latest at $k_hi; $k_on other capture rows between blocks $k_olo and $k_ohi, of which $k_below lie below the first cursor (written before the loop ran: not covered by it)"
+      else
+        info "chain $k_chain: $k_n cursor rows (first scan ended at block $k_lo, latest at $k_hi), shape as written; $k_on other capture rows, $k_below below the first cursor"
+      fi
+    fi
+  done <<EOF
+$out
+EOF
+  if [ "$base_seen" -eq 0 ]; then
+    rec WARN C8 "chain 84532 has capture rows (and a runtime/cursor row), so the Base l1_posted builder knows what the capture loop covered" "rows of chain 84532" "no capture row at all for chain 84532: coverage UNKNOWN, every Base leg stays pending in the window search"
+  fi
+else rec FAIL C8 "capture cursor query" "query answers" "failed: $(errline)"; fi
+
 # ==============================================================================================================================
 # (f) container environment hygiene (names only, never values)
 # ==============================================================================================================================

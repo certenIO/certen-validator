@@ -132,12 +132,12 @@ func (s *BudgetedStore) ListByBlock(ctx context.Context, chain, l1Block uint64) 
 	return s.Inner.ListByBlock(ctx, chain, l1Block)
 }
 
-// ListByRange implements finality.CaptureStore.
 // BlockBounds forwards finality.BlockBounder to the inner store (its fast form when it has one, else the key listing).
 func (s *BudgetedStore) BlockBounds(ctx context.Context, chain uint64, item string) (uint64, uint64, bool, error) {
 	return finality.BlockBoundsOf(ctx, s.Inner, chain, item)
 }
 
+// ListByRange implements finality.CaptureStore.
 func (s *BudgetedStore) ListByRange(ctx context.Context, chain, from, to uint64, prefix string) ([]finality.CaptureKey, error) {
 	return s.Inner.ListByRange(ctx, chain, from, to, prefix)
 }
