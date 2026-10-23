@@ -14,6 +14,7 @@ import (
 	"github.com/certen/independant-validator/pkg/finality"
 	"github.com/certen/independant-validator/pkg/finality/arbposted/capture"
 	"github.com/certen/independant-validator/pkg/finality/ethl1"
+	"github.com/certen/independant-validator/pkg/metrics"
 )
 
 // This file is the ATTEST half of the two-phase build (spec 2.8): given the rows the leg-independent Capturer stored, the
@@ -53,6 +54,10 @@ type Builder struct {
 	Pins  *finality.Pins
 	// Now is the clock for ETAs only (never used by a verifier). Nil means time.Now.
 	Now func() time.Time
+	// Index is the batch index (RB12-INDEX-B). With it a build locates its batch from the index rows and loads only that batch; without
+	// it (CERTEN_FINALITY_ARB_INDEX=off, or a bad setting) the build reads every captured batch and decodes every window candidate, the
+	// reference implementation the index is proven equal to. A build never falls back from one to the other.
+	Index *IndexReader
 }
 
 func (b *Builder) Chain() uint64 { return finality.ChainArbitrumSepolia }
@@ -111,23 +116,35 @@ func (b *Builder) BuildFor(ctx context.Context, ref finality.BlockRef) (*finalit
 	}
 
 	// the batch and message that hold the block, from what the capture phase stored
-	batches, err := capture.LoadBatches(ctx, b.Store, b.Chain())
-	if err != nil {
-		return nil, nil, err
-	}
-	found, err := b.locate(ctx, batches, hdr, txs, arb)
-	if err != nil {
-		return nil, nil, err
-	}
-	if found == nil {
-		newest := uint64(0)
-		for _, r := range batches {
-			if r.N > newest {
-				newest = r.N
-			}
+	var found *located
+	if b.Index != nil {
+		var pend *finality.PendingState
+		found, pend, err = b.Index.Locate(ctx, b, hdr, standardTxs(txs), arb)
+		if err != nil {
+			return nil, nil, err
 		}
-		return nil, pending(b.Chain(), PendingAwaitingBatchPost, b.now().Add(3*time.Minute),
-			map[string]any{"l2_block": hdr.Number, "latest_captured_batch": newest}), nil
+		if pend != nil {
+			return nil, pend, nil
+		}
+	} else {
+		batches, err := capture.LoadBatches(ctx, b.Store, b.Chain())
+		if err != nil {
+			return nil, nil, err
+		}
+		found, err = b.locate(ctx, batches, hdr, txs, arb)
+		if err != nil {
+			return nil, nil, err
+		}
+		if found == nil {
+			newest := uint64(0)
+			for _, r := range batches {
+				if r.N > newest {
+					newest = r.N
+				}
+			}
+			return nil, pending(b.Chain(), PendingAwaitingBatchPost, b.now().Add(3*time.Minute),
+				map[string]any{"l2_block": hdr.Number, "latest_captured_batch": newest}), nil
+		}
 	}
 	rec := found.rec
 
@@ -229,63 +246,116 @@ type located struct {
 	data []byte
 }
 
-// locate finds the captured batch whose decoded payload holds a message with the block's signed transactions. The time
-// bounds only narrow the candidates (hints are never evidence); the decode decides.
-func (b *Builder) locate(ctx context.Context, batches []capture.BatchRecord, hdr finality.HeaderFields, txs [][]byte, arb *arbPins) (*located, error) {
-	var incomplete *capture.BatchRecord
+// standardTxs is the block's signed standard transactions (types 0-4), in order: what a batch message must carry for the block to be in it.
+func standardTxs(txs [][]byte) [][]byte {
 	var std [][]byte
 	for _, tx := range txs {
 		if ethproof.TxType(tx) <= 4 {
 			std = append(std, tx)
 		}
 	}
+	return std
+}
+
+// candidateKind is what matchCandidate concluded about one captured batch.
+type candidateKind uint8
+
+const (
+	candidateNoMatch    candidateKind = iota // the batch does not hold the block: skipped (unreadable data, a payload that does not decode, no message with these transactions)
+	candidateIncomplete                      // a blob batch whose blob rows are not all stored: its content is unknown
+	candidateMatch                           // a message of the batch carries exactly the block's standard transactions
+)
+
+// matchCandidate is the judgement of ONE captured batch, the body of the reference reader's loop and, unchanged, the check the indexed
+// reader makes of the batch its fingerprints point to: load the data rows of the batch, decode the payload, and look for a message whose
+// signed transactions are std. Both readers call it, so they cannot disagree about a batch.
+func (b *Builder) matchCandidate(ctx context.Context, rec capture.BatchRecord, std [][]byte, arb *arbPins) (*located, candidateKind, error) {
+	var payload, data []byte
+	switch rec.DataLocation {
+	case capture.LocBlob:
+		bl, err := capture.LoadBlobs(ctx, b.Store, b.Chain(), rec)
+		if err != nil {
+			return nil, candidateNoMatch, err
+		}
+		if len(bl) != len(rec.VersionedHashes) {
+			return nil, candidateIncomplete, nil
+		}
+		raws := make([][]byte, len(bl))
+		for i := range bl {
+			raws[i] = bl[i].Raw
+		}
+		payload, err = decodeBlobs(raws)
+		if err != nil {
+			return nil, candidateNoMatch, nil
+		}
+	case capture.LocTxInput, capture.LocSeparateBatchEvent:
+		row, ok, err := b.Store.Get(ctx, capture.Key{Chain: b.Chain(), L1Block: rec.L1Block, L1Hash: rec.L1Hash, Item: capture.ItemCalldata(rec.N)})
+		if err != nil || !ok {
+			return nil, candidateNoMatch, nil
+		}
+		if rec.DataLocation == capture.LocTxInput {
+			d, err := capture.ExtractTxInputData(row)
+			if err != nil {
+				return nil, candidateNoMatch, nil
+			}
+			row = d
+		}
+		payload, data = row, row
+	default:
+		return nil, candidateNoMatch, nil
+	}
+	res := decodePayload(payload, arb.MaxUncompressedBatch, arb.MaxSegments)
+	if res.status != payloadOK {
+		return nil, candidateNoMatch, nil
+	}
+	for _, m := range res.messages {
+		if sameTxs(std, m.txs) {
+			return &located{rec: rec, data: data}, candidateMatch, nil
+		}
+	}
+	return nil, candidateNoMatch, nil
+}
+
+// authorized reports whether the record is a batch the Bridge holds (capture.AuthorizeBatch over the captured, verified proofs of its
+// accumulator): false only for a FOREIGN record, one a verified proof contradicts. An unproven record is kept; the verifier of the leg
+// decides what it can prove.
+func (b *Builder) authorized(ctx context.Context, rec capture.BatchRecord, arb *arbPins) (bool, error) {
+	views, err := capture.LoadProofViews(ctx, b.Store, b.Chain(), rec.N, rec.L1Block)
+	if err != nil {
+		return false, err
+	}
+	if capture.AuthorizeBatch(rec, arb.bridge, arb.Layout.AccArraySlot, views) == capture.AuthForeign {
+		metrics.AddFinalityCaptureForeignTxs(b.Chain(), 1)
+		return false, nil
+	}
+	return true, nil
+}
+
+// locate finds the captured batch whose decoded payload holds a message with the block's signed transactions: the REFERENCE reader, which
+// judges every captured batch whose time bounds hold the block's timestamp, in (N, L1 block) order, and serves the first that holds the
+// message and is not foreign. The time bounds only narrow the candidates (hints are never evidence); the decode decides.
+func (b *Builder) locate(ctx context.Context, batches []capture.BatchRecord, hdr finality.HeaderFields, txs [][]byte, arb *arbPins) (*located, error) {
+	var incomplete *capture.BatchRecord
+	std := standardTxs(txs)
 	if len(std) == 0 {
 		return nil, nil
 	}
 	for _, rec := range capture.FindBatchContaining(batches, hdr.Timestamp) {
-		var payload, data []byte
-		switch rec.DataLocation {
-		case capture.LocBlob:
-			bl, err := capture.LoadBlobs(ctx, b.Store, b.Chain(), rec)
+		loc, kind, err := b.matchCandidate(ctx, rec, std, arb)
+		if err != nil {
+			return nil, err
+		}
+		switch kind {
+		case candidateIncomplete:
+			r := rec
+			incomplete = &r
+		case candidateMatch:
+			ok, err := b.authorized(ctx, rec, arb)
 			if err != nil {
 				return nil, err
 			}
-			if len(bl) != len(rec.VersionedHashes) {
-				r := rec
-				incomplete = &r
-				continue
-			}
-			raws := make([][]byte, len(bl))
-			for i := range bl {
-				raws[i] = bl[i].Raw
-			}
-			payload, err = decodeBlobs(raws)
-			if err != nil {
-				continue
-			}
-		case capture.LocTxInput, capture.LocSeparateBatchEvent:
-			row, ok, err := b.Store.Get(ctx, capture.Key{Chain: b.Chain(), L1Block: rec.L1Block, L1Hash: rec.L1Hash, Item: capture.ItemCalldata(rec.N)})
-			if err != nil || !ok {
-				continue
-			}
-			if rec.DataLocation == capture.LocTxInput {
-				d, err := capture.ExtractTxInputData(row)
-				if err != nil {
-					continue
-				}
-				row = d
-			}
-			payload, data = row, row
-		default:
-			continue
-		}
-		res := decodePayload(payload, arb.MaxUncompressedBatch, arb.MaxSegments)
-		if res.status != payloadOK {
-			continue
-		}
-		for _, m := range res.messages {
-			if sameTxs(std, m.txs) {
-				return &located{rec: rec, data: data}, nil
+			if ok {
+				return loc, nil
 			}
 		}
 	}
