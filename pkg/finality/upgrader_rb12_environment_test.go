@@ -77,6 +77,14 @@ func TestRB12F17ALegInACaptureGapIsRebuiltWithinOneRetryIntervalOfTheGapClosing(
 			if msg := conforms(reg, row.State); msg != "" {
 				t.Fatalf("pass %d: the stored state is not in the registry: %s", pass, msg)
 			}
+			// the row is a document the status table and proofs_service read: it renders and parses back, class and all
+			raw, err := row.Document()
+			if err != nil {
+				t.Fatalf("pass %d: %s row does not render: %v", pass, lv, err)
+			}
+			if view, err := ParseBuilderStatusDocument(raw); err != nil || view.Class != BuilderUnavailable {
+				t.Fatalf("pass %d: %s document %s parses as %+v, %v", pass, lv, raw, view, err)
+			}
 		}
 		// not asked before the time the row states
 		clock.Advance(retry - time.Second)
