@@ -166,7 +166,7 @@ func TestSepoliaSpineChunksResumeAcrossProcessesThroughTheRealCaptureTable(t *te
 		t.Fatalf("the flaky provider never put an attempt into the progress state: %v", firstPending)
 	}
 
-	// the rows: the shape the production table holds and the shape check (pr/rb11-prod-shape-check.sh C8) asserts
+	// the rows: the shape the production table holds and the shape check (pr/rb11-prod-shape-check.sh SP1) asserts
 	spans := ethsepolia.PlanSpans(ref.Number, ref.Number+uint64(len(body.Spine))-2)
 	kept := 0
 	for _, sp := range spans {

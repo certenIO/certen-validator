@@ -94,37 +94,48 @@ func ChainEnvPrefix(chainKey string) string {
 	return up
 }
 
+// EndpointVariablesForChain names, in the order EndpointsForChain reads them (and so in cost order), every environment variable that
+// holds an endpoint list of the chain. It is the one table behind EndpointsForChain: a check that must name the variables of a chain
+// (the finality runtime's startup validation, the read-only deploy check) reads it instead of keeping a copy.
+func EndpointVariablesForChain(chainKey string) []string {
+	p := ChainEnvPrefix(chainKey)
+	if p == "" {
+		return []string{EnvPrimary, EnvPrimaryAlt, EnvFallbacks, EnvInfura, EnvAlchemy}
+	}
+	var names []string
+	if p == "ETHEREUM_SEPOLIA" || p == "SEPOLIA" || p == "ETHEREUM" {
+		// Ethereum Sepolia is the chain the original vars were written for. Honour both spellings so existing configuration keeps
+		// working and a per-chain override is still possible.
+		names = []string{p + "_RPC_URL", EnvPrimary, EnvPrimaryAlt, p + "_URL_FALLBACKS", EnvFallbacks, EnvInfura, EnvAlchemy}
+	} else {
+		names = []string{p + "_RPC_URL", p + "_URL_FALLBACKS", "INFURA_" + p + "_URL", "ALCHEMY_" + p + "_URL"}
+	}
+	seen := map[string]bool{}
+	out := names[:0]
+	for _, n := range names {
+		if !seen[n] {
+			seen[n] = true
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
 // EndpointsForChain builds the ordered endpoint list for one chain, cheapest first.
 //
 // Reads <PREFIX>_RPC_URL as primary, then <PREFIX>_URL_FALLBACKS, INFURA_<PREFIX>_URL and
-// ALCHEMY_<PREFIX>_URL as paid fallbacks. Ethereum keeps its existing variables: a deployment that
+// ALCHEMY_<PREFIX>_URL as paid fallbacks (EndpointVariablesForChain). Ethereum keeps its existing variables: a deployment that
 // has only ETHEREUM_URL set behaves exactly as before.
 func EndpointsForChain(chainKey string) []string {
-	p := ChainEnvPrefix(chainKey)
-	if p == "" {
+	if ChainEnvPrefix(chainKey) == "" {
 		return EndpointsFromEnv()
 	}
-
-	// Ethereum Sepolia is the chain the original vars were written for. Honour both spellings so
-	// existing configuration keeps working and a per-chain override is still possible.
-	if p == "ETHEREUM_SEPOLIA" || p == "SEPOLIA" || p == "ETHEREUM" {
-		return ParseEndpoints(
-			os.Getenv(p+"_RPC_URL"),
-			os.Getenv(EnvPrimary),
-			os.Getenv(EnvPrimaryAlt),
-			os.Getenv(p+"_URL_FALLBACKS"),
-			os.Getenv(EnvFallbacks),
-			os.Getenv(EnvInfura),
-			os.Getenv(EnvAlchemy),
-		)
+	names := EndpointVariablesForChain(chainKey)
+	values := make([]string, len(names))
+	for i, n := range names {
+		values[i] = os.Getenv(n)
 	}
-
-	return ParseEndpoints(
-		os.Getenv(p+"_RPC_URL"),
-		os.Getenv(p+"_URL_FALLBACKS"),
-		os.Getenv("INFURA_"+p+"_URL"),
-		os.Getenv("ALCHEMY_"+p+"_URL"),
-	)
+	return ParseEndpoints(values...)
 }
 
 // PoolForChain builds a Pool for one chain.

@@ -82,7 +82,8 @@ func (b *scriptBeacon) Blobs(_ context.Context, slot uint64) ([][]byte, error) {
 	return b.blobs, b.err
 }
 
-// failStore refuses the Put of one item.
+// failStore refuses the Put of one item, and a PutBlock that holds a row of that item: the store admits blocks as a unit, so a
+// refused row refuses the block and nothing of it is stored (the embedded MemStore's own PutBlock would bypass the refusal).
 type failStore struct {
 	*MemStore
 	item string
@@ -93,6 +94,15 @@ func (f failStore) Put(ctx context.Context, k CaptureKey, data []byte) error {
 		return errors.New("store down")
 	}
 	return f.MemStore.Put(ctx, k, data)
+}
+
+func (f failStore) PutBlock(ctx context.Context, rows []finality.CaptureRow) error {
+	for _, r := range rows {
+		if r.Item == f.item {
+			return errors.New("store down")
+		}
+	}
+	return f.MemStore.PutBlock(ctx, rows)
 }
 
 func newCapturer(l1 L1Source, bc BeaconSource, st CaptureStore, rec func(uint64, *finality.StateError)) *Capturer {
@@ -216,6 +226,9 @@ func TestCapturerFailsWithFalseAndAnErrorOnEveryStageAndNamesWhatIsUnavailable(t
 		fs := failStore{MemStore: NewMemStore(), item: item}
 		if ok, err := newCapturer(&scriptL1{blk: blk}, good(), fs, rec).CaptureBlock(ctx, 1000); ok || err == nil {
 			t.Errorf("a store that refuses %s: (%v, %v)", item, ok, err)
+		}
+		if n := rowsOf(t, fs.MemStore); n != 0 {
+			t.Errorf("a store that refuses %s kept %d rows of the refused block", item, n)
 		}
 	}
 }

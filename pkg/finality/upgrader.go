@@ -68,6 +68,12 @@ type StatusRecorder interface {
 	StatusWriteFailed(chain uint64)
 }
 
+// HoldRecorder is the optional half of a Recorder that counts the asks the upgrader HELD instead of failing: a state of the
+// environment class (state_class.go), such as a recorded capture gap, which is no failure of the leg and so is not in BuildFailed.
+type HoldRecorder interface {
+	BuildHeld(chain uint64, code string)
+}
+
 // GapRecorder is the optional half of a Recorder that reports the legs the upgrader holds back for want of evidence, so that
 // "quiet" is a number someone can alert on and not an absence.
 type GapRecorder interface {
@@ -87,6 +93,7 @@ func (MetricsRecorder) Appended(chain uint64, l Level) {
 	metrics.IncFinalityAppended(chain, l.String())
 }
 func (MetricsRecorder) BuildFailed(chain uint64, c string) { metrics.IncFinalityBuildFailure(chain, c) }
+func (MetricsRecorder) BuildHeld(chain uint64, c string)   { metrics.IncFinalityBuildHeld(chain, c) }
 func (MetricsRecorder) Pending(chain uint64, l Level)      { metrics.IncFinalityPending(chain, l.String()) }
 func (MetricsRecorder) ChainBroken(chain uint64)           { metrics.IncFinalityChainBroken(chain) }
 func (MetricsRecorder) LegsAt(chain uint64, l Level, n int) {
@@ -125,6 +132,9 @@ type UpgraderConfig struct {
 	// Go heap in use is above HeapGate(budget) (a pass-level state, logged and counted), so the process cannot be driven to the host's
 	// OOM killer by legs it has not started yet.
 	Memory *MemoryBudget
+	// GaugeEvery is how often the memory gauges (heap in use, budget, reserved) are refreshed between passes (default 5s): a pass lasts as
+	// long as its slowest leg, and an alert on the heap must not wait for it.
+	GaugeEvery time.Duration
 	// HeapInUse reads the Go heap in use (default: runtime.MemStats.HeapInuse, sampled at most once a second); GC is run (default
 	// runtime.GC) once before a pass is held back, because the figure may be garbage that has not been collected. Tests replace both.
 	HeapInUse   func() uint64
@@ -168,6 +178,7 @@ func (c UpgraderConfig) withDefaults() UpgraderConfig {
 	def(&c.FailureRetry, 5*time.Minute)
 	def(&c.BrokenRetry, time.Hour)
 	def(&c.MaxFailureRetry, 6*time.Hour)
+	def(&c.GaugeEvery, 5*time.Second)
 	if c.Memory == nil {
 		c.Memory = NewMemoryBudget(DefaultMemoryBudget)
 	}
@@ -308,6 +319,7 @@ type PassReport struct {
 	Unrecorded   int // attempted legs whose settlement evidence was served while the proof row has no settlement_tx_hash or settlement_block_number yet
 	Deferred     int // suspect legs (an earlier ask failed) left for the next pass because every suspect slot was taken
 	MemoryHeld   int // due legs not started because the heap in use was above the memory gate (finality_memory_budget_exceeded, what=attempt)
+	BuildHeld    int // attempts whose build the environment could not serve now - the memory budget even after waiting for a release (finality_memory_budget_exceeded), a recorded capture gap (l1_capture_gap), see state_class.go: holds, not failures
 	InFlight     int // legs skipped because an attempt started by an earlier pass is still running
 	// SourceErr is a failure listing legs (the pass ended early).
 	SourceErr error
@@ -315,6 +327,8 @@ type PassReport struct {
 
 // Run passes every Interval until ctx is cancelled, and returns when the pass in flight has stopped.
 func (u *Upgrader) Run(ctx context.Context) {
+	u.publishMemory(0) // the budget and heap gauges exist from the start, not from the end of the first pass
+	go u.publishMemoryEvery(ctx)
 	t := time.NewTimer(0)
 	defer t.Stop()
 	defer u.bg.Wait() // the attempts a pass detached stop with ctx (each is bounded by BuildTimeout and by ctx)
@@ -329,11 +343,26 @@ func (u *Upgrader) Run(ctx context.Context) {
 			u.cfg.Logf("[FINALITY] pass could not list settled legs: %v", rep.SourceErr)
 		}
 		if rep.Appended > 0 || rep.Failed > 0 || rep.Broken > 0 || rep.Unusable > 0 {
-			u.cfg.Logf("[FINALITY] pass: listed=%d attempts=%d appended=%d pending=%d failed=%d broken=%d conflict=%d unusable=%d complete=%d no_settlement=%d unrecorded=%d no_prover=%d deferred=%d in_flight=%d memory_held=%d heap_in_use=%d",
-				rep.Listed, rep.Attempts, rep.Appended, rep.Pending, rep.Failed, rep.Broken, rep.Conflict, rep.Unusable, rep.Complete, rep.NoSettlement, rep.Unrecorded, rep.NoProver, rep.Deferred, rep.InFlight, rep.MemoryHeld, u.cfg.HeapInUse())
+			u.cfg.Logf("[FINALITY] pass: listed=%d attempts=%d appended=%d pending=%d failed=%d broken=%d conflict=%d unusable=%d complete=%d no_settlement=%d unrecorded=%d no_prover=%d deferred=%d in_flight=%d memory_held=%d build_held=%d heap_in_use=%d",
+				rep.Listed, rep.Attempts, rep.Appended, rep.Pending, rep.Failed, rep.Broken, rep.Conflict, rep.Unusable, rep.Complete, rep.NoSettlement, rep.Unrecorded, rep.NoProver, rep.Deferred, rep.InFlight, rep.MemoryHeld, rep.BuildHeld, u.cfg.HeapInUse())
 		}
 		u.announceGaps(rep)
 		t.Reset(u.cfg.Interval)
+	}
+}
+
+// publishMemoryEvery keeps the memory gauges current on a ticker of its own until ctx ends (RB12-F12: they were written only at the end of
+// a pass and read 0 for as long as a pass lasted).
+func (u *Upgrader) publishMemoryEvery(ctx context.Context) {
+	t := time.NewTicker(u.cfg.GaugeEvery)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			u.publishMemory(0)
+		}
 	}
 }
 
@@ -549,6 +578,7 @@ func addResult(rep *PassReport, res legResult) {
 	rep.Appended += res.appended
 	rep.Pending += b2i(res.pending != nil)
 	rep.Failed += b2i(res.failed)
+	rep.BuildHeld += b2i(res.held)
 	rep.Broken += b2i(res.broken)
 	rep.Conflict += b2i(res.conflict)
 	rep.Unusable += b2i(res.unusable)
@@ -564,6 +594,7 @@ func (u *Upgrader) mergeLate(rep *PassReport) {
 	rep.Appended += l.Appended
 	rep.Pending += l.Pending
 	rep.Failed += l.Failed
+	rep.BuildHeld += l.BuildHeld
 	rep.Broken += l.Broken
 	rep.Conflict += l.Conflict
 	rep.Unusable += l.Unusable
@@ -801,6 +832,7 @@ type legResult struct {
 	appended     int
 	pending      *PendingState
 	failed       bool
+	held         bool // a build was held by the environment (the process memory budget, a recorded capture gap): not a failure of the leg
 	broken       bool
 	conflict     bool
 	unusable     bool
@@ -832,6 +864,7 @@ func (u *Upgrader) putStatus(ctx context.Context, st BuilderStatus) {
 		return
 	}
 	st.JudgedAt = u.cfg.Now()
+	st = st.WithPins(u.pins) // every row names the pins this builder judged under
 	_, err := bounded(ctx, u.cfg.StoreTimeout, st.Chain, "writing the builder status", func(c context.Context) (struct{}, error) {
 		return struct{}{}, u.cfg.Status.UpsertStatus(c, st)
 	})
@@ -933,6 +966,7 @@ func (u *Upgrader) upgradeLeg(ctx context.Context, ref LegRef) (res legResult) {
 	if len(chain) > 0 && chain[0].Chain != ref.Chain {
 		return u.brokenChain(ref, ChainBroken(1, CheckKind, "stored", chain[0].Chain, "settled_on", ref.Chain))
 	}
+	u.convergeStatus(ctx, ref, chain)
 	have := LevelsOf(chain)
 	current := Top(chain)
 	var targets []Level
@@ -959,7 +993,8 @@ func (u *Upgrader) upgradeLeg(ctx context.Context, ref LegRef) (res legResult) {
 		}
 		wait := time.Duration(-1)                                 // next ask of this level; <0 = the level was stored
 		failWait, failAttempt := u.failDelay(ref.ProofID, target) // the back-off of this ask if it fails (RB12-F1)
-		failed := false
+		failed, held := false, false
+		statusIsFailure := false // the status below is the verdict on a failed ask: a hold never replaces it
 		var status *BuilderStatus
 		for _, p := range u.reg.Provers(ref.Chain) {
 			if c, ok := p.(Ceilinged); ok && c.Ceiling() < target {
@@ -972,15 +1007,39 @@ func (u *Upgrader) upgradeLeg(ctx context.Context, ref LegRef) (res legResult) {
 			if err != nil {
 				if st, ok := AsNamed(err); ok && st.Code == CodeNotApplicable {
 					s := BuilderStatusOf(ref.ProofID, ref.Chain, target, reached(), nil, err, false, u.cfg.Now())
-					status = &s
+					status, statusIsFailure = &s, false
 					wait = u.cfg.BrokenRetry
 					continue // the chain does not have that level: nothing to build, nothing wrong
+				}
+				if st, ok := AsNamed(err); ok && IsEnvironmentState(st.Code) {
+					// The state is a fact about THIS process or its capture store, not a verdict on the leg (state_class.go): the process
+					// memory budget could not cover the build even after waiting for another build to release (RB12-P0LIVE-FIX D2), or the
+					// capture store has a recorded hole in the window of the leg, which the backfill closes (RB12-GO-INT F17). No failure
+					// is counted, the back-off exponent is not advanced, the leg does not become a suspect, and it is asked again at the
+					// bounded poll PendingRetry, so a leg whose hole was just closed is built within one retry interval. The status row
+					// names the state with the time of the next ask.
+					logf("[FINALITY] leg %s chain %d: build of %s held by the environment, %s (asked again at the bounded poll): %v", ref.ProofID, ref.Chain, target, st.Code, err)
+					res.held, held = true, true
+					if hr, ok := u.cfg.Recorder.(HoldRecorder); ok {
+						hr.BuildHeld(ref.Chain, st.Code)
+					}
+					if status == nil || !statusIsFailure {
+						var s BuilderStatus
+						if st.Code == CodeMemoryBudget {
+							s = HeldBuilderStatus(ref.ProofID, ref.Chain, target, reached(), st, u.cfg.Now())
+						} else {
+							s = BuilderStatusOf(ref.ProofID, ref.Chain, target, reached(), nil, err, false, u.cfg.Now())
+						}
+						status = &s
+					}
+					wait = minWait(wait, u.cfg.PendingRetry)
+					continue
 				}
 				u.cfg.Recorder.BuildFailed(ref.Chain, codeOf(err))
 				logf("[FINALITY] leg %s chain %d: build of %s refused: %v", ref.ProofID, ref.Chain, target, err)
 				res.failed, failed = true, true
 				s := BuilderStatusOf(ref.ProofID, ref.Chain, target, reached(), nil, err, false, u.cfg.Now())
-				status = &s
+				status, statusIsFailure = &s, true
 				wait = minWait(wait, failWait)
 				continue // a refusal claims no level
 			}
@@ -997,7 +1056,7 @@ func (u *Upgrader) upgradeLeg(ctx context.Context, ref LegRef) (res legResult) {
 				}
 				s := BuilderStatusOf(ref.ProofID, ref.Chain, target, reached(), pd, nil, false, u.cfg.Now())
 				if status == nil || status.Class != BuilderPending || w < wait || wait < 0 {
-					status = &s
+					status, statusIsFailure = &s, false
 				}
 				wait = minWait(wait, w)
 			}
@@ -1021,19 +1080,20 @@ func (u *Upgrader) upgradeLeg(ctx context.Context, ref LegRef) (res legResult) {
 					res.conflict = true // another validator appended first; the next pass reads its chain
 					wait = minWait(wait, u.cfg.Interval)
 				case named && n.Code != CodeBuildTimeout && n.Code != CodePanic:
-					// the registered Kind (or the chain checks) refused what the prover built: nothing was stored (class R)
+					// the append of what the prover built was refused - by the registered Kind, the store's chain checks or the table's guard, the
+					// state's code says which - and nothing was stored (the refused class)
 					res.failed, failed = true, true
 					u.cfg.Recorder.BuildFailed(ref.Chain, n.Code)
-					logf("[FINALITY] leg %s chain %d: built %s evidence that does not verify: %v", ref.ProofID, ref.Chain, target, err)
+					logf("[FINALITY] leg %s chain %d: the append of the built %s evidence was refused (nothing stored): %v", ref.ProofID, ref.Chain, target, err)
 					s := BuilderStatusOf(ref.ProofID, ref.Chain, target, reached(), nil, err, true, u.cfg.Now())
-					status = &s
+					status, statusIsFailure = &s, true
 					wait = minWait(wait, failWait)
 				default:
 					res.failed, failed = true, true
 					u.cfg.Recorder.BuildFailed(ref.Chain, "store_write")
 					logf("[FINALITY] leg %s chain %d: appending the %s addendum: %v", ref.ProofID, ref.Chain, target, err)
-					s := BuilderStatusOf(ref.ProofID, ref.Chain, target, reached(), nil, err, false, u.cfg.Now())
-					status = &s
+					s := BuilderStatusOf(ref.ProofID, ref.Chain, target, reached(), nil, AtStage(StageAppend, err), false, u.cfg.Now())
+					status, statusIsFailure = &s, true
 					wait = minWait(wait, failWait)
 				}
 				continue
@@ -1051,7 +1111,9 @@ func (u *Upgrader) upgradeLeg(ctx context.Context, ref LegRef) (res legResult) {
 			wait = -1
 			break // one addendum per level
 		}
-		u.commitFail(ref.ProofID, target, failed, failAttempt)
+		if failed || !held { // a held build says nothing about the leg: its failure count stays as it was
+			u.commitFail(ref.ProofID, target, failed, failAttempt)
+		}
 		var nextAt time.Time
 		if wait >= 0 {
 			nextAt = u.scheduleLevel(ref.ProofID, target, wait)
@@ -1062,6 +1124,12 @@ func (u *Upgrader) upgradeLeg(ctx context.Context, ref LegRef) (res legResult) {
 			}
 			if failed && !nextAt.IsZero() && (status.Class == BuilderUnavailable || status.Class == BuilderRefused) {
 				status.noteAttempt(failAttempt, nextAt)
+			} else if held && !nextAt.IsZero() && status.State != nil && IsEnvironmentState(status.State.Code) {
+				if status.Class == BuilderPending {
+					status.noteRetry(nextAt)
+				} else {
+					status.noteNextAttempt(nextAt)
+				}
 			}
 			u.putStatus(ctx, *status)
 		}
@@ -1102,23 +1170,46 @@ func (u *Upgrader) build(ctx context.Context, p Prover, s *ethproof.Settlement, 
 		add *Addendum
 		pd  *PendingState
 	}
-	// everything the prover reads through the generic row loaders is reserved against the process budget and given back when the
-	// attempt ends (an abandoned prover keeps its reservation no longer than its own call: the hold is released on return)
-	hold := NewHold(ctx, p.Chain(), "build")
-	defer hold.Release()
-	ctx = WithHold(ctx, hold)
-	o, err := bounded(ctx, u.cfg.BuildTimeout, p.Chain(), "building the evidence", func(c context.Context) (out, error) {
-		add, pd, err := p.Build(c, s, have, target)
-		return out{add, pd}, err
-	})
-	return o.add, o.pd, err
+	budget := MemoryBudgetOf(ctx)
+	var age uint64 // the build's place in the budget: kept when it has to be run again, so it is not made to wait behind younger builds
+	if budget != nil {
+		age = budget.newAge()
+	}
+	var deadline time.Time
+	for {
+		// Everything the prover reads through the generic row loaders is reserved against the process budget. The hold ends when the
+		// PROVER RETURNS, not when the build is abandoned at BuildTimeout: a prover that ignores its context keeps running with what it has
+		// read in memory, and the budget must go on counting it until it is really gone (RB12-P0LIVE-FIX F7). A reservation it makes
+		// after its hold ended is refused by name, so it cannot read more.
+		hold := newHold(ctx, p.Chain(), "build", age)
+		o, err := bounded(WithHold(ctx, hold), u.cfg.BuildTimeout, p.Chain(), "building the evidence", func(c context.Context) (out, error) {
+			defer hold.Release()
+			add, pd, err := p.Build(c, s, have, target)
+			return out{add, pd}, err
+		})
+		yielded, finished := hold.Yielded()
+		if err == nil || !yielded || budget == nil {
+			return o.add, o.pd, err
+		}
+		// The budget asked this build to give back what it held so that an older build could finish (RB12-P0LIVE-FIX D2): run it again
+		// when another build has finished, within the budget's wait; if none does, the refusal stands and the leg is held.
+		if st, ok := AsNamed(err); !ok || st.Code != CodeMemoryBudget {
+			return o.add, o.pd, err
+		}
+		if deadline.IsZero() {
+			deadline = time.Now().Add(budget.Wait())
+		}
+		if !budget.waitFinished(ctx, finished, time.Until(deadline)) {
+			return o.add, o.pd, err
+		}
+	}
 }
 
 func codeOf(err error) string {
 	if n, ok := AsNamed(err); ok {
 		return n.Code
 	}
-	return "unnamed_error"
+	return CodeBuilderError
 }
 
 // ---- the enable flags ----
@@ -1155,6 +1246,33 @@ func DisabledChainsFromEnv(chains []uint64) (map[uint64]bool, error) {
 	return off, nil
 }
 
+// ConfigInvalidState is the named state of a finality runtime that was NOT started because a setting it parses was refused:
+// finality_upgrader_disabled{reason: config_invalid, variable, entry, class}. entry is the position of the refused entry among the
+// variable's non-blank entries (-1: the variable holds none) and class says what is wrong with it; the value itself is never part of
+// the state, it may hold a credential (env is the variable too, value is the word invalid: the registry's required fields). The validator (consensus, attestation, settlement) is not affected; this validator appends no
+// addenda and captures nothing until the variable is corrected and the process restarted.
+func ConfigInvalidState(variable string, entry int, class string) *StateError {
+	return NewState(CodeUpgraderDisabled, "reason", "config_invalid", "env", variable, "value", "invalid", "variable", variable, "entry", entry, "class", class,
+		"effect", "the finality runtime was not started: no finality addenda are appended and nothing is captured by this validator until the variable is corrected and the process restarted; proofs stay at the level they were stored at; consensus, attestation and settlement are not affected")
+}
+
+// AnnounceUpgraderDisabled announces that the whole upgrader is off, in the one way every such state is announced: the log, the
+// certen_finality_upgrader_enabled gauge, certen_finality_upgrader_disabled_total{chain="0",env} (env: the switch, or the refused
+// variable of a config_invalid state) and the health block's upgrader_disabled_reason. The state carries no secret.
+func AnnounceUpgraderDisabled(logf func(format string, args ...any), st *StateError) {
+	logf("[FINALITY] upgrader DISABLED: %s", st.Error())
+	metrics.SetFinalityUpgraderEnabled(false)
+	metrics.IncFinalityUpgraderDisabled(0, upgraderDisabledEnv(st))
+	metrics.SetFinalityUpgraderDisabledReason(st.Error())
+}
+
+// upgraderDisabledEnv is the setting that caused a whole-upgrader off state: the switch, or the refused variable of a config_invalid state
+// (ConfigInvalidState carries it as env too).
+func upgraderDisabledEnv(st *StateError) string {
+	env, _ := st.Fields["env"].(string)
+	return env
+}
+
 // Launch starts the upgrader and the registered capture loops on their own goroutines, or, when it is switched off, reports
 // the named state finality_upgrader_disabled in the log and the metric: an off switch is never a silent skip. Per-chain
 // switches (CERTEN_FINALITY_CHAIN_<id>_ENABLED, default on) turn one chain's upgrader and capturers off the same way. It
@@ -1162,11 +1280,8 @@ func DisabledChainsFromEnv(chains []uint64) (map[uint64]bool, error) {
 func Launch(ctx context.Context, enabled bool, src LegSource, store AddendumStore, reg *Registry, pins *Pins, cfg UpgraderConfig) (*Upgrader, error) {
 	cfg = cfg.withDefaults()
 	if !enabled {
-		st := NewState(CodeUpgraderDisabled, "env", EnvEnabled, "value", "false",
-			"effect", "no finality addenda are appended by this validator; proofs stay at the level they were stored at")
-		cfg.Logf("[FINALITY] upgrader DISABLED: %s", st.Error())
-		metrics.SetFinalityUpgraderEnabled(false)
-		metrics.IncFinalityUpgraderDisabled(0, EnvEnabled)
+		AnnounceUpgraderDisabled(cfg.Logf, NewState(CodeUpgraderDisabled, "env", EnvEnabled, "value", "false",
+			"effect", "no finality addenda are appended by this validator; proofs stay at the level they were stored at"))
 		return nil, nil
 	}
 	// a missing registry is NewUpgrader's refusal below, not a nil dereference here
@@ -1246,6 +1361,43 @@ func (u *Upgrader) announceGaps(rep PassReport) {
 	if rep.Unrecorded != u.lastUnrecorded {
 		u.lastUnrecorded = rep.Unrecorded
 		u.cfg.Logf("[FINALITY] %d legs had settlement evidence served while their proof row has no settlement_tx_hash or settlement_block_number yet: the check against the recorded settlement was skipped", rep.Unrecorded)
+	}
+}
+
+// convergeStatus writes the verified status row of every level the leg's chain holds whose row is not verified (RB11-DBFIX D1). All
+// validators share one database, so a level can be stored by another validator while this one's row for it still says pending or
+// unavailable, or says nothing (the other validator crashed between its append and its status write, or its write lost a race). A
+// level the chain holds is never a build target again, so nothing else would ever correct that row. The addendum is the fact: the
+// row is derived from it (the store refuses a verified row the chain does not support), never from a judgement of the moment.
+func (u *Upgrader) convergeStatus(ctx context.Context, ref LegRef, chain []Addendum) {
+	if u.cfg.Status == nil {
+		return
+	}
+	type read struct {
+		v  BuilderStatusView
+		ok bool
+	}
+	for _, a := range chain {
+		if !a.Level.Stored() {
+			continue
+		}
+		cur, err := bounded(ctx, u.cfg.StoreTimeout, ref.Chain, "reading the builder status", func(c context.Context) (read, error) {
+			v, ok, err := u.cfg.Status.GetStatus(c, ref.ProofID, a.Level)
+			return read{v, ok}, err
+		})
+		if err != nil {
+			if ctx.Err() == nil {
+				if sr, ok := u.cfg.Recorder.(StatusRecorder); ok {
+					sr.StatusWriteFailed(ref.Chain)
+				}
+				u.cfg.Logf("[FINALITY] leg %s chain %d: the %s status row was not read: %v", ref.ProofID, ref.Chain, a.Level, err)
+			}
+			continue
+		}
+		if cur.ok && cur.v.Class == BuilderVerified {
+			continue
+		}
+		u.putStatus(ctx, VerifiedBuilderStatus(ref.ProofID, ref.Chain, a.Level, a.Seq, u.cfg.Now()))
 	}
 }
 

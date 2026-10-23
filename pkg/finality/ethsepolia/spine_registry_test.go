@@ -100,7 +100,7 @@ func TestTheRegistryRecordsTheNewPendingReasonAndTheNewOperationalState(t *testi
 	if !ok {
 		t.Fatalf("%s is not registered", CodeSpineRowInvalid)
 	}
-	if spec.Scope != "go_operational" || strings.Join(spec.Required, ",") != "block,chain,reason" || strings.Join(spec.Optional, ",") != "at,got_hash,item,want_hash" {
+	if spec.Scope != "go_operational" || strings.Join(spec.Required, ",") != "block,chain,reason" || strings.Join(spec.Optional, ",") != "at,attempt,got_hash,item,next_attempt_at,want_hash" {
 		t.Fatalf("%+v", spec)
 	}
 	want := sorted([]string{SpineRowMalformed, SpineRowNumbers, SpineRowNotChained, SpineRowTopMismatch, SpineRowConflict})

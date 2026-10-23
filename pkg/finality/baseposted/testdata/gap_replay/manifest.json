@@ -1,0 +1,221 @@
+{
+ "recorded_at_utc": "2026-10-23T15:37:37.914Z",
+ "note": "real provider answers, verbatim; read-only; public endpoints, no credentials",
+ "genesis_time": 1655733600,
+ "blocks": [
+  {
+   "number": 11976075,
+   "hash": "0xdc7262c7e24b72f8ca7b49fa64a06fdbeaf678a44b46f376a8cb7a2d6c3417f7",
+   "slot": 11418148,
+   "inbox_txs": 1
+  },
+  {
+   "number": 11976414,
+   "hash": "0xecbaaf65dfdbfbca3bef9601c69d0a5fdcfe774263f6a332f67d8063e7e47212",
+   "slot": 11418487,
+   "inbox_txs": 1
+  },
+  {
+   "number": 11976724,
+   "hash": "0x2c11a1fd89064ab4640bab6090aa4741a6f6cf92bc2a972da7da0d44bcbe5f49",
+   "slot": 11418797,
+   "inbox_txs": 1
+  }
+ ],
+ "scan_file": "scan.json.gz",
+ "calls": [
+  {
+   "kind": "rpc",
+   "method": "eth_getBlockByNumber",
+   "params": [
+    "0xb6bd8b",
+    true
+   ],
+   "file": "block_11976075.json.gz",
+   "host": "ethereum-sepolia-rpc.publicnode.com"
+  },
+  {
+   "kind": "rpc",
+   "method": "eth_getProof",
+   "params": [
+    "0xf272670eb55e895584501d564afeb048bed26194",
+    [
+     "0x0000000000000000000000000000000000000000000000000000000000000067",
+     "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc"
+    ],
+    "0xb6bd8b"
+   ],
+   "file": "proof_11976075_syscfg.json.gz",
+   "host": "rpc.sepolia.ethpandaops.io"
+  },
+  {
+   "kind": "rpc",
+   "method": "eth_getProof",
+   "params": [
+    "0xaeb75e200b9bcf9343ff1a2d2b1b3976e7339ca4",
+    [],
+    "0xb6bd8b"
+   ],
+   "file": "proof_11976075_impl.json.gz",
+   "host": "rpc.sepolia.ethpandaops.io"
+  },
+  {
+   "kind": "beacon",
+   "path": "/eth/v1/beacon/blobs/11418148",
+   "status": 200,
+   "file": "beacon_11976075.json.gz",
+   "host": "ethereum-sepolia-beacon-api.publicnode.com"
+  },
+  {
+   "kind": "rpc",
+   "method": "eth_getBlockByNumber",
+   "params": [
+    "0xb6bede",
+    true
+   ],
+   "file": "block_11976414.json.gz",
+   "host": "ethereum-sepolia-rpc.publicnode.com"
+  },
+  {
+   "kind": "rpc",
+   "method": "eth_getProof",
+   "params": [
+    "0xf272670eb55e895584501d564afeb048bed26194",
+    [
+     "0x0000000000000000000000000000000000000000000000000000000000000067",
+     "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc"
+    ],
+    "0xb6bede"
+   ],
+   "file": "proof_11976414_syscfg.json.gz",
+   "host": "rpc.sepolia.ethpandaops.io"
+  },
+  {
+   "kind": "rpc",
+   "method": "eth_getProof",
+   "params": [
+    "0xaeb75e200b9bcf9343ff1a2d2b1b3976e7339ca4",
+    [],
+    "0xb6bede"
+   ],
+   "file": "proof_11976414_impl.json.gz",
+   "host": "rpc.sepolia.ethpandaops.io"
+  },
+  {
+   "kind": "beacon",
+   "path": "/eth/v1/beacon/blobs/11418487",
+   "status": 200,
+   "file": "beacon_11976414.json.gz",
+   "host": "ethereum-sepolia-beacon-api.publicnode.com"
+  },
+  {
+   "kind": "rpc",
+   "method": "eth_getBlockByNumber",
+   "params": [
+    "0xb6c014",
+    true
+   ],
+   "file": "block_11976724.json.gz",
+   "host": "ethereum-sepolia-rpc.publicnode.com"
+  },
+  {
+   "kind": "rpc",
+   "method": "eth_getProof",
+   "params": [
+    "0xf272670eb55e895584501d564afeb048bed26194",
+    [
+     "0x0000000000000000000000000000000000000000000000000000000000000067",
+     "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc"
+    ],
+    "0xb6c014"
+   ],
+   "file": "proof_11976724_syscfg.json.gz",
+   "host": "rpc.sepolia.ethpandaops.io"
+  },
+  {
+   "kind": "rpc",
+   "method": "eth_getProof",
+   "params": [
+    "0xaeb75e200b9bcf9343ff1a2d2b1b3976e7339ca4",
+    [],
+    "0xb6c014"
+   ],
+   "file": "proof_11976724_impl.json.gz",
+   "host": "rpc.sepolia.ethpandaops.io"
+  },
+  {
+   "kind": "beacon",
+   "path": "/eth/v1/beacon/blobs/11418797",
+   "status": 200,
+   "file": "beacon_11976724.json.gz",
+   "host": "ethereum-sepolia-beacon-api.publicnode.com"
+  }
+ ],
+ "files": [
+  {
+   "file": "block_11976075.json.gz",
+   "sha256_gz": "20f3bdbda0724648f90e3219974f63216196910b9ee469d5f03f25978a150485",
+   "bytes_raw": 171220
+  },
+  {
+   "file": "proof_11976075_syscfg.json.gz",
+   "sha256_gz": "a0c5f5547846709cfead3d4ecf989c5d86ebf4aa5e123916572eafebca286147",
+   "bytes_raw": 9917
+  },
+  {
+   "file": "proof_11976075_impl.json.gz",
+   "sha256_gz": "02e1df441c151828e6e7abb32f4224a767137a14402c17842a7367a00ada4b05",
+   "bytes_raw": 7993
+  },
+  {
+   "file": "beacon_11976075.json.gz",
+   "sha256_gz": "e3eb1a4655839f9082359aa4a26897efe6f8b8c5b8460bb5ef51c3d41fb226a0",
+   "bytes_raw": 3407993
+  },
+  {
+   "file": "block_11976414.json.gz",
+   "sha256_gz": "e8dbc269826a57010fef152a8549d93b179feb2c01aca33dc25cef86137d6648",
+   "bytes_raw": 246702
+  },
+  {
+   "file": "proof_11976414_syscfg.json.gz",
+   "sha256_gz": "048285e26ba75b62bb3de0005f4a56b3572a2156c1c410ce6bcb21d117aa44a2",
+   "bytes_raw": 9917
+  },
+  {
+   "file": "proof_11976414_impl.json.gz",
+   "sha256_gz": "0424d642d5758f8f4d42f4e76cda0dddf66c97a8b7a30b4a222669d7f7a9321e",
+   "bytes_raw": 7993
+  },
+  {
+   "file": "beacon_11976414.json.gz",
+   "sha256_gz": "70dc90dc1c4f85c75a62174a934f989ee9280fbb07fb55b170f5393f9f5381ab",
+   "bytes_raw": 3932291
+  },
+  {
+   "file": "block_11976724.json.gz",
+   "sha256_gz": "6b935f1455325e5928de34f8ab7b54fd5e5ce2f13ad56111300e17576fd4072d",
+   "bytes_raw": 177376
+  },
+  {
+   "file": "proof_11976724_syscfg.json.gz",
+   "sha256_gz": "3c7dc1942396ecd47fed4a0a53de4a5ae444500c6278f3588c0e5e1fb4ff67d0",
+   "bytes_raw": 9917
+  },
+  {
+   "file": "proof_11976724_impl.json.gz",
+   "sha256_gz": "21fcb78b6a8af828971a3e4a8caa016c4b074d8b39b6739d06562410be95a4a2",
+   "bytes_raw": 7993
+  },
+  {
+   "file": "beacon_11976724.json.gz",
+   "sha256_gz": "08707ea69270ee9f316e49521180512b631ef25df6002914e13cbb76b233ec1c",
+   "bytes_raw": 4456589
+  },
+  {
+   "file": "scan.json.gz",
+   "sha256_gz": "fc0ac4fafe904d6606b9a28c526f85774af82168b6429771465a7df5e8a6c59b",
+   "bytes_raw": 76069
+  }
+ ]
+}

@@ -42,7 +42,7 @@ case "$SAMPLE" in ''|*[!0-9]*) SAMPLE=20 ;; esac
 # The supported chains of the S7 table (pkg/finality/table.go): Sepolia, Base Sepolia, Arbitrum Sepolia, Adiri.
 CHAINS_SQL="11155111,84532,421614,2017"
 
-# ---- migration checksums: certen-validator db/migrations at pv2/rb11-int (== the proofs_service RequiredSchema pins for 00000-00014, 00026-00028)
+# ---- migration checksums: certen-validator db/migrations at pv2/rb12-train2 (00000-00028 as at pv2/rb11-int, == the proofs_service RequiredSchema pins for 00000-00014, 00026-00028; 00029 = the dbfix own-hash guard, RB12-GO-INT)
 MIGRATION_SHA='
 00000 dacf9261f48333444c3657532a575ae02ed583fe57f516aef7af3e26cd7c6a14
 00001 ed6ddda58c77649769ecff8ca5bbc555ab36e93118106339155b48c1443028c6
@@ -73,6 +73,7 @@ MIGRATION_SHA='
 00026 3c8aab92e4d5bede91b245121f18e7f29459f987e816237d1ce4c0b0357324f8
 00027 33111ed2735c8af9581bf4502f422935c1131589f47a9e31b8b874301cfe7d63
 00028 759cfbda9571a7a1063a4034fcf7502ce94210800ed49eb53e4e5992ab8b81c5
+00029 2cc377c51c1b1269c8173e850e011646a16a7adb6a49945451fb199b1a63b533
 '
 
 if [ "${1:-}" = "--selftest-migrations" ]; then
@@ -325,9 +326,9 @@ SQL
 ' ' ' | sed 's/^/ /; s/^ $/ none/')"
   fi
   if [ -z "$missing" ] && [ -z "$wrong" ]; then
-    rec PASS E2 "every migration 00000-00028 of the repo is in the history with its file's checksum (proofs_service refuses to start otherwise)" "29 versions, sha256 equal" "29 of 29 equal; versions in the history beyond the repo list: ${extra:-none}"
+    rec PASS E2 "every migration 00000-00029 of the repo is in the history with its file's checksum (proofs_service refuses to start otherwise; 00029 must be staged before the validators with this binary start)" "30 versions, sha256 equal" "30 of 30 equal; versions in the history beyond the repo list: ${extra:-none}"
   else
-    rec FAIL E2 "every migration 00000-00028 of the repo is in the history with its file's checksum (proofs_service refuses to start otherwise)" "29 versions, sha256 equal" "not applied: ${missing:-none}; checksum differs:${wrong:- none}"
+    rec FAIL E2 "every migration 00000-00029 of the repo is in the history with its file's checksum (proofs_service refuses to start otherwise; 00029 must be staged before the validators with this binary start)" "30 versions, sha256 equal" "not applied: ${missing:-none}; checksum differs:${wrong:- none}"
   fi
 else rec FAIL E1 "certen_schema_history readable" "table answers" "query failed: $(errline)"; fi
 
@@ -753,7 +754,100 @@ EOF
   fi
 else rec FAIL C7 "capture query" "query answers" "failed: $(errline)"; fi
 
-# RB12-SEPOLIA-SPINE (C8, C9): the Sepolia execution-header spine is kept as insert-only capture rows (chain 11155111, item spine/n<count>) and
+# C8: the capture cursor rows (item runtime/cursor) that finality.CaptureCoverageOf reads (RB12-F2, checked here by RB12-P0LIVE-FIX D7).
+# The Base l1_posted builder decides a leg whose whole window lies below the first block the capture loop scanned as
+# l1_capture_not_covering (a named unavailable state); that decision rests on three stored-data assumptions, each checked below:
+#   (1) the item is named exactly runtime/cursor and chain 84532 has rows of it;
+#   (2) a cursor row is keyed at the scanned block under the ZERO hash and holds that block as 8 big-endian bytes;
+#   (3) min(l1_block) over the chain's cursor rows is the end of the loop's first range (the loop scanned every block from there minus its
+#       first range on and nothing before): rows of other items below it were written before the loop ran (a one-shot recorder) and are
+#       NOT evidence of coverage; the builder keeps a slack of max(CaptureBlocks, 32) blocks below the first cursor.
+# Positions and classes are printed, never row contents. A chain with capture rows and NO cursor row has an unknown coverage: the builder
+# then concludes nothing and every leg of it stays in the window search (pending) - a named WARN, not a FAIL.
+CURSOR_ROWS=""
+if out=$(sqlro <<SQL
+WITH cur AS (
+  SELECT chain, count(*) AS n, min(l1_block) AS lo, max(l1_block) AS hi,
+    count(*) FILTER (WHERE l1_hash <> decode(repeat('00', 32), 'hex')) AS badhash,
+    count(*) FILTER (WHERE octet_length(bytes) <> 8) AS badlen,
+    count(*) FILTER (WHERE octet_length(bytes) = 8 AND ('x' || encode(bytes, 'hex'))::bit(64)::bigint <> l1_block) AS badval
+  FROM proof_finality_capture WHERE item = 'runtime/cursor' GROUP BY chain),
+ oth AS (
+  SELECT chain, count(*) AS n, min(l1_block) AS lo, max(l1_block) AS hi
+  FROM proof_finality_capture WHERE item <> 'runtime/cursor' GROUP BY chain)
+SELECT chain, COALESCE(cur.n, 0), COALESCE(cur.lo::text, '-'), COALESCE(cur.hi::text, '-'),
+  COALESCE(cur.badhash, 0), COALESCE(cur.badlen, 0), COALESCE(cur.badval, 0),
+  COALESCE(oth.n, 0), COALESCE(oth.lo::text, '-'), COALESCE(oth.hi::text, '-'),
+  (SELECT count(*) FROM proof_finality_capture o WHERE o.chain = chain_all.chain AND o.item <> 'runtime/cursor' AND cur.lo IS NOT NULL AND o.l1_block < cur.lo)
+FROM (SELECT chain FROM cur UNION SELECT chain FROM oth) chain_all
+LEFT JOIN cur USING (chain) LEFT JOIN oth USING (chain) ORDER BY chain;
+SQL
+); then
+  CURSOR_ROWS="$out"
+  base_seen=0
+  while IFS='|' read -r k_chain k_n k_lo k_hi k_bh k_bl k_bv k_on k_olo k_ohi k_below; do
+    [ -z "$k_chain" ] && continue
+    [ "$k_chain" = "84532" ] && base_seen=1
+    if [ "$((k_bh + k_bl + k_bv))" -ne 0 ]; then
+      rec FAIL C8 "chain $k_chain: runtime/cursor rows are keyed under the zero hash and hold their own block as 8 big-endian bytes" "0 violations in $k_n cursor rows" "non-zero hash $k_bh; byte length not 8: $k_bl; value differs from l1_block: $k_bv (first scan ended at $k_lo, latest at $k_hi)"
+    elif [ "$k_n" -eq 0 ]; then
+      if [ "$k_chain" = "84532" ]; then
+        rec WARN C8 "chain 84532 has a runtime/cursor row, so the Base l1_posted builder knows what the capture loop covered" "at least 1 cursor row (min = end of the loop's first range)" "no cursor row, $k_on capture rows between blocks $k_olo and $k_ohi: coverage UNKNOWN, l1_capture_not_covering is never concluded for this chain and its legs stay pending in the window search (the loop writes a cursor row once per tick: a loop that never ticked, or rows written by a one-shot recorder only)"
+      else
+        info "chain $k_chain: $k_on capture rows between blocks $k_olo and $k_ohi and no runtime/cursor row (the Base builder is the only reader of coverage)"
+      fi
+    else
+      if [ "$k_chain" = "84532" ]; then
+        rec PASS C8 "chain 84532: runtime/cursor rows exist and have the written shape; the builder reads min and max of their l1_block" "at least 1 cursor row, zero hash, 8 big-endian bytes equal to l1_block" "$k_n cursor rows; first scan ended at block $k_lo, latest at $k_hi; $k_on other capture rows between blocks $k_olo and $k_ohi, of which $k_below lie below the first cursor (written before the loop ran: not covered by it)"
+      else
+        info "chain $k_chain: $k_n cursor rows (first scan ended at block $k_lo, latest at $k_hi), shape as written; $k_on other capture rows, $k_below below the first cursor"
+      fi
+    fi
+  done <<EOF
+$out
+EOF
+  if [ "$base_seen" -eq 0 ]; then
+    rec WARN C8 "chain 84532 has capture rows (and a runtime/cursor row), so the Base l1_posted builder knows what the capture loop covered" "rows of chain 84532" "no capture row at all for chain 84532: coverage UNKNOWN, every Base leg stays pending in the window search"
+  fi
+else rec FAIL C8 "capture cursor query" "query answers" "failed: $(errline)"; fi
+# (renumbered at the Train 2 integration: C8 is the p0-live cursor-row check above; the capture-gap checks are C9 and C10)
+# C9 (RB12-CAPTURE-GAP): the gap bookkeeping rows the code writes and reads are well-formed, and the spacing audit's assumption holds on the
+# live Base store (consecutive captured inbox blocks are at most 19 blocks apart outside outage holes; the audit suspects a run above 40).
+if out=$(sqlro <<SQL
+SELECT count(*) FILTER (WHERE item LIKE 'gap/%'),
+  count(*) FILTER (WHERE item LIKE 'gap/%' AND item !~ '^gap/[0-9]+/(block_unavailable|state_proof_unavailable|blob_unavailable|capture_failed|outage_unscanned|spacing_unproven|operator_declared)\$'),
+  count(*) FILTER (WHERE item LIKE 'gapfill/%' AND item <> 'gapfill/' || l1_block),
+  count(*) FILTER (WHERE item LIKE 'gapend/%' AND item !~ '^gapend/[0-9]+/(unavailable_proven|retention_expired)\$'),
+  count(*) FILTER (WHERE item LIKE 'gapnote/%')
+  FROM proof_finality_capture;
+SQL
+); then
+  IFS='|' read -r g_n g_badgap g_badfill g_badend g_notes <<EOF
+$out
+EOF
+  [ "$((g_badgap + g_badfill + g_badend))" -eq 0 ] && st=PASS || st=FAIL
+  rec $st C9 "gap bookkeeping rows (gap/<to>/<class>, gapfill/<block>, gapend/<block>/<kind>) are well-formed" "0 malformed" "gap rows $g_n (malformed $g_badgap), malformed fills $g_badfill, malformed ends $g_badend, notes $g_notes"
+else rec FAIL C9 "gap bookkeeping query" "query answers" "failed: $(errline)"; fi
+if out=$(sqlro <<SQL
+WITH ib AS (SELECT DISTINCT l1_block AS blk FROM proof_finality_capture WHERE chain = 84532 AND item = 'inbox'),
+     d  AS (SELECT blk AS a, lead(blk) OVER (ORDER BY blk) AS z FROM ib),
+     r  AS (SELECT a, z FROM d WHERE z IS NOT NULL AND z - a > 40
+              AND NOT EXISTS (SELECT 1 FROM proof_finality_capture g WHERE g.chain = 84532 AND g.item LIKE 'gap/%'
+                               AND g.l1_block <= a + 1 AND split_part(g.item, '/', 2)::bigint >= z - 1))
+SELECT (SELECT count(*) FROM ib),
+       COALESCE((SELECT max(z - a) FROM d WHERE z IS NOT NULL AND z - a <= 40), 0),
+       (SELECT count(*) FROM r), COALESCE((SELECT sum(z - a - 1) FROM r), 0);
+SQL
+); then
+  IFS='|' read -r s_n s_max s_runs s_blocks <<EOF
+$out
+EOF
+  if [ "$s_n" -eq 0 ]; then rec WARN C10 "Base capture: consecutive inbox blocks are at most 40 apart unless a gap row covers the run" "rows to examine" "no Base inbox rows (nothing examined)"
+  elif [ "$s_runs" -eq 0 ]; then rec PASS C10 "Base capture: consecutive inbox blocks are at most 40 apart unless a gap row covers the run" "0 uncovered runs" "$s_n inbox blocks, largest ordinary spacing $s_max, 0 uncovered runs"
+  else rec WARN C10 "Base capture: consecutive inbox blocks are at most 40 apart unless a gap row covers the run" "0 uncovered runs (the spacing audit records them on the first tick of the RB12-CAPTURE-GAP binary)" "$s_runs uncovered run(s), $s_blocks uncaptured blocks; $s_n inbox blocks, largest ordinary spacing $s_max"; fi
+else rec FAIL C10 "Base capture spacing query" "query answers" "failed: $(errline)"; fi
+
+# RB12-SEPOLIA-SPINE (SP1, SP2): the Sepolia execution-header spine is kept as insert-only capture rows (chain 11155111, item spine/n<count>) and
 # its progress is a finality_pending{awaiting_spine} status row. Empty before the first deploy of the fix; on the live store afterwards.
 if out=$(sqlro <<SQL
 SELECT count(*),
@@ -770,12 +864,12 @@ SQL
 $out
 EOF
   if [ "$sp_n" -eq 0 ]; then
-    rec WARN C8 "Sepolia spine chunk rows (proof_finality_capture, chain 11155111, item spine/n<1..40>) are 32-byte-hash rows of whole header windows" "rows to examine" "none yet (expected until the spine fix is deployed and a Sepolia leg has been attempted)"
+    rec WARN SP1 "Sepolia spine chunk rows (proof_finality_capture, chain 11155111, item spine/n<1..40>) are 32-byte-hash rows of whole header windows" "rows to examine" "none yet (expected until the spine fix is deployed and a Sepolia leg has been attempted)"
   else
     [ "$((sp_hash + sp_item + sp_bound + sp_list + sp_size))" -eq 0 ] && st=PASS || st=FAIL
-    rec $st C8 "Sepolia spine chunk rows are 32-byte-hash rows of whole header windows: item spine/n<1..40>, a full window ends at a block = 39 mod 40, the bytes are one RLP list of 400..2048 bytes per header" "0 violations in $sp_n rows (blocks $sp_lo..$sp_hi)" "bad hash length $sp_hash; bad item $sp_item; full window off the boundary $sp_bound; not an RLP list $sp_list; implausible size $sp_size"
+    rec $st SP1 "Sepolia spine chunk rows are 32-byte-hash rows of whole header windows: item spine/n<1..40>, a full window ends at a block = 39 mod 40, the bytes are one RLP list of 400..2048 bytes per header" "0 violations in $sp_n rows (blocks $sp_lo..$sp_hi)" "bad hash length $sp_hash; bad item $sp_item; full window off the boundary $sp_bound; not an RLP list $sp_list; implausible size $sp_size"
   fi
-else rec FAIL C8 "spine rows query" "query answers" "failed: $(errline)"; fi
+else rec FAIL SP1 "spine rows query" "query answers" "failed: $(errline)"; fi
 
 if out=$(sqlro <<SQL
 WITH f AS (SELECT chain, state->>'class' AS cls, state->'state'->>'code' AS code, state->'state'->'fields' AS fl FROM proof_finality_status)
@@ -794,12 +888,12 @@ SQL
 $out
 EOF
   if [ "$as_n" -eq 0 ]; then
-    rec WARN C9 "awaiting_spine status rows carry numeric have <= need and a next_attempt_at time" "rows to examine" "none yet; Sepolia finality_build_timeout rows still present: $as_to (they are replaced by awaiting_spine rows on the first attempts after the fix is deployed)"
+    rec WARN SP2 "awaiting_spine status rows carry numeric have <= need and a next_attempt_at time" "rows to examine" "none yet; Sepolia finality_build_timeout rows still present: $as_to (they are replaced by awaiting_spine rows on the first attempts after the fix is deployed)"
   else
     [ "$((as_bad + as_other))" -eq 0 ] && st=PASS || st=FAIL
-    rec $st C9 "awaiting_spine status rows (only Sepolia legs) carry numeric have <= need and a next_attempt_at time" "0 violations in $as_n rows" "malformed $as_bad; on a chain other than Sepolia $as_other; Sepolia finality_build_timeout rows still present: $as_to"
+    rec $st SP2 "awaiting_spine status rows (only Sepolia legs) carry numeric have <= need and a next_attempt_at time" "0 violations in $as_n rows" "malformed $as_bad; on a chain other than Sepolia $as_other; Sepolia finality_build_timeout rows still present: $as_to"
   fi
-else rec FAIL C9 "awaiting_spine status query" "query answers" "failed: $(errline)"; fi
+else rec FAIL SP2 "awaiting_spine status query" "query answers" "failed: $(errline)"; fi
 
 # ==============================================================================================================================
 # (f) container environment hygiene (names only, never values)

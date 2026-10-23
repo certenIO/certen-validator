@@ -132,20 +132,71 @@ func TestAddendumRepositoryWritesOnlyItsOwnTable(t *testing.T) {
 	}
 }
 
-// main.go wires the upgrader in exactly one place and hands it nothing but the addendum repository, the switch and the
-// framework's own registry and pins: it is never given an attestor, a validator, a consensus object or a hook, and nothing else
-// in main.go names the framework.
+// The upgrader is wired in exactly one place - startFinality in finality_start.go, which main.go's startValidator calls exactly once
+// with nothing but a context, the database client and the logger - and it is handed nothing but the addendum repository, the switch
+// and the framework's own registry and pins: it is never given an attestor, a validator, a consensus object or a hook, and nothing
+// else in main.go names the framework (main.go does not even import it).
 func TestMainWiresTheUpgraderAloneAndGivesItNoConsensusObject(t *testing.T) {
 	root := repoRoot(t)
 	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, filepath.Join(root, "main.go"), nil, parser.SkipObjectResolution)
+
+	// main.go: no use of the framework or its runtime wiring at all; exactly one call of startFinality, inside startValidator, whose
+	// arguments name no consensus-side object
+	mainFile, err := parser.ParseFile(fset, filepath.Join(root, "main.go"), nil, parser.SkipObjectResolution)
 	if err != nil {
 		t.Fatal(err)
 	}
-	allowed := map[string]bool{"Enabled": true, "Launch": true, "Default": true, "EmbeddedPins": true, "UpgraderConfig": true}
+	startCalls := 0
+	for _, decl := range mainFile.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok {
+			continue
+		}
+		ast.Inspect(fn, func(n ast.Node) bool {
+			switch x := n.(type) {
+			case *ast.SelectorExpr:
+				if pkg, ok := x.X.(*ast.Ident); ok && (pkg.Name == "finality" || pkg.Name == "finruntime") {
+					t.Errorf("main.go: %s.%s is used in %s; main.go must not name the finality framework (the wiring is startFinality)", pkg.Name, x.Sel.Name, fn.Name.Name)
+				}
+			case *ast.CallExpr:
+				if id, ok := x.Fun.(*ast.Ident); ok && id.Name == "startFinality" {
+					startCalls++
+					if fn.Name.Name != "startValidator" {
+						t.Errorf("main.go: startFinality is called in %s; the upgrader is started from startValidator only", fn.Name.Name)
+					}
+					for i, arg := range x.Args {
+						ast.Inspect(arg, func(m ast.Node) bool {
+							if id, ok := m.(*ast.Ident); ok {
+								switch id.Name {
+								case "attestor", "validator", "bftValidator", "consensus", "shadow", "executor", "bridge", "accClient", "cfg":
+									t.Errorf("main.go: startFinality argument %d mentions %q, a consensus-side object", i, id.Name)
+								}
+							}
+							return true
+						})
+					}
+				}
+			}
+			return true
+		})
+	}
+	if startCalls != 1 {
+		t.Fatalf("main.go calls startFinality %d times; want exactly one", startCalls)
+	}
+
+	f, err := parser.ParseFile(fset, filepath.Join(root, "finality_start.go"), nil, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// RB12-DBFIX-FIX: AnnounceUpgraderDisabled and ConfigInvalidState announce a refused provider entry as the named state
+	allowed := map[string]bool{"Enabled": true, "Launch": true, "Default": true, "EmbeddedPins": true, "UpgraderConfig": true, "AnnounceUpgraderDisabled": true, "ConfigInvalidState": true}
 	// RB11-B2B2b: the production wiring (pkg/finality/runtime, imported as finruntime) is reached through exactly these symbols:
 	// the configuration read, the wiring call and its collaborator struct. Everything else it builds stays inside that package.
-	runtimeAllowed := map[string]bool{"ConfigFromEnv": true, "Wire": true, "Deps": true}
+	// RB12-GO-INT F14: no failure of the start ends the validator. The runtime classifies a failure into the named state
+	// (StartFailure, StartPanic) and marks the two failures that are raised in startFinality itself (GenesisLinkFailed, LaunchFailed); they
+	// are classifiers, they hand the upgrader nothing.
+	runtimeAllowed := map[string]bool{"ConfigFromEnv": true, "Wire": true, "Deps": true, "ConfigError": true, "CheckProviderEnvironment": true,
+		"StartFailure": true, "StartPanic": true, "GenesisLinkFailed": true, "LaunchFailed": true}
 	var launches []*ast.CallExpr
 	var repoCtors int
 	for _, decl := range f.Decls {
@@ -164,18 +215,18 @@ func TestMainWiresTheUpgraderAloneAndGivesItNoConsensusObject(t *testing.T) {
 			}
 			switch pkg.Name {
 			case "finality":
-				if fn.Name.Name != "startValidator" {
-					t.Errorf("main.go: finality.%s is used in %s; the upgrader is wired in startValidator only", sel.Sel.Name, fn.Name.Name)
+				if fn.Name.Name != "startFinality" {
+					t.Errorf("finality_start.go: finality.%s is used in %s; the upgrader is wired in startFinality only", sel.Sel.Name, fn.Name.Name)
 				}
 				if !allowed[sel.Sel.Name] {
-					t.Errorf("main.go: finality.%s is not one of the upgrader wiring symbols", sel.Sel.Name)
+					t.Errorf("finality_start.go: finality.%s is not one of the upgrader wiring symbols", sel.Sel.Name)
 				}
 			case "finruntime":
-				if fn.Name.Name != "startValidator" {
-					t.Errorf("main.go: finruntime.%s is used in %s; the finality wiring is built in startValidator only", sel.Sel.Name, fn.Name.Name)
+				if fn.Name.Name != "startFinality" {
+					t.Errorf("finality_start.go: finruntime.%s is used in %s; the finality wiring is built in startFinality only", sel.Sel.Name, fn.Name.Name)
 				}
 				if !runtimeAllowed[sel.Sel.Name] {
-					t.Errorf("main.go: finruntime.%s is not one of the finality runtime wiring symbols", sel.Sel.Name)
+					t.Errorf("finality_start.go: finruntime.%s is not one of the finality runtime wiring symbols", sel.Sel.Name)
 				}
 			case "database":
 				if strings.Contains(sel.Sel.Name, "FinalityAddenda") {
@@ -191,31 +242,59 @@ func TestMainWiresTheUpgraderAloneAndGivesItNoConsensusObject(t *testing.T) {
 						launches = append(launches, call)
 					}
 				}
+				// RB12-GO-INT F14: the one launch is made through launchFinality, a package variable initialised with finality.Launch (checked
+				// below) so a test can make the launch fail; it is the same call with the same arguments, still exactly one.
+				if id, ok := call.Fun.(*ast.Ident); ok && id.Name == "launchFinality" {
+					launches = append(launches, call)
+				}
 			}
 			return true
 		})
 	}
+	seamIsLaunch := false
+	for _, decl := range f.Decls {
+		gd, ok := decl.(*ast.GenDecl)
+		if !ok {
+			continue
+		}
+		for _, spec := range gd.Specs {
+			vs, ok := spec.(*ast.ValueSpec)
+			if !ok || len(vs.Names) != 1 || vs.Names[0].Name != "launchFinality" || len(vs.Values) != 1 {
+				continue
+			}
+			if sel, ok := vs.Values[0].(*ast.SelectorExpr); ok {
+				if p, ok := sel.X.(*ast.Ident); ok && p.Name == "finality" && sel.Sel.Name == "Launch" {
+					seamIsLaunch = true
+				}
+			}
+		}
+	}
+	for _, l := range launches {
+		if id, ok := l.Fun.(*ast.Ident); ok && id.Name == "launchFinality" && !seamIsLaunch {
+			t.Errorf("finality_start.go: launchFinality must be initialised with finality.Launch and nothing else")
+		}
+	}
 	if len(launches) != 1 || repoCtors != 1 {
-		t.Fatalf("main.go has %d finality.Launch calls and %d addendum repository constructors; want exactly one of each", len(launches), repoCtors)
+		t.Fatalf("finality_start.go has %d finality.Launch calls and %d addendum repository constructors; want exactly one of each", len(launches), repoCtors)
 	}
 	for i, arg := range launches[0].Args {
 		switch a := arg.(type) {
 		case *ast.Ident:
-			if a.Name != "finalityOn" && a.Name != "finalityRepo" && a.Name != "finalityPins" {
-				t.Errorf("main.go: finality.Launch argument %d is %q; only the switch and the addendum repository may be passed", i, a.Name)
+			if a.Name != "ctx" && a.Name != "on" && a.Name != "repo" {
+				t.Errorf("finality_start.go: finality.Launch argument %d is %q; only the context, the switch and the addendum repository may be passed", i, a.Name)
 			}
 		case *ast.CallExpr, *ast.SelectorExpr, *ast.CompositeLit:
 			ast.Inspect(a, func(n ast.Node) bool {
 				if id, ok := n.(*ast.Ident); ok {
 					switch id.Name {
 					case "attestor", "validator", "bftValidator", "consensus", "shadow", "executor", "bridge":
-						t.Errorf("main.go: finality.Launch argument %d mentions %q, a consensus-side object", i, id.Name)
+						t.Errorf("finality_start.go: finality.Launch argument %d mentions %q, a consensus-side object", i, id.Name)
 					}
 				}
 				return true
 			})
 		default:
-			t.Errorf("main.go: finality.Launch argument %d has unexpected form %T", i, arg)
+			t.Errorf("finality_start.go: finality.Launch argument %d has unexpected form %T", i, arg)
 		}
 	}
 }
