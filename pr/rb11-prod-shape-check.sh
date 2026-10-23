@@ -819,7 +819,7 @@ SELECT count(*) FILTER (WHERE item LIKE 'gap/%'),
   count(*) FILTER (WHERE item LIKE 'gapfill/%' AND item <> 'gapfill/' || l1_block),
   count(*) FILTER (WHERE item LIKE 'gapend/%' AND item !~ '^gapend/[0-9]+/(unavailable_proven|retention_expired)\$'),
   count(*) FILTER (WHERE item LIKE 'gapnote/%'),
-  count(*) FILTER (WHERE (item LIKE 'gapslot/%' AND item <> 'gapslot/' || l1_block) OR (item LIKE 'gapclaim/%' AND item <> 'gapclaim/' || l1_block))
+  count(*) FILTER (WHERE (item LIKE 'gapslot/%' AND item <> 'gapslot/' || l1_block) OR (item LIKE 'gapclaim/%' AND item <> 'gapclaim/' || l1_block) OR (item LIKE 'gapscan/%' AND item !~ '^gapscan/[0-9]+$'))
   FROM proof_finality_capture;
 SQL
 ); then
@@ -871,7 +871,7 @@ else rec FAIL C11 "status pinsSha256 query" "query answers" "failed: $(errline)"
 # its end row; a claim row (gapclaim/<chunk>) is one per chunk and period. The union of the requested windows is bounded by
 # CERTEN_FINALITY_PREFIX_MAX_BLOCKS (default 100000).
 if out=$(sqlro <<'SQL'
-WITH w AS (SELECT l1_block AS f, split_part(item, '/', 2)::bigint AS t FROM proof_finality_capture WHERE chain = 84532 AND item LIKE 'gap/%/capture_prefix'),
+WITH w AS (SELECT l1_block AS f, split_part(item, '/', 2)::bigint AS t FROM proof_finality_capture WHERE chain IN (84532, 421614) AND item LIKE 'gap/%/capture_prefix'),
      u AS (SELECT count(DISTINCT g) AS n FROM (SELECT generate_series(f, t) AS g FROM w WHERE t >= f) x)
 SELECT (SELECT count(*) FROM w),
        (SELECT count(*) FROM w WHERE t < f),
@@ -879,7 +879,7 @@ SELECT (SELECT count(*) FROM w),
        COALESCE((SELECT min(f) FROM w), 0),
        (SELECT count(*) FROM proof_finality_capture e WHERE e.chain = 84532 AND e.item LIKE 'gapend/%'
           AND NOT EXISTS (SELECT 1 FROM proof_finality_capture s WHERE s.chain = e.chain AND s.l1_block = e.l1_block AND s.item = 'gapslot/' || e.l1_block)),
-       (SELECT count(*) FROM proof_finality_capture WHERE chain = 84532 AND item LIKE 'gapclaim/%');
+       (SELECT count(*) FROM proof_finality_capture WHERE chain IN (84532, 421614) AND item LIKE 'gapclaim/%');
 SQL
 ); then
   IFS='|' read -r x_n x_bad x_blocks x_low x_noslot x_claims <<EOF

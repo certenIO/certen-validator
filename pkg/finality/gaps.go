@@ -380,6 +380,32 @@ func gapScan(ctx context.Context, s CaptureStore, chain, from, to uint64) (gapSc
 		}
 		filled[b] = struct{}{}
 	}
+	// scan rows close every gap block of their range (RB12-ARCHIVE-BACKFILL)
+	scans, err := s.ListByRange(ctx, chain, 0, hi, GapScanPrefix)
+	if err != nil {
+		return res, err
+	}
+	for _, k := range scans {
+		st, _, err := blockOfItem(k.Item, GapScanPrefix)
+		if err != nil {
+			return res, err
+		}
+		if st < k.L1Block {
+			return res, fmt.Errorf("finality: malformed scan row %s: it ends before it starts", k)
+		}
+		for _, u := range union {
+			from0, to0 := k.L1Block, st
+			if from0 < u.from {
+				from0 = u.from
+			}
+			if to0 > u.to {
+				to0 = u.to
+			}
+			for b := from0; b <= to0 && from0 <= to0; b++ {
+				filled[b] = struct{}{}
+			}
+		}
+	}
 	ends, err := s.ListByRange(ctx, chain, lo, hi, GapEndPrefix)
 	if err != nil {
 		return res, err
@@ -516,4 +542,23 @@ func AuditSpacing(ctx context.Context, s CaptureStore, chain uint64, item string
 		prev, have = k.L1Block, true
 	}
 	return found, nil
+}
+
+// GapScanPrefix is the item prefix of the scan rows (RB12-ARCHIVE-BACKFILL, Arbitrum).
+const GapScanPrefix = "gapscan/"
+
+const scanMagic = "CGSC1"
+
+// RecordGapScan records that every SequencerInbox-style event of the blocks [from, to] was read (a complete log answer) and captured: the
+// gap blocks in that range are closed, as by a fill, for chains whose captured items are sparse events and whose blocks therefore have no
+// row to fill under. The row is "gapscan/<to>" at (from, zero hash) with "CGSC1" || u64 from || u64 to, a function of the range alone.
+func RecordGapScan(ctx context.Context, s CaptureStore, chain, from, to uint64) error {
+	if to < from || to > MaxCaptureBlock {
+		return fmt.Errorf("finality: bad scan range %d-%d", from, to)
+	}
+	var w Writer
+	w.Fixed([]byte(scanMagic))
+	w.U64(from)
+	w.U64(to)
+	return s.Put(ctx, CaptureKey{Chain: chain, L1Block: from, Item: fmt.Sprintf("%s%d", GapScanPrefix, to)}, w.Bytes())
 }

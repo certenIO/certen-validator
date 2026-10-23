@@ -125,10 +125,10 @@ SELECT b.chain, b.f AS window_from, b.t AS window_to, count(*) AS blocks,
   FROM b LEFT JOIN fl USING (chain, blk) LEFT JOIN en USING (chain, blk)
  GROUP BY 1, 2, 3 ORDER BY 1, 2 LIMIT 60;
 SQL
-echo "   claims on prefix chunks (gapclaim rows, one per chunk and 10-minute period) and beacon-slot evidence of ended blocks (gapslot rows):"
+echo "   claims on prefix chunks (gapclaim rows, one per chunk and 10-minute period) beacon-slot evidence of ended blocks (gapslot rows) and the L1 ranges whose SequencerInbox logs a prefix scan read (gapscan rows, Arbitrum 421614):"
 sql <<'SQL'
 SELECT chain, split_part(item, '/', 1) AS kind, count(*) AS rows, min(l1_block) AS first_block, max(l1_block) AS last_block
-  FROM proof_finality_capture WHERE item LIKE 'gapclaim/%' OR item LIKE 'gapslot/%' GROUP BY 1, 2 ORDER BY 1, 2;
+  FROM proof_finality_capture WHERE item LIKE 'gapclaim/%' OR item LIKE 'gapslot/%' OR item LIKE 'gapscan/%' GROUP BY 1, 2 ORDER BY 1, 2;
 SQL
 
 for v in "$OPEN" "$PROVEN" "$UNAUDITED"; do

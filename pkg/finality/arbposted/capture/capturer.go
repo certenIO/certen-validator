@@ -136,6 +136,9 @@ type Capturer struct {
 	L1     L1Source
 	Beacon BeaconSource
 	Cfg    Config
+	// Prefix, when set, scans the batches posted before the first block this capturer scanned, for the legs that asked for them
+	// (RB12-ARCHIVE-BACKFILL; nil: none).
+	Prefix *PrefixScan
 
 	mu          sync.Mutex
 	started     bool
@@ -152,11 +155,13 @@ type pendBlob struct {
 	tries  int
 	gaveUp bool
 	old    bool // found incomplete beyond RebuildBlocks: retried at the bounded cadence
+	prefix bool // registered by a prefix scan: retried every tick, PrefixBlobsPerTick at a time
 }
 type pendProof struct {
-	rec   BatchRecord
-	ticks int
-	old   bool
+	rec    BatchRecord
+	ticks  int
+	old    bool
+	prefix bool // registered by a prefix scan: retried every tick, PrefixProofsPerTick at a time
 }
 
 // NewCapturer returns a Capturer with defaults applied.
@@ -189,6 +194,11 @@ type Report struct {
 	ProofBlock  uint64
 	Unavailable []uint64
 	Errors      []string // redacted
+	// RB12-ARCHIVE-BACKFILL
+	PrefixScanned     uint64 // L1 blocks of prefix windows scanned this tick
+	PrefixBatches     int    // batches those scans captured
+	PrefixLeaseLost   int    // chunks another validator held
+	PrefixLeaseErrors int    // claims the store could not take
 }
 
 func (c *Capturer) logf(f string, a ...any) {
@@ -234,6 +244,10 @@ func (c *Capturer) Tick(ctx context.Context) (Report, error) {
 	// (a) scan
 	if err := c.scan(ctx, head, &rep); err != nil {
 		rep.fail(c, "scan: %v", err)
+	}
+	// batches posted before the capture started, for the legs that asked for their windows
+	if err := c.scanPrefix(ctx, &rep); err != nil {
+		rep.fail(c, "prefix scan: %v", err)
 	}
 	// blobs awaiting a beacon answer
 	c.fetchBlobs(ctx, &rep)
@@ -578,10 +592,18 @@ func (c *Capturer) fetchBlobs(ctx context.Context, rep *Report) {
 		ns = append(ns, n)
 	}
 	sort.Slice(ns, func(i, j int) bool { return ns[i] < ns[j] })
+	prefixBlobs := 0
 	for _, n := range ns {
 		p := c.needBlobs[n]
-		if p.old && !c.dueOld() {
+		if p.old && !c.dueOld() && !p.prefix {
 			continue
+		}
+		if p.prefix {
+			// a prefix window holds hundreds of batches: a bounded few per tick, and once the beacon has given up on one only on the old cadence
+			if prefixBlobs >= PrefixBlobsPerTick || p.gaveUp && !c.dueOld() {
+				continue
+			}
+			prefixBlobs++
 		}
 		slot := (p.ts - c.Cfg.GenesisTime) / 12
 		scs, err := c.Beacon.Sidecars(ctx, slot, p.rec.VersionedHashes)
@@ -671,9 +693,15 @@ func (c *Capturer) captureProofs(ctx context.Context, head uint64, rep *Report) 
 		ns = append(ns, n)
 	}
 	sort.Slice(ns, func(i, j int) bool { return ns[i] < ns[j] })
+	prefixJobs := 0
 	for _, n := range ns {
-		if c.needProof[n].old && !c.dueOld() {
+		if pp := c.needProof[n]; pp.old && !c.dueOld() && !pp.prefix {
 			continue
+		} else if pp.prefix {
+			if prefixJobs >= PrefixProofsPerTick {
+				continue
+			}
+			prefixJobs++
 		}
 		jobs = append(jobs, proofJob{ProofBatchAcc, n, [][32]byte{ArraySlot(SequencerAccSlot, n)}, c.needProof[n]})
 	}

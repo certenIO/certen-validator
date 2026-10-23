@@ -309,7 +309,8 @@ func wireArb(reg *finality.Registry, env Env, d Deps, clock loopClock, logf func
 	cfg := env.Config
 	hdr := &baseposted.JSONRPCSource{BlockURLs: env.L1Block, ProofURLs: env.L1Proof, Client: env.HTTP}
 	if err := reg.RegisterProver(&arbposted.Builder{Store: env.Store, L2: &ArbL2{URLs: cfg.ArbL2, HTTP: env.HTTP},
-		L1: &ArbL1{LC: lcPlain{cache}, Headers: hdr}, Pins: env.Pins, Now: d.Now}); err != nil {
+		L1: &ArbL1{LC: lcPlain{cache}, Headers: hdr}, Pins: env.Pins, Now: d.Now,
+		Prefix: finality.PrefixPolicy{MaxBlocks: cfg.PrefixMax, Floor: cfg.PrefixFloor}}); err != nil {
 		return err
 	}
 	if err := reg.RegisterProver(&arbbuild.Prover{Pins: env.Pins, Store: env.Store,
@@ -324,6 +325,13 @@ func wireArb(reg *finality.Registry, env Env, d Deps, clock loopClock, logf func
 	bc := capture.NewHTTPBeacon(cfg.Beacon...)
 	bc.Client = env.HTTP
 	cp := capture.NewCapturer(env.Store, l1, bc, capture.Config{Logf: logf, StartBack: 32})
+	// the batches posted before the capture started: scanned for the legs that asked for them, one range per tick, claimed per range
+	arbLease, err := finality.NewLease(env.Store, finality.ChainArbitrumSepolia)
+	if err != nil {
+		return err
+	}
+	arbLease.Span, arbLease.Chunk = cfg.PrefixLease, uint64(cfg.PrefixArbScan)
+	cp.Prefix = &capture.PrefixScan{Lease: arbLease, Blocks: uint64(cfg.PrefixArbScan), Now: d.Now}
 	return reg.RegisterCapturer(&ArbPostedLoop{Cap: cp, Providers: Hosts(providers), Status: d.Status, Pins: env.Pins, Every: cfg.CaptureEvery, Logf: logf, Clock: clock})
 }
 

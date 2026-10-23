@@ -28,6 +28,7 @@ import (
 	"github.com/certen/independant-validator/pkg/envvar"
 	"github.com/certen/independant-validator/pkg/ethrpc"
 	"github.com/certen/independant-validator/pkg/finality"
+	"github.com/certen/independant-validator/pkg/finality/arbposted/capture"
 	"github.com/certen/independant-validator/pkg/finality/baseposted"
 )
 
@@ -60,6 +61,7 @@ const (
 	EnvPrefixLease   = "CERTEN_FINALITY_PREFIX_LEASE_SECONDS"
 	EnvPrefixChunk   = "CERTEN_FINALITY_PREFIX_CHUNK_BLOCKS"
 	EnvPrefixReprobe = "CERTEN_FINALITY_PREFIX_REPROBE_SECONDS"
+	EnvPrefixArbScan = "CERTEN_FINALITY_PREFIX_ARB_SCAN_BLOCKS"
 )
 
 // DefaultPrefixMaxBlocks bounds the union of the requested prefix windows: about 85 KB of rows per Base L1 block (measured 2026-10-23),
@@ -116,6 +118,7 @@ type Config struct {
 	PrefixLease     time.Duration // how long a claim on a chunk of prefix blocks lasts
 	PrefixChunk     int           // blocks per claim
 	PrefixReprobe   time.Duration // how often blocks proven unavailable are asked again
+	PrefixArbScan   int           // L1 blocks one Arbitrum prefix scan reads (one eth_getLogs answer) and the size of its claim chunk
 	Concurrency     int
 	Interval        time.Duration
 	BuildTimeout    time.Duration
@@ -415,6 +418,10 @@ func readSettings(c *Config) error {
 			return
 		},
 		func() (e error) { c.PrefixReprobe, e = envvar.Seconds(EnvPrefixReprobe, 24*time.Hour, 3600); return },
+		func() (e error) {
+			c.PrefixArbScan, e = envvar.Int(EnvPrefixArbScan, int(capture.DefaultPrefixScanBlocks), 1)
+			return
+		},
 		func() (e error) { c.Concurrency, e = envvar.Int(EnvConcurrency, 4, 1); return },
 		func() (e error) { c.Interval, e = envvar.Seconds(EnvInterval, 60*time.Second, 1); return },
 		func() (e error) { c.BuildTimeout, e = envvar.Seconds(EnvBuildTimeout, 5*time.Minute, 1); return },
@@ -423,6 +430,9 @@ func readSettings(c *Config) error {
 	var errs []error
 	if err := envvar.Check(rd...); err != nil {
 		errs = append(errs, err)
+	}
+	if c.PrefixArbScan > 2000 {
+		errs = append(errs, envvar.Refuse(EnvPrefixArbScan, strconv.Itoa(c.PrefixArbScan), "an integer from 1 to 2000 (one eth_getLogs answer)"))
 	}
 	if c.PrefixChunk > 1024 {
 		errs = append(errs, envvar.Refuse(EnvPrefixChunk, strconv.Itoa(c.PrefixChunk), "an integer from 1 to 1024"))
@@ -464,7 +474,7 @@ func (c Config) Describe() map[string]any {
 		"memory_budget_bytes": c.MemoryBudget, "memory_gate_bytes": finality.HeapGate(c.MemoryBudget),
 		"gap_blocks_per_tick": c.GapBlocks, "gap_audit_spacing": c.GapAuditSpacing,
 		"prefix_max_blocks": c.PrefixMax, "prefix_floor_l1_block": c.PrefixFloor, "prefix_lease": c.PrefixLease.String(), "prefix_chunk_blocks": c.PrefixChunk,
-		"prefix_reprobe": c.PrefixReprobe.String(),
+		"prefix_reprobe": c.PrefixReprobe.String(), "prefix_arb_scan_blocks": c.PrefixArbScan,
 	}
 }
 
