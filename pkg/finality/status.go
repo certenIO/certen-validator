@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"time"
 
 	"github.com/certen/independant-validator/pkg/ethrpc"
@@ -24,7 +25,10 @@ const (
 	BuilderPending BuilderClass = "pending"
 	// BuilderUnavailable: the builder could not obtain what it needs (a provider window, a source, a timeout, a panic): class U.
 	BuilderUnavailable BuilderClass = "unavailable"
-	// BuilderRefused: evidence was built and the registered Kind refused it (class R); nothing was stored.
+	// BuilderRefused: evidence was built and its APPEND was refused; nothing was stored. Who refused is the state's code, exactly: the
+	// registered Kind's verifier (its own named state: class R proper), the store's chain checks (finality_chain_broken, or
+	// finality_block_mismatch{leg}) or the table's guard (finality_guard_refused). The class names the event (a built addendum was not
+	// stored), never the reason; the reason is the code.
 	BuilderRefused BuilderClass = "refused"
 	// BuilderNotApplicable: the chain has no such level (level_not_applicable).
 	BuilderNotApplicable BuilderClass = "not_applicable"
@@ -76,11 +80,24 @@ func (s BuilderStatus) Document() ([]byte, error) {
 		if s.State == nil {
 			return nil, fmt.Errorf("finality: a %s status names its state", s.Class)
 		}
-		d.State = s.State.Canonical()
+		// the last gate: the state is redacted here as well, whatever built it (BuilderStatusOf redacts too, and redaction is idempotent)
+		d.State = redactedState(s.State).Canonical()
 	default:
 		return nil, fmt.Errorf("finality: unknown status class %q", s.Class)
 	}
-	return json.Marshal(d)
+	raw, err := json.Marshal(d)
+	if err != nil {
+		return nil, err
+	}
+	// and the whole document once more: a credential that survived in any member (a field name, a pattern the structural pass cannot see)
+	// is removed from the text, and the result must still be the same document shape (a redaction that breaks the JSON is refused)
+	if red := ethrpc.RedactText(string(raw)); red != string(raw) {
+		if !json.Valid([]byte(red)) {
+			return nil, fmt.Errorf("finality: the status document of %s cannot be redacted into a valid document", s.ProofID)
+		}
+		raw = []byte(red)
+	}
+	return raw, nil
 }
 
 // ParseBuilderStatusDocument is the inverse of Document for the fields a reader shows. The state is returned as the stored canonical
@@ -141,13 +158,13 @@ type BuilderStatusStore interface {
 }
 
 // BuilderStatusOf classifies a builder-side state for the status row. pd is the pending the prover returned (class pending);
-// otherwise err is the named state it failed with: level_not_applicable is not_applicable, a refusal of built evidence
-// (refused=true) is refused, anything else is unavailable. reached is the highest stored level the leg holds and target the
+// otherwise err is the named state it failed with: level_not_applicable is not_applicable, a refusal of the append of built evidence
+// (refused=true: the Kind, the chain checks or the guard refused it; the state's code says which) is refused, anything else is unavailable. reached is the highest stored level the leg holds and target the
 // level the builder was working towards.
 func BuilderStatusOf(proofID string, chain uint64, target, reached Level, pd *PendingState, err error, refused bool, at time.Time) BuilderStatus {
 	s := BuilderStatus{ProofID: proofID, Chain: chain, TargetLevel: target, LevelReached: reached, NextLevel: target, JudgedAt: at}
 	if pd != nil {
-		s.Class, s.State, s.ETA = BuilderPending, pd.State(), pd.ETA
+		s.Class, s.State, s.ETA = BuilderPending, redactedState(pd.State()), pd.ETA
 		return s
 	}
 	st, named := AsNamed(err)
@@ -166,22 +183,102 @@ func BuilderStatusOf(proofID string, chain uint64, target, reached Level, pd *Pe
 	return s
 }
 
-// redactedState is st with every text field (a string or an error value) passed through the one
-// sanitiser of provider text, pkg/ethrpc RedactText, before it is stored in a status row: the row is read by the gateway and
-// must never carry a credential from a provider URL or response. Numbers, bytes and levels are left as they are.
+// redactedState is st with every text in it passed through the one sanitiser of provider text, pkg/ethrpc RedactText, before it is
+// stored in a status row: the row is read by the gateway and must never carry a credential from a provider URL or response. The
+// redaction is recursive (redactValue): a string, an error, a fmt.Stringer, the elements of a slice, the values of a map and the
+// exported fields of a nested struct are each sanitised, whatever their depth. Numbers, bytes, levels and times are left as they are.
 func redactedState(st *StateError) *StateError {
 	out := NewState(st.Code)
 	for k, v := range st.Fields {
-		switch x := v.(type) {
-		case string:
-			out.Fields[k] = ethrpc.RedactText(x)
-		case error:
-			out.Fields[k] = ethrpc.RedactText(x.Error())
-		default:
-			out.Fields[k] = v
-		}
+		out.Fields[k] = redactValue(v, 0)
 	}
 	return out
+}
+
+// maxRedactDepth bounds the recursion into nested values; a value nested deeper is rendered as text and that text is redacted,
+// so nothing below the bound is stored as it was.
+const maxRedactDepth = 8
+
+// redactValue returns v with every text in it redacted. The result keeps the canonical rendering of v (canonValue): a string stays a
+// string, a []string a []string, a map a map, a Level a Level, an integer an integer, bytes bytes; an error, a fmt.Stringer, a
+// pointer, a struct and any other composite is replaced by redacted text or by the map of its redacted exported fields.
+func redactValue(v any, depth int) any {
+	if depth > maxRedactDepth {
+		return ethrpc.RedactText(fmt.Sprint(v))
+	}
+	switch x := v.(type) {
+	case nil:
+		return nil
+	case string:
+		return ethrpc.RedactText(x)
+	case error:
+		return ethrpc.RedactText(x.Error())
+	case bool, Level, uint8, uint16, uint32, uint64, uint, int, int16, int32, int64, [32]byte, [4]byte, []byte, time.Time, time.Duration, []uint64:
+		return v
+	case []string:
+		out := make([]string, len(x))
+		for i, e := range x {
+			out[i] = ethrpc.RedactText(e)
+		}
+		return out
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for k, e := range x {
+			out[ethrpc.RedactText(k)] = redactValue(e, depth+1)
+		}
+		return out
+	case map[string]string:
+		out := make(map[string]any, len(x))
+		for k, e := range x {
+			out[ethrpc.RedactText(k)] = ethrpc.RedactText(e)
+		}
+		return out
+	case []any:
+		out := make([]any, len(x))
+		for i, e := range x {
+			out[i] = redactValue(e, depth+1)
+		}
+		return out
+	case fmt.Stringer:
+		return ethrpc.RedactText(x.String())
+	}
+	rv := reflect.ValueOf(v)
+	switch rv.Kind() {
+	case reflect.Ptr, reflect.Interface:
+		if rv.IsNil() {
+			return nil
+		}
+		return redactValue(rv.Elem().Interface(), depth+1)
+	case reflect.Struct:
+		out := map[string]any{}
+		for i := 0; i < rv.NumField(); i++ {
+			if f := rv.Type().Field(i); f.IsExported() {
+				out[f.Name] = redactValue(rv.Field(i).Interface(), depth+1)
+			}
+		}
+		return out
+	case reflect.Map:
+		out := map[string]any{}
+		for _, k := range rv.MapKeys() {
+			out[ethrpc.RedactText(fmt.Sprint(k.Interface()))] = redactValue(rv.MapIndex(k).Interface(), depth+1)
+		}
+		return out
+	case reflect.Slice, reflect.Array:
+		if rv.Type().Elem().Kind() == reflect.Uint8 {
+			return v // a byte string: rendered as hex by canonValue, no text
+		}
+		out := make([]any, rv.Len())
+		for i := range out {
+			out[i] = redactValue(rv.Index(i).Interface(), depth+1)
+		}
+		return out
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64, reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32,
+		reflect.Uint64, reflect.Uintptr, reflect.Bool, reflect.Float32, reflect.Float64:
+		return v
+	case reflect.String:
+		return ethrpc.RedactText(rv.String())
+	}
+	return ethrpc.RedactText(fmt.Sprint(v))
 }
 
 // VerifiedBuilderStatus is the row of a level that is stored.
