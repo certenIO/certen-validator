@@ -54,10 +54,11 @@ func proveLeaf(root common.Hash, index uint32, nodes [][]byte, carried []byte) b
 
 // classifyConfirmation is 5.7 O4. The transaction at confTxIndex and its receipt are MPT-proven under K's transactionsRoot and
 // receiptsRoot; the receipt status is 1; it holds a log of the Rollup with topic0 AssertionConfirmed and topic1 the assertion
-// hash. The path is honest iff the Rollup was called with confirmAssertion and no AssertionForceConfirmed log exists, or a
-// ValidatorWallet entry point carries a call to the Rollup with confirmAssertion, the receipt holds no force log and
-// anyTrustFastConfirmer is the zero address at K. A force selector or the force log is confirmed_by_owner_force{force}; the fast
-// selectors are confirmed_by_owner_force{fast}; anything else is confirmation_path_unproven{indirect}.
+// hash. The path is honest iff the Rollup was called with confirmAssertion and no AssertionForceConfirmed log exists, or a callee
+// PROVEN to be a ValidatorWallet (ProveWallet, at K) was called through an entry point that carries a call to the Rollup with
+// confirmAssertion, the receipt holds no force log and anyTrustFastConfirmer is the zero address at K. A force selector or the force
+// log is confirmed_by_owner_force{force}; the fast selectors are confirmed_by_owner_force{fast}, both also through a proven wallet; a
+// callee that is not proven a ValidatorWallet, whatever its calldata decodes to, and anything else, is confirmation_path_unproven{indirect}.
 func classifyConfirmation(arb *Pins, kb ethl1.L1Block, kHeader finality.HeaderFields, acctK *ethproof.AccountState, assertion [32]byte, e Evidence) (Confirmed, error) {
 	var out Confirmed
 	if !proveLeaf(common.Hash(kHeader.TransactionRoot), e.ConfTxIndex, e.Nodes, e.ConfTxRaw) {

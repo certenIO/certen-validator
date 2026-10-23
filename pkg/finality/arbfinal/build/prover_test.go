@@ -12,6 +12,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -958,3 +959,19 @@ func TestACalleeThatIsNotAWalletIsRefusedByTheVerifierAndNoImplementationIsChase
 }
 
 func ptrHash(h common.Hash) *common.Hash { return &h }
+
+// The capture row names are stored in proof_finality_capture.item, which the table limits to varchar(160) matching
+// ^[a-z0-9_-]+(/[a-z0-9_-]+)*$ (db/migrations/00028): every item name the builder uses fits, with a real 32-byte assertion hash.
+func TestEveryCaptureItemNameFitsTheTable(t *testing.T) {
+	re := regexp.MustCompile(`^[a-z0-9_-]+(/[a-z0-9_-]+)*$`)
+	h := crypto.Keccak256Hash([]byte("an assertion"))
+	for _, prefix := range []string{captureItemState, captureItemConf, captureItemWallet} {
+		item := prefix + hex.EncodeToString(h[:])
+		if len(item) > 160 || !re.MatchString(item) {
+			t.Errorf("%q does not fit proof_finality_capture.item", item)
+		}
+	}
+	if captureItemWallet == captureItemConf || captureItemWallet == captureItemState {
+		t.Fatal("the wallet row must not share a name with another row")
+	}
+}
