@@ -1,6 +1,6 @@
 # RB12-SEPOLIA-SPINE: a resumable execution-header spine for eth-sepolia/finalized/v1 (live defect F6)
 
-Base: origin/main 0e10cb92, merged with origin/pv2/rb12-train2 (467fb97d). Builder side only. Nothing a verifier reads changes.
+Base: origin/main 0e10cb92, merged with origin/pv2/rb12-train2 (986b195a). Builder side only. Nothing a verifier reads changes.
 
 ## The defect
 
