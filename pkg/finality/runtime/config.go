@@ -18,6 +18,7 @@ package runtime
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -100,27 +101,75 @@ type Config struct {
 	ProviderSources map[string]string
 }
 
-func splitURLs(s string) []string { return ethrpc.ParseEndpoints(strings.Split(s, ",")...) }
+// urlSeparators are the separators of a provider list the validator has always accepted (ethrpc.ParseEndpoints).
+func urlSeparator(r rune) bool {
+	return r == ',' || r == ';' || r == ' ' || r == '\t' || r == '\n' || r == '\r'
+}
 
-func listFromEnv(key string, def []string) ([]string, string) {
-	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
-		return splitURLs(v), key
+// checkURLEntries refuses an entry that is not an http(s) URL with a host. The refusal names the variable (or provider list) and the
+// INDEX of the entry among the non-blank entries, never the entry: a provider URL may hold a credential.
+func checkURLEntries(what string, entries []string) error {
+	for i, e := range entries {
+		u, err := url.Parse(e)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {
+			return fmt.Errorf("%s: entry %d is not an http(s) URL with a host (the entry is not printed: it may hold a credential)", what, i)
+		}
 	}
-	return append([]string(nil), def...), "default"
+	return nil
+}
+
+// parseURLList splits and validates one URL-list variable. A value that holds no entry at all (",,,") is a refusal: it must not
+// become an empty list that silently overrides the default.
+func parseURLList(env, value string) ([]string, error) {
+	entries := strings.FieldsFunc(value, urlSeparator)
+	if len(entries) == 0 {
+		return nil, fmt.Errorf("%s is set but holds no entry (an empty list would override the default; unset the variable to use it)", env)
+	}
+	if err := checkURLEntries(env, entries); err != nil {
+		return nil, err
+	}
+	return ethrpc.ParseEndpoints(entries...), nil
+}
+
+func listFromEnv(key string, def []string) ([]string, string, error) {
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+		l, err := parseURLList(key, v)
+		return l, key, err
+	}
+	return append([]string(nil), def...), "default", nil
+}
+
+// chainListFromEnv is the validated provider list the validator already uses for a chain (<PREFIX>_RPC_URL, <PREFIX>_URL_FALLBACKS,
+// INFURA_<PREFIX>_URL, ALCHEMY_<PREFIX>_URL): the finality providers speak HTTP JSON-RPC, so an entry that is not an http(s) URL with
+// a host is refused here by chain and index.
+func chainListFromEnv(chainKey string) ([]string, error) {
+	l := ethrpc.EndpointsForChain(chainKey)
+	if err := checkURLEntries(chainKey+" provider list ("+ethrpc.ChainEnvPrefix(chainKey)+"_RPC_URL, "+ethrpc.ChainEnvPrefix(chainKey)+"_URL_FALLBACKS, INFURA_/ALCHEMY_"+ethrpc.ChainEnvPrefix(chainKey)+"_URL)", l); err != nil {
+		return nil, err
+	}
+	return l, nil
 }
 
 // ConfigFromEnv reads the configuration. A numeric variable that is not a number in range refuses startup by name (the
-// envvar package's rule); a list variable that is empty takes its default; the per-chain provider lists are the ones the
-// validator already uses (<PREFIX>_RPC_URL, <PREFIX>_URL_FALLBACKS, INFURA_/ALCHEMY_<PREFIX>_URL).
+// envvar package's rule); a list variable that is empty takes its default, and one that is set must hold at least one entry and every
+// entry must be an http(s) URL with a host (the refusal names the variable and the entry index, never the value); the per-chain
+// provider lists are the ones the validator already uses (<PREFIX>_RPC_URL, <PREFIX>_URL_FALLBACKS, INFURA_/ALCHEMY_<PREFIX>_URL).
 func ConfigFromEnv() (Config, error) {
 	var c Config
 	c.ProviderSources = map[string]string{}
 	var src string
+	var err error
 
 	// Ethereum Sepolia: the validator's own provider list first, then the public default, so the capture follows the same node
 	// the observers use when it is configured.
-	own := ethrpc.EndpointsForChain("ethereum-sepolia")
-	l1, src := listFromEnv(EnvL1RPCURLs, nil)
+	own, err := chainListFromEnv("ethereum-sepolia")
+	if err != nil {
+		return Config{}, err
+	}
+	l1, src, err := listFromEnv(EnvL1RPCURLs, nil)
+	if err != nil {
+		return Config{}, err
+	}
 	if src == "default" {
 		l1 = ethrpc.ParseEndpoints(append(append([]string(nil), own...), DefaultL1RPCURLs...)...)
 		if len(own) > 0 {
@@ -128,29 +177,45 @@ func ConfigFromEnv() (Config, error) {
 		}
 	}
 	c.L1RPC, c.ProviderSources["l1_rpc"] = l1, src
-	c.L1Proof, c.ProviderSources["l1_proof"] = listFromEnv(EnvL1ProofURLs, DefaultL1ProofURLs)
-	c.Archive, src = listFromEnv(EnvArchiveURLs, nil)
+	if c.L1Proof, c.ProviderSources["l1_proof"], err = listFromEnv(EnvL1ProofURLs, DefaultL1ProofURLs); err != nil {
+		return Config{}, err
+	}
+	if c.Archive, src, err = listFromEnv(EnvArchiveURLs, nil); err != nil {
+		return Config{}, err
+	}
 	c.ProviderSources["archive"] = src
 	c.ArchiveOrigin = "unset"
 	if len(c.Archive) > 0 {
 		c.ArchiveOrigin = "set"
 	}
-	c.LC, c.ProviderSources["lc"] = listFromEnv(EnvLCURLs, DefaultLCURLs)
-	c.Beacon, c.ProviderSources["beacon"] = listFromEnv(EnvBeaconURLs, DefaultBeaconURLs)
+	if c.LC, c.ProviderSources["lc"], err = listFromEnv(EnvLCURLs, DefaultLCURLs); err != nil {
+		return Config{}, err
+	}
+	if c.Beacon, c.ProviderSources["beacon"], err = listFromEnv(EnvBeaconURLs, DefaultBeaconURLs); err != nil {
+		return Config{}, err
+	}
 
-	c.BaseL2 = ethrpc.EndpointsForChain("base-sepolia")
+	if c.BaseL2, err = chainListFromEnv("base-sepolia"); err != nil {
+		return Config{}, err
+	}
 	c.ProviderSources["base_l2"] = "ethrpc:base-sepolia"
-	c.ArbL2 = ethrpc.EndpointsForChain("arbitrum-sepolia")
+	if c.ArbL2, err = chainListFromEnv("arbitrum-sepolia"); err != nil {
+		return Config{}, err
+	}
 	c.ProviderSources["arb_l2"] = "ethrpc:arbitrum-sepolia"
-	c.AdiriPF = ethrpc.EndpointsForChain("telcoin-adiri")
+	if c.AdiriPF, err = chainListFromEnv("telcoin-adiri"); err != nil {
+		return Config{}, err
+	}
 	c.ProviderSources["adiri_proof"] = "ethrpc:telcoin-adiri"
-	pub, src := listFromEnv(EnvAdiriURLs, DefaultAdiriURLs)
+	pub, src, err := listFromEnv(EnvAdiriURLs, DefaultAdiriURLs)
+	if err != nil {
+		return Config{}, err
+	}
 	c.Adiri = ethrpc.ParseEndpoints(append(append([]string(nil), pub...), c.AdiriPF...)...)
 	c.ProviderSources["adiri_public"] = src
 
 	c.PinsFile = strings.TrimSpace(os.Getenv(EnvPinsFile))
 
-	var err error
 	rd := []func() error{
 		func() (e error) { c.RateRPS, e = envvar.Float(EnvRateRPS, DefaultRateRPS, 0.1); return },
 		func() (e error) { c.RateBurst, e = envvar.Int(EnvRateBurst, 5, 1); return },
