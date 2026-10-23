@@ -25,6 +25,7 @@ import (
 var ProductionItems = []string{
 	"hdr", "header", "inbox", "syscfg", "cursor", "runtime/cursor", // baseposted, arbposted, runtime, finality.CaptureCursorItem
 	"tx/", "txnodes/", "blob/", "batch/", "proof/", // baseposted and arbposted families
+	"calldata/", "delayedproof/", "unavailable/", "blobunavailable/", // arbposted/capture/records.go ItemCalldata, ItemDelayedProof, ItemUnavailable, ItemBlobUnavailable
 	"gap/", "gapend/", "gapnote/", "gapfill/", "gapslot/", "gapclaim/", // capture-gap / archive-backfill
 	"idx/",              // capture index (idx/g<gen>/<family>/...)
 	"spine/", "spine/n", // Sepolia spine chunks
@@ -69,7 +70,7 @@ func seedProduction(ctx context.Context, store finality.CaptureStore, c Chains) 
 	put := func(chain, block uint64, seed byte, item string) error {
 		return store.Put(ctx, finality.CaptureKey{Chain: chain, L1Block: block, L1Hash: hash(seed, block), Item: item}, []byte{seed, byte(block)})
 	}
-	items := []string{"hdr", "header", "inbox", "syscfg", "tx/0", "tx/3", "txnodes/0", "blob/0/1", "batch/1", "proof/1", "gap/105/outage_unscanned",
+	items := []string{"hdr", "header", "inbox", "syscfg", "tx/0", "tx/3", "txnodes/0", "blob/0/1", "batch/1", "proof/1", "calldata/1", "delayedproof/2", "unavailable/3", "blobunavailable/4", "gap/105/outage_unscanned",
 		"gapend/105/unavailable_proven", "gapnote/7", "gapfill/x", "gapslot/70", "gapclaim/9", "idx/g1/bi/c/1/2/00", "idx/g1/bi/cursor", "spine/n3",
 		"basefinal/game/00ff", "arbfinal/state/aa", "arbfinal/conf/aa", "arbfinal/wallet/aa", "runtime/cursor", "cursor"}
 	for _, chain := range []uint64{c.L2A, c.L2B, c.L1} {
