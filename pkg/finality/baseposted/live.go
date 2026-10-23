@@ -10,7 +10,9 @@ import (
 	"fmt"
 	"io"
 	"math/big"
+	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -257,14 +259,47 @@ type StatusError struct {
 	Status int
 	// Gone: every endpoint answered HTTP 404 or 410 on every blob route of this request, Endpoints being how many endpoints were asked. It is
 	// the one provider evidence that a blob is unavailable (RB12-CAPTURE-GAP); a provider error, a timeout or a single dissenting endpoint
-	// is not.
+	// is not. Endpoints counts DISTINCT HOSTS (host and port): two base URLs of one provider are one provider (RB12-GO-INT D7).
 	Gone      bool
 	Endpoints int
 }
 
+// distinctHosts is how many different providers (host and port) the base URLs name.
+func distinctHosts(bases []string) int {
+	seen := map[string]bool{}
+	for _, b := range bases {
+		seen[hostKeyOf(b)] = true
+	}
+	return len(seen)
+}
+
+// hostKeyOf names the provider a base URL points at: its host name lower-cased and without a trailing dot, an IP literal in its canonical
+// form (so ::1, 0:0:0:0:0:0:0:1 and ::ffff:127.0.0.1 are what they are), and the port only when it is not the default of the scheme
+// (80 for http, 443 for https): https://p.io and https://p.io:443 are one provider listed twice (RB12-GO-INT N2). A base that does not parse
+// is its own key.
+func hostKeyOf(base string) string {
+	raw := strings.TrimSpace(base)
+	u, err := url.Parse(raw)
+	if err != nil || u.Hostname() == "" {
+		return strings.ToLower(raw)
+	}
+	h := strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))
+	if ip := net.ParseIP(h); ip != nil {
+		h = ip.String()
+	}
+	port := u.Port()
+	if (strings.EqualFold(u.Scheme, "http") && port == "80") || (strings.EqualFold(u.Scheme, "https") && port == "443") {
+		port = ""
+	}
+	if port != "" {
+		return net.JoinHostPort(h, port)
+	}
+	return h
+}
+
 func (e *StatusError) Error() string {
 	if e.Gone {
-		return fmt.Sprintf("beacon blob answer HTTP %d from every one of %d endpoints", e.Status, e.Endpoints)
+		return fmt.Sprintf("beacon blob answer HTTP %d from every one of %d distinct beacon hosts", e.Status, e.Endpoints)
 	}
 	return fmt.Sprintf("beacon blob answer HTTP %d", e.Status)
 }
@@ -331,7 +366,7 @@ func (b *BeaconHTTP) Blobs(ctx context.Context, slot uint64) ([][]byte, error) {
 		}
 	}
 	if se, ok := last.(*StatusError); ok && attempts > 0 && goneAnswers == attempts {
-		return nil, &StatusError{Status: se.Status, Gone: true, Endpoints: len(b.Bases)}
+		return nil, &StatusError{Status: se.Status, Gone: true, Endpoints: distinctHosts(b.Bases)}
 	}
 	return nil, last
 }

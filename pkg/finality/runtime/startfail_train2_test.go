@@ -129,3 +129,22 @@ func TestRTF14StartPanicCarriesNoValue(t *testing.T) {
 		t.Fatalf("%s", st.Error())
 	}
 }
+
+// V-T2 note: the state is redacted, and so is the log line of an error that carries no classification of its own or of a wiring failure
+// (a provider URL with a credential inside a wrapped error is cut before it reaches the log).
+func TestRTF14StartFailureLogsNoCredentialOfAnUnclassifiedOrWiringError(t *testing.T) {
+	const secret = "hunter2-fake-credential"
+	for name, err := range map[string]error{
+		"unclassified": errors.New("dial https://user:" + secret + "@host.example/key?apikey=" + secret + ": refused"),
+		"wiring":       &WireError{Stage: finality.StartStageKinds, Err: errors.New("provider https://user:" + secret + "@host.example/x?apikey=" + secret + " rejected")},
+	} {
+		logf, logs := rtLogs()
+		st := StartFailure(logf, err)
+		if strings.Contains(logs(), secret) || strings.Contains(st.Error(), secret) {
+			t.Fatalf("%s: a credential reached the log or the state:\n%s\n%s", name, logs(), st.Error())
+		}
+		if !strings.Contains(logs(), "start failed at") {
+			t.Fatalf("%s: the failure is still logged by name:\n%s", name, logs())
+		}
+	}
+}

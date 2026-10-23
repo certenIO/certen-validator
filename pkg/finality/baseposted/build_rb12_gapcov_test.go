@@ -237,3 +237,61 @@ func (w *buildWorld) putCursor(t *testing.T, first, last uint64) {
 		}
 	}
 }
+
+// RB12-GO-INT D4 (V-T2): a leg inside a gap whose channel is not captured is HELD and asked again every poll. Each ask used to read the
+// whole window (up to ~300 MB of rows) before the gap lookup. The answer of a held ask depends on the captured inbox rows of the window,
+// the recorded gaps of the window and the leg's own L2 time; when none of them has changed since the last held ask the answer is the
+// same, and it is returned after the key-only lookups (the gap pieces and the inbox keys of the window), reading no row.
+func TestRB12GOINTAHeldAskReadsNoRowWhileTheStoreHasNotChanged(t *testing.T) {
+	st := rbStore(t, rbFirstBlock, 300, true)
+	rawGapRow(t, st, gcLeg+40, gcLeg+120, "state_proof_unavailable")
+	s, l2 := rbLeg(t, gcLeg)
+	b := rbBuilder(t, st, l2)
+	ask := func() (*finality.StateError, int64, int64) {
+		bytes0, gets0 := st.bytes.Load(), st.gets.Load()
+		_, pend, err := b.Build(context.Background(), s, haveIncludedOnly, finality.LevelL1Posted)
+		se, named := finality.AsNamed(err)
+		if pend != nil || !named || se.Code != "l1_capture_gap" {
+			t.Fatalf("want l1_capture_gap, got pend=%v err=%v", pend, err)
+		}
+		return se, st.bytes.Load() - bytes0, st.gets.Load() - gets0
+	}
+	first, b1, g1 := ask()
+	if b1 == 0 || g1 == 0 {
+		t.Fatalf("the first ask of a window reads it once (%d bytes, %d rows): the fixture is not exercising the window read", b1, g1)
+	}
+	for i := 0; i < 5; i++ {
+		again, bytesRead, rows := ask()
+		if bytesRead != 0 || rows != 0 {
+			t.Fatalf("held ask %d read %d bytes in %d rows of a window that did not change: it must cost the key lookups only", i+2, bytesRead, rows)
+		}
+		if again.Error() != first.Error() {
+			t.Fatalf("the repeated answer differs: %s vs %s", again.Error(), first.Error())
+		}
+	}
+	// the gap closes: the answer must follow the store, not the memory of the last ask
+	for n := gcLeg + 40; n <= gcLeg+120; n++ {
+		rawFillRow(t, st, uint64(n))
+	}
+	_, pend, err := b.Build(context.Background(), s, haveIncludedOnly, finality.LevelL1Posted)
+	if err != nil || pend == nil || pend.Reason != "l1_posted_unproven" {
+		t.Fatalf("with the gap filled the leg is plain pending, got pend=%v err=%v", pend, err)
+	}
+	// a new gap piece inside the window changes the answer too
+	rawGapRow(t, st, gcLeg+200, gcLeg+210, "state_proof_unavailable")
+	se, _, _ := ask()
+	if se.Fields["from"] != uint64(gcLeg+200) {
+		t.Fatalf("a gap recorded after the last held ask must be seen: %v", se)
+	}
+	// and so does a newly captured inbox block of the window
+	bytes0 := st.bytes.Load()
+	var h [32]byte
+	h[0] = 0xee
+	if err := st.Put(context.Background(), CaptureKey{Chain: uint64(Chain), L1Block: gcLeg + 3, L1Hash: h, Item: ItemInbox}, []byte{0, 0, 0, 0}); err != nil {
+		t.Fatal(err)
+	}
+	_, nb, _ := ask()
+	if nb == 0 || st.bytes.Load() == bytes0 {
+		t.Fatal("a captured block that appeared in the window since the last held ask must make the next ask read it")
+	}
+}

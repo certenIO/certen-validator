@@ -4,9 +4,6 @@ package baseposted
 
 import (
 	"context"
-	"math/big"
-
-	"github.com/ethereum/go-ethereum/core/types"
 
 	"github.com/certen/independant-validator/pkg/finality"
 	"github.com/certen/independant-validator/pkg/metrics"
@@ -25,28 +22,36 @@ import (
 // that is not pinned), nothing of that block is filtered: its frames stay candidates and the verifier names what is wrong with the proof
 // (contract_identity_unproven, l1_state_proof_invalid, ...), instead of the leg waiting silently. The count of such blocks is a metric.
 
-// senderFilter says which transactions of one captured block the batcher sent.
-type senderFilter struct {
-	want   [20]byte
-	signer types.Signer
-}
+// senderFilter says which transactions of one captured block the batcher sent. It IS the capture's authorizer (authorize.go): the live capture
+// and the backfill keep only the batcher's transactions by the same function, the readers skip the rest of rows stored before that rule by the
+// same function, and the verifier's rule is the one both reproduce.
+type senderFilter = batcherAuthorizer
 
 // batcherFromRows is the batcher address the rows of a block prove: systemConfigAt over the nodes of the syscfg row under the state root
 // of the header row. ok is false when the rows cannot establish it.
 func batcherFromRows(bp *Pins, hdrRaw, sysRow []byte) (addr [20]byte, ok bool) {
+	a, ok := authorizerFromRows(bp, hdrRaw, sysRow)
+	if !ok {
+		return addr, false
+	}
+	return a.want, true
+}
+
+// authorizerFromRows is authorizerAt over the header row and the syscfg row of a captured block.
+func authorizerFromRows(bp *Pins, hdrRaw, sysRow []byte) (*batcherAuthorizer, bool) {
 	h, err := finality.ReadHeader(hdrRaw)
 	if err != nil {
-		return addr, false
+		return nil, false
 	}
 	nodes, err := finality.NewReader(sysRow, finality.DefaultLimits()).LPList("syscfg", 256, finality.DefaultLimits().MaxTxLeafBytes)
 	if err != nil {
-		return addr, false
+		return nil, false
 	}
-	addr, err = systemConfigAt(newNodeDB(nodes), bp, h.StateRoot, h.Number)
+	a, err := authorizerAt(bp, nodes, h.StateRoot, h.Number)
 	if err != nil {
-		return [20]byte{}, false
+		return nil, false
 	}
-	return addr, true
+	return a, true
 }
 
 // loadSenderFilter reads the header and syscfg rows of the captured block bk (chain, number, hash) and returns its filter, or nil when the
@@ -71,25 +76,10 @@ func loadSenderFilter(ctx context.Context, store finality.CaptureStore, bk final
 		}
 		rows[i] = b
 	}
-	want, ok := batcherFromRows(bp, rows[0], rows[1])
+	a, ok := authorizerFromRows(bp, rows[0], rows[1])
 	if !ok {
 		metrics.IncFinalityBatcherUnestablished(uint64(Chain))
 		return nil, nil
 	}
-	return &senderFilter{want: want, signer: types.LatestSignerForChainID(new(big.Int).SetUint64(bp.L1ChainID))}, nil
-}
-
-// foreign reports whether raw is a transaction the batcher did not send (verifyChannel: the sender cannot be recovered, or is not the
-// batcher). A nil filter (batcher not established) filters nothing. A transaction that does not parse is not judged here: its reader fails
-// on it by name, as before.
-func (f *senderFilter) foreign(raw []byte) bool {
-	if f == nil {
-		return false
-	}
-	var tx types.Transaction
-	if err := tx.UnmarshalBinary(raw); err != nil {
-		return false
-	}
-	from, err := f.signer.Sender(&tx)
-	return err != nil || [20]byte(from) != f.want
+	return a, nil
 }

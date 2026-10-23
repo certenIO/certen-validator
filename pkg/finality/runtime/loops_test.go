@@ -12,9 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
-	"github.com/ethereum/go-ethereum/rlp"
 
 	"github.com/certen/independant-validator/pkg/finality"
 	"github.com/certen/independant-validator/pkg/finality/arbposted/capture"
@@ -26,11 +24,8 @@ import (
 // rtHeader is a raw RLP execution header of block n and its hash (15 items: every positional slot ReadHeader needs).
 func rtHeader(t testing.TB, n uint64) ([]byte, [32]byte) {
 	t.Helper()
-	raw, err := rlp.EncodeToBytes(&types.Header{Number: new(big.Int).SetUint64(n), Difficulty: big.NewInt(0)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return raw, [32]byte(crypto.Keccak256Hash(raw))
+	raw, h := rtHeaderFor(n, [][]byte{{0x02}}) // the one (junk) transaction of the failing blocks of rtBaseL1: the header commits to it
+	return raw, h
 }
 
 // rtScript is the scripted clock of a loop: After records the wait it is asked for and answers at once; the stopAfter-th wait
@@ -133,7 +128,7 @@ func (f *rtBaseL1) Block(ctx context.Context, n uint64) (baseposted.L1BlockData,
 		f.onBlock(n)
 	}
 	if !f.failing[n] {
-		return baseposted.L1BlockData{Number: n}, nil // no transactions: nothing to capture
+		return rtEmptyBlock(n), nil // no transactions: nothing to capture
 	}
 	hdr, hash := rtHeader(f.t, n)
 	return baseposted.L1BlockData{Number: n, Hash: hash, HeaderRLP: hdr, Timestamp: 1_700_000_000,
@@ -149,7 +144,7 @@ func rtBaseLoop(t testing.TB, l1 *rtBaseL1, st finality.BuilderStatusStore) (*Ba
 	l1.t = t
 	mem := finality.NewMemCaptureStore()
 	lg := &rtLog{}
-	c := &baseposted.Capturer{Chain: finality.ChainBaseSepolia, Pins: &baseposted.Pins{BatchInbox: rtInbox}, L1: l1, Store: mem, SlotSeconds: 12}
+	c := &baseposted.Capturer{Chain: finality.ChainBaseSepolia, Pins: rtPins(), L1: l1, Store: mem, SlotSeconds: 12}
 	return &BasePostedLoop{Cap: c, Store: mem, Status: st, Every: 12 * time.Second, StartBack: 2, Logf: lg.logf,
 		retry: map[uint64]*retryEntry{}, lastState: map[uint64]*finality.StateError{}}, mem, lg
 }

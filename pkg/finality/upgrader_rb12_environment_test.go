@@ -21,8 +21,10 @@ import (
 // surface and the API of the merged base, so they run there and fail by their assertion.
 
 // rb12GapState is the state the Base l1_posted builder returns for a leg inside a recorded gap (pkg/finality/baseposted/gaps.go).
-func rb12GapState() *StateError {
-	return NewState("l1_capture_gap", "chain", uint64(ChainBaseSepolia), "kind", "l1_posted", "from", uint64(110), "to", uint64(120), "gap_state", "open",
+func rb12GapState() *StateError { return rb12GapStateOf("open") }
+
+func rb12GapStateOf(gapState string) *StateError {
+	return NewState("l1_capture_gap", "chain", uint64(ChainBaseSepolia), "kind", "l1_posted", "from", uint64(110), "to", uint64(120), "gap_state", gapState,
 		"ranges", 1, "blocks", uint64(11), "epoch_l1_block", uint64(100), "window_end_l1_block", uint64(130), "archive_provider", "unset")
 }
 
@@ -207,4 +209,71 @@ func rb12Counter(t *testing.T, name string, labels map[string]string) float64 {
 		return 0
 	}
 	return 0
+}
+
+// D1 (V-T2): a TERMINAL gap (unavailable_proven, retention_expired) never heals - no fill can come - so holding its legs at the 2-minute
+// poll for ever was a load without an end (720 asks in 24 hours, the exponent flat). Only an OPEN gap is a fact about the capture store
+// that the backfill changes; a terminal one is a verdict about the data and backs off like any failure. The class is by code AND the
+// state's gap_state, for EVERY gap_state the registry names.
+func TestRB12F17ATerminalCaptureGapBacksOffLikeAFailureAndAnOpenOneDoesNot(t *testing.T) {
+	reg := loadRegistry(t)
+	states := reg.States["l1_capture_gap"].Enums["gap_state"]
+	if len(states) != 4 { // open, unavailable_proven, retention_expired and (Train 3) unrecorded = the hole the index infers from the L2 timeline
+		t.Fatalf("the registry names the gap states %v", states)
+	}
+	for _, gs := range states {
+		t.Run(gs, func(t *testing.T) {
+			u, src, clock, rec, logs := rb12Fixture(t, rb12GapCfg(),
+				func(*rb12Source) func(context.Context, *ethproof.Settlement, LevelSet, Level) (*Addendum, *PendingState, error) {
+					return func(context.Context, *ethproof.Settlement, LevelSet, Level) (*Addendum, *PendingState, error) {
+						return nil, nil, rb12GapStateOf(gs)
+					}
+				})
+			status := newRB12Status()
+			u.cfg.Status = status
+			src.add(leg(1))
+			terminal := gs == "unavailable_proven" || gs == "retention_expired" // open and unrecorded are holes the backfill can still close
+			wait := 5 * time.Minute
+			var asks int
+			for i := 1; i <= 24; i++ {
+				at := clock.Now()
+				rep := u.RunOnce(context.Background())
+				if rep.Attempts != 1 {
+					t.Fatalf("ask %d: %+v\n%s", i, rep, logs.Joined())
+				}
+				asks++
+				row, ok := status.row(leg(1), LevelL1Posted)
+				if !ok || row.State == nil || row.State.Code != "l1_capture_gap" {
+					t.Fatalf("ask %d: %+v", i, row)
+				}
+				next := row.State.Fields["next_attempt_at"]
+				if terminal {
+					if rep.Failed != 1 || row.State.Fields["attempt"] != uint64(i) {
+						t.Fatalf("ask %d of a %s gap: failed=%d attempt=%v: a gap that cannot heal is a failure that backs off", i, gs, rep.Failed, row.State.Fields["attempt"])
+					}
+					if want := at.Add(wait).UTC().Format(time.RFC3339); next != want {
+						t.Fatalf("ask %d of a %s gap: next_attempt_at=%v want %s (the back-off)", i, gs, next, want)
+					}
+					clock.Advance(wait)
+					if wait *= 2; wait > 6*time.Hour {
+						wait = 6 * time.Hour
+					}
+				} else {
+					if rep.Failed != 0 || row.State.Fields["attempt"] != nil {
+						t.Fatalf("ask %d of an open gap: failed=%d attempt=%v", i, rep.Failed, row.State.Fields["attempt"])
+					}
+					if want := at.Add(2 * time.Minute).UTC().Format(time.RFC3339); next != want {
+						t.Fatalf("ask %d of an open gap: next_attempt_at=%v want %s", i, next, want)
+					}
+					clock.Advance(2 * time.Minute)
+				}
+			}
+			if terminal && (rec.failures["l1_capture_gap"] != 2*asks || !u.isSuspect(leg(1))) { // two levels per ask
+				t.Fatalf("a terminal gap is counted as the failure it is: %d of %d level asks, suspect %v", rec.failures["l1_capture_gap"], 2*asks, u.isSuspect(leg(1)))
+			}
+			if !terminal && (rec.failures["l1_capture_gap"] != 0 || u.isSuspect(leg(1))) {
+				t.Fatalf("an open gap is no failure: %d, suspect %v", rec.failures["l1_capture_gap"], u.isSuspect(leg(1)))
+			}
+		})
+	}
 }

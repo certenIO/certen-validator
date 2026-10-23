@@ -77,6 +77,10 @@ var (
 		Name: "certen_finality_build_held_total",
 		Help: "Finality asks held by the environment instead of failed (RB12-GO-INT F17): a state that is a fact about this process or its capture store, such as l1_capture_gap, by chain and state code. A held leg is asked again at the bounded poll and is not counted in certen_finality_build_failures_total.",
 	}, []string{"chain", "code"})
+	finalityCaptureForeignInboxTx = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "certen_finality_capture_foreign_inbox_tx_total",
+		Help: "Transactions sent to the batch inbox by a key that is not the SystemConfig batcher at that block, skipped by the capture (RB12-GO-INT D2), by chain.",
+	}, []string{"chain"})
 	finalityPending = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "certen_finality_pending_total",
 		Help: "Finality builds that ended in finality_pending (the level reached is proven; the next one is not yet buildable).",
@@ -319,6 +323,11 @@ func IncFinalityAppended(chain uint64, level string) {
 	finalityHealth.mu.Unlock()
 }
 
+// IncFinalityCaptureForeignInboxTx counts a batch-inbox transaction the capture skipped because the batcher did not send it.
+func IncFinalityCaptureForeignInboxTx(chain uint64) {
+	finalityCaptureForeignInboxTx.WithLabelValues(chainLabel(chain)).Inc()
+}
+
 // IncFinalityBuildHeld counts an ask held by the environment (a state of the environment class, see pkg/finality/state_class.go).
 func IncFinalityBuildHeld(chain uint64, code string) {
 	finalityBuildHeld.WithLabelValues(chainLabel(chain), code).Inc()
@@ -476,6 +485,7 @@ func registerFinalityMetrics() {
 	prometheus.MustRegister(finalityAppended)
 	prometheus.MustRegister(finalityBuildFailures)
 	prometheus.MustRegister(finalityBuildHeld)
+	prometheus.MustRegister(finalityCaptureForeignInboxTx)
 	prometheus.MustRegister(finalityPending)
 	prometheus.MustRegister(finalityChainBroken)
 	prometheus.MustRegister(finalityStatus)

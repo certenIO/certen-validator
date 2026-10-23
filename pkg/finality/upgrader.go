@@ -261,6 +261,7 @@ type Upgrader struct {
 	unrecorded  map[string]uint64      // proof id -> chain, for the legs whose settlement evidence was last served before the proof row recorded the settlement
 	noProverAt  map[uint64]bool        // chains whose no-prover gauge is currently non-zero (reset when they drop out)
 	fails       map[levelKey]int       // (proof id, level) -> consecutive failed asks (the back-off exponent); a leg with any is a suspect
+	heldAge     map[levelKey]uint64    // (proof id, level) -> the memory-budget age of a build that was held (refused after its wait): its next attempt keeps it (RB12-GO-INT D3)
 	inflight    map[string]bool        // proof ids whose attempt is running (a suspect's attempt outlives the pass that started it)
 	late        PassReport             // results of detached attempts that finished after their pass returned, merged into the next report
 
@@ -297,7 +298,7 @@ func NewUpgrader(src LegSource, store AddendumStore, reg *Registry, pins *Pins, 
 		next: map[string]time.Time{}, levelAt: map[levelKey]time.Time{}, disabled: map[uint64]bool{},
 		complete: map[string]Level{}, stand: map[string]legStand{}, noProver: map[uint64]bool{},
 		noComponent: newBundleMemo(noComponentMemoCap), quiet: map[string]uint64{}, unrecorded: map[string]uint64{}, noProverAt: map[uint64]bool{},
-		fails: map[levelKey]int{}, inflight: map[string]bool{},
+		fails: map[levelKey]int{}, heldAge: map[levelKey]uint64{}, inflight: map[string]bool{},
 	}, nil
 }
 
@@ -1000,7 +1001,7 @@ func (u *Upgrader) upgradeLeg(ctx context.Context, ref LegRef) (res legResult) {
 			if c, ok := p.(Ceilinged); ok && c.Ceiling() < target {
 				continue
 			}
-			add, pd, err := u.build(ctx, p, settlement.Included, have, target)
+			add, pd, err := u.buildKeyed(ctx, levelKey{ref.ProofID, target}, p, settlement.Included, have, target)
 			if ctx.Err() != nil {
 				return res // cancelled: leave the schedule alone, nothing was judged
 			}
@@ -1011,7 +1012,7 @@ func (u *Upgrader) upgradeLeg(ctx context.Context, ref LegRef) (res legResult) {
 					wait = u.cfg.BrokenRetry
 					continue // the chain does not have that level: nothing to build, nothing wrong
 				}
-				if st, ok := AsNamed(err); ok && IsEnvironmentStateError(st) {
+				if st, ok := AsNamed(err); ok && IsEnvironment(st) {
 					// The state is a fact about THIS process or its capture store, not a verdict on the leg (state_class.go): the process
 					// memory budget could not cover the build even after waiting for another build to release (RB12-P0LIVE-FIX D2), or the
 					// capture store has a recorded hole in the window of the leg, which the backfill closes (RB12-GO-INT F17). No failure
@@ -1124,7 +1125,7 @@ func (u *Upgrader) upgradeLeg(ctx context.Context, ref LegRef) (res legResult) {
 			}
 			if failed && !nextAt.IsZero() && (status.Class == BuilderUnavailable || status.Class == BuilderRefused) {
 				status.noteAttempt(failAttempt, nextAt)
-			} else if held && !nextAt.IsZero() && status.State != nil && IsEnvironmentStateError(status.State) {
+			} else if held && !nextAt.IsZero() && status.State != nil && IsEnvironment(status.State) {
 				if status.Class == BuilderPending {
 					status.noteRetry(nextAt)
 				} else {
@@ -1166,15 +1167,48 @@ func (u *Upgrader) brokenChain(ref LegRef, err error) legResult {
 // build runs one prover under BuildTimeout and recovers its panic. A prover that ignores its context is abandoned at the
 // deadline: the leg is reported as a named timeout and the worker moves on, so no prover can stall the pass.
 func (u *Upgrader) build(ctx context.Context, p Prover, s *ethproof.Settlement, have LevelSet, target Level) (*Addendum, *PendingState, error) {
+	var age uint64
+	if budget := MemoryBudgetOf(ctx); budget != nil {
+		age = budget.newAge()
+	}
+	return u.buildAged(ctx, age, p, s, have, target)
+}
+
+// buildKeyed is build for the attempt of one (leg, level): a build that was HELD by the memory budget (refused after its full wait) keeps its
+// age for the next attempt of that leg and level, so a hold - which charges no back-off and is asked again at the bounded poll - does not
+// queue behind every build that started in between (RB12-GO-INT D3). Any other outcome gives the age up.
+func (u *Upgrader) buildKeyed(ctx context.Context, key levelKey, p Prover, s *ethproof.Settlement, have LevelSet, target Level) (*Addendum, *PendingState, error) {
+	budget := MemoryBudgetOf(ctx)
+	if budget == nil {
+		return u.buildAged(ctx, 0, p, s, have, target)
+	}
+	u.mu.Lock()
+	age := u.heldAge[key]
+	u.mu.Unlock()
+	if age == 0 {
+		age = budget.newAge()
+	}
+	add, pd, err := u.buildAged(ctx, age, p, s, have, target)
+	u.mu.Lock()
+	if st, ok := AsNamed(err); ok && st.Code == CodeMemoryBudget && ctx.Err() == nil {
+		if len(u.heldAge) >= 4096 {
+			u.heldAge = map[levelKey]uint64{}
+		}
+		u.heldAge[key] = age
+	} else {
+		delete(u.heldAge, key)
+	}
+	u.mu.Unlock()
+	return add, pd, err
+}
+
+// buildAged runs the build with the given place in the budget (0: no budget on ctx).
+func (u *Upgrader) buildAged(ctx context.Context, age uint64, p Prover, s *ethproof.Settlement, have LevelSet, target Level) (*Addendum, *PendingState, error) {
 	type out struct {
 		add *Addendum
 		pd  *PendingState
 	}
 	budget := MemoryBudgetOf(ctx)
-	var age uint64 // the build's place in the budget: kept when it has to be run again, so it is not made to wait behind younger builds
-	if budget != nil {
-		age = budget.newAge()
-	}
 	var deadline time.Time
 	for {
 		// Everything the prover reads through the generic row loaders is reserved against the process budget. The hold ends when the

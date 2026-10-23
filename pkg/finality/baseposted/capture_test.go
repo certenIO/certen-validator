@@ -76,7 +76,7 @@ type fakeL1 struct {
 func (f *fakeL1) Head(context.Context) (uint64, error) { return f.blk.Number, nil }
 func (f *fakeL1) Block(_ context.Context, n uint64) (L1BlockData, error) {
 	if n != f.blk.Number {
-		return L1BlockData{Number: n}, nil
+		return emptyBlockAt(n), nil
 	}
 	return f.blk, nil
 }
@@ -85,13 +85,7 @@ func (f *fakeL1) Proof(_ context.Context, addr [20]byte, slots [][32]byte, block
 	if f.failProof {
 		return StateProof{}, errors.New("historical state is not available")
 	}
-	sp := StateProof{Nodes: [][]byte{[]byte("node-" + common.Bytes2Hex(addr[:2]))}, Values: map[[32]byte][32]byte{}}
-	if len(slots) > 0 {
-		var v [32]byte
-		copy(v[12:], testImpl[:])
-		sp.Values[eip1967ImplSlot] = v
-	}
-	return sp, nil
+	return testProvable().proof(addr, slots), nil
 }
 
 type fakeBeacon struct{ blobs [][]byte }
@@ -123,7 +117,7 @@ func blobBlock(t *testing.T, kz *kzgsetup.Context, number uint64, data []byte) (
 	other := userTx(7)
 	raws := [][]byte{other, raw}
 	root := ethproof.TrieRoot(raws)
-	h := &types.Header{Number: new(big.Int).SetUint64(number), TxHash: root, Root: common.Hash{9}, ParentHash: common.Hash{8}, Time: 1655733600 + 12*5000,
+	h := &types.Header{Number: new(big.Int).SetUint64(number), TxHash: root, Root: testProvable().st.Root, ParentHash: common.Hash{8}, Time: 1655733600 + 12*5000,
 		Difficulty: big.NewInt(0), UncleHash: types.EmptyUncleHash, ReceiptHash: types.EmptyReceiptsHash}
 	hdr, _ := rlp.EncodeToBytes(h)
 	var otherTo [20]byte

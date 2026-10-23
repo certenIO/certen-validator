@@ -180,7 +180,7 @@ func entryIDs(t testing.TB, st finality.CaptureStore) map[[16]byte]bool {
 	return out
 }
 
-func foreignCount(t testing.TB) float64 {
+func f19ForeignCount(t testing.TB) float64 {
 	v, _ := vGather(t, "certen_finality_capture_foreign_txs_total")
 	return v
 }
@@ -206,7 +206,7 @@ func TestRB12F19AJunkChannelFirstByPositionDoesNotHideTheHonestLeg(t *testing.T)
 				w.putBlock(1010, w.honest, f19Tx{key: w.junk, frames: J})
 				w.putBlock(1020, w.honest, f19Tx{key: w.honest, frames: H})
 			}
-			before := foreignCount(t)
+			before := f19ForeignCount(t)
 			stepAll(t, NewIndexer(st, w.bp, 0, IndexConfig{}), 1200)
 			T := uint64(1_790_100_030)
 			ids := entryIDs(t, st)
@@ -219,7 +219,7 @@ func TestRB12F19AJunkChannelFirstByPositionDoesNotHideTheHonestLeg(t *testing.T)
 					t.Errorf("indexed=%v: the honest leg must be served despite the junk channel that holds the same T first: ch=%v err=%v", indexed, sr.ch, err)
 				}
 			}
-			if foreignCount(t) <= before {
+			if f19ForeignCount(t) <= before {
 				t.Errorf("a skipped non-batcher transaction is counted (certen_finality_capture_foreign_txs_total)")
 			}
 		})

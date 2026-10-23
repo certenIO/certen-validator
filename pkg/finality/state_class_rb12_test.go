@@ -44,8 +44,8 @@ func TestRB12F17TheEnvironmentClassIsExactlyTheProcessAndStoreStates(t *testing.
 		}
 	}
 	sort.Strings(got)
-	want := []string{"finality_index_disabled", "finality_memory_budget_exceeded", "l1_capture_gap"}
-	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
+	want := []string{"finality_index_disabled", "finality_memory_budget_exceeded", "index_inconsistent", "l1_capture_gap"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] || got[3] != want[3] {
 		t.Fatalf("environment states: %v, want %v", got, want)
 	}
 	for _, code := range want {
@@ -77,38 +77,68 @@ func TestRB12F17TheMemoryCodeConstantIsInTheTable(t *testing.T) {
 	}
 }
 
-// Train 3: index_inconsistent is classified by its REASON. Only a missing row can clear by a retry (reconcile or a capture backfill writes
-// it); a corrupt, quarantined, overflowing, re-pinned or disagreeing row is persistent until a new index generation, so it keeps the
-// failure back-off. Every reason of the registry's closed set must be decided by name.
-func TestRB12F17IndexInconsistentIsClassifiedByItsReason(t *testing.T) {
+// D1 (V-T2): some states are environment only for some values of one of their fields (l1_capture_gap: an OPEN gap heals, a terminal one
+// never does). The rule is a table too, and it names EVERY value of the field the registry names, no more, no fewer.
+func TestRB12F17EveryValueOfAFieldWithAClassRuleHasAClass(t *testing.T) {
 	reg := loadRegistry(t)
-	set := reg.States["index_inconsistent"].Enums["reason"]
-	by := StateReasonClasses()["index_inconsistent"]
-	if len(set) == 0 || len(by) != len(set) {
-		t.Fatalf("every reason of the closed set %v must have a class, the table has %v", set, by)
+	rules := FieldClassRules()
+	if len(rules) == 0 {
+		t.Fatal("no field rule: l1_capture_gap is environment only while the gap is open")
 	}
-	for _, reason := range set {
-		want, ok := by[reason]
+	for code, rule := range rules {
+		spec, ok := reg.States[code]
 		if !ok {
-			t.Errorf("reason %s has no class", reason)
+			t.Errorf("the rule names %s, which is not registered", code)
 			continue
 		}
+		if base, _ := ClassOfState(code); base != ClassEnvironment {
+			t.Errorf("%s: a field rule refines an environment state; its base class is %q", code, base)
+		}
+		enum := spec.Enums[rule.Field]
+		if len(enum) == 0 {
+			t.Errorf("%s: the registry names no closed set for %s", code, rule.Field)
+		}
+		for _, v := range enum {
+			if _, ok := rule.Classes[v]; !ok {
+				t.Errorf("%s: %s=%s has no class", code, rule.Field, v)
+			}
+		}
+		for v := range rule.Classes {
+			found := false
+			for _, e := range enum {
+				found = found || e == v
+			}
+			if !found {
+				t.Errorf("%s: the rule classifies %s=%s, which the registry does not name", code, rule.Field, v)
+			}
+		}
+	}
+	gs := func(v string) *StateError { return NewState("l1_capture_gap", "gap_state", v) }
+	if ClassOfStateError(gs("open")) != ClassEnvironment || ClassOfStateError(gs("unavailable_proven")) != ClassFailure ||
+		ClassOfStateError(gs("retention_expired")) != ClassFailure {
+		t.Fatal("open is environment, the two terminal gap states are failures")
+	}
+	if ClassOfStateError(NewState("l1_capture_gap")) != ClassFailure || ClassOfStateError(gs("invented")) != ClassFailure {
+		t.Fatal("a gap whose state is missing or unknown is not known to heal: failure")
+	}
+	if ClassOfStateError(nil) != ClassFailure || ClassOfStateError(NewState("finality_memory_budget_exceeded")) != ClassEnvironment {
+		t.Fatal("nil is a failure; a code without a field rule is classed by its code")
+	}
+}
+
+// Train 3: index_inconsistent is environment ONLY for a missing row (the reconcile or a backfill writes it); every other reason is persistent
+// until a new index generation, so it keeps the failure back-off. A leg is held or backed off by the reason of its state.
+func TestRB12F17IndexInconsistentIsEnvironmentOnlyForAMissingRow(t *testing.T) {
+	for _, reason := range loadRegistry(t).States["index_inconsistent"].Enums["reason"] {
 		st := IndexInconsistent(84532, "bi", reason)
-		got, known := ClassOfStateError(st)
-		if !known || got != want {
-			t.Errorf("%s: class %q, want %q", reason, got, want)
-		}
-		wantEnv := reason == IndexRowMissing
-		if IsEnvironmentStateError(st) != wantEnv {
-			t.Errorf("%s: environment=%v, want %v (only row_missing clears by a retry)", reason, IsEnvironmentStateError(st), wantEnv)
+		if got, want := IsEnvironment(st), reason == IndexRowMissing; got != want {
+			t.Errorf("%s: environment=%v, want %v (only row_missing clears by a retry)", reason, got, want)
 		}
 	}
-	// a reason the table does not know keeps the failure back-off (the stronger protection)
-	if c, _ := ClassOfStateError(NewState("index_inconsistent", "chain", uint64(84532), "family", "bi", "reason", "unheard_of")); c != ClassFailure {
-		t.Errorf("an unknown reason keeps the failure back-off, got %q", c)
+	if IsEnvironment(NewState("index_inconsistent", "chain", uint64(84532), "family", "bi", "reason", "unheard_of")) {
+		t.Error("an unknown reason keeps the failure back-off")
 	}
-	// a code that is not refined keeps its own class
-	if c, _ := ClassOfStateError(NewState("l1_capture_gap", "chain", uint64(84532), "gap_state", "open")); c != ClassEnvironment {
-		t.Errorf("l1_capture_gap is an environment state, got %q", c)
+	if !IsEnvironment(NewState("l1_capture_gap", "gap_state", GapStateUnrecorded)) {
+		t.Error("an inferred hole (unrecorded) is held like an open one")
 	}
 }
