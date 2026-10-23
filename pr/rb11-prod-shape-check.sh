@@ -1160,6 +1160,9 @@ cat <<'EOF'
      proof_artifacts; a role with no grant there and a table-level grant elsewhere is invisible to it.
  N7  The wire format of proofs_service responses (certen-finality-summary/1) as the gateway parses it: that is a code-to-code
      contract tested by the two repos' vectors, not a database shape.
+ N8  That the number of blob rows of a Base transaction equals the number of blob hashes in its RLP (PostgreSQL has no RLP). I13 checks contiguity and the
+     type-3 correspondence; the equality is checked by the indexer itself on every block it digests (blob_rows_inconsistent) and shows as
+     index_block_unindexable in the log, the metric certen_finality_index_unindexable_blocks_total and the state of the legs it blocks.
 EOF
 
 # ==============================================================================================================================
