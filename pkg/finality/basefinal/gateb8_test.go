@@ -153,7 +153,10 @@ func TestTheBuilderFindsTheCoveringGameByGallopAndBisectionAndNamesTheEnds(t *te
 		{"the live game is in the middle of regular games", 30, 12, 600, 0, true, false},
 		{"games above are wider apart", 30, 12, 700, 0, true, false},
 		{"games above are closer", 30, 12, 500, 0, true, false},
-		{"the search needs a handful of probes and may take them", 30, 12, 650, 12, true, false},
+		// the search of this row needs exactly 11 probes: the bound is pinned from both sides (an off-by-one in the comparison that
+		// counts the probes survives neither row)
+		{"the search needs exactly eleven probes and may take eleven", 30, 12, 650, 11, true, false},
+		{"the search needs eleven probes and may take ten", 30, 12, 650, 10, false, true},
 		{"the search needs more than one probe and may take one", 30, 12, 650, 1, false, true},
 	} {
 		w := loadLive(t)

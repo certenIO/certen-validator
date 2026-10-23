@@ -87,12 +87,12 @@ func TestStatusDocumentOmitsAnAbsentEtaAndReadsOnlyKnownLevelsAndTimes(t *testin
 	if _, err := ParseLevelOrNone("nonsense"); err == nil {
 		t.Fatal("nonsense was read as a level")
 	}
-	// classification: a pending is pending; an unnamed error becomes a named verifier_failed unavailability; N and R are told apart
+	// classification: a pending is pending; an unnamed error becomes the named builder-side unavailability finality_builder_error (finality_verifier_failed means evidence was built and failed verification, RB12-P0LIVE-FIX D4); N and R are told apart
 	pd := &PendingState{Chain: 1, LevelReached: LevelIncluded, NextLevel: LevelL1Posted, Reason: "awaiting_batch_post"}
 	if s := BuilderStatusOf(legID, 1, LevelL1Posted, LevelIncluded, pd, errors.New("ignored"), true, time.Now()); s.Class != BuilderPending || s.State.Code != CodePending {
 		t.Fatalf("%+v", s)
 	}
-	if s := BuilderStatusOf(legID, 1, LevelL1Posted, LevelIncluded, nil, errors.New("plain failure"), false, time.Now()); s.Class != BuilderUnavailable || s.State.Code != CodeVerifierFailed {
+	if s := BuilderStatusOf(legID, 1, LevelL1Posted, LevelIncluded, nil, errors.New("plain failure"), false, time.Now()); s.Class != BuilderUnavailable || s.State.Code != CodeBuilderError {
 		t.Fatalf("%+v", s)
 	}
 	na := NotApplicableState(1, LevelL1Posted, ReasonChainIsL1)

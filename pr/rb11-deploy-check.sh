@@ -131,8 +131,20 @@ exit "$fail"
 #       after inclusion; a 4.6k-header spine takes about 3 min on the public Sepolia RPC) and chains 84532 / 421614 level 2 (l1_posted,
 #       about 17 to 21 min after a leg). Arbitrum finalized follows at about 65 to 110 min, Base finalized at about 5 days + 15 min.
 #     proof_finality_status (legs): codes finality_pending (awaiting_*; Sepolia: the block-not-yet-covered reason until the finalized head
-#       passes the leg) and 'verified' rows ('-' code, class verified). Any class 'refused' (finality_verifier_failed) is a bug to report; 'unavailable' with l1_proof_window_unavailable /
-#       batcher_state_unavailable / l1_blob_unavailable is a missed provider window (OD4 removes the usual cause).
+#       passes the leg) and 'verified' rows ('-' code, class verified). The CLASS of a row and its CODE are different things; do not read one as
+#       the other:
+#       - class 'refused' = evidence was BUILT and the registered Kind refused it (nothing stored); the code is that Kind's own named refusal
+#         (finality_verifier_failed is one of them). Any class 'refused' row for an honest leg is a bug to report.
+#       - code finality_verifier_failed, whatever its class, means evidence was built and failed verification: a bug to report. A builder error
+#         that carries no name of its own (a capture row that vanished, a database or provider error) is class 'unavailable' with the code
+#         finality_builder_error{stage=build|append}, never finality_verifier_failed.
+#       - class 'unavailable' = the builder could not obtain or build what it needs: l1_proof_window_unavailable / batcher_state_unavailable /
+#         l1_blob_unavailable (a missed provider window; OD4 removes the usual cause), l1_capture_not_covering (a leg older than the capture,
+#         decided at once with the block it was judged at), finality_game_source_unavailable / finality_covering_game_unavailable,
+#         finality_build_timeout (each failed ask carries attempt and next_attempt_at), finality_builder_error.
+#       - class 'pending' with code finality_memory_budget_exceeded (next_attempt_at, eta, no attempt) = the process memory budget held the
+#         build; the leg is asked again at the pending interval and nothing failed. Many of these with certen_finality_memory_refused_total
+#         rising is a budget (CERTEN_FINALITY_MEMORY_BUDGET_BYTES) or concurrency question, not a defect of a leg.
 #     capture pseudo rows: none in a healthy first hour; a row there is a capture loop's named unavailability state (see the deploy guide, 3.2).
 #     proof_finality_capture: chain 84532 and 421614 rows_last_30m > 0 whenever those chains posted batches in the window (Base posts about
 #       every few minutes, Arbitrum batches likewise), and the cursor block within about 60 L1 blocks of the Sepolia head.
