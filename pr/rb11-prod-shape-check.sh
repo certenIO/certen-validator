@@ -809,6 +809,42 @@ EOF
     rec WARN C8 "chain 84532 has capture rows (and a runtime/cursor row), so the Base l1_posted builder knows what the capture loop covered" "rows of chain 84532" "no capture row at all for chain 84532: coverage UNKNOWN, every Base leg stays pending in the window search"
   fi
 else rec FAIL C8 "capture cursor query" "query answers" "failed: $(errline)"; fi
+# (renumbered at the Train 2 integration: C8 is the p0-live cursor-row check above; the capture-gap checks are C9 and C10)
+# C9 (RB12-CAPTURE-GAP): the gap bookkeeping rows the code writes and reads are well-formed, and the spacing audit's assumption holds on the
+# live Base store (consecutive captured inbox blocks are at most 19 blocks apart outside outage holes; the audit suspects a run above 40).
+if out=$(sqlro <<SQL
+SELECT count(*) FILTER (WHERE item LIKE 'gap/%'),
+  count(*) FILTER (WHERE item LIKE 'gap/%' AND item !~ '^gap/[0-9]+/(block_unavailable|state_proof_unavailable|blob_unavailable|capture_failed|outage_unscanned|spacing_unproven|operator_declared)\$'),
+  count(*) FILTER (WHERE item LIKE 'gapfill/%' AND item <> 'gapfill/' || l1_block),
+  count(*) FILTER (WHERE item LIKE 'gapend/%' AND item !~ '^gapend/[0-9]+/(unavailable_proven|retention_expired)\$'),
+  count(*) FILTER (WHERE item LIKE 'gapnote/%')
+  FROM proof_finality_capture;
+SQL
+); then
+  IFS='|' read -r g_n g_badgap g_badfill g_badend g_notes <<EOF
+$out
+EOF
+  [ "$((g_badgap + g_badfill + g_badend))" -eq 0 ] && st=PASS || st=FAIL
+  rec $st C9 "gap bookkeeping rows (gap/<to>/<class>, gapfill/<block>, gapend/<block>/<kind>) are well-formed" "0 malformed" "gap rows $g_n (malformed $g_badgap), malformed fills $g_badfill, malformed ends $g_badend, notes $g_notes"
+else rec FAIL C9 "gap bookkeeping query" "query answers" "failed: $(errline)"; fi
+if out=$(sqlro <<SQL
+WITH ib AS (SELECT DISTINCT l1_block AS blk FROM proof_finality_capture WHERE chain = 84532 AND item = 'inbox'),
+     d  AS (SELECT blk AS a, lead(blk) OVER (ORDER BY blk) AS z FROM ib),
+     r  AS (SELECT a, z FROM d WHERE z IS NOT NULL AND z - a > 40
+              AND NOT EXISTS (SELECT 1 FROM proof_finality_capture g WHERE g.chain = 84532 AND g.item LIKE 'gap/%'
+                               AND g.l1_block <= a + 1 AND split_part(g.item, '/', 2)::bigint >= z - 1))
+SELECT (SELECT count(*) FROM ib),
+       COALESCE((SELECT max(z - a) FROM d WHERE z IS NOT NULL AND z - a <= 40), 0),
+       (SELECT count(*) FROM r), COALESCE((SELECT sum(z - a - 1) FROM r), 0);
+SQL
+); then
+  IFS='|' read -r s_n s_max s_runs s_blocks <<EOF
+$out
+EOF
+  if [ "$s_n" -eq 0 ]; then rec WARN C10 "Base capture: consecutive inbox blocks are at most 40 apart unless a gap row covers the run" "rows to examine" "no Base inbox rows (nothing examined)"
+  elif [ "$s_runs" -eq 0 ]; then rec PASS C10 "Base capture: consecutive inbox blocks are at most 40 apart unless a gap row covers the run" "0 uncovered runs" "$s_n inbox blocks, largest ordinary spacing $s_max, 0 uncovered runs"
+  else rec WARN C10 "Base capture: consecutive inbox blocks are at most 40 apart unless a gap row covers the run" "0 uncovered runs (the spacing audit records them on the first tick of the RB12-CAPTURE-GAP binary)" "$s_runs uncovered run(s), $s_blocks uncaptured blocks; $s_n inbox blocks, largest ordinary spacing $s_max"; fi
+else rec FAIL C10 "Base capture spacing query" "query answers" "failed: $(errline)"; fi
 
 # ==============================================================================================================================
 # (f) container environment hygiene (names only, never values)
