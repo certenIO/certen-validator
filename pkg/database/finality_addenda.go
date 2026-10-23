@@ -7,11 +7,13 @@ import (
 	"compress/gzip"
 	"context"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/lib/pq"
@@ -219,31 +221,36 @@ func (r *FinalityAddendaRepository) Chain(ctx context.Context, proofID string) (
 // its size).
 const maxBundleJSON = 16 << 20
 
+// maxStoredBundle bounds a stored bundle before it is fetched: proof_bundles.bundle_data is read only after its octet_length is
+// known to be within this many (compressed) bytes.
+const maxStoredBundle = 16 << 20
+
 // bundleFormatV1 is the only proof_bundles.bundle_format the leg source reads: the gzip of the bundle JSON that
 // pkg/proof CertenProofBundle.ToCompressedJSON writes.
 const bundleFormatV1 = "certen_v1"
 
-// SettledLegs lists the stored proofs that have a settlement and a bundle, NEWEST FIRST (by the proof's creation time, then
-// its id, both descending), leaving out proofs whose chain already stands at finalized. A backlog of old legs therefore never
-// stands in front of a new one. The cursor `after` is the proof id the previous page ended with; the next page starts after that
-// proof's own (created_at, proof_id), so a proof stored between two pages is newer than the cursor: this walk does not see it,
-// the next listing starts with it, and nothing already returned is returned again. A cursor that names no proof is refused (an
-// empty page would end the pass as if the backlog were done).
+// SettledLegs lists every stored proof that has a bundle, NEWEST FIRST (by the proof's creation time, then its id, both
+// descending), leaving out proofs whose chain already stands at finalized. A backlog of old legs therefore never stands in front
+// of a new one. Each leg carries the id of the proof's NEWEST bundle (LegRef.BundleID), which LegSettlement reads and the upgrader
+// remembers when that bundle holds no execution proof. The cursor `after` is the proof id the previous page ended with; the next
+// page starts after that proof's own (created_at, proof_id), so a proof stored between two pages is newer than the cursor: this
+// walk does not see it, the next listing starts with it, and nothing already returned is returned again. A cursor that names no
+// proof is refused (an empty page would end the pass as if the backlog were done).
 //
-// The candidates are the rows production writes for a settled leg: proof_artifacts.settlement_block_number is set and a
-// proof_bundles row exists. That is a cheap prefilter, not a judgement: whether the bundle really holds an execution proof is
-// decided per leg by LegSettlement, which gunzips it. The chain is the cycle summary's chain_id (proof_artifacts.artifact_json
-// is the summary; it never carries proof_components).
+// There is no filter on what the bundle holds or on settlement_block_number: a prefilter that can drop a settled leg is below the
+// claim that every settled leg gets its evidence. Whether the bundle holds an execution proof is decided per leg by LegSettlement
+// (a named state), and the upgrader reads a bundle that holds none once. The chain is the cycle summary's chain_id
+// (proof_artifacts.artifact_json is the summary; it never carries proof_components).
 func (r *FinalityAddendaRepository) SettledLegs(ctx context.Context, after string, limit int) ([]finality.LegRef, error) {
 	if limit <= 0 {
 		limit = 200
 	}
 	query := `
-		SELECT pa.proof_id::text, pa.artifact_json ->> 'chain_id'
+		SELECT pa.proof_id::text, pa.artifact_json ->> 'chain_id', pb.bundle_id::text
 		FROM proof_artifacts pa
-		WHERE pa.settlement_block_number IS NOT NULL
-		  AND EXISTS (SELECT 1 FROM proof_bundles pb WHERE pb.proof_id = pa.proof_id)
-		  AND NOT EXISTS (SELECT 1 FROM proof_finality_addenda f WHERE f.proof_id = pa.proof_id AND f.level = 3)`
+		JOIN LATERAL (SELECT bundle_id FROM proof_bundles WHERE proof_id = pa.proof_id
+			ORDER BY created_at DESC, bundle_id DESC LIMIT 1) pb ON true
+		WHERE NOT EXISTS (SELECT 1 FROM proof_finality_addenda f WHERE f.proof_id = pa.proof_id AND f.level = 3)`
 	args := []any{}
 	if after != "" {
 		var cursorAt time.Time
@@ -267,7 +274,7 @@ func (r *FinalityAddendaRepository) SettledLegs(ctx context.Context, after strin
 	for rows.Next() {
 		var ref finality.LegRef
 		var chain sql.NullString
-		if err := rows.Scan(&ref.ProofID, &chain); err != nil {
+		if err := rows.Scan(&ref.ProofID, &chain, &ref.BundleID); err != nil {
 			return nil, err
 		}
 		id, perr := strconv.ParseUint(chain.String, 10, 64)
@@ -281,11 +288,14 @@ func (r *FinalityAddendaRepository) SettledLegs(ctx context.Context, after strin
 	return out, rows.Err()
 }
 
-// executionProof is component 5 of a stored bundle: the raw JSON of its execution proof, and the chain it names (when it names one).
+// executionProof is component 5 of a stored bundle: the raw JSON of its execution proof, the chain it names, and the settlement
+// the proof row records (NULL until the proof's settlement was classified) that the served evidence must be for.
 type executionProof struct {
-	raw      json.RawMessage
-	chain    uint64
-	hasChain bool
+	raw          json.RawMessage
+	chain        uint64
+	settlementTx sql.NullString
+	settlementAt sql.NullInt64
+	bundleID     string // the bundle component 5 was read from
 }
 
 // bundleInvalid is the named state of a stored bundle the source cannot read.
@@ -310,34 +320,61 @@ func gunzipBounded(data []byte) ([]byte, error) {
 	return out, nil
 }
 
-// executionProofOf reads component 5 (proof_components.5_execution_proof) of a proof's NEWEST stored bundle: the one source of
+// idHex is a proof id as the bundle writer states it in bundle_integrity.custody_chain_hash: lower-case hex without dashes.
+func idHex(id string) string {
+	return strings.ReplaceAll(strings.ToLower(strings.TrimSpace(id)), "-", "")
+}
+
+// executionProofOf reads component 5 (proof_components.5_execution_proof) of one stored bundle of a proof, the bundle bundleID names or,
+// when it is empty, the proof's NEWEST: the one source of
 // a leg's L6 evidence, shared by LegRef and LegSettlement (and so by the upgrader and by cmd/proofverify). proof_artifacts.artifact_json
-// is only the cycle summary and is never a source. A proof that does not exist is sql.ErrNoRows. A proof with no bundle, a bundle
-// with no execution proof, or one whose execution proof carries no block header has no settlement (yet): the named
-// finality_included_unavailable state. A bundle that cannot be read (not certen_v1, not gzip, truncated, past the size bound, not
-// JSON, component 5 not an object) is the named finality_included_invalid state with its cause.
-func (r *FinalityAddendaRepository) executionProofOf(ctx context.Context, proofID string) (*executionProof, error) {
-	var format sql.NullString
-	var data []byte
-	err := r.client.DB().QueryRowContext(ctx, `SELECT pb.bundle_format, pb.bundle_data
+// is only the cycle summary and is never a source.
+//
+//   - A proof that does not exist is sql.ErrNoRows.
+//   - finality_included_unavailable (no settlement yet) is exactly: the proof has no bundle, or its bundle's component 5 is absent,
+//     JSON null or {}. Nothing is wrong and nothing was served.
+//   - Everything else that is not a usable execution proof is the named finality_included_invalid state with its cause: a bundle
+//     that is not certen_v1, is stored over the size bound, is not gzip, is truncated, decompresses past the bound, is not a JSON
+//     object (a top-level null included), was written for another proof (bundle_integrity.custody_chain_hash is not this proof's
+//     id; the writer, pkg/execution generateAndPersistBundle, has set it to the proof id on every bundle since 2026-01-26), or
+//     whose non-empty component 5 is not an object, has no block_header_rlp (the writer always emits it with the evidence), or
+//     names no chain_id that is a decimal number.
+func (r *FinalityAddendaRepository) executionProofOf(ctx context.Context, proofID, bundleID string) (*executionProof, error) {
+	ep := &executionProof{}
+	var foundID, format sql.NullString
+	var size sql.NullInt64
+	err := r.client.DB().QueryRowContext(ctx, `SELECT pa.settlement_tx_hash, pa.settlement_block_number, pb.bundle_id::text, pb.bundle_format, pb.size
 		FROM proof_artifacts pa
-		LEFT JOIN LATERAL (SELECT bundle_format, bundle_data FROM proof_bundles WHERE proof_id = pa.proof_id
+		LEFT JOIN LATERAL (SELECT bundle_id, bundle_format, octet_length(bundle_data) AS size FROM proof_bundles WHERE proof_id = pa.proof_id AND ($2::text = '' OR bundle_id::text = $2::text)
 			ORDER BY created_at DESC, bundle_id DESC LIMIT 1) pb ON true
-		WHERE pa.proof_id = $1::uuid`, proofID).Scan(&format, &data)
+		WHERE pa.proof_id = $1::uuid`, proofID, bundleID).Scan(&ep.settlementTx, &ep.settlementAt, &foundID, &format, &size)
 	if err != nil {
 		return nil, err
 	}
-	if !format.Valid {
+	if !foundID.Valid {
 		return nil, finality.IncludedUnavailable(finality.IncludedNoExecutionProof, "proof_id", proofID)
 	}
 	if format.String != bundleFormatV1 {
 		return nil, bundleInvalid(proofID, "bundle_format "+format.String+" is not "+bundleFormatV1)
 	}
+	if size.Int64 > maxStoredBundle {
+		return nil, bundleInvalid(proofID, fmt.Sprintf("the stored bundle is %d bytes, the bound is %d", size.Int64, int64(maxStoredBundle)))
+	}
+	var data []byte
+	if err := r.client.DB().QueryRowContext(ctx, `SELECT bundle_data FROM proof_bundles WHERE bundle_id = $1::uuid`, foundID.String).Scan(&data); err != nil {
+		return nil, err
+	}
 	doc, err := gunzipBounded(data)
 	if err != nil {
 		return nil, bundleInvalid(proofID, err.Error())
 	}
+	if string(bytes.TrimSpace(doc)) == "null" {
+		return nil, bundleInvalid(proofID, "the bundle is JSON null")
+	}
 	var bundle struct {
+		BundleIntegrity struct {
+			CustodyChainHash string `json:"custody_chain_hash"`
+		} `json:"bundle_integrity"`
 		ProofComponents struct {
 			Execution json.RawMessage `json:"5_execution_proof"`
 		} `json:"proof_components"`
@@ -345,44 +382,54 @@ func (r *FinalityAddendaRepository) executionProofOf(ctx context.Context, proofI
 	if err := json.Unmarshal(doc, &bundle); err != nil {
 		return nil, bundleInvalid(proofID, "the bundle is not JSON of the certen_v1 shape: "+err.Error())
 	}
+	if got := idHex(bundle.BundleIntegrity.CustodyChainHash); got == "" {
+		return nil, bundleInvalid(proofID, "bundle_integrity.custody_chain_hash is empty: the writer sets it to the proof id")
+	} else if got != idHex(proofID) {
+		return nil, bundleInvalid(proofID, fmt.Sprintf("the bundle was written for proof %s: bundle_integrity.custody_chain_hash is the proof id the writer sets, and it is not this proof's", got))
+	}
 	raw := bundle.ProofComponents.Execution
 	if len(raw) == 0 || string(raw) == "null" {
 		return nil, finality.IncludedUnavailable(finality.IncludedNoExecutionProof, "proof_id", proofID)
 	}
-	var head struct {
-		ChainID *string `json:"chain_id"`
-		Header  *string `json:"block_header_rlp"`
+	var members map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &members); err != nil || members == nil {
+		return nil, bundleInvalid(proofID, "the bundle's execution proof is not a JSON object")
 	}
-	if err := json.Unmarshal(raw, &head); err != nil {
-		return nil, bundleInvalid(proofID, "the bundle's execution proof is not a JSON object with a string chain_id and block_header_rlp: "+err.Error())
-	}
-	if head.Header == nil || *head.Header == "" {
+	if len(members) == 0 {
 		return nil, finality.IncludedUnavailable(finality.IncludedNoExecutionProof, "proof_id", proofID)
 	}
-	ep := &executionProof{raw: raw}
-	if head.ChainID != nil {
-		if id, perr := strconv.ParseUint(*head.ChainID, 10, 64); perr == nil {
-			ep.chain, ep.hasChain = id, true
-		}
+	var header string
+	if err := json.Unmarshal(members["block_header_rlp"], &header); err != nil || header == "" {
+		return nil, bundleInvalid(proofID, "the bundle's execution proof has evidence but no usable block_header_rlp")
 	}
+	var chain string
+	if err := json.Unmarshal(members["chain_id"], &chain); err != nil || chain == "" {
+		return nil, bundleInvalid(proofID, "the bundle's execution proof names no chain_id (a non-empty decimal string)")
+	}
+	id, err := strconv.ParseUint(chain, 10, 64)
+	if err != nil {
+		return nil, bundleInvalid(proofID, fmt.Sprintf("the bundle's execution proof chain_id %q is not a decimal chain id", chain))
+	}
+	ep.raw, ep.chain, ep.bundleID = raw, id, foundID.String
 	return ep, nil
 }
 
 // LegSettlement loads a leg's L6 evidence from its stored bundle (component 5): the block header and the transaction and
 // receipt proofs, verified here before they are handed on. Evidence that does not verify is a named finality_included_invalid
 // state, not a partial settlement. The leg's chain is the execution proof's own; the reference's chain (the cycle summary's
-// chain_id) must agree with it when both are known, and a disagreement is a named finality_included_invalid state.
+// chain_id) must agree with it when the reference has one, and a disagreement is a named finality_included_invalid state. The
+// evidence must also be for the settlement the proof row records: when proof_artifacts.settlement_tx_hash and
+// settlement_block_number are set, the proven transaction hash and the verified header's block number must equal them, else
+// finality_included_invalid naming both. (The writer sets them from the same observation as component 5.) A NULL column is not
+// checked, and the Settlement is returned marked Unrecorded: the writer records the settlement right after the bundle, and the
+// upgrader counts and reports such legs. The bundle read is the one ref.BundleID names (the newest when it is empty).
 func (r *FinalityAddendaRepository) LegSettlement(ctx context.Context, ref finality.LegRef) (finality.Settlement, error) {
-	ep, err := r.executionProofOf(ctx, ref.ProofID)
+	ep, err := r.executionProofOf(ctx, ref.ProofID, ref.BundleID)
 	if err != nil {
 		return finality.Settlement{}, err
 	}
-	chain := ref.Chain
-	if ep.hasChain {
-		if ref.Chain != 0 && ref.Chain != ep.chain {
-			return finality.Settlement{}, bundleInvalid(ref.ProofID, fmt.Sprintf("the bundle's execution proof settled on chain %d, the proof's summary names chain %d", ep.chain, ref.Chain))
-		}
-		chain = ep.chain
+	if ref.Chain != 0 && ref.Chain != ep.chain {
+		return finality.Settlement{}, bundleInvalid(ref.ProofID, fmt.Sprintf("the bundle's execution proof settled on chain %d, the proof's summary names chain %d", ep.chain, ref.Chain))
 	}
 	var settlement ethproof.Settlement
 	if err := json.Unmarshal(ep.raw, &settlement); err != nil {
@@ -392,19 +439,26 @@ func (r *FinalityAddendaRepository) LegSettlement(ctx context.Context, ref final
 	if err != nil {
 		return finality.Settlement{}, err
 	}
-	return finality.Settlement{Chain: chain, Subject: subject, Included: &settlement}, nil
+	provenTx := hex.EncodeToString(settlement.TxHash[:])
+	if ep.settlementTx.Valid && strings.TrimPrefix(strings.ToLower(strings.TrimSpace(ep.settlementTx.String)), "0x") != provenTx {
+		return finality.Settlement{}, bundleInvalid(ref.ProofID, fmt.Sprintf("the bundle proves transaction 0x%s, the proof's settlement_tx_hash is %s", provenTx, ep.settlementTx.String))
+	}
+	if ep.settlementAt.Valid && ep.settlementAt.Int64 != int64(subject.BlockNumber) {
+		return finality.Settlement{}, bundleInvalid(ref.ProofID, fmt.Sprintf("the bundle proves block %d, the proof's settlement_block_number is %d", subject.BlockNumber, ep.settlementAt.Int64))
+	}
+	// A proof row that does not record its settlement yet (the writer records it right after the bundle) is served without the
+	// check against the recorded one, and says so: the upgrader counts such legs.
+	return finality.Settlement{Chain: ep.chain, Subject: subject, Included: &settlement, Unrecorded: !ep.settlementTx.Valid || !ep.settlementAt.Valid}, nil
 }
 
 // LegRef returns one stored proof's leg: the chain its bundle's execution proof settled on. A proof whose bundle carries no
 // execution proof (component 5) has no leg: the named finality_included_unavailable state.
 func (r *FinalityAddendaRepository) LegRef(ctx context.Context, proofID string) (finality.LegRef, error) {
 	ref := finality.LegRef{ProofID: proofID}
-	ep, err := r.executionProofOf(ctx, proofID)
+	ep, err := r.executionProofOf(ctx, proofID, "")
 	if err != nil {
 		return ref, err
 	}
-	if ep.hasChain {
-		ref.Chain = ep.chain
-	}
+	ref.Chain, ref.BundleID = ep.chain, ep.bundleID
 	return ref, nil
 }

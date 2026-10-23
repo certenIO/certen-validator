@@ -9,6 +9,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -78,9 +79,10 @@ func ProductionExecutionProof(t testing.TB, s finality.Settlement) map[string]an
 	return exec
 }
 
-// ProductionBundleJSON is the JSON document a certen_v1 bundle holds (pkg/proof CertenProofBundle): the same top-level members,
+// ProductionBundleJSON is the JSON document a certen_v1 bundle holds (pkg/proof CertenProofBundle): the same top-level members, with
+// bundle_integrity.custody_chain_hash set to the proof id as the writer sets it (lower-case hex, no dashes),
 // the components keyed as production keys them. A nil exec leaves component 5 out, as a bundle without a receipt proof does.
-func ProductionBundleJSON(exec map[string]any) []byte {
+func ProductionBundleJSON(proofID string, exec map[string]any) []byte {
 	components := map[string]any{
 		"1_merkle_inclusion": map[string]any{"leaf_hash": "00"},
 		"2_anchor_reference": map[string]any{"anchor_tx": "0x00"},
@@ -91,9 +93,10 @@ func ProductionBundleJSON(exec map[string]any) []byte {
 		components["5_execution_proof"] = exec
 	}
 	raw, err := json.Marshal(map[string]any{
-		"$schema":                "https://certen.io/schemas/proof-bundle/v1.0",
-		"bundle_id":              "bundle-test",
-		"bundle_integrity":       map[string]any{"bundle_hash": "00"},
+		"$schema":   "https://certen.io/schemas/proof-bundle/v1.0",
+		"bundle_id": "bundle-test",
+		"bundle_integrity": map[string]any{"artifact_hash": "sha256:00", "bundle_signature": "", "signer_id": "validator-test",
+			"custody_chain_hash": strings.ReplaceAll(strings.ToLower(proofID), "-", "")},
 		"bundle_version":         "1.0",
 		"generated_at":           time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC).Format(time.RFC3339),
 		"proof_components":       components,
@@ -158,6 +161,6 @@ func StoreProductionLeg(t testing.TB, db *sql.DB, s finality.Settlement) string 
 	t.Helper()
 	exec := ProductionExecutionProof(t, s)
 	id := StoreProductionArtifact(t, db, s.Chain, exec["tx_hash"].(string), exec["block_number"].(uint64))
-	StoreBundleRow(t, db, id, Gzip(ProductionBundleJSON(exec)))
+	StoreBundleRow(t, db, id, Gzip(ProductionBundleJSON(id, exec)))
 	return id
 }
