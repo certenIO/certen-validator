@@ -166,6 +166,29 @@ func BuilderStatusOf(proofID string, chain uint64, target, reached Level, pd *Pe
 	return s
 }
 
+// Field names a failed builder status adds to its named state (RB12-F1): how many consecutive asks of this (leg, level) have failed
+// and when the builder asks again. They are fields of the state, not members of the status document, so the document format and
+// every reader of it are unchanged.
+const (
+	FieldAttempt       = "attempt"
+	FieldNextAttemptAt = "next_attempt_at"
+)
+
+// noteAttempt records on a failure status the ordinal of the failed ask and the time of the next one (RFC 3339, UTC, whole
+// seconds). The state is copied, so a shared state value is never changed.
+func (s *BuilderStatus) noteAttempt(attempt int, next time.Time) {
+	if s.State == nil {
+		return
+	}
+	st := NewState(s.State.Code)
+	for k, v := range s.State.Fields {
+		st.Fields[k] = v
+	}
+	st.Fields[FieldAttempt] = uint64(attempt)
+	st.Fields[FieldNextAttemptAt] = next.UTC().Format(time.RFC3339)
+	s.State = st
+}
+
 // redactedState is st with every text field (a string or an error value) passed through the one
 // sanitiser of provider text, pkg/ethrpc RedactText, before it is stored in a status row: the row is read by the gateway and
 // must never carry a credential from a provider URL or response. Numbers, bytes and levels are left as they are.
