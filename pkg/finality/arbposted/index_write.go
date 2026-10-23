@@ -745,16 +745,16 @@ func (ix *Indexer) NoteLate(block uint64) {
 // above the cursor stays (the forward step takes the block). It returns the number of blocks it worked on.
 func (ix *Indexer) reconcileHints(ctx context.Context, rep *finality.StepReport, deadline time.Time) (int, error) {
 	ix.hintMu.Lock()
-	var todo []uint64
+	var noted []uint64
 	for b := range ix.hints {
 		if b <= ix.cursor {
-			todo = append(todo, b)
+			noted = append(noted, b)
 		}
 	}
 	ix.hintMu.Unlock()
-	sort.Slice(todo, func(i, j int) bool { return todo[i] < todo[j] })
+	sort.Slice(noted, func(i, j int) bool { return noted[i] < noted[j] })
 	work := 0
-	for _, b := range todo {
+	for _, b := range noted {
 		if work > 0 && (ix.stopCause(ctx, work, rep.Late, deadline) != "" || work >= ix.Cfg.blocks()) {
 			break
 		}
