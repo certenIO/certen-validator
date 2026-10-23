@@ -49,3 +49,24 @@ was lost, but nothing had to be at risk either.
 That is correct, and it crash-looped the fleet three times in one day before the `schema-migrate` gate in
 this compose file made the order structural instead of procedural. See
 `docs/runbooks/schema-and-evidence-hardening.md` §0.
+
+## Base images and the validator build (RB11-BASEIMG)
+
+The validator `Dockerfile` has no `apk` step: its builder and runtime stages start `FROM certen/validator-builder:...` and
+`certen/validator-runtime:...`, two local images that `deploy/make-base-images.sh` builds from digest-pinned bases and the exact
+Alpine package versions of the day (`deploy/refresh-apk-pins.sh` resolves them). Alpine withdrawing an old package version can
+therefore no longer break `git pull && docker-compose build --no-cache && docker-compose up -d`. Full model:
+`docs/l4/REPRODUCIBLE_BUILD.md`.
+
+One time per host (and again only when a base changes), then the usual command works unchanged:
+
+```sh
+cd ~/certen-validators && git pull
+sh deploy/make-base-images.sh      # builds the two base images; idempotent; prints the lock
+sh deploy/verify-base-images.sh    # optional: tags, manifests vs deploy/base-images.lock, build log free of apk, binary SHA-256
+docker-compose build --no-cache && docker-compose up -d
+```
+
+If the build stops with `pull access denied for certen/validator-builder` (or `-runtime`), the base image is missing on this
+host: run `sh deploy/make-base-images.sh`. `sh deploy/make-base-images.sh --check` (no Docker, no network) checks that the
+Dockerfile and the base Dockerfiles agree; `sh deploy/base-images/test-make-base-images.sh` tests the scripts with a fake `docker`.

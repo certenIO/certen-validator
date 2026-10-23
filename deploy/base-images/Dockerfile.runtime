@@ -1,0 +1,32 @@
+# BASE IMAGE for the validator's runtime stage: certen/validator-runtime:alpine<branch>.
+#
+# Built ONCE per base change by `sh deploy/make-base-images.sh`, never by a normal `docker-compose build` (the validator
+# Dockerfile has no apk step at all). See Dockerfile.builder for why.
+#
+# ca-certificates and tzdata are data that enters none of the validator's binaries, so they do not change the published
+# SHA-256; they are still installed at an exact, recorded version (APK_PINS, resolved from Alpine's APKINDEX by
+# make-base-images.sh and written to deploy/base-images.lock) so the image is described, not floating.
+# The FROM line is read by make-base-images.sh: change the tag or digest here, then run the script and commit the new lock.
+#
+# certen-apk-packages: ca-certificates tzdata
+FROM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
+
+ARG APK_PINS
+ARG BASE_NAME
+ARG BASE_DIGEST
+ARG BUILD_DATE
+
+RUN set -eu; \
+    [ -n "${APK_PINS}" ] || { \
+        echo "FATAL: APK_PINS is empty. This file is built by 'sh deploy/make-base-images.sh', which resolves the exact"; \
+        echo "       package versions and passes them in; do not run 'docker build' on it directly."; \
+        exit 1; }; \
+    apk add --no-cache ${APK_PINS}; \
+    apk info -v | sort > /etc/certen-apk-manifest
+
+LABEL org.opencontainers.image.title="CERTEN validator runtime base" \
+      org.opencontainers.image.base.name="${BASE_NAME}" \
+      org.opencontainers.image.base.digest="${BASE_DIGEST}" \
+      org.opencontainers.image.created="${BUILD_DATE}" \
+      io.certen.base.kind="runtime" \
+      io.certen.apk.pins="${APK_PINS}"

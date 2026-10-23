@@ -1,22 +1,43 @@
 # Dockerfile for Certen Protocol Independent Validator
 # Production-Grade Multi-Stage Build
 
-# REPRODUCIBLE BUILD. Every input is pinned, so the same commit and the same key files give byte-identical binaries,
-# and the release publishes their SHA-256 (docs/l4/REPRODUCIBLE_BUILD.md):
-#   - both base images by digest (a tag such as golang:1.25-alpine or alpine:latest moves under the same name);
-#   - the BUILDER Alpine packages (git, gcc, musl-dev) by exact version: they decide the bytes of the cgo validator
-#     binary, and apk fails by name when a pinned version leaves the repository, instead of building against a different
-#     compiler or libc without saying so. When that happens run deploy/refresh-apk-pins.sh (one command, then commit);
-#   - the RUNTIME packages (ca-certificates, tzdata) are NOT pinned: they are data that enters no binary (the published
-#     SHA-256 are of the binaries), Alpine withdraws old versions every few weeks, and newer CA and time-zone data is
-#     what a runtime image should carry;
+# BASE IMAGES (read this first). This file has NO apk step: a normal `docker-compose build --no-cache` never contacts
+# Alpine's package repository, so it cannot break the day Alpine withdraws a package version (it did: ca-certificates
+# 20260909-r0 and musl-dev 1.2.6-r2 were each withdrawn while pinned here). Both stages start FROM a base image that
+# `sh deploy/make-base-images.sh` builds ONCE per host (and again only when a base changes, e.g. a security bump):
+#   certen/validator-builder:go1.25.14-alpine3.24   golang:1.25.14-alpine3.24@sha256:1ae0735f... + git gcc musl-dev
+#   certen/validator-runtime:alpine3.24             alpine:3.24@sha256:294b683c...                + ca-certificates tzdata
+# ONE-TIME on a host, before the first build of a checkout that has this header:   sh deploy/make-base-images.sh
+# If a base image is missing, the build stops BY NAME at its FROM line ("pull access denied for certen/validator-builder"
+# or "...validator-runtime", or "No such image"): that is the cue to run the command above. It is never a cue to put an
+# apk step back in here, and nothing here falls back to one.
+# `sh deploy/make-base-images.sh --check` (no docker, no network) verifies that the two FROM tags below are exactly the
+# tags deploy/base-images/Dockerfile.builder and Dockerfile.runtime produce, and that deploy/base-images.lock is for them.
+
+# REPRODUCIBLE BUILD. Every input is pinned, so the same commit, the same key files and the same base images give
+# byte-identical binaries, and the release publishes their SHA-256 (docs/l4/REPRODUCIBLE_BUILD.md):
+#   - both base images, by digest, in deploy/base-images/Dockerfile.* (a tag such as golang:1.25-alpine or alpine:latest
+#     moves under the same name);
+#   - the BUILDER packages (git, gcc, musl-dev) by exact version inside the builder base image: they decide the bytes of
+#     the cgo validator binary. The exact list is baked into the image (/etc/certen-apk-manifest, printed by the first
+#     step of the builder stage and copied into the runtime image as /etc/certen-builder-apk-manifest) and recorded in
+#     deploy/base-images.lock;
+#   - the RUNTIME packages (ca-certificates, tzdata), also exact inside the runtime base image, are data that enters no
+#     binary: the published SHA-256 are of the binaries;
 #   - every go build with -trimpath (no host paths), -buildvcs=false (.git is not in the context, .dockerignore) and
 #     -ldflags=-buildid= (no per-build id).
-# To move a pin: change it here, rebuild twice from the same commit, compare, publish the new digests.
-FROM golang:1.25.14-alpine3.24@sha256:1ae0735f00daffa3aaf1363a5184c0d2dc55c78e3db4ec70241cdac97bf84b59 AS builder
+# To move a base: edit deploy/base-images/Dockerfile.* (and the FROM tags below if the Go or Alpine version changed), run
+# `sh deploy/make-base-images.sh --force --write-lock`, rebuild twice from the same commit, compare, publish the new
+# digests and commit deploy/base-images.lock.
+FROM certen/validator-builder:go1.25.14-alpine3.24 AS builder
 
-# Install build dependencies (versions pinned; see above)
-RUN apk add --no-cache git=2.54.0-r0 gcc=15.2.0-r5 musl-dev=1.2.6-r2
+# The base image must be the one make-base-images.sh built (it writes this manifest); print it so the build log records
+# which compiler and libc this build used.
+RUN [ -s /etc/certen-apk-manifest ] || { \
+        echo "FATAL: the builder base image has no /etc/certen-apk-manifest, so it was not built by"; \
+        echo "       'sh deploy/make-base-images.sh'. Run that command on this host and build again."; \
+        exit 1; }; \
+    echo "builder base image packages:"; cat /etc/certen-apk-manifest
 
 # Set working directory
 WORKDIR /build
@@ -121,10 +142,16 @@ RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -trimpath -buildvcs=
 # ═══════════════════════════════════════════════════════════════
 # Production Stage
 # ═══════════════════════════════════════════════════════════════
-FROM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
+FROM certen/validator-runtime:alpine3.24
 
-# Install runtime dependencies (deliberately unpinned data packages; see the header)
-RUN apk add --no-cache ca-certificates tzdata
+# ca-certificates and tzdata come from the runtime base image (see the header); the builder stage's package list rides
+# along as a file so a running node can say which compiler and libc built its binaries:
+#   docker exec certen-validator-N cat /etc/certen-builder-apk-manifest
+COPY --from=builder /etc/certen-apk-manifest /etc/certen-builder-apk-manifest
+RUN [ -s /etc/certen-apk-manifest ] || { \
+        echo "FATAL: the runtime base image has no /etc/certen-apk-manifest, so it was not built by"; \
+        echo "       'sh deploy/make-base-images.sh'. Run that command on this host and build again."; \
+        exit 1; }
 
 # Create unprivileged user for security
 RUN adduser -D -s /bin/sh validator

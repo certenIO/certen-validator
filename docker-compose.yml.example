@@ -10,6 +10,11 @@
 # A per-validator secret in .env.shared gives every validator the same key: in RB3-F64 every node sent
 # and claimed settlements as one validator. Each service below reads [.env.shared, its own secrets file].
 #
+# Every validator service builds the one root Dockerfile (`build: .`), which has no apk step: its builder and runtime
+# stages start FROM the base images `sh deploy/make-base-images.sh` builds once per host. On a new host run that first;
+# after that `git pull && docker-compose build --no-cache && docker-compose up -d` never talks to Alpine's repository.
+# A missing base image stops the build by name ("pull access denied for certen/validator-builder"); run the command.
+#
 # Note that `env_file:` populates variables INSIDE the container. It does NOT provide values for
 # ${VAR} substitution in this file — compose takes those from the shell or a file literally named
 # .env. That is why secrets are simply absent here rather than referenced as ${...}.

@@ -51,3 +51,14 @@ pkg/finality/testdata/finality/*.txt -text
 cmd/proofverify/testdata/finality_e2e_pos1/* -text
 pkg/finality/ethsepolia/testdata/finality_eth_sepolia2/** -text
 pkg/finality/ethsepolia/testdata/finality_eth_sepolia3/** -text
+
+# The validator image is built on a Linux host from a git checkout, and the shell scripts that build and deploy it run
+# there under /bin/sh. A CRLF checkout (core.autocrlf=true on Windows) puts a carriage return at the end of every line:
+# `sh deploy/make-base-images.sh` then stops on its first `set` line, and a Dockerfile RUN line carries a stray CR into
+# its command. The base-image Dockerfiles and the script that resolves and records their package versions are part of the
+# reproducible-build claim (docs/l4/REPRODUCIBLE_BUILD.md), so their bytes are LF everywhere.
+Dockerfile text eol=lf
+deploy/base-images/Dockerfile.* text eol=lf
+deploy/*.sh text eol=lf
+deploy/base-images/*.sh text eol=lf
+deploy/base-images.lock text eol=lf
