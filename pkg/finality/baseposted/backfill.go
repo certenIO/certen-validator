@@ -30,6 +30,7 @@ type BackfillPolicy struct {
 	GoneObservations        int           // how many failures with every beacon endpoint answering 404/410 prove a blob unavailable ...
 	GoneSpan                time.Duration // ... when they span at least this long (a beacon node that is merely behind recovers inside it)
 	MinGoneHosts            int           // ... and every observation was made by at least this many DISTINCT beacon hosts (default 2): one provider's 404 is not proof
+	ReprobeEvery            time.Duration // a block proven unavailable is asked again this often (default 24h): the newest of each run, the rest when that one is served
 	Retention               time.Duration // beacon blob retention (4096 epochs) plus one epoch of margin
 	GenesisTime             uint64
 	SlotSeconds             uint64
@@ -38,7 +39,7 @@ type BackfillPolicy struct {
 // DefaultBackfillPolicy is the production policy: blobs are kept 4096 epochs (about 18.2 days), a blob is proven gone by three
 // all-endpoints-404/410 answers over half an hour, a block is retried after 30 s doubling to 30 min.
 func DefaultBackfillPolicy() BackfillPolicy {
-	return BackfillPolicy{BackoffBase: 30 * time.Second, BackoffMax: 30 * time.Minute, GoneObservations: 3, GoneSpan: 30 * time.Minute, MinGoneHosts: 2,
+	return BackfillPolicy{BackoffBase: 30 * time.Second, BackoffMax: 30 * time.Minute, GoneObservations: 3, GoneSpan: 30 * time.Minute, MinGoneHosts: 2, ReprobeEvery: 24 * time.Hour,
 		Retention: (4096 + 1) * 32 * 12 * time.Second, GenesisTime: SepoliaBeaconGenesis, SlotSeconds: 12}
 }
 
@@ -55,6 +56,9 @@ func (p BackfillPolicy) withDefaults() BackfillPolicy {
 	}
 	if p.GoneObservations <= 0 {
 		p.GoneObservations = d.GoneObservations
+	}
+	if p.ReprobeEvery <= 0 {
+		p.ReprobeEvery = d.ReprobeEvery
 	}
 	if p.MinGoneHosts <= 0 {
 		p.MinGoneHosts = d.MinGoneHosts
@@ -110,12 +114,19 @@ type Backfiller struct {
 	Logf func(string, ...any)
 	// Lease, when set, is the cross-validator claim on chunks of prefix blocks (nil: no claims, one validator or tests).
 	Lease *Lease
+	// OnFill is told of every block the backfill closes (after its fill row is stored), so an index of the capture store can digest a block
+	// that arrived out of order (RB12-ARCHIVE-BACKFILL; nil: nobody is told).
+	OnFill func(block uint64, hasInbox bool)
 
 	mu          sync.Mutex
 	entries     map[uint64]*bfEntry
 	reopenSet   string // the provider set the terminal blocks were last compared with
 	reopen      map[uint64]bool
 	reopenReady bool
+	// the daily re-probe of blocks proven unavailable
+	probing     map[uint64]bool
+	reopenAll   bool
+	lastReprobe time.Time
 }
 
 func (b *Backfiller) now() time.Time {
@@ -196,6 +207,7 @@ func (b *Backfiller) Step(ctx context.Context, max int) (BackfillReport, error) 
 	if err := b.reopenTerminal(ctx, pieces); err != nil {
 		return rep, err
 	}
+	b.reprobe(b.now(), pieces, pol)
 	wins, err := finality.PrefixWindowsOf(ctx, b.Store, b.Chain)
 	if err != nil {
 		return rep, err
@@ -313,6 +325,8 @@ func (b *Backfiller) attempt(ctx context.Context, n uint64, pol BackfillPolicy, 
 		b.entries[n] = e
 	}
 	hash, inbox, err := b.Capturer.CaptureBlockHash(ctx, n)
+	wasProbe := b.probing[n]
+	delete(b.probing, n)
 	if err == nil {
 		if ferr := finality.RecordGapFill(ctx, b.Store, b.Chain, n, hash, inbox); ferr != nil {
 			rep.Failed++
@@ -322,6 +336,13 @@ func (b *Backfiller) attempt(ctx context.Context, n uint64, pol BackfillPolicy, 
 		delete(b.entries, n)
 		delete(b.reopen, n)
 		rep.Filled++
+		if wasProbe {
+			b.reopenAll = true // a block once proven unavailable is served again: every run of them is asked again
+			b.logf("[FINALITY] gap backfill chain %d: L1 block %d, proven unavailable before, is served again; the blocks proven unavailable are asked again", b.Chain, n)
+		}
+		if b.OnFill != nil {
+			b.OnFill(n, inbox)
+		}
 		return
 	}
 	if ctx.Err() != nil {
@@ -347,7 +368,18 @@ func (b *Backfiller) attempt(ctx context.Context, n uint64, pol BackfillPolicy, 
 	now := b.now()
 	if ge, gone := BlobsGone(err); class == finality.GapBlobUnavailable && gone {
 		if end, ok := b.goneVerdict(e, cf, ge.Endpoints, now, pol); ok {
-			if rerr := finality.RecordGapEnd(ctx, b.Store, b.Chain, n, end); rerr == nil {
+			// the slot the blobs were asked at is recorded first: an end is never visible without its slot evidence
+			var serr error
+			if cf == nil || cf.State == nil {
+				serr = errors.New("the capture failure carries no state")
+			} else if v, have := cf.State.Fields["beacon_slot"].(uint64); have {
+				serr = finality.RecordGapSlot(ctx, b.Store, b.Chain, n, v)
+			} else {
+				serr = errors.New("the capture failure names no beacon slot")
+			}
+			if serr != nil {
+				b.logf("[FINALITY] gap backfill chain %d: the slot of L1 block %d not recorded, so its end is not recorded yet: %v", b.Chain, n, ethrpc.RedactError(serr))
+			} else if rerr := finality.RecordGapEnd(ctx, b.Store, b.Chain, n, end); rerr == nil {
 				rep.Ended++
 				if rep.EndedByKind == nil {
 					rep.EndedByKind = map[string]int{}
@@ -412,4 +444,45 @@ func minInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// maxReprobes bounds the blocks asked again in one daily re-probe: the newest block of each run proven unavailable, the runs being few.
+const maxReprobes = 16
+
+// reprobe is the cadence of blocks proven unavailable: a gap that ended is not asked again by the same providers except once a day, and
+// then only the NEWEST block of each run (providers prune oldest first, so if the newest is still gone every older one is). When that
+// block is served, every block proven unavailable is asked again. The first step of a process starts the day.
+func (b *Backfiller) reprobe(now time.Time, pieces []finality.GapRange, pol BackfillPolicy) {
+	if b.reopen == nil {
+		b.reopen = map[uint64]bool{}
+	}
+	if b.probing == nil {
+		b.probing = map[uint64]bool{}
+	}
+	if b.reopenAll {
+		b.reopenAll = false
+		for _, p := range pieces {
+			if p.State == finality.GapUnavailableProven {
+				for n := p.From; n <= p.To; n++ {
+					b.reopen[n] = true
+				}
+			}
+		}
+		return
+	}
+	if b.lastReprobe.IsZero() {
+		b.lastReprobe = now
+		return
+	}
+	if now.Sub(b.lastReprobe) < pol.ReprobeEvery {
+		return
+	}
+	b.lastReprobe = now
+	probes := 0
+	for i := len(pieces) - 1; i >= 0 && probes < maxReprobes; i-- {
+		if p := pieces[i]; p.State == finality.GapUnavailableProven {
+			b.reopen[p.To], b.probing[p.To] = true, true
+			probes++
+		}
+	}
 }

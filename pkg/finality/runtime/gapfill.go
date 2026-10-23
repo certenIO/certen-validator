@@ -50,6 +50,7 @@ type GapBackfillLoop struct {
 	lastSig        string
 	lastOpenBlocks uint64
 	auditSig       string
+	prefixSig      string
 	filledTotal    int
 }
 
@@ -149,6 +150,7 @@ func (l *GapBackfillLoop) Tick(ctx context.Context, tick int) error {
 	_, proven, _ := rangesText(pieces, finality.GapUnavailableProven)
 	_, expired, _ := rangesText(pieces, finality.GapRetentionExpired)
 	metrics.SetFinalityGapBlocks(chain, openBlocks, proven, expired, uint64(openRanges))
+	l.reportPrefix(ctx, pieces)
 	if sig := fmt.Sprintf("%s|%d|%d", openText, proven, expired); sig != l.lastSig {
 		l.lastSig = sig
 		if openBlocks > 0 || proven > 0 || expired > 0 {
@@ -181,9 +183,12 @@ func (l *GapBackfillLoop) Tick(ctx context.Context, tick int) error {
 		metrics.AddFinalityGapEnded(chain, kind, n)
 	}
 	if rep.Attempted > 0 {
-		l.logf("[FINALITY] gap backfill %s: attempted %d blocks, captured %d, failed %d (kept open, retried with backoff), ended %d; %d blocks still open",
-			l.Name(), rep.Attempted, rep.Filled, rep.Failed, rep.Ended, rep.Open)
+		l.logf("[FINALITY] gap backfill %s: attempted %d blocks (%d of them prefix blocks), captured %d, failed %d (kept open, retried with backoff), ended %d; %d blocks still open",
+			l.Name(), rep.Attempted, rep.PrefixAttempted, rep.Filled, rep.Failed, rep.Ended, rep.Open)
 	}
+	metrics.AddFinalityPrefixBackfilled(chain, rep.PrefixFilled)
+	metrics.AddFinalityPrefixLease(chain, "lost", rep.LeaseLost)
+	metrics.AddFinalityPrefixLease(chain, "error", rep.LeaseErrors)
 	metrics.SetFinalityGapBlocks(chain, rep.Open, rep.UnavailableProven, rep.RetentionExpired, uint64(openRanges))
 	if rep.Open == 0 && (l.lastOpenBlocks > 0 || openBlocks > 0) {
 		l.logf("[FINALITY] gap backfill %s: every recorded capture gap is closed (%d blocks backfilled by this process; %d proven unavailable, %d past retention remain recorded)",
@@ -195,7 +200,17 @@ func (l *GapBackfillLoop) Tick(ctx context.Context, tick int) error {
 
 // audit records the runs without a captured inbox block as unproven gaps and names them once (and again whenever the set changes).
 func (l *GapBackfillLoop) audit(ctx context.Context) {
-	found, err := finality.AuditSpacing(ctx, l.Store, l.ChainID, baseposted.ItemInbox, 0, finality.MaxCaptureBlock, l.auditSpacing())
+	// The audit covers the region the capture loop scanned (from its first cursor row on). Captured prefix blocks lie below it, in windows that
+	// were asked for, with the unrequested stretches between them: a run between two of those is not a hole, so the audit never reaches below
+	// the loop's own start (RB12-ARCHIVE-BACKFILL).
+	lo := uint64(0)
+	if cov, known, cerr := finality.CaptureCoverageOf(ctx, l.Store, l.ChainID); cerr != nil {
+		l.logf("[FINALITY] gap backfill %s: spacing audit skipped, the capture coverage cannot be read: %v", l.Name(), ethrpc.RedactError(cerr))
+		return
+	} else if known {
+		lo = cov.First
+	}
+	found, err := finality.AuditSpacing(ctx, l.Store, l.ChainID, baseposted.ItemInbox, lo, finality.MaxCaptureBlock, l.auditSpacing())
 	if err != nil {
 		l.logf("[FINALITY] gap backfill %s: spacing audit failed: %v", l.Name(), ethrpc.RedactError(err))
 		return
@@ -206,4 +221,29 @@ func (l *GapBackfillLoop) audit(ctx context.Context) {
 		l.logf("[FINALITY] gap backfill %s: spacing audit: %d ranges (%d blocks) have no captured batch-inbox block for more than %d blocks and are recorded as unproven capture gaps (spacing_unproven): %s",
 			l.Name(), n, blocks, l.auditSpacing(), text)
 	}
+}
+
+// reportPrefix sets the prefix gauges from the requested windows and the unfilled pieces (every tick, so the gauges are live from the
+// first one) and names, once per change, the windows that cannot be completed without a blob archive.
+func (l *GapBackfillLoop) reportPrefix(ctx context.Context, pieces []finality.GapRange) {
+	wins, err := finality.PrefixWindowsOf(ctx, l.Store, l.ChainID)
+	if err != nil {
+		l.logf("[FINALITY] gap backfill %s: the prefix windows could not be read: %v", l.Name(), ethrpc.RedactError(err))
+		return
+	}
+	st := baseposted.PrefixWindowStates(wins, pieces)
+	metrics.SetFinalityPrefixWindows(l.ChainID, st[baseposted.PrefixWindowComplete], st[baseposted.PrefixWindowOpen],
+		st[baseposted.PrefixWindowUnavailableProven], st[baseposted.PrefixWindowRetentionExpired], finality.PrefixBlocks(finality.MergePrefixWindows(wins)))
+	sig := fmt.Sprintf("%d|%d|%d|%d", st[baseposted.PrefixWindowComplete], st[baseposted.PrefixWindowOpen],
+		st[baseposted.PrefixWindowUnavailableProven], st[baseposted.PrefixWindowRetentionExpired])
+	if sig == l.prefixSig {
+		return
+	}
+	l.prefixSig = sig
+	if len(wins) == 0 {
+		return
+	}
+	l.logf("[FINALITY] gap backfill %s: %d prefix windows requested (%d blocks): %d complete, %d being captured, %d cannot be completed from these providers (blobs proven unavailable: a blob archive, OD4, would close them), %d past retention",
+		l.Name(), len(wins), finality.PrefixBlocks(finality.MergePrefixWindows(wins)), st[baseposted.PrefixWindowComplete], st[baseposted.PrefixWindowOpen],
+		st[baseposted.PrefixWindowUnavailableProven], st[baseposted.PrefixWindowRetentionExpired])
 }

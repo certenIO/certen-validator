@@ -815,18 +815,19 @@ else rec FAIL C8 "capture cursor query" "query answers" "failed: $(errline)"; fi
 # live Base store (consecutive captured inbox blocks are at most 19 blocks apart outside outage holes; the audit suspects a run above 40).
 if out=$(sqlro <<SQL
 SELECT count(*) FILTER (WHERE item LIKE 'gap/%'),
-  count(*) FILTER (WHERE item LIKE 'gap/%' AND item !~ '^gap/[0-9]+/(block_unavailable|state_proof_unavailable|blob_unavailable|capture_failed|outage_unscanned|spacing_unproven|operator_declared)\$'),
+  count(*) FILTER (WHERE item LIKE 'gap/%' AND item !~ '^gap/[0-9]+/(block_unavailable|state_proof_unavailable|blob_unavailable|capture_failed|outage_unscanned|spacing_unproven|operator_declared|capture_prefix)\$'),
   count(*) FILTER (WHERE item LIKE 'gapfill/%' AND item <> 'gapfill/' || l1_block),
   count(*) FILTER (WHERE item LIKE 'gapend/%' AND item !~ '^gapend/[0-9]+/(unavailable_proven|retention_expired)\$'),
-  count(*) FILTER (WHERE item LIKE 'gapnote/%')
+  count(*) FILTER (WHERE item LIKE 'gapnote/%'),
+  count(*) FILTER (WHERE (item LIKE 'gapslot/%' AND item <> 'gapslot/' || l1_block) OR (item LIKE 'gapclaim/%' AND item <> 'gapclaim/' || l1_block))
   FROM proof_finality_capture;
 SQL
 ); then
-  IFS='|' read -r g_n g_badgap g_badfill g_badend g_notes <<EOF
+  IFS='|' read -r g_n g_badgap g_badfill g_badend g_notes g_badaux <<EOF
 $out
 EOF
-  [ "$((g_badgap + g_badfill + g_badend))" -eq 0 ] && st=PASS || st=FAIL
-  rec $st C9 "gap bookkeeping rows (gap/<to>/<class>, gapfill/<block>, gapend/<block>/<kind>) are well-formed" "0 malformed" "gap rows $g_n (malformed $g_badgap), malformed fills $g_badfill, malformed ends $g_badend, notes $g_notes"
+  [ "$((g_badgap + g_badfill + g_badend + g_badaux))" -eq 0 ] && st=PASS || st=FAIL
+  rec $st C9 "gap bookkeeping rows (gap/<to>/<class>, gapfill/<block>, gapend/<block>/<kind>) are well-formed" "0 malformed" "gap rows $g_n (malformed $g_badgap), malformed fills $g_badfill, malformed ends $g_badend, malformed slot/claim rows $g_badaux, notes $g_notes"
 else rec FAIL C9 "gap bookkeeping query" "query answers" "failed: $(errline)"; fi
 if out=$(sqlro <<SQL
 WITH ib AS (SELECT DISTINCT l1_block AS blk FROM proof_finality_capture WHERE chain = 84532 AND item = 'inbox'),
@@ -865,6 +866,31 @@ EOF
   else rec PASS C11 "status rows carry pinsSha256 only as 64 lowercase hex characters" "0 malformed" "$p_has of $p_n rows carry it, all well-formed"; fi
 else rec FAIL C11 "status pinsSha256 query" "query answers" "failed: $(errline)"; fi
 
+# C12 (RB12-ARCHIVE-BACKFILL): the capture-store prefix extension. Positions and counts only. A prefix request is a gap row of class
+# capture_prefix (gap/<to>/capture_prefix at l1_block=<from>); a block proven unavailable has a beacon-slot row (gapslot/<block>) written before
+# its end row; a claim row (gapclaim/<chunk>) is one per chunk and period. The union of the requested windows is bounded by
+# CERTEN_FINALITY_PREFIX_MAX_BLOCKS (default 100000).
+if out=$(sqlro <<'SQL'
+WITH w AS (SELECT l1_block AS f, split_part(item, '/', 2)::bigint AS t FROM proof_finality_capture WHERE chain = 84532 AND item LIKE 'gap/%/capture_prefix'),
+     u AS (SELECT count(DISTINCT g) AS n FROM (SELECT generate_series(f, t) AS g FROM w WHERE t >= f) x)
+SELECT (SELECT count(*) FROM w),
+       (SELECT count(*) FROM w WHERE t < f),
+       (SELECT n FROM u),
+       COALESCE((SELECT min(f) FROM w), 0),
+       (SELECT count(*) FROM proof_finality_capture e WHERE e.chain = 84532 AND e.item LIKE 'gapend/%'
+          AND NOT EXISTS (SELECT 1 FROM proof_finality_capture s WHERE s.chain = e.chain AND s.l1_block = e.l1_block AND s.item = 'gapslot/' || e.l1_block)),
+       (SELECT count(*) FROM proof_finality_capture WHERE chain = 84532 AND item LIKE 'gapclaim/%');
+SQL
+); then
+  IFS='|' read -r x_n x_bad x_blocks x_low x_noslot x_claims <<EOF
+$out
+EOF
+  if [ "$x_bad" -ne 0 ]; then rec FAIL C12 "prefix requests (gap/<to>/capture_prefix) end at or after the block they start at" "0 malformed" "$x_bad of $x_n"
+  elif [ "$x_n" -eq 0 ]; then rec WARN C12 "prefix requests: the legs posted before the capture started are asked for by their builders" "requests once the validators of this branch run" "no prefix request yet ($x_claims claim rows)"
+  elif [ "$x_noslot" -ne 0 ]; then rec WARN C12 "every ended block has its beacon-slot row" "0 ends without a slot (ends written by an earlier binary have none)" "$x_noslot end row(s) without a slot; $x_n prefix windows ($x_blocks blocks from $x_low), $x_claims claim rows"
+  else rec PASS C12 "prefix requests are well-formed and every ended block has its beacon-slot row" "0 malformed, 0 ends without a slot" "$x_n prefix windows, $x_blocks blocks from $x_low, $x_claims claim rows"; fi
+else rec FAIL C12 "prefix requests query" "query answers" "failed: $(errline)"; fi
+
 # ==============================================================================================================================
 # (f) container environment hygiene (names only, never values)
 # ==============================================================================================================================
@@ -877,7 +903,7 @@ else
   # variable name -> role. Provider lists are read by pkg/ethrpc EndpointsForChain; a chain is DISABLED by name when its list is empty.
   PROVIDER_VARS="BASE_SEPOLIA_RPC_URL BASE_SEPOLIA_URL_FALLBACKS INFURA_BASE_SEPOLIA_URL ALCHEMY_BASE_SEPOLIA_URL ARBITRUM_SEPOLIA_RPC_URL ARBITRUM_SEPOLIA_URL_FALLBACKS INFURA_ARBITRUM_SEPOLIA_URL ALCHEMY_ARBITRUM_SEPOLIA_URL ETHEREUM_SEPOLIA_RPC_URL ETHEREUM_URL ETHEREUM_URL_FALLBACKS INFURA_SEPOLIA_URL ALCHEMY_SEPOLIA_URL TELCOIN_ADIRI_RPC_URL"
   FIN_LISTS="CERTEN_FINALITY_L1_RPC_URLS CERTEN_FINALITY_L1_PROOF_URLS CERTEN_FINALITY_ARCHIVE_URLS CERTEN_FINALITY_LC_URLS CERTEN_FINALITY_BEACON_URLS CERTEN_FINALITY_ADIRI_PUBLIC_URLS CERTEN_FINALITY_PINS_FILE"
-  FIN_NUMS="CERTEN_FINALITY_RATE_LIMIT_RPS CERTEN_FINALITY_RATE_BURST CERTEN_FINALITY_MAX_BATCH CERTEN_FINALITY_BACKOFF_RETRIES CERTEN_FINALITY_BACKOFF_MAX_SECONDS CERTEN_FINALITY_CAPTURE_INTERVAL_SECONDS CERTEN_FINALITY_MAX_CAPTURE_BYTES_PER_LEG CERTEN_FINALITY_CAPTURE_MAX_BLOCKS_PER_TICK CERTEN_FINALITY_UPGRADER_CONCURRENCY CERTEN_FINALITY_UPGRADER_INTERVAL_SECONDS CERTEN_FINALITY_BUILD_TIMEOUT_SECONDS"
+  FIN_NUMS="CERTEN_FINALITY_RATE_LIMIT_RPS CERTEN_FINALITY_RATE_BURST CERTEN_FINALITY_MAX_BATCH CERTEN_FINALITY_BACKOFF_RETRIES CERTEN_FINALITY_BACKOFF_MAX_SECONDS CERTEN_FINALITY_CAPTURE_INTERVAL_SECONDS CERTEN_FINALITY_MAX_CAPTURE_BYTES_PER_LEG CERTEN_FINALITY_CAPTURE_MAX_BLOCKS_PER_TICK CERTEN_FINALITY_UPGRADER_CONCURRENCY CERTEN_FINALITY_UPGRADER_INTERVAL_SECONDS CERTEN_FINALITY_BUILD_TIMEOUT_SECONDS CERTEN_FINALITY_GAPFILL_BLOCKS_PER_TICK CERTEN_FINALITY_GAP_AUDIT_SPACING CERTEN_FINALITY_PREFIX_MAX_BLOCKS CERTEN_FINALITY_PREFIX_FLOOR_L1_BLOCK CERTEN_FINALITY_PREFIX_LEASE_SECONDS CERTEN_FINALITY_PREFIX_CHUNK_BLOCKS CERTEN_FINALITY_PREFIX_REPROBE_SECONDS"
   FIN_SWITCHES="CERTEN_FINALITY_UPGRADER_ENABLED CERTEN_FINALITY_CHAIN_11155111_ENABLED CERTEN_FINALITY_CHAIN_84532_ENABLED CERTEN_FINALITY_CHAIN_421614_ENABLED CERTEN_FINALITY_CHAIN_2017_ENABLED"
   KNOWN_FIN="$FIN_LISTS $FIN_NUMS $FIN_SWITCHES"
   probe_script='for v in "$@"; do

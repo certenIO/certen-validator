@@ -405,3 +405,45 @@ func TestRB12PrefixAStoreThatCannotClaimTakesNoPrefixBlockAndSaysSo(t *testing.T
 		t.Fatalf("no claim, no fetch: %+v %v %v", rep, err, oc.order)
 	}
 }
+
+// A run that a hole ALSO covers is a hole run: it is taken with the holes (here the random pick, forced to the highest), not oldest-first
+// like a window that only a prefix request covers; and the daily re-probe asks the newest block of at most 16 runs.
+func TestRB12PrefixARunAHoleAlsoCoversIsTakenWithTheHolesAndMoreThanSixteenRunsAreNotAllAskedAgainInOneDay(t *testing.T) {
+	ctx := context.Background()
+	c := uint64(Chain)
+	st := NewMemStore()
+	_ = finality.RecordGap(ctx, st, c, 1000, 1019, finality.GapCapturePrefix)
+	_ = finality.RecordGap(ctx, st, c, 1010, 1012, finality.GapOutageUnscanned)
+	oc := &orderCap{}
+	now, _ := bfClock()
+	b := &Backfiller{Chain: c, Store: st, Capturer: oc, Policy: bfPolicy(), Now: now, Pick: func(n int) int { return n - 1 }}
+	_, _ = b.Step(ctx, 1)
+	if fmt.Sprint(oc.order) != "[1019]" {
+		t.Fatalf("the whole open run is a hole run (the pick chose the highest): %v", oc.order)
+	}
+	st1 := NewMemStore()
+	_ = finality.RecordGap(ctx, st1, c, 1000, 1019, finality.GapCapturePrefix)
+	oc1 := &orderCap{}
+	b1 := &Backfiller{Chain: c, Store: st1, Capturer: oc1, Policy: bfPolicy(), Now: now, Pick: func(n int) int { return n - 1 }}
+	_, _ = b1.Step(ctx, 1)
+	if fmt.Sprint(oc1.order) != "[1000]" {
+		t.Fatalf("a prefix-only window ignores the pick and starts at its oldest block: %v", oc1.order)
+	}
+	// the daily re-probe asks the newest block of at most 16 runs
+	st2 := NewMemStore()
+	for i := uint64(0); i < 20; i++ {
+		n := 1000 + i*10
+		_ = finality.RecordGap(ctx, st2, c, n, n, finality.GapBlobUnavailable)
+		_ = finality.RecordGapSlot(ctx, st2, c, n, 5)
+		_ = finality.RecordGapEnd(ctx, st2, c, n, finality.GapEnd{Kind: finality.GapUnavailableProven, Reason: "beacon_404_every_provider", Providers: []string{"a", "b"}})
+	}
+	now2, adv := bfClock()
+	sc := &scriptCap{script: func(n uint64, call int) ([32]byte, bool, error) { return [32]byte{}, false, blobFailure(n, 5, true) }}
+	b2 := &Backfiller{Chain: c, Store: st2, Capturer: sc, Providers: []string{"a", "b"}, Policy: bfPolicy(), Now: now2}
+	_, _ = b2.Step(ctx, 100)
+	adv(24 * time.Hour)
+	_, _ = b2.Step(ctx, 100)
+	if len(sc.calls) != 16 || sc.calls[1190] != 1 || sc.calls[1040] != 1 || sc.calls[1030] != 0 {
+		t.Fatalf("the newest 16 of 20 runs: %d %v", len(sc.calls), sc.calls)
+	}
+}

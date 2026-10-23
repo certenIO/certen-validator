@@ -166,3 +166,59 @@ func gapState(pieces []finality.GapRange, origin, end uint64, archive bool) *fin
 	return finality.NewState(CodeCaptureGap, "chain", uint64(Chain), "kind", KindName, "from", first.From, "to", first.To, "gap_state", string(best),
 		"ranges", ranges, "blocks", blocks, "epoch_l1_block", origin, "window_end_l1_block", end, "archive_provider", arch)
 }
+
+// goneEvidence is the extra fields of an l1_capture_gap whose worst piece is terminal (the providers proved the blobs unavailable, or their
+// retention elapsed): the NEWEST such block of the window, the beacon slot it was asked at and how many beacon hosts said so (the end
+// record), the oldest slot at which a block of the window WAS served (the first captured batch-inbox block above it), and what closes
+// the gap: a blob archive (OD4). Nothing is invented: a field whose evidence is not in the store is left out.
+func (b *Builder) goneEvidence(ctx context.Context, gs *finality.StateError, pieces []finality.GapRange, end uint64) ([]any, error) {
+	best, _ := gs.Fields["gap_state"].(string)
+	if best != string(finality.GapUnavailableProven) && best != string(finality.GapRetentionExpired) {
+		return nil, nil
+	}
+	var newest uint64
+	for _, p := range pieces {
+		if string(p.State) == best && p.To > newest {
+			newest = p.To
+		}
+	}
+	kv := []any{"needs", "blob_archive", "newest_gone_l1_block", newest}
+	slot, ok, err := finality.GapSlotOf(ctx, b.Store, uint64(Chain), newest)
+	if err != nil {
+		return nil, err
+	}
+	if ok {
+		kv = append(kv, "newest_gone_slot", slot)
+	}
+	ends, err := finality.GapEndsOf(ctx, b.Store, uint64(Chain), newest)
+	if err != nil {
+		return nil, err
+	}
+	for _, e := range ends {
+		if string(e.Kind) == best {
+			kv = append(kv, "gone_hosts", uint64(len(e.Providers)))
+			break
+		}
+	}
+	if newest < end {
+		keys, err := finality.CaptureKeysOfItemIn(ctx, b.Store, uint64(Chain), newest+1, end, ItemInbox)
+		if err != nil {
+			return nil, err
+		}
+		if len(keys) > 0 {
+			hk := keys[0]
+			hk.Item = ItemHeader
+			raw, found, err := b.Store.Get(ctx, hk)
+			if err != nil {
+				return nil, err
+			}
+			if found {
+				// a header row that does not parse is not evidence of a slot: the field is left out (the verifier names such a row when a build reads it)
+				if hf, err := finality.ReadHeader(raw); err == nil && hf.Timestamp >= SepoliaBeaconGenesis {
+					kv = append(kv, "oldest_served_slot", (hf.Timestamp-SepoliaBeaconGenesis)/12)
+				}
+			}
+		}
+	}
+	return kv, nil
+}

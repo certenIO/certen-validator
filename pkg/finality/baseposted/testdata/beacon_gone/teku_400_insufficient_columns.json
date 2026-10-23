@@ -1,0 +1,1 @@
+{"code":400,"message":"BAD_REQUEST: Insufficient data columns to reconstruct blobs: required 64, but only 0 were found. You may need to run the beacon node with --supernode or --semi-supernode.","stacktraces":[]}

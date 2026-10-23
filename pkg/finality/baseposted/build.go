@@ -461,6 +461,13 @@ func (b *Builder) search(ctx context.Context, bp *Pins, l2 finality.HeaderFields
 			return sr, err
 		}
 		if gs := gapState(pieces, origin, end, b.HasArchive); gs != nil {
+			extra, err := b.goneEvidence(ctx, gs, pieces, end)
+			if err != nil {
+				return sr, err
+			}
+			if len(extra) > 0 {
+				gs = finality.NewState(gs.Code, append(stateKV(gs), extra...)...)
+			}
 			b.heldMu.Lock()
 			if b.held == nil || len(b.held) >= maxHeldMemos {
 				b.held = map[heldKey]heldMemo{}

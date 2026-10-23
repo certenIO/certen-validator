@@ -181,3 +181,47 @@ func RequestPrefix(ctx context.Context, s CaptureStore, chain, from, to uint64, 
 	}
 	return PrefixRecorded, nil
 }
+
+// GapSlotPrefix is the item prefix of the beacon-slot evidence of a block the providers proved unavailable.
+const GapSlotPrefix = "gapslot/"
+
+const slotMagic = "CGSL1"
+
+func gapSlotKey(chain, block uint64) CaptureKey {
+	return CaptureKey{Chain: chain, L1Block: block, Item: fmt.Sprintf("%s%d", GapSlotPrefix, block)}
+}
+
+// RecordGapSlot records the beacon slot of an L1 block whose blobs are gone: "CGSL1" || u64 block || u64 slot, at (block, zero hash). The
+// slot is a function of the block (its timestamp), so every validator writes the same bytes; another slot under the same block is the
+// named conflict ErrCaptureConflict. It is written BEFORE the end row of the block, so a leg never sees an end without its slot.
+func RecordGapSlot(ctx context.Context, s CaptureStore, chain, block, slot uint64) error {
+	var w Writer
+	w.Fixed([]byte(slotMagic))
+	w.U64(block)
+	w.U64(slot)
+	return s.Put(ctx, gapSlotKey(chain, block), w.Bytes())
+}
+
+// GapSlotOf reads the slot recorded for block; ok is false when none was recorded.
+func GapSlotOf(ctx context.Context, s CaptureStore, chain, block uint64) (slot uint64, ok bool, err error) {
+	b, found, err := s.Get(ctx, gapSlotKey(chain, block))
+	if err != nil || !found {
+		return 0, false, err
+	}
+	r := NewReader(b, DefaultLimits())
+	m, err := r.Fixed("magic", len(slotMagic))
+	if err != nil || string(m) != slotMagic {
+		return 0, false, fmt.Errorf("finality: row %s is not a gap slot record", gapSlotKey(chain, block))
+	}
+	bl, err := r.U64("block")
+	if err != nil {
+		return 0, false, err
+	}
+	if slot, err = r.U64("slot"); err != nil {
+		return 0, false, err
+	}
+	if bl != block {
+		return 0, false, fmt.Errorf("finality: gap slot record of block %d names block %d", block, bl)
+	}
+	return slot, true, r.End("gap slot")
+}
