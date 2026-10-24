@@ -1,0 +1,19 @@
+{
+ "headline": "refused",
+ "parts": {
+  "code_identity": "refused"
+ },
+ "states": [
+  {
+   "part": "code_identity",
+   "code": "contract_identity_immutable_mismatch",
+   "fields": {
+    "got": "0x0000000000000000000000006f9049cdb948bd0b3edcd8c10e9ed796c0615101",
+    "name": "groth16Verifier",
+    "offset": "1289",
+    "role": "blsZkVerifier",
+    "want": "0x0000000000000000000000006f9049cdb948bd0b3edcd8c10e9ed796c0615100"
+   }
+  }
+ ]
+}

@@ -1,0 +1,18 @@
+{
+ "headline": "unproven",
+ "parts": {
+  "authority_level": "unproven"
+ },
+ "states": [
+  {
+   "part": "authority_level",
+   "code": "contract_identity_unproven",
+   "fields": {
+    "leg": "0",
+    "level": "OPERATOR",
+    "reason": "level_below_required_at_N",
+    "required": "MANAGER"
+   }
+  }
+ ]
+}

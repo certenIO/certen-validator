@@ -1,0 +1,17 @@
+{
+ "headline": "refused",
+ "parts": {
+  "pointer": "refused"
+ },
+ "states": [
+  {
+   "part": "pointer",
+   "code": "contract_identity_pointer_mismatch",
+   "fields": {
+    "account": "0x2ec2d261a4770e42dbe43826489d299d596bc5f7",
+    "got": "0x0000000000000000000000000000000000000000",
+    "want": "0x830cfb484b6e5606687e00f64c40aeb9c7c84e3c"
+   }
+  }
+ ]
+}

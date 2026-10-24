@@ -1,0 +1,19 @@
+{
+ "headline": "refused",
+ "parts": {
+  "code_identity": "refused"
+ },
+ "states": [
+  {
+   "part": "code_identity",
+   "code": "contract_identity_code_not_published",
+   "fields": {
+    "address": "0x6f9049cdb948bd0b3edcd8c10e9ed796c0615100",
+    "code_hash": "0x0429f8e5ccc2e323d66afd52988127a3fc39ff8c7bc52c2af2b116b90081f123",
+    "masked_keccak": "0x0429f8e5ccc2e323d66afd52988127a3fc39ff8c7bc52c2af2b116b90081f123",
+    "role": "groth16Verifier",
+    "want": "0xee840ce838b5ab2170499f85d0c3dcfedf958eede7ceff0084c1a78ed9fc6a23"
+   }
+  }
+ ]
+}

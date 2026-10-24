@@ -1,0 +1,34 @@
+{
+ "id": "VS8-087.stored_level_5",
+ "base": "H0",
+ "mutations": [
+  {
+   "op": "set_field",
+   "target": "world",
+   "path": "stations.settle.accounts.0x2ec2d261a4770e42dbe43826489d299d596bc5f7.storage.0xb4cd9068a05bee26330d746dba9f56c5843c7297baa03551adf589b9a4a33297",
+   "value": "0x0000000000000000000000000000000000000000000000000000000000000001"
+  },
+  {
+   "op": "set_field",
+   "target": "world",
+   "path": "stations.settle.accounts.0x2ec2d261a4770e42dbe43826489d299d596bc5f7.storage.0xb453ddbf25a85121e2f12d312654df672c808a90a80b9eb59e1562b8c435e093",
+   "value": "0x0000000000000000000000000000000000000000000000000000000000000005"
+  }
+ ],
+ "expected": {
+  "headline": "refused",
+  "parts": {
+   "authority_level": "refused"
+  },
+  "states": [
+   {
+    "part": "authority_level",
+    "code": "contract_identity_authority_level_invalid",
+    "fields": {
+     "field": "page_level",
+     "got": "5"
+    }
+   }
+  ]
+ }
+}

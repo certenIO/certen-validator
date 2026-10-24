@@ -1,0 +1,19 @@
+{
+ "headline": "refused",
+ "parts": {
+  "account_provenance": "refused"
+ },
+ "states": [
+  {
+   "part": "account_provenance",
+   "code": "contract_identity_code_not_published",
+   "fields": {
+    "address": "0x8387d061830e10eb42bc25c2a047631164803f25",
+    "code_hash": "0x4ef27353db13a806c704aaeea8df6348f50bbfbdd8e20062b2d66cfcb18a1eff",
+    "masked_keccak": "0x5302148b0c5c6885336c3149e5dce80a0fd9258a1ea047538c3e5dcbf6e0cfa2",
+    "role": "accountFactory",
+    "want": "0x03468f871a3de23ffaf14d83ccd0aaea0f81d9ac387ae6a515b780e8f84bf22f"
+   }
+  }
+ ]
+}

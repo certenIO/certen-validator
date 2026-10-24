@@ -1,0 +1,17 @@
+{
+ "headline": "refused",
+ "parts": {
+  "authority_level": "refused"
+ },
+ "states": [
+  {
+   "part": "authority_level",
+   "code": "contract_identity_proof_invalid",
+   "fields": {
+    "address": "0x2ec2d261a4770e42dbe43826489d299d596bc5f7",
+    "root": "settle",
+    "slot": "0xb4cd9068a05bee26330d746dba9f56c5843c7297baa03551adf589b9a4a33297"
+   }
+  }
+ ]
+}

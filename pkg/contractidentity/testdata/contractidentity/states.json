@@ -3,7 +3,7 @@
  "spec": {
   "file": "V2_SPEC_S8.md",
   "revision": "r3.2",
-  "sha256": "57de77c06f404b324b67fce456a00c47ff52f6399ab7947903202c5a75c9b97e"
+  "sha256": "19709a5eb7aff7e26e8d577015321155042bad90ca7850bb58417403eba0083e"
  },
  "prefix": "contract_identity_",
  "common_fields": [

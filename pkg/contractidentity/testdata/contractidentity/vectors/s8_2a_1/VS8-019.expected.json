@@ -1,0 +1,21 @@
+{
+ "headline": "unproven",
+ "parts": {
+  "account_provenance": "unproven",
+  "authority_level": "unproven",
+  "code_identity": "unproven",
+  "pointer": "unproven",
+  "record": "unproven",
+  "settlement_path": "unproven"
+ },
+ "states": [
+  {
+   "part": "settlement_path",
+   "code": "contract_identity_unproven",
+   "fields": {
+    "part": "all",
+    "reason": "no_evidence_in_file"
+   }
+  }
+ ]
+}

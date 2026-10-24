@@ -1,0 +1,15 @@
+{
+ "headline": "refused",
+ "parts": {
+  "code_identity": "refused"
+ },
+ "states": [
+  {
+   "part": "code_identity",
+   "code": "contract_identity_code_unproven_bytes",
+   "fields": {
+    "address": "0x2ec2d261a4770e42dbe43826489d299d596bc5f7"
+   }
+  }
+ ]
+}

@@ -1,0 +1,29 @@
+{
+ "id": "VS8-087.requirement_above_4",
+ "base": "H0",
+ "mutations": [
+  {
+   "op": "set_field",
+   "target": "world",
+   "path": "stations.settle.accounts.0x2ec2d261a4770e42dbe43826489d299d596bc5f7.storage.0xca64b7db9a0e5db3d779db084f06e77cd1d56b0840f6f0918393498e6656d2c6",
+   "value": "0x0000000000000000000000000000000000000000000000000000000000000005"
+  }
+ ],
+ "expected": {
+  "headline": "refused",
+  "parts": {
+   "authority_level": "refused"
+  },
+  "states": [
+   {
+    "part": "authority_level",
+    "code": "contract_identity_proof_invalid",
+    "fields": {
+     "address": "0x2ec2d261a4770e42dbe43826489d299d596bc5f7",
+     "root": "settle",
+     "slot": "0xca64b7db9a0e5db3d779db084f06e77cd1d56b0840f6f0918393498e6656d2c6"
+    }
+   }
+  ]
+ }
+}
