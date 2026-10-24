@@ -383,6 +383,15 @@ func wireArb(reg *finality.Registry, env Env, d Deps, clock loopClock, logf func
 			return err
 		}
 		builder.Index = r
+		// the lowest block the archive backfill's prefix windows reach: the index's time search starts there, not 512 blocks below the first cursor row
+		r.Floor = func(ctx context.Context) (uint64, bool, error) {
+			ws, err := finality.PrefixWindowsOf(ctx, env.Store, finality.ChainArbitrumSepolia)
+			if err != nil {
+				return 0, false, err
+			}
+			lo, ok := finality.PrefixLowest(finality.MergePrefixWindows(ws))
+			return lo, ok, nil
+		}
 		durable := env.Durable
 		if durable == nil {
 			durable = env.Store
@@ -415,6 +424,9 @@ func wireArb(reg *finality.Registry, env Env, d Deps, clock loopClock, logf func
 	}
 	arbLease.Span, arbLease.Chunk = cfg.PrefixLease, uint64(cfg.PrefixArbScan)
 	cp.Prefix = &capture.PrefixScan{Lease: arbLease, Blocks: uint64(cfg.PrefixArbScan), Now: d.Now}
+	// THE authorization of a captured batch (capture/authorize.go): the live capture and the batches the prefix scan stores both judge a batch by it
+	// once its accumulator proof is stored, and the reference reader, the indexed reader and the index writer apply the same function
+	cp.Authorize = capture.AuthorizeBatch
 	var noter finality.LateBlockNoter
 	if nt, ok := indexer.(finality.LateBlockNoter); ok {
 		noter = nt

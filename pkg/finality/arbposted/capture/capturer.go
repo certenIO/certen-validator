@@ -140,11 +140,11 @@ type Capturer struct {
 	// Prefix, when set, scans the batches posted before the first block this capturer scanned, for the legs that asked for them
 	// (RB12-ARCHIVE-BACKFILL; nil: none).
 	Prefix *PrefixScan
-	// Authorize, when set, decides for EVERY batch the capturer is about to store (the live capture and the prefix scan both go through
-	// captureBatch) whether the transaction that delivered it is one the sequencer inbox's batch poster sent: the Arbitrum counterpart of
-	// the Base rule (baseposted/authorize.go: the one function the capture and the readers share). nil: no check, as before this hook
-	// existed (RB12-ARCHIVE-BACKFILL F-ab-8). The INDEX-B authorization (arbposted/capture/authorize.go) is what plugs in here.
-	Authorize BatchAuthorizer
+	// Authorize is THE authorization of a captured batch (authorize.go AuthorizeBatch): it judges a batch record against the accumulator proofs
+	// the capturer has stored for it, in the live capture AND in the batches the prefix scan stores (both register the same proof step), and is the
+	// same function the reference reader, the indexed reader and the index writer apply. nil means AuthorizeBatch itself; the Arbitrum wiring sets it
+	// explicitly. A batch the verdict calls foreign is counted and reported (Report.Foreign), its rows stay (insert-only) and no reader serves it.
+	Authorize func(rec BatchRecord, bridge [20]byte, accSlot uint64, views []ProofView) Authorization
 
 	mu          sync.Mutex
 	started     bool
@@ -154,11 +154,6 @@ type Capturer struct {
 	ticks       int
 	gaps        map[uint64]BatchRecord // batches recorded as an incomplete-capture gap and not yet closed
 }
-
-// BatchAuthorizer says whether the transaction tx, which delivered the batch rec, was sent by the batch poster the chain's own state
-// authorizes. A false answer skips the batch (counted: certen_finality_capture_foreign_inbox_txs_total) and an error stops its capture
-// for this tick (retried), so nothing is stored on an answer that could not be given.
-type BatchAuthorizer func(ctx context.Context, rec BatchRecord, tx Tx) (bool, error)
 
 type pendBlob struct {
 	rec    BatchRecord
@@ -212,10 +207,11 @@ type Report struct {
 	BlobBlocks []uint64
 	Errors     []string // redacted
 	// RB12-ARCHIVE-BACKFILL
-	PrefixScanned     uint64 // L1 blocks of prefix windows scanned this tick
-	PrefixBatches     int    // batches those scans captured
-	PrefixLeaseLost   int    // chunks another validator held
-	PrefixLeaseErrors int    // claims the store could not take
+	PrefixScanned     uint64   // L1 blocks of prefix windows scanned this tick
+	PrefixBatches     int      // batches those scans captured
+	PrefixBlocks      []uint64 // the L1 blocks of those batches: far below the index cursor, so the capture loop notes them to the batch index
+	PrefixLeaseLost   int      // chunks another validator held
+	PrefixLeaseErrors int      // claims the store could not take
 }
 
 func (c *Capturer) logf(f string, a ...any) {
@@ -524,16 +520,6 @@ func (c *Capturer) captureBatch(ctx context.Context, lg Log, rep *Report) (*uint
 		return nil, errors.New("the batch transaction is not in the event's block")
 	}
 	rec.TxRaw, rec.TxIndex = tx.Raw, tx.Index
-	if c.Authorize != nil {
-		ok, err := c.Authorize(ctx, rec, tx)
-		if err != nil {
-			return nil, fmt.Errorf("authorizing the poster of batch %d: %w", rec.N, ethrpc.RedactError(err))
-		}
-		if !ok {
-			metrics.IncFinalityCaptureForeignInboxTx(c.Cfg.Chain)
-			return nil, nil
-		}
-	}
 	var data []byte
 	switch rec.DataLocation {
 	case LocBlob:
@@ -868,7 +854,7 @@ func (c *Capturer) proveAt(ctx context.Context, h Header, stateRoot [32]byte, jo
 				// the same authorization every reader applies: a record the stored proof contradicts is counted and reported here
 				if j.rec != nil && j.rec.rec.N == j.index {
 					view := ProofView{Rec: pr, Block: h.Number, StateRoot: stateRoot}
-					if AuthorizeBatch(j.rec.rec, c.Cfg.Bridge, SequencerAccSlot, []ProofView{view}) == AuthForeign {
+					if c.authorize()(j.rec.rec, c.Cfg.Bridge, SequencerAccSlot, []ProofView{view}) == AuthForeign {
 						rep.Foreign = append(rep.Foreign, j.index)
 						metrics.AddFinalityCaptureForeignTxs(c.Cfg.Chain, 1)
 						c.logf("capture: batch %d recorded at L1 block %d is not the batch the Bridge holds at slot %d (proof block %d): its record is foreign and is never served", j.index, j.rec.rec.L1Block, j.index, h.Number)
@@ -884,3 +870,11 @@ func (c *Capturer) proveAt(ctx context.Context, h Header, stateRoot [32]byte, jo
 
 // Hex helpers for logs and the runner.
 func HexHash(b [32]byte) string { return "0x" + hex.EncodeToString(b[:]) }
+
+// authorize is the capturer's authorization function: the field, or AuthorizeBatch.
+func (c *Capturer) authorize() func(rec BatchRecord, bridge [20]byte, accSlot uint64, views []ProofView) Authorization {
+	if c.Authorize != nil {
+		return c.Authorize
+	}
+	return AuthorizeBatch
+}

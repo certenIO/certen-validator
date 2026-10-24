@@ -7,6 +7,8 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/certen/independant-validator/pkg/finality"
@@ -490,6 +492,14 @@ func (r *IndexReader) holeIn(ctx context.Context, ts uint64, batchKeys []finalit
 		if !below {
 			continue
 		}
+		// a number missing between two batches is a hole in the CAPTURE only where the capture was scanning: between a batch of a prefix window and a
+		// batch of the live region (or of two windows) lies ground nobody scanned, and that is the coverage judgement's (l1_capture_not_covering with
+		// its prefix state), not an N-hole. A range the prefix scan closed (a gapscan row) is ground that WAS scanned.
+		if scanned, err := r.scannedBetween(ctx, all[i-1].key.L1Block, all[i].key.L1Block); err != nil {
+			return nil, err
+		} else if !scanned {
+			continue
+		}
 		above, err := r.proven(ctx, all[i].key)
 		if err != nil {
 			return nil, err
@@ -633,4 +643,62 @@ func (r *IndexReader) newestBatch(ctx context.Context, through uint64, io *ioCou
 			return 0, nil
 		}
 	}
+}
+
+// scannedBetween reports whether every L1 block of [lo, hi] is ground the capture scanned: at or above the first block the live loop scanned (its
+// cursor rows, less the first-scan slack), or inside ranges the archive backfill's prefix scan closed (gapscan rows, merged). Keys only.
+func (r *IndexReader) scannedBetween(ctx context.Context, lo, hi uint64) (bool, error) {
+	chain := r.chain()
+	first, _, ok, err := finality.BlockBoundsOf(ctx, r.Store, chain, capture.ItemCursor)
+	if err != nil {
+		return false, err
+	}
+	if !ok {
+		return false, nil // a store without a cursor says nothing about what it scanned
+	}
+	liveLo := uint64(0)
+	if first > firstScanSlack {
+		liveLo = first - firstScanSlack
+	}
+	if lo >= liveLo {
+		return true, nil
+	}
+	keys, err := r.Store.ListByRange(ctx, chain, 0, hi, finality.GapScanPrefix)
+	if err != nil {
+		return false, err
+	}
+	type span struct{ from, to uint64 }
+	var spans []span
+	for _, k := range keys {
+		to, err := strconv.ParseUint(strings.TrimPrefix(k.Item, finality.GapScanPrefix), 10, 64)
+		if err != nil || to < k.L1Block {
+			continue
+		}
+		spans = append(spans, span{k.L1Block, to})
+	}
+	sort.Slice(spans, func(i, j int) bool { return spans[i].from < spans[j].from })
+	next := lo // the first block not yet shown scanned
+	if liveLo <= hi && liveLo > next {
+		// the part at or above liveLo is live-scanned; the part below needs the closed ranges
+		hi = minU64(hi, liveLo-1)
+	}
+	for _, sp := range spans {
+		if sp.from > next {
+			break
+		}
+		if sp.to >= next {
+			next = sp.to + 1
+		}
+		if next > hi {
+			return true, nil
+		}
+	}
+	return next > hi, nil
+}
+
+func minU64(a, b uint64) uint64 {
+	if a < b {
+		return a
+	}
+	return b
 }

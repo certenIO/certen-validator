@@ -503,6 +503,11 @@ func (l *ArbPostedLoop) noteBlobs(rep capture.Report) {
 	for _, b := range rep.BlobBlocks {
 		l.Notes.NoteLate(b)
 	}
+	// the batches the archive backfill's prefix scan stored lie far below the index cursor, in ranges that close out of order: each is told the
+	// moment its row exists (its blobs, when it has some, are told again when they are whole)
+	for _, b := range rep.PrefixBlocks {
+		l.Notes.NoteLate(b)
+	}
 }
 
 // ArbIndexLoop drives the Arbitrum batch index (RB12-INDEX-B) in its own goroutine, so that indexing - a backfill of a whole table takes many steps - can never

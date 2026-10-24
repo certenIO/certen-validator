@@ -263,3 +263,59 @@ func TestRTArbIndexSelfCheckOnDemandNamesItsResult(t *testing.T) {
 		})
 	}
 }
+
+// RB12-TRAIN3-INT duty (1): the Arbitrum wiring sets the capturer's authorization explicitly, so the live capture and the prefix scan judge a
+// batch by the one function the readers and the writer use.
+func TestRTArbWiringSetsTheCapturersOneAuthorization(t *testing.T) {
+	rtProviderEnv(t)
+	_, reg, _ := rtWire(t)
+	found := false
+	for _, c := range reg.Capturers() {
+		if l, ok := c.(*ArbPostedLoop); ok {
+			found = true
+			if l.Cap.Authorize == nil {
+				t.Fatal("the capturer must carry THE authorization (capture.AuthorizeBatch), set by the wiring")
+			}
+			rec := capture.BatchRecord{N: 1}
+			if got, want := l.Cap.Authorize(rec, [20]byte{1}, 3, nil), capture.AuthorizeBatch(rec, [20]byte{1}, 3, nil); got != want {
+				t.Fatalf("not the one function: %v vs %v", got, want)
+			}
+			if l.Cap.Prefix == nil {
+				t.Fatal("the prefix scan is wired on the same capturer, so it judges by the same field")
+			}
+		}
+	}
+	if !found {
+		t.Fatal("the Arbitrum capture loop is registered")
+	}
+}
+
+// RB12-TRAIN3-INT duty (2): the Arbitrum prefix scan's stored batches reach the batch index (NoteLate) and the index reader's Floor follows the
+// archive backfill's windows, so a batch stored far below the index cursor is found within one step, not after a walk of the table.
+type arbNotes struct{ noted []uint64 }
+
+func (n *arbNotes) NoteLate(b uint64) { n.noted = append(n.noted, b) }
+
+func TestRTArbPrefixScanBatchesAreNotedToTheIndexAndTheFloorFollowsTheWindows(t *testing.T) {
+	notes := &arbNotes{}
+	l := &ArbPostedLoop{Notes: notes}
+	l.noteBlobs(capture.Report{BlobBlocks: []uint64{500}, PrefixBlocks: []uint64{12, 7}})
+	if len(notes.noted) != 3 || notes.noted[1] != 12 || notes.noted[2] != 7 {
+		t.Fatalf("blob blocks and prefix-scan blocks are both told: %v", notes.noted)
+	}
+	rtProviderEnv(t)
+	w, reg, _ := rtWire(t)
+	_ = w
+	var floor func(context.Context) (uint64, bool, error)
+	for _, p := range reg.Provers(finality.ChainArbitrumSepolia) {
+		if b, ok := p.(*arbposted.Builder); ok && b.Index != nil {
+			floor = b.Index.Floor
+		}
+	}
+	if floor == nil {
+		t.Fatal("the Arbitrum index reader has a Floor")
+	}
+	if _, ok, err := floor(context.Background()); err != nil || ok {
+		t.Fatalf("with no prefix window there is no floor: %v %v", ok, err)
+	}
+}

@@ -156,6 +156,7 @@ func (c *Capturer) scanPrefixRange(ctx context.Context, a, b uint64, rep *Report
 		}
 		if n != nil {
 			fresh = append(fresh, *n)
+			rep.PrefixBlocks = append(rep.PrefixBlocks, lg.BlockNumber)
 		}
 	}
 	for _, n := range fresh {

@@ -47,6 +47,9 @@ func TestRB12ArbPrefixScanCapturesTheBatchRowsOfTheLiveCaptureAndClosesTheRange(
 	if rep.PrefixScanned != 10 || rep.PrefixBatches != 1 {
 		t.Fatalf("%+v", rep)
 	}
+	if len(rep.PrefixBlocks) != 1 || rep.PrefixBlocks[0] != 995 {
+		t.Fatalf("the L1 block of the batch the scan stored is reported for the index: %v", rep.PrefixBlocks)
+	}
 	want, got := allRows(t, live, 995, 995), allRows(t, st, 995, 995)
 	if len(got) == 0 || len(got) > len(want) {
 		t.Fatalf("rows: got %d want %d", len(got), len(want))

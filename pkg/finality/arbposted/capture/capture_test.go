@@ -684,34 +684,3 @@ func TestArraySlotMatchesTheSolidityLayout(t *testing.T) {
 		t.Fatal("ArraySlot differs from keccak256(w(7)) + 3")
 	}
 }
-
-// RB12-TRAIN3-INT duty (c): the hook the INDEX-B poster authorization plugs into. It sits in captureBatch, which the live capture and the
-// prefix scan share, so there is ONE place; nil keeps today's behaviour, false skips the batch, an error stores nothing.
-func TestTheBatchAuthorizerHookIsAppliedByTheOnePlaceEveryCaptureGoesThrough(t *testing.T) {
-	for _, c := range []struct {
-		name   string
-		auth   BatchAuthorizer
-		stored bool
-		errs   bool
-	}{
-		{"none", nil, true, false},
-		{"authorized", func(context.Context, BatchRecord, Tx) (bool, error) { return true, nil }, true, false},
-		{"foreign poster", func(context.Context, BatchRecord, Tx) (bool, error) { return false, nil }, false, false},
-		{"cannot be decided", func(context.Context, BatchRecord, Tx) (bool, error) { return false, errors.New("state unavailable") }, false, true},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			store := NewMemStore()
-			sc := newScenario(t, LocTxInput, 0)
-			cp := newCapturer(sc, store)
-			cp.Authorize = c.auth
-			rep, _ := cp.Tick(context.Background())
-			_, ok, _ := store.Get(context.Background(), Key{Chain: ChainArbitrumSepolia, L1Block: 995, L1Hash: sc.rec.L1Hash, Item: ItemCalldata(77)})
-			if ok != c.stored {
-				t.Fatalf("stored=%v, want %v (%+v)", ok, c.stored, rep)
-			}
-			if c.errs && len(rep.Errors) == 0 {
-				t.Fatalf("an authorization that could not be decided is an error of the tick, not a silent skip: %+v", rep)
-			}
-		})
-	}
-}
