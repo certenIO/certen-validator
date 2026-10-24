@@ -189,7 +189,7 @@ func (d *derived) runPlan(rd reader) error {
 		}
 		p.slot(StationSettle, ids.F, ci.MappingSlotAt(ci.KeyBytes32(common.BytesToHash(crypto.Keccak256(enc))), 3))
 	}
-	p.slot(StationSettle, ids.acct, ci.SlotIndex(2))
+	d.pointedAccount(p, ids, p.slot(StationSettle, ids.acct, ci.SlotIndex(2)))
 	p.authSet(StationSettle, ids, false)
 	for _, l := range sp.Settlement.Legs { // step 14
 		p.slot(StationSettle, ids.acct, ci.PageSlot(10, ids.book, ids.page))
