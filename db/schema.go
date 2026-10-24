@@ -96,10 +96,15 @@ func parseFingerprint(name, source string) (string, error) {
 	return fingerprint, nil
 }
 
-// Lint rejects transaction control in SQL files. The runner owns transaction boundaries, which prevents
-// the legacy nested-BEGIN/COMMIT failure mode. PL/pgSQL function bodies are intentionally not matched.
+// Lint rejects transaction control and statement-level session settings in SQL files. The runner owns transaction boundaries, which
+// prevents the legacy nested-BEGIN/COMMIT failure mode, and owns the session settings (the timeouts). A function ATTRIBUTE
+// (CREATE FUNCTION ... SET search_path = pg_catalog, pg_temp, which migrations must write to pin name resolution) and the SET clause of an
+// UPDATE are not session settings and are accepted wherever they are written; a SET or RESET that begins a statement is not.
 func Lint(m Migration) error {
 	approved := false
+	if m.Version != "00000" && hasSessionSetting(string(m.SQL)) {
+		return fmt.Errorf("%s changes session settings; configure timeouts in the runner instead", m.Name)
+	}
 	var code strings.Builder
 	for _, line := range strings.Split(string(m.SQL), "\n") {
 		trimmed := strings.TrimSpace(line)
@@ -109,10 +114,7 @@ func Lint(m Migration) error {
 			return fmt.Errorf("%s contains runner-owned transaction control", m.Name)
 		}
 		// The production-derived baseline is intentionally an immutable pg_dump and contains
-		// pg_dump's session SET commands. New migrations must never alter runner timeouts.
-		if m.Version != "00000" && (strings.HasPrefix(upper, "SET ") || strings.HasPrefix(upper, "RESET ")) {
-			return fmt.Errorf("%s changes session settings; configure timeouts in the runner instead", m.Name)
-		}
+		// pg_dump's session SET commands. New migrations must never alter runner timeouts (hasSessionSetting, above).
 		if strings.Contains(trimmed, "schema: destructive-approved") {
 			approved = true
 		}
@@ -143,6 +145,174 @@ func isDestructive(statement string) bool {
 	for _, clause := range []string{" DROP ", " RENAME ", " SET NOT NULL ", " TYPE "} {
 		if strings.Contains(padded, clause) {
 			return true
+		}
+	}
+	return false
+}
+
+// sqlToken is one lexical unit of a migration: a word (upper-cased), a semicolon, or the text between a pair of dollar quotes or single quotes
+// (which hasSessionSetting judges as SQL of its own where it is the body of a routine). Comments and quoted identifiers are dropped.
+type sqlToken struct {
+	word     string // upper-cased word, ";" or ""
+	body     string // the text inside $tag$ ... $tag$, or inside '...'
+	isBody   bool
+	isString bool // the body is a single-quoted string
+}
+
+func lexSQL(sql string) []sqlToken {
+	var out []sqlToken
+	i := 0
+	for i < len(sql) {
+		c := sql[i]
+		switch {
+		case c == '-' && strings.HasPrefix(sql[i:], "--"):
+			for i < len(sql) && sql[i] != '\n' && sql[i] != '\r' { // PostgreSQL ends a -- comment at a bare carriage return too
+				i++
+			}
+		case c == '/' && strings.HasPrefix(sql[i:], "/*"):
+			depth := 0 // PostgreSQL block comments nest
+			for i < len(sql) {
+				if strings.HasPrefix(sql[i:], "/*") {
+					depth++
+					i += 2
+				} else if strings.HasPrefix(sql[i:], "*/") {
+					depth--
+					i += 2
+					if depth == 0 {
+						break
+					}
+				} else {
+					i++
+				}
+			}
+		case c == '\'':
+			escapes := i > 0 && (sql[i-1] == 'e' || sql[i-1] == 'E') && (i == 1 || !isWordByte(sql[i-2]))
+			i++
+			var text strings.Builder // the content, a doubled quote read as one: a function body may be written as a string
+			for i < len(sql) {
+				if escapes && sql[i] == '\\' && i+1 < len(sql) {
+					text.WriteString(sql[i : i+2])
+					i += 2
+					continue
+				}
+				if sql[i] == '\'' {
+					if i+1 < len(sql) && sql[i+1] == '\'' {
+						text.WriteByte('\'')
+						i += 2
+						continue
+					}
+					i++
+					break
+				}
+				text.WriteByte(sql[i])
+				i++
+			}
+			out = append(out, sqlToken{isBody: true, isString: true, body: text.String()})
+		case c == '"':
+			i++
+			for i < len(sql) {
+				if sql[i] == '"' {
+					if i+1 < len(sql) && sql[i+1] == '"' {
+						i += 2
+						continue
+					}
+					i++
+					break
+				}
+				i++
+			}
+		case c == '$':
+			if i > 0 && isWordByte(sql[i-1]) { // PostgreSQL reads a $ after an identifier character as part of the identifier (foo$bar$)
+				i++
+				continue
+			}
+			if end := dollarTagEnd(sql, i); end > 0 {
+				tag := sql[i:end]
+				close := strings.Index(sql[end:], tag)
+				if close < 0 { // unterminated: PostgreSQL refuses it, the rest is judged as the body
+					out = append(out, sqlToken{isBody: true, body: sql[end:]})
+					return out
+				}
+				out = append(out, sqlToken{isBody: true, body: sql[end : end+close]})
+				i = end + close + len(tag)
+				continue
+			}
+			i++
+		case c == ';':
+			out = append(out, sqlToken{word: ";"})
+			i++
+		case isWordByte(c):
+			j := i
+			for j < len(sql) && isWordByte(sql[j]) {
+				j++
+			}
+			out = append(out, sqlToken{word: strings.ToUpper(sql[i:j])})
+			i = j
+		default:
+			i++
+		}
+	}
+	return out
+}
+
+func isWordByte(c byte) bool {
+	return c == '_' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= 0x80
+}
+
+// dollarTagEnd is the index just past the opening dollar quote ($$ or $tag$) that starts at sql[i], or 0 when sql[i] is not one.
+func dollarTagEnd(sql string, i int) int {
+	j := i + 1
+	for j < len(sql) && (sql[j] == '_' || sql[j] >= 'a' && sql[j] <= 'z' || sql[j] >= 'A' && sql[j] <= 'Z' || j > i+1 && sql[j] >= '0' && sql[j] <= '9' || sql[j] >= 0x80) {
+		j++
+	}
+	if j < len(sql) && sql[j] == '$' {
+		return j + 1
+	}
+	return 0
+}
+
+// hasSessionSetting reports whether sql holds a statement that changes a session or role setting: a statement that BEGINS with SET or
+// RESET (SET LOCAL and SET SESSION included), or an ALTER ROLE / USER / DATABASE / SYSTEM that carries one. A statement begins at the start
+// of the text, after a semicolon, and, inside a function body, after BEGIN, THEN, ELSE or LOOP. The SET that follows other words of a
+// statement is a clause of it (UPDATE ... SET, ON CONFLICT DO UPDATE SET, ALTER TABLE ... SET, the SET attribute of CREATE FUNCTION) and
+// is not judged. The body of CREATE FUNCTION and CREATE PROCEDURE (the dollar-quoted text, or the single-quoted string after AS) and of DO
+// is judged as SQL of its own; any other quoted text is a string.
+func hasSessionSetting(sql string) bool {
+	atStart := true
+	var first, second, head, prev string
+	alter, routine := false, false
+	for _, tok := range lexSQL(sql) {
+		if tok.isBody {
+			if routine && (!tok.isString || head == "DO" || prev == "AS") && hasSessionSetting(tok.body) {
+				return true
+			}
+			atStart, prev = false, ""
+			continue
+		}
+		prev = tok.word
+		switch tok.word {
+		case ";":
+			atStart, first, second, head, alter, routine = true, "", "", "", false, false
+			continue
+		case "SET", "RESET":
+			if atStart || alter {
+				return true
+			}
+		}
+		if head == "" {
+			head = tok.word
+		}
+		routine = routine || head == "DO" || head == "CREATE" && (tok.word == "FUNCTION" || tok.word == "PROCEDURE")
+		switch {
+		case first == "":
+			first = tok.word
+		case second == "":
+			second = tok.word
+			alter = first == "ALTER" && (second == "ROLE" || second == "USER" || second == "DATABASE" || second == "SYSTEM")
+		}
+		atStart = tok.word == "BEGIN" || tok.word == "THEN" || tok.word == "ELSE" || tok.word == "LOOP"
+		if atStart {
+			first, second, alter = "", "", false
 		}
 	}
 	return false

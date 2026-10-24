@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"reflect"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/certen/independant-validator/pkg/finality/ethl1"
@@ -19,7 +20,8 @@ import (
 const PinsFormat = "certen-finality-pins/1"
 
 // PinsSHA256 is the SHA-256 of the embedded pins file. A verifier refuses to start (finality_pins_corrupt) if the embedded
-// bytes hash otherwise; CI job finality-pins-sync compares this constant and the file across the three repositories.
+// bytes hash otherwise; CI job finality-pins-sync compares this constant and the file across the three repositories
+// (.github/workflows/finality-pins-sync.yml here; the comparison is scripts/finality-pins-sync.mjs of certen-contracts, which publishes the file).
 const PinsSHA256 = "fdba733e7fc4206d96d73c87352834c51801ee8fe0af76d60654cb461fbd5440"
 
 //go:embed pins/finality-pins.json
@@ -361,7 +363,11 @@ func (e *EthSepoliaPins) AnchorFor(sigPeriod uint64) (AnchorPin, error) {
 // offending key: inside every object a key smaller than its predecessor is keys_unsorted{key}, a key equal to it
 // duplicate_key{key} (sorted keys make a duplicate adjacent), and, where t is a struct type, a key that is not EXACTLY (case-
 // sensitively) one of its json names is unknown_key{key}. Where t is nil, or not a struct (the raw sections of the other
-// chains), only the order and duplicate rules apply. The text has already passed json.Valid, so a token error is not_json.
+// chains), only the order and duplicate rules apply, plus one more (RB12-OPS-A1, F4/N1): a key that differs from an earlier key of
+// the same object only in letter case (the code hash keys of logic_pins, 0xAB.. and 0xab.., are the same hash) is duplicate_key{key}
+// wherever it stands, because the decoders of the chain sections match names and hex digits without regard to case and two spellings
+// of one name would otherwise be merged in the order of a Go map. The first such key in document order is the one named, so the answer
+// is a function of the bytes of the file. The text has already passed json.Valid, so a token error is not_json.
 func walkKeys(dec *json.Decoder, t reflect.Type) (PinsReason, string) {
 	for t != nil && t.Kind() == reflect.Ptr {
 		t = t.Elem()
@@ -377,12 +383,24 @@ func walkKeys(dec *json.Decoder, t reflect.Type) (PinsReason, string) {
 	switch d {
 	case '{':
 		prev, first := "", true
+		var spelled map[string]string // case-folded key -> the spelling seen first; objects that are not structs only
+		if t == nil || t.Kind() != reflect.Struct {
+			spelled = map[string]string{}
+		}
 		for dec.More() {
 			kt, err := dec.Token()
 			if err != nil {
 				return PinsNotJSON, ""
 			}
 			k, _ := kt.(string)
+			if spelled != nil {
+				f := foldKey(k)
+				if was, seen := spelled[f]; !seen {
+					spelled[f] = k
+				} else if was != k {
+					return PinsDuplicateKey, k
+				}
+			}
 			if !first {
 				if k < prev {
 					return PinsKeysUnsorted, k
@@ -432,4 +450,18 @@ func jsonFieldType(t reflect.Type, name string) reflect.Type {
 		}
 	}
 	return nil
+}
+
+// foldKey maps every rune of s to the smallest rune of its Unicode simple-folding orbit, so foldKey(a) == foldKey(b) exactly when
+// strings.EqualFold(a, b): the equivalence encoding/json uses to match an object key to a field name.
+func foldKey(s string) string {
+	return strings.Map(func(r rune) rune {
+		m := r
+		for f := unicode.SimpleFold(r); f != r; f = unicode.SimpleFold(f) {
+			if f < m {
+				m = f
+			}
+		}
+		return m
+	}, s)
 }

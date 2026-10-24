@@ -227,7 +227,16 @@ func main() {
 	live := flag.String("live", "", "directory written by cmd/finalityarbfinalrecord (adds the real vectors)")
 	set2 := flag.String("set2", "", "write the second set (finality_arb_final2) to this directory instead")
 	set3 := flag.String("set3", "", "write the third set (finality_arb_final3) to this directory instead")
+	set4 := flag.String("set4", "", "write the fourth set (finality_arb_final4) to this directory instead, from the worlds in -from")
+	from := flag.String("from", "pkg/finality/arbfinal/testdata/finality_arb_final4", "the directory holding the worlds of -set4 (vectors.json, evidence/, pins/)")
 	flag.Parse()
+	if *set4 != "" {
+		if err := generate4(*set4, *from); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	if *set3 != "" {
 		if err := generate3(*set3); err != nil {
 			fmt.Fprintln(os.Stderr, err)

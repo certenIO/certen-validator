@@ -46,7 +46,10 @@ func (f *fakeAdiri) recordJSON(e int) json.RawMessage {
 		}
 		return out
 	}
-	digests := f.cf.RecordDigests()
+	digests, derr := f.cf.RecordDigests()
+	if derr != nil {
+		panic(derr) // a recorded chain names its tables
+	}
 	parent := make([]byte, 32)
 	if e > 0 {
 		parent = digests[e-1][:]

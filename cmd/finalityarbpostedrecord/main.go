@@ -37,6 +37,8 @@ func main() {
 		err = build2(*raw, *out)
 	case "build3":
 		err = build3(*raw, *out)
+	case "build5":
+		err = build5(*raw, *out)
 	case "build4":
 		err = build4(*raw, *out)
 	case "measure":

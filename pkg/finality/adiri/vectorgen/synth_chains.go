@@ -188,7 +188,8 @@ func buildSynth(kp *keyPool, epochs []epochSpec, k2 *kind2, salt byte) synthOut 
 		cf.Records = append(cf.Records, r)
 	}
 	cf.Tables = tables
-	digests := cf.RecordDigests()
+	digests, derr := cf.RecordDigests()
+	must(derr)
 	for e, sp := range epochs {
 		var sigs []*bls.Signature
 		for _, s := range sp.signers {

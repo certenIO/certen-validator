@@ -118,10 +118,16 @@ func ParsePins(p *finality.Pins) (*Pins, error) {
 		return nil, bad("batch_inbox")
 	}
 	copy(out.BatchInbox[:], bi)
-	for k, v := range map[string]uint64{"seq_window_size": r.SeqWindowSize, "channel_timeout": r.ChannelTimeout,
-		"granite_time": r.GraniteTime, "channel_timeout_granite": r.ChannelTimeoutGranite, "max_rlp_bytes_per_channel": r.MaxRLPBytesPerChannel, "l2_genesis_time": r.L2GenesisTime, "l2_block_time": r.L2BlockTime, "isthmus_time": r.IsthmusTime, "denim_time": r.DenimTime} {
-		if v == 0 {
-			return nil, bad(k)
+	// Several zero pins are judged in sorted-name order, so the key a refusal names is a function of the file (RB12-OPS-A1, F4/N1: this
+	// loop ranged over a Go map and named a random one of them).
+	for _, z := range []struct {
+		key string
+		v   uint64
+	}{{"channel_timeout", r.ChannelTimeout}, {"channel_timeout_granite", r.ChannelTimeoutGranite}, {"denim_time", r.DenimTime},
+		{"granite_time", r.GraniteTime}, {"isthmus_time", r.IsthmusTime}, {"l2_block_time", r.L2BlockTime}, {"l2_genesis_time", r.L2GenesisTime},
+		{"max_rlp_bytes_per_channel", r.MaxRLPBytesPerChannel}, {"seq_window_size", r.SeqWindowSize}} {
+		if z.v == 0 {
+			return nil, bad(z.key)
 		}
 	}
 	if r.MaxBlobs <= 0 {

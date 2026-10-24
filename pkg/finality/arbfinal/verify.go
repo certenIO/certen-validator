@@ -165,9 +165,9 @@ func (k *Kind) Verify(p *finality.Pins, b finality.BlockRef, evidence []byte) (f
 	if kb.Number > s.Number {
 		return finality.Verdict{}, finality.BlockMismatch("confBlockAboveStateBlock", e.StateBlock, e.ConfBlock)
 	}
-	kHeader, found := headerNumbered(e.L1Spine, kb.Number)
-	if !found {
-		return finality.Verdict{}, asState(ethl1.BlockNotCovered(kb.Number, covered[0].Number))
+	kHeader, err := headerNumbered(e.L1Spine, covered[0].Number, kb.Number)
+	if err != nil {
+		return finality.Verdict{}, asState(err)
 	}
 	// [r2:E1FIX L3] spec 8.2: a NODES element off the transaction and receipt proof paths is a state or storage node, at most
 	// max_node_bytes; judged here, where K's roots are known, before any proof consumes a node.
@@ -177,19 +177,24 @@ func (k *Kind) Verify(p *finality.Pins, b finality.BlockRef, evidence []byte) (f
 	return k.verifyState(arb, s, kb, kHeader, b, e)
 }
 
-// headerNumbered returns the fields of the spine header with this number. Covers has already read and walked every header of the
-// spine and BlockAt found the number on it, so the header is there; found is false only for a caller whose spine lacks it.
-func headerNumbered(spine [][]byte, number uint64) (finality.HeaderFields, bool) {
-	for _, raw := range spine {
-		h, err := finality.ReadHeader(raw)
-		if err != nil {
-			continue
-		}
-		if h.Number == number {
-			return h, true
-		}
+// headerNumbered returns the fields of the spine header with this number, read by the framework header reader. top is the number of
+// spine[0], the finalized head. Covers has walked the spine (the numbers step down by one) and BlockAt found the number on it, so the
+// header is spine[top-number]. The light-client reader that walked the spine reads four items of a header and the framework reader seven:
+// a header the first accepts and the second refuses is finality_block_header_unreadable{block_number, finalized_exec_number, reason}, a
+// statement about a block that IS on the spine. A number that is not on the spine, or whose position holds another number, is
+// finality_block_not_covered, the state of a block above the head or below the spine.
+func headerNumbered(spine [][]byte, top, number uint64) (finality.HeaderFields, error) {
+	if number > top || top-number >= uint64(len(spine)) {
+		return finality.HeaderFields{}, ethl1.BlockNotCovered(number, top)
 	}
-	return finality.HeaderFields{}, false
+	h, err := finality.ReadHeader(spine[top-number])
+	if err != nil {
+		return finality.HeaderFields{}, BlockHeaderUnreadable(number, top, err)
+	}
+	if h.Number != number {
+		return finality.HeaderFields{}, ethl1.BlockNotCovered(number, top)
+	}
+	return h, nil
 }
 
 // verifyState is the part of the judgement that runs under the state roots of the covered L1 blocks S and K; it is separate

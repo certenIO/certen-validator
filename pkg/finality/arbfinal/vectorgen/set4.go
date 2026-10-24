@@ -1,0 +1,194 @@
+// Copyright 2026 Certen Protocol
+
+package main
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+
+	"github.com/ethereum/go-ethereum/common"
+
+	"github.com/certen/independant-validator/pkg/finality"
+	"github.com/certen/independant-validator/pkg/finality/arbfinal"
+	sw "github.com/certen/independant-validator/pkg/finality/arbfinal/synthworld"
+)
+
+// oddAtK4 is the documented verdict of the three worlds with an odd header at K. The worlds were first built (and recorded on pv2/rb12-ops-a1,
+// never merged or published) with the verdict finality_block_not_covered{block_number K, finalized_exec_number F}; that code names a block
+// that is not on the covered spine, and K IS on it (RB12-ARBFINAL-FIX, class 8), so the verifier answers
+// finality_block_header_unreadable{block_number, finalized_exec_number, reason, index}: the framework header reader's refusal of K's header.
+// The table, not the literal in the vectors.json it is handed, is what the generator judges these worlds against.
+var oddAtK4 = map[string]string{
+	"l1_header_at_k_has_a_31_byte_transactions_root":    st(arbfinal.CodeBlockHeaderUnreadable, "block_number", uint64(11999995), "finalized_exec_number", uint64(12000000), "reason", finality.ReasonHeaderItemNot32Bytes, "index", uint64(4)),
+	"l1_header_at_k_has_a_33_byte_receipts_root":        st(arbfinal.CodeBlockHeaderUnreadable, "block_number", uint64(11999995), "finalized_exec_number", uint64(12000000), "reason", finality.ReasonHeaderItemNot32Bytes, "index", uint64(5)),
+	"l1_header_at_k_has_a_list_in_the_withdrawals_slot": st(arbfinal.CodeBlockHeaderUnreadable, "block_number", uint64(11999995), "finalized_exec_number", uint64(12000000), "reason", finality.ReasonHeaderItemIsList, "index", uint64(16)),
+}
+
+// inProcess4 are the vectors generate4 builds itself with synthworld (inProcessWorlds4) instead of reading them from the worlds it is handed.
+var inProcess4 = map[string]bool{
+	"l1_header_at_k_equal_to_the_head_has_a_31_byte_transactions_root":  true,
+	"l1_header_at_k_one_below_the_head_has_a_31_byte_transactions_root": true,
+	"wallet_fast_confirmer_set_at_k_only_is_refused":                    true,
+	"wallet_fast_confirmer_set_at_s_only_is_finalized":                  true,
+}
+
+// inProcessWorlds4 are the four vectors of the set that are built here, from the committed synthworld, and not read from the worlds handed to
+// generate4 (RB12-ARBFINAL-FIX):
+//
+//   - the odd header at K when K is the finalized head itself (S = K = F) and when K is the block just below it (S = K = F - 1), the two
+//     boundaries of the unreadable-header state: the block is on the spine in both, so it is never finality_block_not_covered;
+//   - the fast-confirmer pair. A wallet confirmation is honest only while anyTrustFastConfirmer is the zero address at K (annex A3); S and K
+//     are different L1 blocks (the default world: S = F - 2, K = F - 5), so a verifier that read the confirmer under S's storage root, or the
+//     head's, would answer the other way round on exactly these two worlds: the confirmer set at K only is refused (confirmation_path_unproven
+//     {fast_confirmer_set}) and the confirmer set at S only is finalized. No earlier set could say this: synthworld could not give S and K
+//     different storage for the Rollup (the hook is Parts.FastS / Parts.FastK).
+func inProcessWorlds4(g *gen) {
+	odd := func(label string, sBack, kBack uint64, k uint64) *sw.World {
+		return world(label, func(p *sw.Parts) {
+			p.SBack, p.KBack = sBack, kBack
+			p.OddL1 = map[uint64]sw.OddHeader{k: sw.OddTxRoot31}
+		})
+	}
+	unreadable := func(k uint64) string {
+		return st(arbfinal.CodeBlockHeaderUnreadable, "block_number", k, "finalized_exec_number", uint64(12000000), "reason", finality.ReasonHeaderItemNot32Bytes, "index", uint64(4))
+	}
+	atHead := odd("odd-k-is-head", 0, 0, 12000000)
+	g.synth("l1_header_at_k_equal_to_the_head_has_a_31_byte_transactions_root", "synthetic", "S = K = F: K is the finalized head and its header has a 31-byte transactionsRoot; K is on the spine, so the block is named unreadable, not uncovered", atHead, unreadable(12000000))
+	belowHead := odd("odd-k-below-head", 1, 0, 11999999)
+	g.synth("l1_header_at_k_one_below_the_head_has_a_31_byte_transactions_root", "synthetic", "S = K = F - 1 and K's header has a 31-byte transactionsRoot", belowHead, unreadable(11999999))
+
+	confirmCall := sw.ConfirmCall(sw.SelConfirm)
+	fast := common.HexToAddress("0x00000000000000000000000000000000000fa570")
+	wallet := func(label string, mod func(*sw.Parts)) *sw.World {
+		return world(label, func(p *sw.Parts) {
+			t := sw.ValidatorW
+			p.TxTo, p.TxInput, p.Wallet = &t, sw.WalletInput(sw.SelWalletTx, [][]byte{confirmCall}, []common.Address{sw.Rollup}), &sw.WalletState{}
+			mod(p)
+		})
+	}
+	atK := wallet("wallet-fast-confirmer-at-k-only", func(p *sw.Parts) { p.FastK = &fast })
+	g.synth("wallet_fast_confirmer_set_at_k_only_is_refused", "synthetic", "a wallet confirmation; anyTrustFastConfirmer is set in the Rollup storage at K (F-5) and zero at S (F-2): the confirmer is read under K's root",
+		atK, st(arbfinal.CodeConfirmationUnproof, "reason", arbfinal.ConfirmFastConfirmerSet, "tx", atK.TxHash, "l1_block", atK.K.Number))
+	atS := wallet("wallet-fast-confirmer-at-s-only", func(p *sw.Parts) { p.FastS = &fast })
+	g.synth("wallet_fast_confirmer_set_at_s_only_is_finalized", "synthetic", "a wallet confirmation; anyTrustFastConfirmer is set in the Rollup storage at S (F-2) and zero at K (F-5): the confirmer is read under K's root, so the confirmation is honest",
+		atS, okText(okFields(atS, "wallet")))
+}
+
+// generate4 publishes the fourth set, finality_arb_final4 (BETA findings B-ARB-2 and B-ARB-3, RB12-ARBFINAL-FIX): worlds in which an L1 header
+// has an item that the light-client spine reader (parent, state root, number, timestamp) accepts and the framework's positional header
+// reader (parent, state root, transactions root, receipts root, number, timestamp, withdrawals root from 17 items) refuses. The verifier
+// applies the framework reader to K's header ONLY, so an odd header at the finalized head, at S, or anywhere but K is judged and an odd
+// header at K is finality_block_header_unreadable{block_number: K, finalized_exec_number: F, reason, index}; and the pair of worlds that
+// separates reading the fast confirmer under K's root from reading it under S's (inProcessWorlds4).
+//
+// The eight worlds of BETA are read from dir from (vectors.json, evidence/, pins/ in the layout of every set); the three with an odd header
+// at K are judged against oddAtK4, the other five against the literal they carry; the four vectors in inProcess4 are built here by
+// inProcessWorlds4. This function does what every generator of this package does with a world it is given: it judges EVERY vector with the
+// verifier of this checkout, refuses to write a vector whose expected literal differs from the verdict, and writes the set in the published
+// layout with its manifest. Run on the published set itself it reproduces it byte for byte (gen4_test.go).
+func generate4(out, from string) error {
+	mismatches = nil
+	g := newGen()
+	raw, err := os.ReadFile(filepath.Join(from, "vectors.json"))
+	if err != nil {
+		return err
+	}
+	var f struct {
+		Vectors []vec `json:"vectors"`
+	}
+	if err := json.Unmarshal(raw, &f); err != nil {
+		return err
+	}
+	if len(f.Vectors) == 0 {
+		return fmt.Errorf("%s holds no vectors", from)
+	}
+	for _, v := range f.Vectors {
+		if inProcess4[v.Name] {
+			continue // rebuilt by inProcessWorlds4 below: regenerating from the published set must not add them twice
+		}
+		if lit, ok := oddAtK4[v.Name]; ok {
+			v.Expect = lit
+		}
+		if v.Base != "" || len(v.Edits) != 0 || v.Evidence != v.Name+".bin" {
+			return fmt.Errorf("%s: this set stores one whole evidence file per vector, named after it (evidence %q, base %q)", v.Name, v.Evidence, v.Base)
+		}
+		ev, err := os.ReadFile(filepath.Join(from, "evidence", v.Evidence))
+		if err != nil {
+			return err
+		}
+		pins, err := os.ReadFile(filepath.Join(from, "pins", v.Pins))
+		if err != nil {
+			return err
+		}
+		hash, err := hex.DecodeString(strings.TrimPrefix(v.Leg.Hash, "0x"))
+		if err != nil || len(hash) != 32 {
+			return fmt.Errorf("%s: leg hash %q", v.Name, v.Leg.Hash)
+		}
+		header, err := hex.DecodeString(v.Leg.HeaderHex)
+		if err != nil {
+			return fmt.Errorf("%s: header_hex: %v", v.Name, err)
+		}
+		g.add(v.Name, v.Group, v.Note, finality.BlockRef{Chain: v.Leg.Chain, Number: v.Leg.Number, Hash: [32]byte(hash), HeaderRLP: header}, v.Pins, pins, ev, v.Expect)
+	}
+	inProcessWorlds4(g)
+	if len(mismatches) > 0 {
+		return fmt.Errorf("%d vectors disagree with the verifier:\n%s", len(mismatches), strings.Join(mismatches, "\n"))
+	}
+	return g.write4(out)
+}
+
+// write4 writes the set in the layout of write3 with the format tags of the fourth set.
+func (g *gen) write4(out string) error {
+	for _, d := range []string{"evidence", "pins"} {
+		if err := os.MkdirAll(filepath.Join(out, d), 0o755); err != nil {
+			return err
+		}
+	}
+	files := map[string]string{}
+	put := func(rel string, b []byte) error {
+		files[rel] = fmt.Sprintf("%x", sha256.Sum256(b))
+		return os.WriteFile(filepath.Join(out, filepath.FromSlash(rel)), b, 0o644)
+	}
+	for _, kind := range []struct {
+		dir, ext string
+		m        map[string][]byte
+	}{{"evidence", ".bin", g.evidence}, {"pins", "", g.pins}} {
+		var names []string
+		for k := range kind.m {
+			names = append(names, k)
+		}
+		sort.Strings(names)
+		for _, k := range names {
+			if err := put(kind.dir+"/"+k+kind.ext, kind.m[k]); err != nil {
+				return err
+			}
+		}
+	}
+	vj, err := json.MarshalIndent(map[string]any{"format": "finality_arb_final4/1", "vectors": g.vecs}, "", " ")
+	if err != nil {
+		return err
+	}
+	if err := put("vectors.json", append(vj, '\n')); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(out, "README.md"), []byte(readme4Text), 0o644); err != nil {
+		return err
+	}
+	mj, _ := json.MarshalIndent(map[string]any{"format": "finality_arb_final4/manifest/1", "files": files}, "", " ")
+	mj = append(mj, '\n')
+	if err := os.WriteFile(filepath.Join(out, "MANIFEST.json"), mj, 0o644); err != nil {
+		return err
+	}
+	sum := sha256.Sum256(mj)
+	if err := os.WriteFile(filepath.Join(out, "MANIFEST.json.sha256"), []byte(hex.EncodeToString(sum[:])+"\n"), 0o644); err != nil {
+		return err
+	}
+	fmt.Printf("wrote %d vectors, %d evidence files, %d pins files; MANIFEST sha256 %x\n", len(g.vecs), len(g.evidence), len(g.pins), sum)
+	return nil
+}

@@ -223,6 +223,9 @@ func verifyLink(par *Params, res *ChainResult, body *Body, leg finality.BlockRef
 // it, else equal by hash and number).
 func verifySpine(res *ChainResult, spine [][]byte, leg finality.BlockRef) (linkResult, error) {
 	var out linkResult
+	if len(spine) == 0 { // DecodeBody refuses an empty spine; this function indexes the last header, so it states the same refusal itself
+		return out, finality.Malformed("spine", finality.ReasonSpineEmpty, 0, 1)
+	}
 	F := res.Final
 	var prev finality.HeaderFields
 	for i, raw := range spine {

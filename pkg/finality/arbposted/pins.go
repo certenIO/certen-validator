@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"encoding/json"
+	"math/big"
 	"strings"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -57,6 +58,12 @@ type arbPins struct {
 	bridge common.Address
 }
 
+// MaxUncompressedBatchLimit is the largest max_uncompressed_batch a pins file may carry: 16 MiB, Nitro's MaxDecompressedLen (the bound of
+// the batch decoder this package replays: V2_SPEC_S7 section 4.2 pins 16777216 and R11-arbitrum-sepolia.md step 6 reads "Decompress (<= 16
+// MiB)"). A larger pin would make the verifier accept a batch Nitro itself refuses, and a pin near the largest int would be a cap that is no
+// cap; the shipped value is the limit. A value above it is finality_pins_corrupt{bad_value, key arb_sepolia.max_uncompressed_batch}.
+const MaxUncompressedBatchLimit = 16 * 1024 * 1024
+
 // Pin field names used in pin_mismatch / finality_pin_unknown.
 const (
 	pinSection = "arb_sepolia"
@@ -74,6 +81,22 @@ func hexAddr(s string) (common.Address, bool) {
 	return common.BytesToAddress(b), true
 }
 
+func maxBatchCorrupt() *finality.StateError {
+	return finality.PinsCorrupt(finality.PinsBadValue, "key", pinSection+".max_uncompressed_batch")
+}
+
+// maxBatchBeyondLimit reports whether the section's max_uncompressed_batch is an integer literal above MaxUncompressedBatchLimit, whatever its size.
+func maxBatchBeyondLimit(raw []byte) bool {
+	var probe struct {
+		Max json.RawMessage `json:"max_uncompressed_batch"`
+	}
+	if err := json.Unmarshal(raw, &probe); err != nil || probe.Max == nil {
+		return false
+	}
+	n, ok := new(big.Int).SetString(string(probe.Max), 10)
+	return ok && n.Cmp(big.NewInt(MaxUncompressedBatchLimit)) > 0
+}
+
 // loadArbPins parses the arb_sepolia section. An absent section is finality_pin_unknown; a section that does not parse or
 // whose values are outside their domain is pin_mismatch{field}.
 func loadArbPins(p *finality.Pins) (*arbPins, error) {
@@ -88,6 +111,10 @@ func loadArbPins(p *finality.Pins) (*arbPins, error) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&a); err != nil {
+		// an integer that does not fit an int is beyond the limit too: it is named so, not "the section does not parse"
+		if maxBatchBeyondLimit(raw) {
+			return nil, maxBatchCorrupt()
+		}
 		return nil, PinMismatch("section")
 	}
 	if a.ChainID != finality.ChainArbitrumSepolia {
@@ -111,6 +138,9 @@ func loadArbPins(p *finality.Pins) (*arbPins, error) {
 	}
 	if a.MaxUncompressedBatch <= 0 {
 		return nil, PinMismatch("max_uncompressed_batch")
+	}
+	if a.MaxUncompressedBatch > MaxUncompressedBatchLimit {
+		return nil, maxBatchCorrupt()
 	}
 	// The three numeric pins whose value 0 is a possible value are judged by presence: an absent (or null) key decodes as 0 and must not
 	// switch the pre-BoLD guard or a storage slot silently to 0.

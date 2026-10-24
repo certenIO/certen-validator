@@ -122,7 +122,9 @@ func PeriodGap(signaturePeriod, storePeriod uint64) *Fault {
 	return fault(CodePeriodGap, "signature_period", signaturePeriod, "store_period", storePeriod)
 }
 
-// BlockNotCovered: the block lies above the finalized execution head of the spine (the builder maps this to pending).
+// BlockNotCovered: the block is not on the covered spine: it lies above the finalized execution head (a builder holds such a leg as
+// finality_pending{block_not_yet_covered} instead of building it) or below the spine's last header. It is never the state of a block whose
+// header IS on the spine and cannot be read: arbfinal names that finality_block_header_unreadable.
 func BlockNotCovered(blockNumber, spineTopNumber uint64) *Fault {
 	return fault(CodeBlockNotCovered, "block_number", blockNumber, "finalized_exec_number", spineTopNumber)
 }

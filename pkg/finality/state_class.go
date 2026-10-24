@@ -63,6 +63,7 @@ var stateClasses = map[string]StateClass{
 	"evidence_pin_mismatch":                ClassFailure,
 	"finality_addendum_malformed":          ClassFailure,
 	"finality_append_conflict":             ClassFailure,
+	"finality_block_header_unreadable":     ClassFailure,
 	"finality_block_mismatch":              ClassFailure,
 	"finality_block_not_covered":           ClassFailure,
 	"finality_bootstrap_invalid":           ClassFailure,
