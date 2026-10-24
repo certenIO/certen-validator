@@ -157,6 +157,8 @@ type Deps struct {
 	SourceFor func(chain uint64) (AttestSource, error)
 	Clock     ethproof.ReplayClock // default ethproof.WallClock
 	Logf      func(string, ...interface{})
+	// Deadline is the memberChainDeadline of an anchor of a chain (pkg/execution): past it its hop ticks stop. Optional.
+	Deadline func(chain uint64, anchorID [32]byte) (time.Time, bool)
 }
 
 type jobKey struct {
@@ -183,6 +185,8 @@ type Runtime struct {
 	seen   map[jobKey]bool
 	order  []jobKey
 	queues map[uint64]chan job
+	// tickers: E1b, one tick chain per chain, started with the first attested anchor of the chain.
+	tickers map[uint64]*Ticker
 }
 
 // Start starts the runtime. It returns (nil, nil) for an off switch and (nil, *Disabled) for a state it cannot run in; it never panics and
@@ -225,7 +229,7 @@ func Start(ctx context.Context, set Settings, d Deps) (rt *Runtime, dis *Disable
 		d.Clock = ethproof.WallClock
 	}
 	rctx, cancel := context.WithCancel(ctx)
-	rt = &Runtime{set: set, d: d, mem: &budget{cap: set.MemoryBytes}, ctx: rctx, stop: cancel, seen: map[jobKey]bool{}, queues: map[uint64]chan job{}}
+	rt = &Runtime{set: set, d: d, mem: &budget{cap: set.MemoryBytes}, ctx: rctx, stop: cancel, seen: map[jobKey]bool{}, queues: map[uint64]chan job{}, tickers: map[uint64]*Ticker{}}
 	metrics.SetContractIdentityCapture(true, set.MemoryBytes)
 	logf("✅ [CONTRACT-IDENTITY] capture on: %d captures per chain, %d provider calls at once, %d MiB budget", set.Concurrency, set.Parallel, set.MemoryBytes>>20)
 	return rt, nil
@@ -385,6 +389,9 @@ func (r *Runtime) runAttest(ctx context.Context, cfg Config, j job) string {
 	if err := SaveAttest(ctx, r.d.Store, res); err != nil {
 		return r.storeOutcome(cfg.Chain, "attest", res.Stated != nil, err)
 	}
+	if res.Stated == nil {
+		r.track(cfg, res)
+	}
 	return outcomeOf(res.Stated)
 }
 
@@ -443,7 +450,7 @@ func (r *Runtime) runSettle(ctx context.Context, cfg Config, j job) string {
 		return outcomeOf(res.Stated)
 	}
 	req := SettleRequest{TxHash: tx, PKC: att.PKC, Link: ci.LinkSpine}
-	if plan, err := ChooseLink(cfg.Manifest, cfg.Chain, att.Block.Number, rcBlock.BlockNumber.Uint64(), 0); err == nil {
+	if plan, _, err := PlanLink(ctx, r.d.Store, cfg.Manifest, cfg.Chain, facts.AnchorID, att.Block, rcBlock.BlockNumber.Uint64()); err == nil {
 		req.Link, req.HopNumbers = plan.Link, plan.HopNumbers
 	} // out of reach: the settle part is captured without a hop read; the assembly states the attest part attest_block_out_of_reach
 	res, err := CaptureSettle(ctx, cfg, req)
@@ -458,7 +465,57 @@ func (r *Runtime) runSettle(ctx context.Context, cfg Config, j job) string {
 	if err := SaveSettle(ctx, r.d.Store, res); err != nil {
 		return r.storeOutcome(cfg.Chain, "settle", res.Stated != nil, err)
 	}
+	r.untrack(cfg.Chain, facts.AnchorID)
 	return outcomeOf(res.Stated)
+}
+
+// track hands an attested anchor to the tick chain of its chain (E1b), starting the chain's loop on first use. A chain without a tick
+// chain, or a full tracker, leaves the anchor without hops: its legs beyond the window are then attest_block_out_of_reach, counted here.
+func (r *Runtime) track(cfg Config, res *AttestResult) {
+	defer func() { _ = recover() }()
+	r.mu.Lock()
+	t := r.tickers[cfg.Chain]
+	if t == nil && r.ctx.Err() == nil {
+		tc := TickConfig{Config: cfg, Store: r.d.Store, Reserve: func() (func(), bool) { return r.mem.reserve(TickWorkingSetBytes) }}
+		if r.d.Deadline != nil {
+			chain := cfg.Chain
+			tc.Deadline = func(a [32]byte) (time.Time, bool) { return r.d.Deadline(chain, a) }
+		}
+		nt, err := NewTicker(tc)
+		if err != nil {
+			r.mu.Unlock()
+			metrics.ContractIdentityCaptureDropped(cfg.Chain, "tick", "no_tick_chain")
+			return
+		}
+		t = nt
+		r.tickers[cfg.Chain] = t
+		r.wg.Add(1)
+		go func() {
+			defer r.wg.Done()
+			defer func() {
+				if p := recover(); p != nil {
+					r.logf("⚠️ [CONTRACT-IDENTITY] chain %d tick loop panicked: %v", cfg.Chain, p)
+				}
+			}()
+			t.Run(r.ctx)
+		}()
+	}
+	r.mu.Unlock()
+	if t == nil {
+		return
+	}
+	if err := t.Track(TrackedAnchor{AnchorID: res.AnchorID, Bv: res.Block}); err != nil {
+		metrics.ContractIdentityCaptureDropped(cfg.Chain, "tick", "tracker_full")
+	}
+}
+
+func (r *Runtime) untrack(chain uint64, anchorID common.Hash) {
+	r.mu.Lock()
+	t := r.tickers[chain]
+	r.mu.Unlock()
+	if t != nil {
+		t.Untrack(anchorID)
+	}
 }
 
 // waitAttest finds the attestation station's row for the anchor, waiting up to attestWait: E1 normally finished before the settlement.
