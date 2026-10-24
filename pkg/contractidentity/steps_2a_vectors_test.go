@@ -28,7 +28,10 @@ import (
 // run; the expectation names the parts of this package only (the headline is the one the full verifier yields when the other packages judge
 // their parts of H0 as verified, which they do on every vector below: no vector touches the attestation side).
 
-const vectorSet2a = "s8_2a_1"
+const (
+	vectorSet2a  = "s8_2a_1"
+	vectorSet2a2 = "s8_2a_2"
+)
 
 func cf(m map[string]any) json.RawMessage {
 	b, err := ci.Canonical(m)
@@ -655,6 +658,32 @@ func (a *author) storageRoot(who common.Address) common.Hash {
 	return st.StorageRoot
 }
 
+// vectorsSet2 are the vectors added after the first hand-mutant run of the published set s8_2a_1 found three conditions no vector pinned (the
+// bundleId word of the record, a non-boolean _pageLevelSet word, an out-of-enum _operationRequirements word). A published set is never edited:
+// they are a second set.
+func (a *author) vectorsSet2() []ci.Vector {
+	acct, anchor, _, _, _ := a.roles()
+	spec := a.f.spec
+	anchorID := common.HexToHash(spec.Settlement.AnchorID)
+	rec := ci.MappingSlotAt(ci.KeyBytes32(anchorID), 1)
+	book := common.HexToHash(spec.Settlement.AuthorityBook)
+	var selKey [4]byte
+	copy(selKey[:], common.FromHex(spec.Settlement.Legs[0].Data)[:4])
+	var out []ci.Vector
+	add := func(id string, e ci.Expected, muts ...ci.Mutation) {
+		out = append(out, ci.Vector{ID: id, Base: "H0", Mutations: muts, Expected: e})
+	}
+	add("VS8-074.bundle_id_word", exp(ci.HeadlineRefused, only(ci.JudgedRecord, "refused"), est(ci.JudgedRecord, "record_inconsistent", map[string]any{"field": "bundle_id"})),
+		world.SetStorage(world.StationSettle, anchor, ci.MemberSlot(rec, 0), common.HexToHash("0xbb")))
+	setSlot := ci.PageSlot(10, book, spec.Settlement.AuthorityPage)
+	add("VS8-087.page_level_set_not_bool", exp(ci.HeadlineRefused, only(ci.JudgedAuthorityLevel, "refused"), est(ci.JudgedAuthorityLevel, "proof_invalid", map[string]any{"root": "settle", "address": acct, "slot": setSlot})),
+		world.SetStorage(world.StationSettle, acct, setSlot, common.BigToHash(big.NewInt(2))))
+	reqSlot := ci.MappingSlotAt(ci.KeyBytes4(selKey), 8)
+	add("VS8-087.requirement_above_4", exp(ci.HeadlineRefused, only(ci.JudgedAuthorityLevel, "refused"), est(ci.JudgedAuthorityLevel, "proof_invalid", map[string]any{"root": "settle", "address": acct, "slot": reqSlot})),
+		world.SetStorage(world.StationSettle, acct, reqSlot, common.BigToHash(big.NewInt(5))))
+	return out
+}
+
 // dropOnPath returns the drop_node mutation of the last node (in container order) a walk visits; dropping any node of the path breaks the read.
 func (a *author) dropOnPath(walk func(ns *ci.NodeSet, root common.Hash)) []ci.Mutation {
 	c := a.f.built.World.Container
@@ -745,7 +774,7 @@ func TestVectors2aAgainstTheVerifier(t *testing.T) {
 	a := &author{t, f}
 	wj := worldJSON(t, f)
 	ver := f.verifier()
-	for _, v := range a.vectors() {
+	for _, v := range append(a.vectors(), a.vectorsSet2()...) {
 		t.Run(v.ID, func(t *testing.T) {
 			in, err := world.Builder{Manifest: f.m}.Build(wj, v, nil)
 			if err != nil {
@@ -762,15 +791,23 @@ func TestVectors2aAgainstTheVerifier(t *testing.T) {
 	}
 }
 
-func setDir() string { return filepath.Join("testdata", "contractidentity", "vectors", vectorSet2a) }
+func setDir(name string) string {
+	return filepath.Join("testdata", "contractidentity", "vectors", name)
+}
 
 // The published set: loaded from disk (every file hash-checked by the loader), run WITHOUT the world builder on the materialised inputs, and
 // regenerated into a temporary directory, which must be byte-identical (the world builder and the author did not drift). The set is written
 // once, by CERTEN_WRITE_S8_2A=1; world.WriteSet refuses to write into a published set.
 func TestVectorSet2aIsPublishedRunsAndIsReproducible(t *testing.T) {
 	f := newFixture(t, 11155111, world.VariantH0)
-	vectors := (&author{t, f}).vectors()
-	dir := setDir()
+	a := &author{t, f}
+	for name, vectors := range map[string][]ci.Vector{vectorSet2a: a.vectors(), vectorSet2a2: a.vectorsSet2()} {
+		t.Run(name, func(t *testing.T) { checkPublished(t, f, name, vectors) })
+	}
+}
+
+func checkPublished(t *testing.T, f *fixture, name string, vectors []ci.Vector) {
+	dir := setDir(name)
 	if _, err := os.Stat(dir); err != nil && os.Getenv("CERTEN_WRITE_S8_2A") == "1" {
 		if err := world.WriteSet(dir, f.spec, vectors); err != nil {
 			t.Fatal(err)
@@ -778,7 +815,7 @@ func TestVectorSet2aIsPublishedRunsAndIsReproducible(t *testing.T) {
 	}
 	set, err := ci.LoadVectorSet(dir)
 	if err != nil {
-		t.Fatalf("the set %s is not published: %v", vectorSet2a, err)
+		t.Fatalf("the set %s is not published: %v", name, err)
 	}
 	if len(set.Vectors) != len(vectors) {
 		t.Fatalf("published %d vectors, the author defines %d", len(set.Vectors), len(vectors))
@@ -815,7 +852,7 @@ func TestVectorSet2aIsPublishedRunsAndIsReproducible(t *testing.T) {
 func TestEveryStepOfPackage2aIsKilledByAVector(t *testing.T) {
 	f := newFixture(t, 11155111, world.VariantH0)
 	wj := worldJSON(t, f)
-	vectors := (&author{t, f}).vectors()
+	vectors := append((&author{t, f}).vectors(), (&author{t, f}).vectorsSet2()...)
 	inputs := make([]ci.Inputs, len(vectors))
 	for i, v := range vectors {
 		in, err := world.Builder{Manifest: f.m}.Build(wj, v, nil)
