@@ -3,7 +3,7 @@
  "spec": {
   "file": "V2_SPEC_S8.md",
   "revision": "r3.2",
-  "sha256": "9fc92ab90f7be4c69ab72e76c1301f4c96f25348f01eb476b6574548db6b0067"
+  "sha256": "2eccbae5e64fccda1df10decae1763f96bc4a6acad885e5689df30115de08a6f"
  },
  "note": "one entry per row of Freeze inventory item 5; set is null and status spec_only until a published set (see FORMAT.md) contains the vector; expected entries with code null are tokens that are not registry rows (a headline word, a generator verdict)",
  "vectors": [
@@ -1972,10 +1972,13 @@
    "id": "VS8-179",
    "step": "22",
    "mutation": "manifest build: a `txScan` row that lists a type without `evidence.source` or without `evidence.observation`; an observation whose `nonceAfter` does not exceed `nonceBefore` (covered) or differs from `nonceBefore` (system)",
-   "expectedText": "OWED, not enforced by the manifest tooling today (the v1.1 `txScan` rows carry a free-text `citation` with the observation inline; neither the generator nor the offline verify checks `evidence.source`, `evidence.observation` or the nonce rule): the manifest build is to fail (generator and `--onchain` check)",
+   "expectedText": "the offline `verify` and the extension gate fail (`scripts/lib/txscan-evidence.mjs`; tests `scripts/tests/txscan-evidence.test.mjs`): the v1.1 `citation` of a `covered` or `system` type needs a source part and an `Observation:` part; covered: every `nonce A to B` has B > A; system: the sender absent, an unchanged nonce or a delta of 0; `--onchain` re-reads the chains",
    "expected": [],
    "other_tokens": [
-    "citation"
+    "verify",
+    "citation",
+    "covered",
+    "system"
    ],
    "set": null,
    "status": "spec_only"
