@@ -60,7 +60,13 @@ func verifyAssembledLeg(t *testing.T, v ci.Verifier) {
 				}
 			}
 			if k := rep.Headline.Kind; k == ci.HeadlineRefused || k == ci.HeadlineUnproven {
-				t.Fatalf("%d rich=%v: headline %s", chain, rich, k)
+				var open []string
+				for _, p := range rep.Parts {
+					if p.Status != ci.StatusVerified {
+						open = append(open, fmt.Sprintf("%s=%s %+v", p.Part, p.Status, p.State))
+					}
+				}
+				t.Fatalf("%d rich=%v: headline %s; parts not verified: %v", chain, rich, k, open)
 			}
 		}
 	}

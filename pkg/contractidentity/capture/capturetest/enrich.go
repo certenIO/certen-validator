@@ -50,7 +50,9 @@ func EnrichStation(sp *world.Spec, st *world.Station) {
 	}
 	book := common.HexToHash(sp.Settlement.AuthorityBook)
 	put(sp.Roles.Account, ci.PageSlot(10, book, sp.Settlement.AuthorityPage), one)
-	put(sp.Roles.Account, ci.PageSlot(9, book, sp.Settlement.AuthorityPage), common.BigToHash(big.NewInt(3)))
+	// the stored page level is the level the world logs (ROOT = 4, the governing default of page 1): step 14 judges the computed level against the
+	// logged one, so a different stored level would make the rich world a world in which the leg is (correctly) unproven
+	put(sp.Roles.Account, ci.PageSlot(9, book, sp.Settlement.AuthorityPage), common.BigToHash(big.NewInt(4)))
 	for _, l := range sp.Settlement.Legs {
 		if d := common.FromHex(l.Data); len(d) >= 4 {
 			put(sp.Roles.Account, ci.MappingSlotAt(ci.KeyBytes4([4]byte(d[:4])), 8), common.BigToHash(big.NewInt(2)))
