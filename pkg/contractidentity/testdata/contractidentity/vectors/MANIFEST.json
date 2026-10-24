@@ -3,7 +3,7 @@
  "spec": {
   "file": "V2_SPEC_S8.md",
   "revision": "r3.2",
-  "sha256": "b1c429437079e5a57fcab87a53287d1cf036b634508c7f8067a3d3ed43eba173"
+  "sha256": "d6b77be664332cb3588fcda207c2ad2249c76a21cd978035f8822120895db9c1"
  },
  "note": "one entry per row of Freeze inventory item 5; set is null and status spec_only until a published set (see FORMAT.md) contains the vector; expected entries with code null are tokens that are not registry rows (a headline word, a generator verdict)",
  "vectors": [
@@ -695,8 +695,8 @@
   {
    "id": "VS8-062",
    "step": "5",
-   "mutation": "account absent (exclusion proof); empty storage root with a non-empty proof",
-   "expectedText": "`account_absent`; `proof_invalid`",
+   "mutation": "account absent (exclusion proof); a node that no walk visits (the container carries ONE pool of nodes, not a proof per read)",
+   "expectedText": "`account_absent`; `evidence_malformed{part:nodes,reason:nodes_unreferenced}` (step 22b, VS8-018) [r3.3:S4]",
    "expected": [
     {
      "code": "contract_identity_account_absent",
@@ -704,9 +704,9 @@
      "fields": null
     },
     {
-     "code": "contract_identity_proof_invalid",
+     "code": "contract_identity_evidence_malformed",
      "reason": null,
-     "fields": null
+     "fields": "part:nodes,reason:nodes_unreferenced"
     }
    ],
    "other_tokens": [],
@@ -716,8 +716,8 @@
   {
    "id": "VS8-063",
    "step": "5-22",
-   "mutation": "proof under the parent's root; under N+1; slot-key swap; value-equal slot; mapping base off by one; array element by the wrong formula `floor(index*20/32)`",
-   "expectedText": "`proof_invalid{root,address,slot}`",
+   "mutation": "a node of the walk missing from the pool (a proof of other keys, under the parent's root or under N+1, proves nothing of the key the walk needs); one vector per read; a swapped slot key or a mapping base off by one reads another value or an absence and is judged by the row that value feeds (`pointer_mismatch`, `record_inconsistent`, `account_not_canonical`)",
+   "expectedText": "`proof_invalid{root,address,slot}`; the row of the value read [r3.3:S4]",
    "expected": [
     {
      "code": "contract_identity_proof_invalid",
@@ -1255,15 +1255,23 @@
    "id": "VS8-120",
    "step": "18",
    "mutation": "each AUTH word of rows A01-A21, V01-V03, C01 differs pre vs post (one vector per row)",
-   "expectedText": "`state_changed_in_block{field:<row id>}`",
+   "expectedText": "`state_changed_in_block{field:<row id>}` on `authorization_attest`; for C01 the field is `C01:A`, `C01:V` or `C01:G` and `code_identity` carries `code_unproven_bytes{address}` (R) when the carried code of that contract does not hash to the codeHash proven at a station [r3.3:S5]",
    "expected": [
     {
      "code": "contract_identity_unproven",
      "reason": "state_changed_in_block",
      "fields": "field:<row id>"
+    },
+    {
+     "code": "contract_identity_code_unproven_bytes",
+     "reason": null,
+     "fields": "address"
     }
    ],
-   "other_tokens": [],
+   "other_tokens": [
+    "authorization_attest",
+    "code_identity"
+   ],
    "set": "s8_2b2_1",
    "status": "published"
   },

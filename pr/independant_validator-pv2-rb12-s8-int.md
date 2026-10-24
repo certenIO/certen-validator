@@ -1,0 +1,33 @@
+# S8 contract-identity verifier: the composed verifier, the capture package and the published vector sets (branch `pv2/rb12-s8-int`)
+
+Integration of the packages skeleton, 2a (steps 1c-14), 2b-1 (15, 16, 17, 20), 2b-2 (18, 18b, 19, 22), 2c (21, 23, 24) and capture (3a, 3b, train2) by plain merge commits, with the defects the integration found fixed. Specification: `V2_SPEC_S8.md` r3.3, sha256 `d6b77be664332cb3588fcda207c2ad2249c76a21cd978035f8822120895db9c1` (frozen copy `pkg/contractidentity/testdata/contractidentity/spec/V2_SPEC_S8.r3.3.md`).
+
+## What is in it
+* `pkg/contractidentity/verify_default.go`: `NewDefaultVerifier()` registers the four step packages. `NewVerifier` returns an error when any of the 25 steps has no function.
+* Every published vector set runs through that verifier from its materialised inputs, without the world builder (`TestEveryPublishedSetRunsThroughTheComposedVerifier`): s8_2a_1 (102 vectors), s8_2a_2 (3), s8_2b1_1 (38), s8_2b2_1 (75), s8_2c_1 (16), s8_2c_2 (2), s8_2c_3 (17), s8_int_1 (15), s8_int_2 (8): 276 vectors, all pass. 106 of the 123 rows of Freeze item 5 have a vector; the other 17 are classified, each with its reason and, where one exists, the test that judges it, in `unpublishedRows` (`TestEveryPublishedVectorNamesARowAndEveryOtherRowIsClassified` fails when a row gains a vector or loses its classification).
+* Negative controls (`naive_test.go`, one test): `NaiveSettlementOnly` accepts H0 and `VS8-220.n_only_hole` and `NaivePrePost` accepts H0 and `VS8-172.owner_active_in_block_prepost`; the composed verifier refuses the first with step 19b `R authorization_mismatch{field:binding}` and returns `unproven owner_active_in_block` on `intra_block_window` for the second.
+* `capture/attest_verify_real_test.go`: the container that E1, E2 and the link assemble verifies with the composed verifier on all four chains, plain and rich storage.
+* Step 22b exactness of the composed verifier on 4 chains x {h0, s6silent, hops} x {minimal, rich-storage} worlds: 0 unreferenced nodes (`TestComposedVerifierVisitsExactlyTheNodesItCarriesOnEveryChainAndWorld`).
+* Step-kill gate over every published set (`TestEveryStepOfTheComposedVerifierIsKilledByAVector`): each of the 25 steps, disabled (stand-in reports its parts verified) and inert (real step, verdicts dropped), makes at least one vector fail. Two steps are observably redundant in the inert form and are listed with their reason in the test (step 10: step 12 carries `Facts.A.AnchorRefusal` onto `code_identity`; step 23: it contributes no part); both are killed by the disabled form.
+* An unproven header link (the test fails when fewer than 8 published vectors exercise it: the hop and spine refusals) decides `registry_link` and `intra_block_window` as `unproven attest_absent{part}`, never an `UndecidedPartError` (`TestAnUnprovenHeaderLinkDecidesRegistryLinkAndIntraBlockWindowWithTheCause`).
+
+## Defects found by the integration and fixed
+| kind | where | fix |
+|---|---|---|
+| code | step 18 did not read `A06:<commitment>` of the `manifest_history` rows, so step 21 raised `RegistryWordsMissingError` (VS8-154, 157) or refused (155, 156, 158.x) | `b2ShapedPKCList` and the reads in `b2ReadStation` (S8_FREEZE 7, D-INT-2) |
+| code | step 13 compared six AUTH rows only: a key or power of a listed validator rotated after the attestation was no drift (VS8-076, VS8-152) | `a2DriftIDs`, record words `A09:<addr>:0/1/key`, completeness check (D-INT-1) [r3.3:S2] |
+| code | 2b-1 improvised states that F16 names: typed Go error for undecodable calldata, `flip` for the operation commitment, `spine` for link 0, `attest_post` for the leaf proofs | `unproven attest_calldata_undecodable{reason,field}`, `operation_commitment`, `same_block`, `attest_tx` / `attest_receipt` with slot `rlp(txIndex)` (D-INT-3) |
+| code | step 23 was observationally redundant: the runner printed the constant list whether or not it ran | `rulesNotJudgedOf` takes the list from step 23 when it ran; an empty list after step 23 is an error |
+| code (test support) | `capturetest.Enrich` stored authority level ADMIN while the world logs ROOT: step 14 correctly said `level_differs_from_logged` | enrich stores ROOT |
+| build | `lower` declared in `steps_2b2_test.go` and `steps_2c_test.go` (the merge did not compile) | one helper |
+| lift | `lift.mjs` had no handler for the F16 rows (`attest_calldata_undecodable reason`, the `proof_invalid root` cell with `attest_tx`, `attest_receipt`); F16 had never been lifted | two reviewed handlers, bindings and a Go prefix |
+| vector (sets unpublished, regenerated) | s8_2c_1 VS8-151.message_root (r3.2 expectation contradicted by F17), s8_2c_2 both vectors (ids VS8-090 / VS8-100 were not the rows of the controls; VS8-172 keeps `authorization_attest` verified because the IB code is carried there only for a violated rule), s8_2c_3 VS8-155 (the key swap must persist at N), s8_2a_1 VS8-076.set_root_inconsistent (+ drift), s8_2b1_1 VS8-110 / VS8-113 (F16 vocabulary) | regenerated with `CERTEN_WRITE_S8_*`; only the named vectors and the set MANIFEST changed |
+
+## Specification r3.3 (one batched revision, one re-lift)
+S1: Item 19 and VS8-162 said a `Registry9` key compare is insensitive to case and `0x`, which contradicts E-g and VS8-020; the compare is on decoded bytes and another spelling is `context_incomplete{missing:[registry9]}`. S2: step 13 drift covers the validator record words. S3: the registry step column of `anchor_not_batch` lists 18b. S4: VS8-062 / VS8-063 restated for the single pool of nodes. S5: VS8-120 row C01 names the part that carries the code refusal. FORMAT-R2 (`FORMAT.md`): mutation target `s7`, expectations `registry`, `rules_not_judged`, `s7_finalized_status`; they make VS8-162, VS8-184 and VS8-190 expressible.
+
+## Consensus and format impact
+None for the chain. No file under `pkg/consensus`, `pkg/proof`, `pkg/attestation`, `pkg/commitment`, `pkg/intentcert`, `pkg/proofv2shadow`, `pkg/ethproof`, `go.mod` or `go.sum` differs from `origin/main` (`git diff --stat origin/main..HEAD -- <those paths>` is empty). The container format (`CIE1`) and the digest are unchanged; the report gains no member; the lifted registry gains one row and one vocabulary set (F16). The runtime wiring of the capture package is the one delivered by RB12-GOCAPTURE-3b, merged unchanged.
+
+## Not in this PR (exact remainder in the hand-off)
+Mutation sweep (policy V3: one final session), the TypeScript port (consumes these sets), the 17 classified rows, member-level `authorization_mismatch` fields (step 19 d/f1 map to count/key/count today, D-B2-6), world knobs for VS8-132 and for vectors that change A10/A16/A18/V03 between stations, VS8-120 C01 part assignment.
