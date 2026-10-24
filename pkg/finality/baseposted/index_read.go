@@ -350,7 +350,7 @@ func (r *IndexReader) unindexableIn(ctx context.Context, origin, end uint64) (*f
 // searchIndexed is search's index path: the same prelude (origin, window, capture cursor) and the same named outcomes, with the window
 // read replaced by a lookup. It fills sr; a nil sr.ch with sr.pending set is a named pending, a nil sr.ch alone is l1_posted_unproven.
 func (b *Builder) searchIndexed(ctx context.Context, bp *Pins, l2 finality.HeaderFields, hold *finality.Hold, sr *searched, origin, end uint64,
-	cov finality.CaptureCoverage, known bool, lower uint64, belowScanned func() error) error {
+	cov finality.CaptureCoverage, known bool, lower uint64, belowScanned, authentic func() error) error {
 	r := b.Index
 	io := &ioCount{}
 	defer func() { metrics.ObserveFinalityIndexLookupBytes(uint64(Chain), FamilyBaseInbox, io.n) }()
@@ -424,24 +424,24 @@ func (b *Builder) searchIndexed(ctx context.Context, bp *Pins, l2 finality.Heade
 		metrics.IncFinalityIndexLookup(uint64(Chain), FamilyBaseInbox, "unindexable")
 		return us
 	}
-	// RB12-CAPTURE-GAP (INT-1): a recorded gap inside the window may hold the channel, so "not posted yet" cannot be said; the durable records are
-	// consulted exactly as the window reader does (same function, same state bytes) BEFORE the inference below, which stays the answer for a
-	// hole no record names.
-	pieces, err := finality.GapsIn(ctx, b.Store, uint64(Chain), origin, end)
-	if err != nil {
-		return err
+	// The end of a miss is the window reader's, by the one function (absentChannel): the recorded gaps with their evidence (RB12-CAPTURE-GAP,
+	// INT-1), then the inference of a hole no record names (the index's own, below), then the determinate l1_posted_not_found of a complete
+	// window with authentic() first.
+	infer := func() (*finality.StateError, error) {
+		mc, err := r.classifyMiss(ctx, l2.Timestamp, origin, capHi, names)
+		if err != nil {
+			return nil, err
+		}
+		return mc.gap, nil
 	}
-	if gs := gapState(pieces, origin, end, b.HasArchive); gs != nil {
-		metrics.IncFinalityIndexLookup(uint64(Chain), FamilyBaseInbox, "gap")
-		return gs
-	}
-	mc, err := r.classifyMiss(ctx, l2.Timestamp, origin, capHi, names)
-	if err != nil {
-		return err
-	}
-	if mc.gap != nil {
-		metrics.IncFinalityIndexLookup(uint64(Chain), FamilyBaseInbox, "gap")
-		return mc.gap
+	aerr := b.absentChannel(ctx, origin, end, cov, known, authentic, infer)
+	if aerr != nil {
+		if gs, ok := finality.AsNamed(aerr); ok && gs.Code == CodeCaptureGap {
+			metrics.IncFinalityIndexLookup(uint64(Chain), FamilyBaseInbox, "gap")
+		} else {
+			metrics.IncFinalityIndexLookup(uint64(Chain), FamilyBaseInbox, "miss")
+		}
+		return aerr
 	}
 	metrics.IncFinalityIndexLookup(uint64(Chain), FamilyBaseInbox, "miss")
 	return nil

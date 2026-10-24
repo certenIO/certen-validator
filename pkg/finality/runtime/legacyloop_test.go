@@ -684,7 +684,8 @@ func TestRTWireLegacyHeaderRegistrationProblemsAreNamedAndNeverFatal(t *testing.
 	if len(unwired) != 1 || len(w.LegacyLoops) != 1 || w.LegacyLoops[0].ChainID != finality.ChainBaseSepolia {
 		t.Fatalf("unwired %v loops %d", unwired, len(w.LegacyLoops))
 	}
-	if st := unwired[99999]; st == nil || st.Code != finality.CodeUpgraderDisabled || st.Fields["reason"] != finality.DisabledWiringFailed || st.Fields["stage"] != finality.StartStageKinds || st.Fields["chain"] != uint64(99999) {
+	if st := unwired[99999]; st == nil || st.Code != finality.CodeUpgraderDisabled || st.Fields["reason"] != finality.DisabledWiringFailed || st.Fields["stage"] != finality.StartStageKinds || st.Fields["chain"] != uint64(99999) ||
+		!strings.Contains(fmt.Sprint(st.Fields["effect"]), "legacy-header reconstruction for chain 99999") { // the loop is named in the effect (the F14 vocabulary has no loop field)
 		t.Fatalf("state = %v", st)
 	}
 

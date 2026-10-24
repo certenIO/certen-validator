@@ -459,7 +459,7 @@ func (b *Builder) search(ctx context.Context, bp *Pins, l2 finality.HeaderFields
 		}
 	}
 	if b.Index != nil {
-		err := b.searchIndexed(ctx, bp, l2, hold, &sr, origin, end, cov, known, lower, belowScanned)
+		err := b.searchIndexed(ctx, bp, l2, hold, &sr, origin, end, cov, known, lower, belowScanned, authentic)
 		return sr, err
 	}
 	// A held ask rebuilds no evidence and used to read the whole window (up to ~300 MB of rows) before the gap lookup. The lookups that decide
@@ -506,35 +506,58 @@ func (b *Builder) search(ctx context.Context, bp *Pins, l2 finality.HeaderFields
 		}
 	}
 	if sr.ch == nil {
-		// RB12-CAPTURE-GAP: a recorded gap inside the window may hold the channel; "not posted yet" cannot be said while it is open
-		pieces, err := finality.GapsIn(ctx, b.Store, uint64(Chain), origin, end)
-		if err != nil {
-			return sr, err
-		}
-		if gs := gapState(pieces, origin, end, b.HasArchive); gs != nil {
-			extra, err := b.goneEvidence(ctx, gs, pieces, end)
-			if err != nil {
-				return sr, err
-			}
-			if len(extra) > 0 {
-				gs = finality.NewState(gs.Code, append(stateKV(gs), extra...)...)
-			}
+		aerr := b.absentChannel(ctx, origin, end, cov, known, authentic, nil)
+		if gs, ok := finality.AsNamed(aerr); ok && gs.Code == CodeCaptureGap { // the held answer of this window (RB12-GO-INT D4)
 			b.heldMu.Lock()
 			if b.held == nil || len(b.held) >= maxHeldMemos {
 				b.held = map[heldKey]heldMemo{}
 			}
 			b.held[hk] = heldMemo{fingerprint: fp, state: gs}
 			b.heldMu.Unlock()
-			return sr, gs
 		}
-		if known && cov.Last >= windowCompleteMargin && end <= cov.Last-windowCompleteMargin {
-			if err := authentic(); err != nil { // the verdict is as determinate as the origin it was derived from
-				return sr, err
-			}
-			return sr, st(CodeWindowNoChannel, "chain", uint64(Chain), "kind", KindName, "from", origin, "to", end, "covered_to", cov.Last)
-		}
+		return sr, aerr
 	}
 	return sr, nil
+}
+
+// absentChannel is what a search that found NO channel answers, for the window reader and the index path alike (one function, so the two
+// cannot diverge again: RB12-TRAIN3-INT N-I1). In order: a recorded gap inside the window may hold the channel, so "not posted yet" cannot be
+// said while it is open (RB12-CAPTURE-GAP), and a terminal one carries the evidence of what closes it (the archive backfill's goneEvidence);
+// then infer, when given (the index path's inference of a hole no record names, which the window reader has no way to make); then, when the
+// capture is known to have covered the window, the determinate verdict that no channel was posted in it (l1_posted_not_found), which is as
+// determinate as the origin it was derived from, so authentic() comes first. nil means "not posted yet": the caller's pending.
+func (b *Builder) absentChannel(ctx context.Context, origin, end uint64, cov finality.CaptureCoverage, known bool, authentic func() error,
+	infer func() (*finality.StateError, error)) error {
+	pieces, err := finality.GapsIn(ctx, b.Store, uint64(Chain), origin, end)
+	if err != nil {
+		return err
+	}
+	if gs := gapState(pieces, origin, end, b.HasArchive); gs != nil {
+		extra, err := b.goneEvidence(ctx, gs, pieces, end)
+		if err != nil {
+			return err
+		}
+		if len(extra) > 0 {
+			gs = finality.NewState(gs.Code, append(stateKV(gs), extra...)...)
+		}
+		return gs
+	}
+	if infer != nil {
+		gs, err := infer()
+		if err != nil {
+			return err
+		}
+		if gs != nil {
+			return gs
+		}
+	}
+	if known && cov.Last >= windowCompleteMargin && end <= cov.Last-windowCompleteMargin {
+		if err := authentic(); err != nil {
+			return err
+		}
+		return st(CodeWindowNoChannel, "chain", uint64(Chain), "kind", KindName, "from", origin, "to", end, "covered_to", cov.Last)
+	}
+	return nil
 }
 
 // windowFingerprint is the key-only description of the store as a search of [origin, end] sees it: the recorded gap pieces and the number
