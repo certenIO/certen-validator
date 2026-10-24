@@ -4,14 +4,17 @@ package contractidentity_test
 
 import (
 	"math/big"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/crypto"
 
 	ci "github.com/certen/independant-validator/pkg/contractidentity"
 	"github.com/certen/independant-validator/pkg/contractidentity/world"
+	"github.com/certen/independant-validator/pkg/finality"
 )
 
 func TestB1Step16Hops(t *testing.T) {
@@ -166,4 +169,95 @@ func TestB1AttestJudgedWhenSettleIsStated(t *testing.T) {
 	g := b1New(t, 11155111, world.VariantH0, world.Set("attestation.blob.12", common.HexToHash("0x99").Hex()), world.Set("attestation.message_hash", common.HexToHash("0x99").Hex()))
 	r, _ = g.run(b1All, g.edit(stated), nil)
 	b1Want(t, r, ci.JudgedAuthorizationAttest, "refused", "attest_mismatch", "field", "message_hash")
+}
+
+// Step 22b: the nodes the steps of package 2b-1 visit are EXACTLY the reads of the algorithm. The oracle makes those reads independently
+// (the transaction and receipt leaves, the history account and ring slot at every link, the anchor and slot 17 at B_v-pre) over a fresh node
+// set; the nodes the real run visits beyond a run in which the steps of 2b-1 are stand-ins must be the oracle's nodes, no more, no fewer.
+func TestB1VisitedNodesEqualTheReadsOfTheAlgorithm(t *testing.T) {
+	for _, c := range []struct {
+		chain   uint64
+		variant string
+	}{{11155111, world.VariantH0}, {11155111, world.VariantHops}, {421614, world.VariantHops}, {84532, world.VariantS6Silent}} {
+		t.Run(strconv.FormatUint(c.chain, 10)+"/"+c.variant, func(t *testing.T) {
+			f := b1New(t, c.chain, c.variant)
+			f.run(b1All, nil, nil)
+			real := f.visited
+			f.run(nil, nil, nil)
+			fake := f.visited
+			key := func(b []byte) common.Hash { return crypto.Keccak256Hash(b) }
+			set := func(nodes [][]byte) map[common.Hash]bool {
+				m := map[common.Hash]bool{}
+				for _, n := range nodes {
+					m[key(n)] = true
+				}
+				return m
+			}
+			realSet, fakeSet := set(real), set(fake)
+			got := map[common.Hash]bool{}
+			for h := range realSet {
+				if !fakeSet[h] {
+					got[h] = true
+				}
+			}
+			// the oracle
+			cont, err := ci.Decode(f.built.Inputs.Container, ci.DefaultLimits())
+			if err != nil {
+				t.Fatal(err)
+			}
+			ns, err := ci.NewNodeSet(cont.Nodes)
+			if err != nil {
+				t.Fatal(err)
+			}
+			a := cont.Attest.Attest
+			hv, _ := finality.ReadHeader(a.HeaderV)
+			hp, _ := finality.ReadHeader(a.HeaderVParent)
+			for _, root := range [][32]byte{hv.TransactionRoot, hv.ReceiptsRoot} {
+				if _, err := ci.ReadIndexedLeaf(common.Hash(root), ns, uint64(a.TxIndex), ci.DefaultLimits().MaxNodeBytes); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if a.Link == ci.LinkHops {
+				e, _ := f.m.EIP2935(c.chain)
+				hist := common.HexToAddress(e.Address)
+				hs := []finality.HeaderFields{hv}
+				for _, raw := range a.HopHeaders {
+					h, _ := finality.ReadHeader(raw)
+					hs = append(hs, h)
+				}
+				sh, _ := finality.ReadHeader(f.built.Inputs.Ctx.Settlement.Header)
+				hs = append(hs, sh)
+				for i := 0; i+1 < len(hs); i++ {
+					acct, err := ci.ReadAccount(common.Hash(hs[i+1].StateRoot), ns, hist)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if _, err := ci.ReadSlot(acct.StorageRoot, ns, ci.SlotIndex(hs[i].Number%e.Window)); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			acct, err := ci.ReadAccount(common.Hash(hp.StateRoot), ns, f.addr(f.spec.Roles.Anchor))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := ci.ReadSlot(acct.StorageRoot, ns, ci.SlotIndex(17)); err != nil {
+				t.Fatal(err)
+			}
+			want := map[common.Hash]bool{}
+			for _, n := range ns.VisitedNodes() {
+				if h := key(n); !fakeSet[h] {
+					want[h] = true
+				}
+			}
+			if len(got) == 0 || len(got) != len(want) {
+				t.Fatalf("package 2b-1 visited %d nodes beyond package 2a, the algorithm reads %d", len(got), len(want))
+			}
+			for h := range want {
+				if !got[h] {
+					t.Fatalf("node %s is read by the algorithm and not visited by the steps", h.Hex())
+				}
+			}
+		})
+	}
 }

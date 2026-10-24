@@ -23,6 +23,8 @@ type b1fx struct {
 	spec  *world.Spec
 	built *world.Built
 	facts ci.Facts
+	// visited are the nodes the run visited, captured by the stand-in of step 23 (after every real step ran)
+	visited [][]byte
 }
 
 func b1New(t *testing.T, chain uint64, variant string, muts ...ci.Mutation) *b1fx {
@@ -86,8 +88,12 @@ func (f *b1fx) run(real []ci.StepID, container []byte, tweak func(*ci.LegContext
 				switch id {
 				case ci.Step15:
 					env.Facts.B1.AttestCaptured = env.AttestStated() == nil
+				case ci.Step17:
+					// the pkc is read by step 13 of package 2a at N (row A05): the stand-in hands over the same value
+					env.Facts.B1.PKC = common.HexToHash(f.spec.Attestation.Blob[13])
 				case ci.Step23:
 					f.facts = *env.Facts
+					f.visited = env.Nodes.VisitedNodes()
 				case ci.Step21:
 					env.Facts.C.RegistryLink = "via S9"
 				case ci.Step24:
