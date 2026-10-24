@@ -279,11 +279,12 @@ func (c *Capturer) rebuild(ctx context.Context, head uint64) error {
 	if err != nil {
 		return err
 	}
-	have := map[uint64]bool{}
+	// the blocks of the proof rows by batch: a proof taken BELOW the batch's own block shows the slot still empty and is no proof of the batch
+	proofAt := map[uint64][]uint64{}
 	for _, k := range pk {
 		var n uint64
 		if _, e := fmt.Sscanf(k.Item, "proof/%d", &n); e == nil {
-			have[n] = true
+			proofAt[n] = append(proofAt[n], k.L1Block)
 		}
 	}
 	// the blob rows by batch, from the keys alone: an old batch's blob rows are not read to find out whether they are all there
@@ -310,7 +311,11 @@ func (c *Capturer) rebuild(ctx context.Context, head uint64) error {
 			return err
 		}
 		var missing []finality.GapClass
-		if !have[rec.N] {
+		have := false
+		for _, b := range proofAt[rec.N] {
+			have = have || b >= rec.L1Block
+		}
+		if !have {
 			c.needProof[rec.N] = &pendProof{rec: rec, old: old}
 			missing = append(missing, finality.GapStateProofUnavailable)
 		}
@@ -699,6 +704,12 @@ func (c *Capturer) captureProofs(ctx context.Context, head uint64, rep *Report) 
 	var failures []string
 	for try := 0; try < c.Cfg.ProofTries && uint64(try) <= head; try++ {
 		P := head - uint64(try)
+		// a batch posted above P cannot be proven at P (the slot is empty in the state below its block): its job waits for a nearer block, it is never
+		// cleared by a proof taken below it; a lower P cannot help either, so the tries end when no job is left
+		jobsAt := jobsEligibleAt(jobs, P)
+		if len(jobsAt) == 0 {
+			break
+		}
 		h, err := c.L1.Header(ctx, P)
 		if err != nil {
 			failures = append(failures, fmt.Sprintf("header %d: %s", P, ethrpc.RedactText(err.Error())))
@@ -709,7 +720,7 @@ func (c *Capturer) captureProofs(ctx context.Context, head uint64, rep *Report) 
 			failures = append(failures, fmt.Sprintf("header %d unreadable", P))
 			continue
 		}
-		if done := c.proveAt(ctx, h, hf.StateRoot, jobs, rep, &failures); done {
+		if done := c.proveAt(ctx, h, hf.StateRoot, jobsAt, rep, &failures); done {
 			rep.ProofBlock = P
 			return
 		}
@@ -734,6 +745,18 @@ func (c *Capturer) captureProofs(ctx context.Context, head uint64, rep *Report) 
 	for _, f := range failures {
 		rep.fail(c, "proof: %s", f)
 	}
+}
+
+// jobsEligibleAt are the jobs a proof block P can serve: every job but a batch accumulator proof of a batch whose event is above P.
+func jobsEligibleAt(jobs []proofJob, P uint64) []proofJob {
+	var out []proofJob
+	for _, j := range jobs {
+		if j.kind == ProofBatchAcc && j.rec != nil && j.rec.rec.L1Block > P {
+			continue
+		}
+		out = append(out, j)
+	}
+	return out
 }
 
 type proofJob struct {

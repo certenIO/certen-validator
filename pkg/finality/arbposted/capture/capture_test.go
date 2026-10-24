@@ -127,6 +127,7 @@ type fakeL1 struct {
 	window    uint64 // eth_getProof is served for blocks >= head-window
 	proofErr  error
 	proofCall int
+	failAt    map[uint64]bool // blocks whose state the provider does not serve (yet)
 }
 
 func (f *fakeL1) HeadNumber(context.Context) (uint64, error) { return f.head, nil }
@@ -160,6 +161,9 @@ func (f *fakeL1) GetProof(_ context.Context, addr [20]byte, slots [][32]byte, n 
 	f.proofCall++
 	if f.proofErr != nil {
 		return nil, f.proofErr
+	}
+	if f.failAt[n] {
+		return nil, &ProviderErrors{Op: "eth_getProof", Failures: []ProviderFailure{{Provider: "fake", Err: "state of the block is not available yet"}}}
 	}
 	if n+f.window < f.head {
 		return nil, &ProviderErrors{Op: "eth_getProof", Failures: []ProviderFailure{{Provider: "fake", Err: "distance to target block exceeds maximum proof window"}}}
