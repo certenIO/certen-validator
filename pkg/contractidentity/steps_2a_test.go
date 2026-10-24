@@ -327,6 +327,16 @@ func TestSettleMutations(t *testing.T) {
 		{name: "record not executed", muts: func(f *fixture) []ci.Mutation {
 			return []ci.Mutation{world.SetStorage(world.StationSettle, anchorOf(f), ci.MemberSlot(f.rec(), 10), common.Hash{})}
 		}, want: []want{{"record", "refused", "record_not_executed", "", ""}}},
+		{name: "record valid only", muts: func(f *fixture) []ci.Mutation {
+			var w common.Hash
+			w[11] = 1
+			return []ci.Mutation{world.SetStorage(world.StationSettle, anchorOf(f), ci.MemberSlot(f.rec(), 10), w)}
+		}, want: []want{{"record", "refused", "record_not_executed", "", ""}}},
+		{name: "record proofExecuted only", muts: func(f *fixture) []ci.Mutation {
+			var w common.Hash
+			w[10] = 1
+			return []ci.Mutation{world.SetStorage(world.StationSettle, anchorOf(f), ci.MemberSlot(f.rec(), 10), w)}
+		}, want: []want{{"record", "refused", "record_not_executed", "", ""}}},
 		{name: "bundle id broken by the batch root", muts: func(f *fixture) []ci.Mutation {
 			return []ci.Mutation{world.SetStorage(world.StationSettle, anchorOf(f), ci.MemberSlot(f.rec(), 1), common.HexToHash("0xaa"))}
 		}, want: []want{{"record", "refused", "record_inconsistent", "field", "bundle_id"}}},
@@ -383,6 +393,23 @@ func TestSettleMutations(t *testing.T) {
 			}
 			c.Receipt = &r
 		}, want: []want{{"settlement_path", "unproven", "unproven", "reason", "multiple_leaf_consumed"}}},
+		{name: "a second LeafConsumed log of another key is not a candidate (S6 key)", tweak: func(f *fixture, c *ci.LegContext) {
+			r := *c.Receipt
+			r.Logs = append([]*types.Log(nil), c.Receipt.Logs...)
+			for _, l := range c.Receipt.Logs {
+				if len(l.Topics) == 3 && l.Topics[0] == ci.TopicOf(ci.SigLeafConsumed) {
+					l2 := *l
+					l2.Topics = []common.Hash{l.Topics[0], l.Topics[1], common.HexToHash("0xbeef")}
+					r.Logs = append(r.Logs, &l2)
+				}
+			}
+			c.Receipt = &r
+		}, want: []want{{"settlement_path", "verified", "", "", ""}, {"s6_link", "verified", "", "", ""}}},
+		{name: "the S6 leaf key matches no log of the account", tweak: func(f *fixture, c *ci.LegContext) {
+			s := *c.S6
+			s.LeafKey[0] ^= 1
+			c.S6 = &s
+		}, want: []want{{"settlement_path", "unproven", "unproven", "reason", "settlement_event_missing"}}},
 		{name: "S6 names another contract", tweak: func(f *fixture, c *ci.LegContext) {
 			s := *c.S6
 			s.Contract = decoy
@@ -556,4 +583,36 @@ func TestInfrastructureCallIsNotApplicableAndHalts(t *testing.T) {
 		c.Tx = types.NewTx(&types.LegacyTx{To: &to})
 	}, nil, true)
 	f.expect(r, want{part: "settlement_path", status: "unproven", code: "unproven", key: "reason", val: "settlement_event_missing"})
+}
+
+// Hostile input: a bounded corpus (fixed seed) of byte flips, truncations and appended bytes over the H0 container, and of context edits,
+// must never panic and never make the verifier return an error: every outcome is a Report whose parts carry registered states.
+func TestHostileContainerAndContextNeverErrorOrPanic(t *testing.T) {
+	f := newFixture(t, 11155111, world.VariantH0)
+	raw := f.built.Inputs.Container
+	seed := uint64(0x5338326132) // "S82a2"
+	next := func() uint64 {
+		seed ^= seed << 13
+		seed ^= seed >> 7
+		seed ^= seed << 17
+		return seed
+	}
+	check := func(name string, r ci.Report) {
+		if _, err := r.Map(); err != nil {
+			t.Fatalf("%s: the report is not printable: %v", name, err)
+		}
+	}
+	for i := 0; i < 300; i++ {
+		mut := append([]byte(nil), raw...)
+		switch i % 3 {
+		case 0:
+			mut[next()%uint64(len(mut))] ^= byte(1 + next()%255)
+		case 1:
+			mut = mut[:next()%uint64(len(mut))]
+		default:
+			mut = append(mut, byte(next()))
+		}
+		r, _ := f.run(nil, mut, true)
+		check(fmt.Sprintf("container mutation %d", i), r)
+	}
 }
