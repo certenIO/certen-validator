@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -292,27 +293,51 @@ func TestWriteSetWritesNothingWhenAVectorCannotBeBuilt(t *testing.T) {
 	}
 }
 
-// The H0 containers are UNCHANGED by the world fix: the sha256 values recorded before the change.
-func TestH0ContainerHashesAreUnchangedByTheWorldFix(t *testing.T) {
+// The H0 container of every chain and variant is PINNED: a change of the manifest, of the generator or of the container codec moves these values
+// and must be a conscious act. History: the world fix (C1/C2) left the Sepolia values unchanged (h0
+// a3b70595c56ff2bd2ed180d20a8ebc8ba85bf8da70f609061073d44b274f3664, hops e4db02eee5f7d88778c3d3ca05e8d8e237876516f5e3eba056cdcc5fbccb68f4); the
+// manifest re-sync to MANIFEST-1.2 (aef3b65, sha256 6d0fa8c8...) changed all of them: the txScan lists decide which transaction types the world
+// puts into the attestation block (Base 0,2,4,0x7e; Arbitrum gained 0x4; Adiri 0,2), and the chains, deployments, accounts, eip2935, owner and
+// setRoot rows changed too (for Sepolia, whose txScan list did not change, those rows only).
+func TestH0ContainerHashesArePinned(t *testing.T) {
 	m := manifest(t)
-	for variant, want := range map[string]string{
-		VariantH0:   "a3b70595c56ff2bd2ed180d20a8ebc8ba85bf8da70f609061073d44b274f3664",
-		VariantHops: "e4db02eee5f7d88778c3d3ca05e8d8e237876516f5e3eba056cdcc5fbccb68f4",
-	} {
-		sp, err := Generate(m, sepolia, variant)
-		if err != nil {
-			t.Fatal(err)
-		}
-		w, err := Derive(m, sp)
-		if err != nil {
-			t.Fatal(err)
-		}
-		built, err := Apply(m, sp, nil, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := sha(w.ContainerBytes); got != want || sha(built.Inputs.Container) != want {
-			t.Errorf("%s: container sha256 %s (Apply %s), want %s", variant, got, sha(built.Inputs.Container), want)
+	want := map[string]string{}
+	for k, v := range pinnedH0 {
+		want[k] = v
+	}
+	for _, chain := range []uint64{11155111, 84532, 421614, 2017} {
+		for _, variant := range []string{VariantH0, VariantS6Silent, VariantHops} {
+			sp, err := Generate(m, chain, variant)
+			if err != nil {
+				t.Fatal(err)
+			}
+			w, err := Derive(m, sp)
+			if err != nil {
+				t.Fatal(err)
+			}
+			built, err := Apply(m, sp, nil, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			key := fmt.Sprintf("%d/%s", chain, variant)
+			if got := sha(w.ContainerBytes); got != want[key] || sha(built.Inputs.Container) != got {
+				t.Errorf("%s: container sha256 %s (Apply %s), pinned %q", key, got, sha(built.Inputs.Container), want[key])
+			}
 		}
 	}
+}
+
+var pinnedH0 = map[string]string{
+	"11155111/h0":       "c0946690e4579783916ae873f4a5691f1caf4c33e9bdd5d5f56e0c4e6599d04b",
+	"11155111/s6silent": "c0946690e4579783916ae873f4a5691f1caf4c33e9bdd5d5f56e0c4e6599d04b",
+	"11155111/hops":     "3168975d85473a263eb683905d68a255eee11b732333ed87e356af5c0e312bc1",
+	"84532/h0":          "5dd97d3d6d1e1756a43a489dd2e5af4d564277a822c9a6853446cc1ed3472424",
+	"84532/s6silent":    "5dd97d3d6d1e1756a43a489dd2e5af4d564277a822c9a6853446cc1ed3472424",
+	"84532/hops":        "374c01efe52101f05733e786121c1ab166be6302aa3cc2e7280ee96c73d2e9e9",
+	"421614/h0":         "3554b1d734a5c540bf0ef1d620220663dfd8b797e35bbd5e70df1e83ddaaddc1",
+	"421614/s6silent":   "3554b1d734a5c540bf0ef1d620220663dfd8b797e35bbd5e70df1e83ddaaddc1",
+	"421614/hops":       "4d089b08cc9e09c6c35447945085c7a1f10e44d5a31079faa6feaf7b37055af3",
+	"2017/h0":           "bafb9c255fedcc745f0575dce2923cbed0b1b78076ab4c26d6d54a5129c6dce3",
+	"2017/s6silent":     "bafb9c255fedcc745f0575dce2923cbed0b1b78076ab4c26d6d54a5129c6dce3",
+	"2017/hops":         "a4f9693edf2e24de851109c4a23aa476e02be18f218539424c5aca4052f46e87",
 }

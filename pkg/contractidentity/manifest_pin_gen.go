@@ -5,4 +5,4 @@ package contractidentity
 // ManifestSHA256 is the pin of the embedded identity manifest: SHA-256 over the bytes of testdata/contractidentity/manifest/identity-manifest.json
 // with CRLF normalised to LF. A verifier refuses to start (manifest_corrupt) if the embedded bytes hash otherwise; TestManifestSync compares this
 // constant, the embedded file and its sibling .sha256 file.
-const ManifestSHA256 = "ee7d56fac3d2a73fa11d546a6e61f1ae2f574b4812dd5e5a40428fb55524d104"
+const ManifestSHA256 = "6d0fa8c81f760b23f10cb222a1d19edd756984b94d0106d6940b5ddb13a4fb39"

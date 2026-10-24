@@ -169,10 +169,18 @@ func TestCreationArtifactBytes(t *testing.T) {
 	if _, err := m.CreationArtifactBytes("BadPath/r5", fsys); !errors.Is(err, ErrCreationArtifactMismatch) {
 		t.Errorf("path outside: %v", err)
 	}
-	// the embedded directory holds only its README until the manifest follow-up embeds the files: a named error, never empty bytes
+	// the embedded directory holds the creation code of all seven pinned builds (MANIFEST-1.2): every row resolves, checked against its row
 	emb := embeddedOK(t)
-	if b, err := emb.EmbeddedCreationArtifactBytes("CertenAccountV7_3/r5"); !errors.Is(err, ErrCreationArtifactAbsent) || b != nil {
-		t.Errorf("embedded: %v %v", b, err)
+	for _, key := range []string{"BLSZKVerifierV2Generated/r5", "BLSZKVerifierV2Generated/r7", "BLSZKVerifierV2_1/r5", "CertenAccountFactoryV11/r5", "CertenAccountV7_3/r5", "CertenAnchorV8_2/r5", "CertenOutcomeRegistryV1/r5"} {
+		row, ok := emb.CreationArtifact(key)
+		got, err := emb.EmbeddedCreationArtifactBytes(key)
+		if !ok || err != nil || len(got) != row.Bytes || crypto.Keccak256Hash(got).Hex() != row.Keccak256 {
+			t.Errorf("embedded %s: %v (%d bytes, row %+v)", key, err, len(got), row)
+		}
+	}
+	// a build without a row is a named error, never empty bytes
+	if b, err := emb.EmbeddedCreationArtifactBytes("CertenAccountV7_2/r5"); !errors.Is(err, ErrCreationArtifactAbsent) || b != nil {
+		t.Errorf("embedded, no row: %d bytes, %v", len(b), err)
 	}
 }
 
@@ -287,29 +295,57 @@ func TestVS8_004_NewChainExtension(t *testing.T) {
 
 func TestExtensionGenerations(t *testing.T) {
 	m := embeddedOK(t)
-	row := func(gen string) map[string]any {
-		return map[string]any{"role": "account", "generation": gen, "pinned": false, "kind": "observed", "maskedKeccak": "0x" + strings.Repeat("ab", 32), "runtimeBytes": 1, "references": []any{}, "source": "x"}
+	n := len(m.Generations())
+	mk := func(role, gen, kind, masked string) map[string]any {
+		return map[string]any{"role": role, "generation": gen, "pinned": false, "kind": kind, "maskedKeccak": masked, "runtimeBytes": 1, "references": []any{}, "source": "x"}
 	}
-	merged, err := m.WithExtension(marshal(t, map[string]any{"schema": ManifestSchema, "generations": []any{row("V6"), row("V7")}}))
+	h := func(b string) string { return "0x" + strings.Repeat(b, 32) }
+	ext := func(rows ...map[string]any) []byte {
+		l := make([]any, len(rows))
+		for i, r := range rows {
+			l[i] = r
+		}
+		return marshal(t, map[string]any{"schema": ManifestSchema, "generations": l})
+	}
+	// [r3.2:E-e2] the pair (role, generation) is NOT unique: a catalogued and an observed CertenAccountV7 row and two `unidentified`
+	// families are four rows of one extension, accepted because their masked runtime hashes differ
+	merged, err := m.WithExtension(ext(
+		mk("account", "CertenAccountV7", "catalogued", h("a1")), mk("account", "CertenAccountV7", "observed", h("a2")),
+		mk("account", "unidentified", "observed", h("a3")), mk("account", "unidentified", "observed", h("a4"))))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !merged.HasGenerations() || len(merged.Generations()) != 2 {
-		t.Fatalf("generations %v", merged.Generations())
+	if len(merged.Generations()) != n+4 || len(m.Generations()) != n {
+		t.Fatalf("generations %d (base %d, was %d)", len(merged.Generations()), len(m.Generations()), n)
 	}
-	if _, ok := merged.GenerationByMaskedKeccak("0x" + strings.Repeat("AB", 32)); !ok {
-		t.Error("generation lookup")
+	for _, c := range []struct{ masked, gen, kind string }{{h("a1"), "CertenAccountV7", GenCatalogued}, {h("a2"), "CertenAccountV7", GenObserved}, {h("a3"), "unidentified", GenObserved}} {
+		g, ok := merged.GenerationFor("account", strings.ToUpper(c.masked[:2])+c.masked[2:])
+		if !ok || g.Generation != c.gen || g.Kind != c.kind {
+			t.Errorf("lookup of %s: %+v %v", c.masked, g, ok)
+		}
 	}
-	if m.HasGenerations() {
-		t.Error("the base manifest gained a generations table")
+	if _, ok := merged.GenerationFor("anchor", h("a1")); ok {
+		t.Error("a generation was found under another role")
 	}
-	// a second extension of the same key is a shadow; of a new key it is accepted
-	_, err = merged.WithExtension(marshal(t, map[string]any{"schema": ManifestSchema, "generations": []any{row("V6")}}))
-	wantState(t, err, ManifestShadow("generations", "account,V6"))
-	if _, err = merged.WithExtension(marshal(t, map[string]any{"schema": ManifestSchema, "generations": []any{row("V8")}})); err != nil {
+	// the same masked hash in the same role is a shadow whatever the generation name or the hex case; the key is (role, lowercase masked)
+	shadow := func(base *Manifest, e []byte, key string) {
+		t.Helper()
+		_, err := base.WithExtension(e)
+		wantState(t, err, ManifestShadow("generations", key))
+	}
+	shadow(merged, ext(mk("account", "OtherName", "observed", h("a1"))), "account,"+h("a1"))
+	shadow(merged, ext(mk("account", "CertenAccountV7", "catalogued", "0x"+strings.Repeat("A3", 32))), "account,"+h("a3"))
+	shadow(m, ext(mk("account", "x", "observed", h("b1")), mk("account", "y", "observed", h("b1"))), "account,"+h("b1")) // inside one extension
+	// a row of the BASE manifest cannot be redefined either (rows of the pinned table, every one of them)
+	for _, g := range m.Generations() {
+		shadow(m, ext(mk(g.Role, "renamed", "observed", g.MaskedKeccak)), g.Role+","+strings.ToLower(g.MaskedKeccak))
+	}
+	// the same hash in ANOTHER role is a different key and is accepted
+	if _, err = merged.WithExtension(ext(mk("factory", "CertenAccountFactoryV8", "catalogued", h("a1")))); err != nil {
+		t.Fatalf("another role: %v", err)
+	}
+	// and a new key is accepted after an earlier extension
+	if _, err = merged.WithExtension(ext(mk("account", "CertenAccountV8", "catalogued", h("c1")))); err != nil {
 		t.Fatal(err)
 	}
-	// a repeated key inside one extension is also a shadow
-	_, err = m.WithExtension(marshal(t, map[string]any{"schema": ManifestSchema, "generations": []any{row("V6"), row("V6")}}))
-	wantState(t, err, ManifestShadow("generations", "account,V6"))
 }

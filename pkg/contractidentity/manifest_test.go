@@ -498,15 +498,11 @@ func TestManifestAccessorsOnTheEmbeddedManifest(t *testing.T) {
 	if s, ok := m.AuthSlot("A20"); !ok || !s.Slot.IsNo || s.Slot.Num != 30 || s.Offset == nil || *s.Offset != 21 || s.Field != "minimumGovernanceLevel" {
 		t.Errorf("A20 %+v", s)
 	}
-	// generations: this manifest predates the table; it is reported as absent, never as empty-and-complete
 	if c01, ok := m.AuthSlot("C01"); !ok || c01.Slot.Text != "account" || c01.Slot.IsNo || c01.Offset != nil || c01.Label != nil {
 		t.Errorf("C01 %+v", c01)
 	}
-	if m.HasGenerations() || len(m.Generations()) != 0 {
-		t.Error("the embedded manifest has no generations table yet")
-	}
-	if _, ok := m.GenerationByMaskedKeccak("0x00"); ok {
-		t.Error("generation found without a table")
+	if _, ok := m.GenerationFor("account", "0x00"); ok {
+		t.Error("generation found for a hash that is in no row")
 	}
 	if m.Section("no-such-table") != nil || m.Section("maskRule") == nil {
 		t.Error("Section")
@@ -527,11 +523,11 @@ func TestSpecShapeTablesOnAFixture(t *testing.T) {
 	if !m.HasGenerations() || len(m.Generations()) != 2 {
 		t.Fatalf("generations %v", m.Generations())
 	}
-	g, ok := m.GenerationByMaskedKeccak("0xaa")
+	g, ok := m.GenerationFor("account", "0xaa")
 	if !ok || g.Generation != "V7_2" || g.Pinned || g.Kind != GenCatalogued || g.RuntimeBytes != 14000 || len(g.References) != 1 {
 		t.Fatalf("generation %+v", g)
 	}
-	if g, _ := m.GenerationByMaskedKeccak("0xBB"); g.Kind != GenObserved || !Check("generation_kind", g.Kind) {
+	if g, _ := m.GenerationFor("account", "0xBB"); g.Kind != GenObserved || !Check("generation_kind", g.Kind) {
 		t.Fatalf("observed generation %+v", g)
 	}
 	ts, _ := m.TxScan(11155111)
@@ -569,5 +565,44 @@ func TestLoadOverrideSource(t *testing.T) {
 	}
 	if _, err := LoadOverride([]byte("{}")); err == nil {
 		t.Fatal("an empty document was accepted as an override")
+	}
+}
+
+// The embedded manifest (MANIFEST-1.2 aef3b65) carries the generations table: 16 rows, 10 observed and 6 catalogued, none pinned, the pair
+// (role, generation) repeated (CertenAccountV7 twice, several `unidentified`) and the pair (role, maskedKeccak) unique [r3.2:E-e2].
+func TestEmbeddedGenerationsTable(t *testing.T) {
+	m, err := Embedded()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !m.HasGenerations() || len(m.Generations()) != 16 {
+		t.Fatalf("generations: %d rows", len(m.Generations()))
+	}
+	kinds := map[string]int{}
+	byRoleGen := map[string]int{}
+	seen := map[string]bool{}
+	for _, g := range m.Generations() {
+		kinds[g.Kind]++
+		byRoleGen[g.Role+"/"+g.Generation]++
+		k := g.Role + "," + strings.ToLower(g.MaskedKeccak)
+		if seen[k] {
+			t.Errorf("(role, maskedKeccak) %s repeats", k)
+		}
+		seen[k] = true
+		if g.Pinned || !Check("generation_kind", g.Kind) || !Check("role", g.Role) && g.Role != "factory" || len(g.MaskedKeccak) != 66 {
+			t.Errorf("generation row %+v", g)
+		}
+		if back, ok := m.GenerationFor(g.Role, "0x"+strings.ToUpper(g.MaskedKeccak[2:])); ok == (g.MaskedKeccak == "") || (ok && back.Generation != g.Generation) {
+			t.Errorf("lookup of %s,%s: %+v %v", g.Role, g.MaskedKeccak, back, ok)
+		}
+		if _, ok := m.GenerationFor("no-such-role", g.MaskedKeccak); ok {
+			t.Errorf("%s found under an unknown role", g.MaskedKeccak)
+		}
+	}
+	if kinds[GenObserved] != 10 || kinds[GenCatalogued] != 6 {
+		t.Errorf("kinds %v", kinds)
+	}
+	if byRoleGen["account/CertenAccountV7"] != 2 || byRoleGen["account/unidentified"] != 2 || byRoleGen["factory/unidentified"] != 5 {
+		t.Errorf("repeated (role, generation) pairs: %v", byRoleGen)
 	}
 }

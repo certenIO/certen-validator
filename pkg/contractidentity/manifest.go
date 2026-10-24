@@ -116,20 +116,50 @@ type AuthWritersRecord struct {
 	Conditions  map[string]string `json:"conditions"`
 	EntryPoints int               `json:"entryPoints"`
 	Hazards     []json.RawMessage `json:"hazards"`
+	// OwnerModifier is the member-level record of the onlyOwner modifier (contract, modifier, bodyHash, predicate, shape, ownerSlot, ownerOffset,
+	// file, lines); Entries are the per-entry-point records (signature, modifiers, callees, writes). Both are kept raw: the pinned body hash and
+	// the writes are compared by the rule IB gate (step 22 IB3), not interpreted here.
+	OwnerModifier json.RawMessage `json:"ownerModifier"`
+	Entries       json.RawMessage `json:"entries"`
 }
 
-// AllowRow is one allow-listed writer entry of a build.
+// AllowedWrites is the allowedWrites cell of an allow-list row: the string "*" (the constructor, deployment only) or a list of written paths.
+type AllowedWrites struct {
+	Any   bool
+	Paths []string
+}
+
+// UnmarshalJSON accepts "*" or an array of strings; anything else is an error (a malformed allow-list is manifest_corrupt).
+func (a *AllowedWrites) UnmarshalJSON(b []byte) error {
+	var s string
+	if err := json.Unmarshal(b, &s); err == nil {
+		if s != "*" {
+			return fmt.Errorf("allowedWrites %q is neither \"*\" nor a list", s)
+		}
+		*a = AllowedWrites{Any: true}
+		return nil
+	}
+	var l []string
+	if err := json.Unmarshal(b, &l); err != nil {
+		return fmt.Errorf("allowedWrites: %w", err)
+	}
+	*a = AllowedWrites{Paths: l}
+	return nil
+}
+
+// AllowRow is one allow-listed writer entry of a build (a function of the contract, the paths it may write, why that is safe).
 type AllowRow struct {
-	Entry         string          `json:"entry"`
-	AllowedWrites []string        `json:"allowedWrites"`
-	Why           string          `json:"why"`
-	Guard         json.RawMessage `json:"guard"`
+	Function       string          `json:"function"`
+	AllowedWrites  AllowedWrites   `json:"allowedWrites"`
+	DeploymentOnly bool            `json:"deploymentOnly"`
+	Why            string          `json:"why"`
+	Guard          json.RawMessage `json:"guard"`
 }
 
 // AuthWriterAllowList is a build's allow-list and its pinned onlyOwner modifier record.
 type AuthWriterAllowList struct {
-	OnlyOwner json.RawMessage `json:"onlyOwner"`
-	Rows      []AllowRow      `json:"rows"`
+	OwnerModifierPin json.RawMessage `json:"ownerModifierPin"`
+	Rows             []AllowRow      `json:"rows"`
 }
 
 // Build is a row of builds{}: one contract at one compile variant.
@@ -275,16 +305,30 @@ type Topic struct {
 }
 
 // Generation is a row of generations[] (manifest item 5 and 12): a build that exists on a chain but is not pinned. Kind is catalogued
-// or observed. The table is absent from manifests older than 0a-ii.
+// or observed. The primary key is (Role, MaskedKeccak) [r3.2:E-e2]: the pair (Role, Generation) repeats (CertenAccountV7 has a catalogued and an
+// observed row; several families are `unidentified`). Source is the source record of a catalogued row (null for an observed one); Evidence are
+// the on-chain observations (chain, address, block, code hash) and SettlementSelector the selector of the account's settlement call when the
+// row records one.
 type Generation struct {
-	Role         string `json:"role"`
-	Generation   string `json:"generation"`
-	Pinned       bool   `json:"pinned"`
-	Kind         string `json:"kind"`
-	MaskedKeccak string `json:"maskedKeccak"`
-	RuntimeBytes int    `json:"runtimeBytes"`
-	References   []Ref  `json:"references"`
-	Source       string `json:"source"`
+	Role               string          `json:"role"`
+	Generation         string          `json:"generation"`
+	Pinned             bool            `json:"pinned"`
+	Kind               string          `json:"kind"`
+	MaskedKeccak       string          `json:"maskedKeccak"`
+	RuntimeBytes       int             `json:"runtimeBytes"`
+	References         []Ref           `json:"references"`
+	Source             json.RawMessage `json:"source"`
+	SourceReason       string          `json:"sourceReason"`
+	Evidence           []GenEvidence   `json:"evidence"`
+	SettlementSelector string          `json:"settlementSelector"`
+}
+
+// GenEvidence is one on-chain observation of a generations row.
+type GenEvidence struct {
+	ChainID  uint64 `json:"chainId"`
+	Address  string `json:"address"`
+	Block    uint64 `json:"block"`
+	CodeHash string `json:"codeHash"`
 }
 
 // SlotRef is the slot column of an AUTH row: a storage slot number, or the word "account" for the account-proof row C01.
@@ -566,6 +610,13 @@ func (m *Manifest) decode() error {
 	}
 	// the tables are keyed and must not repeat a primary key inside one document
 	seen := map[string]bool{}
+	for _, g := range m.gens {
+		k := "generations:" + generationKey(g.Role, g.MaskedKeccak)
+		if seen[k] {
+			return fmt.Errorf("manifest: generations repeat (role,maskedKeccak) %s", k)
+		}
+		seen[k] = true
+	}
 	for _, d := range m.deploys {
 		k := fmt.Sprintf("%d,%s", d.ChainID, d.Role)
 		if seen[k] {
@@ -852,14 +903,21 @@ func (m *Manifest) Generations() []Generation { return append([]Generation(nil),
 // HasGenerations reports whether the manifest carries the generations table at all.
 func (m *Manifest) HasGenerations() bool { return m.hasGens }
 
-// GenerationByMaskedKeccak is the generations row with the given masked keccak (case-insensitive hex).
-func (m *Manifest) GenerationByMaskedKeccak(masked string) (Generation, bool) {
+// GenerationFor is the generations row with the primary key (role, maskedKeccak) [r3.2:E-e2]: the pair (role, generation) is NOT unique
+// (CertenAccountV7 has a catalogued and an observed row, and several `unidentified` families exist), the masked runtime hash identifies the
+// code. The hash is compared case-insensitively.
+func (m *Manifest) GenerationFor(role, maskedKeccak string) (Generation, bool) {
 	for _, g := range m.gens {
-		if strings.EqualFold(g.MaskedKeccak, masked) {
+		if g.Role == role && strings.EqualFold(g.MaskedKeccak, maskedKeccak) {
 			return g, true
 		}
 	}
 	return Generation{}, false
+}
+
+// generationKey is the primary key of a generations row (role, lowercase maskedKeccak) as the no-shadow rule and the duplicate check use it.
+func generationKey(role, maskedKeccak string) string {
+	return role + "," + strings.ToLower(maskedKeccak)
 }
 
 // AuthSlots are the rows of the AUTH slot set (authSlots[]), in table order.
@@ -873,6 +931,22 @@ func (m *Manifest) AuthSlot(id string) (AuthSlot, bool) {
 		}
 	}
 	return AuthSlot{}, false
+}
+
+// AuthWritersFor is the writer-premise record of a build (nil when the build has none).
+func (m *Manifest) AuthWritersFor(buildKey string) *AuthWritersRecord {
+	if b, ok := m.builds[buildKey]; ok {
+		return b.AuthWriters
+	}
+	return nil
+}
+
+// AuthAllowListFor is the allow-list of a build (nil when the build has none).
+func (m *Manifest) AuthAllowListFor(buildKey string) *AuthWriterAllowList {
+	if b, ok := m.builds[buildKey]; ok {
+		return b.AuthWriterAllowList
+	}
+	return nil
 }
 
 // AuthWritersStatus is the status of a build's writer premise ("" when the build has none): rule IB is valid only for "pass".
@@ -1066,7 +1140,14 @@ func (m *Manifest) WithExtension(ext []byte) (*Manifest, error) {
 		}
 	}
 	if raw, ok := edoc["generations"]; ok {
-		if merged["generations"], err = mergeArrayRows(merged["generations"], raw, "generations", func(r json.RawMessage) string { return rowKey(r, "role", "generation") }); err != nil {
+		if merged["generations"], err = mergeArrayRows(merged["generations"], raw, "generations", func(r json.RawMessage) string {
+			var g struct {
+				Role         string `json:"role"`
+				MaskedKeccak string `json:"maskedKeccak"`
+			}
+			_ = json.Unmarshal(r, &g)
+			return generationKey(g.Role, g.MaskedKeccak)
+		}); err != nil {
 			return nil, err
 		}
 	}
