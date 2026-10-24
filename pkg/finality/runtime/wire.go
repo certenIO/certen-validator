@@ -40,6 +40,8 @@ type Env struct {
 	Logf    func(string, ...any)
 	L1Block []string // Sepolia execution endpoints
 	L1Proof []string // near-head proof providers followed by the archive provider
+	// Memory is the process memory budget the upgrader's builders and the gap backfill reserve from (one budget, one process).
+	Memory *finality.MemoryBudget
 }
 
 // Deps are the process-level collaborators of the wiring.
@@ -71,6 +73,17 @@ type Wiring struct {
 	Disabled map[uint64]*finality.StateError
 	Config   Config
 }
+
+// WireError is a failure of Wire that is not a refused setting (a refused setting is an *envvar.Refusal, a refused provider entry a
+// *ConfigError): Stage says where it happened (finality.StartStage*), so the process can announce it as a named state without parsing
+// the text (RB12-GO-INT F14). Its text is the text of the error it wraps.
+type WireError struct {
+	Stage string
+	Err   error
+}
+
+func (e *WireError) Error() string { return e.Err.Error() }
+func (e *WireError) Unwrap() error { return e.Err }
 
 func disabledState(chain uint64, env, value, effect string) *finality.StateError {
 	return finality.NewState(finality.CodeUpgraderDisabled, "chain", chain, "env", env, "value", value, "effect", effect)
@@ -128,7 +141,7 @@ func Wire(cfg Config, d Deps) (*Wiring, error) {
 	}
 	logf = ethrpc.RedactingLogf(logf)
 	if d.Registry == nil || d.Store == nil {
-		return nil, fmt.Errorf("finality runtime: a registry and a capture store are required")
+		return nil, &WireError{Stage: finality.StartStageArguments, Err: fmt.Errorf("finality runtime: a registry and a capture store are required")}
 	}
 	cfg.RegisterRedaction()
 
@@ -137,7 +150,11 @@ func Wire(cfg Config, d Deps) (*Wiring, error) {
 	if pins == nil {
 		var err error
 		if pins, source, sha, err = LoadPins(cfg.PinsFile); err != nil {
-			return nil, err
+			stage := finality.StartStagePinsEmbedded
+			if cfg.PinsFile != "" {
+				stage = finality.StartStagePinsFile
+			}
+			return nil, &WireError{Stage: stage, Err: err}
 		}
 	} else {
 		sha, source = pins.Identity()
@@ -153,7 +170,7 @@ func Wire(cfg Config, d Deps) (*Wiring, error) {
 
 	reg := d.Registry
 	if err := allkinds.Register(reg); err != nil {
-		return nil, err
+		return nil, &WireError{Stage: finality.StartStageKinds, Err: err}
 	}
 
 	hc := d.HTTP
@@ -168,7 +185,8 @@ func Wire(cfg Config, d Deps) (*Wiring, error) {
 	}
 	cache := &lcCache{inner: lcf, now: now}
 	l1Proof := cfg.proofURLs()
-	env := Env{Pins: pins, Config: cfg, LC: cache, HTTP: hc, Store: store, Logf: logf, L1Block: cfg.L1RPC, L1Proof: l1Proof}
+	mem := finality.NewMemoryBudget(cfg.MemoryBudget)
+	env := Env{Pins: pins, Config: cfg, LC: cache, HTTP: hc, Store: store, Logf: logf, L1Block: cfg.L1RPC, L1Proof: l1Proof, Memory: mem}
 
 	w := &Wiring{Registry: reg, Pins: pins, PinsSource: source, PinsSHA256: sha, Store: store, Disabled: map[uint64]*finality.StateError{}, Config: cfg}
 
@@ -219,7 +237,7 @@ func Wire(cfg Config, d Deps) (*Wiring, error) {
 		}
 	}
 	w.Upgrader = finality.UpgraderConfig{
-		Concurrency: cfg.Concurrency, Interval: cfg.Interval, BuildTimeout: cfg.BuildTimeout, Memory: finality.NewMemoryBudget(cfg.MemoryBudget),
+		Concurrency: cfg.Concurrency, Interval: cfg.Interval, BuildTimeout: cfg.BuildTimeout, Memory: mem,
 		Status: d.Status, DisabledChains: disabled, DisabledReasons: reasons, Logf: logf, Now: d.Now,
 	}
 	chains := make([]uint64, 0, len(w.Disabled))
@@ -255,8 +273,16 @@ func wireBase(reg *finality.Registry, env Env, d Deps, clock loopClock, logf fun
 	}
 	capt := &baseposted.Capturer{Chain: finality.ChainBaseSepolia, Pins: bp, L1: l1, Beacon: &baseposted.BeaconHTTP{Bases: cfg.Beacon, Client: env.HTTP},
 		Store: env.Store, GenesisTime: capture.BeaconGenesisTime, SlotSeconds: 12}
-	return reg.RegisterCapturer(&BasePostedLoop{Cap: capt, Store: env.Store, Status: d.Status, Every: cfg.CaptureEvery, MaxPerTick: cfg.CaptureBlocks,
-		StartBack: 32, HasArchive: len(cfg.Archive) > 0, Logf: logf, Clock: clock})
+	if err := reg.RegisterCapturer(&BasePostedLoop{Cap: capt, Store: env.Store, Status: d.Status, Pins: env.Pins, Every: cfg.CaptureEvery, MaxPerTick: cfg.CaptureBlocks,
+		StartBack: 32, HasArchive: len(cfg.Archive) > 0, Logf: logf, Clock: clock}); err != nil {
+		return err
+	}
+	// RB12-CAPTURE-GAP: the loop that closes the recorded capture gaps with the same capture call (the providers are the same, plus the archive
+	// provider when one is configured), one block at a time, inside the process memory budget
+	bf := &baseposted.Backfiller{Chain: finality.ChainBaseSepolia, Store: env.Store, Capturer: baseposted.CapturerOf(capt), Providers: Hosts(cfg.Beacon),
+		Policy: baseposted.DefaultBackfillPolicy(), Now: d.Now, Logf: logf}
+	return reg.RegisterCapturer(&GapBackfillLoop{ChainID: finality.ChainBaseSepolia, Store: env.Store, Backfill: bf, Every: cfg.CaptureEvery, PerTick: cfg.GapBlocks,
+		AuditSpacing: uint64(cfg.GapAuditSpacing), Memory: env.Memory, Logf: logf, Clock: clock})
 }
 
 // captureSlack is how many blocks before its first cursor row the Base capture loop may have started scanning: its first range ends
@@ -288,7 +314,7 @@ func wireArb(reg *finality.Registry, env Env, d Deps, clock loopClock, logf func
 	bc := capture.NewHTTPBeacon(cfg.Beacon...)
 	bc.Client = env.HTTP
 	cp := capture.NewCapturer(env.Store, l1, bc, capture.Config{Logf: logf, StartBack: 32})
-	return reg.RegisterCapturer(&ArbPostedLoop{Cap: cp, Providers: Hosts(providers), Status: d.Status, Every: cfg.CaptureEvery, Logf: logf, Clock: clock})
+	return reg.RegisterCapturer(&ArbPostedLoop{Cap: cp, Providers: Hosts(providers), Status: d.Status, Pins: env.Pins, Every: cfg.CaptureEvery, Logf: logf, Clock: clock})
 }
 
 // wireSepolia registers the Ethereum Sepolia finalized prover: the light-client objects come from the ordered CERTEN_FINALITY_LC_URLS

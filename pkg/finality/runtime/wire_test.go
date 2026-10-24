@@ -4,6 +4,7 @@ package runtime
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -94,10 +95,14 @@ func TestRTWireTakesTheEnvironmentSwitchesAndBounds(t *testing.T) {
 	if w.Upgrader.Concurrency != 7 || w.Upgrader.Interval != 13*time.Second || w.Upgrader.BuildTimeout != 321*time.Second {
 		t.Fatalf("bounds not taken from the environment: %+v", w.Upgrader)
 	}
-	if len(reg.Capturers()) != 2 {
-		t.Fatalf("%d capture loops, want the Base inbox loop and the Arbitrum sequencer-inbox loop", len(reg.Capturers()))
+	var names []string
+	for _, c := range reg.Capturers() {
+		names = append(names, c.Name())
 	}
-	// a switch that is not a switch refuses startup by name
+	if fmt.Sprint(names) != "[base-sepolia/inbox base-sepolia/gapfill arbitrum-sepolia/sequencer-inbox]" {
+		t.Fatalf("capture loops %v, want the Base inbox loop, the Base gap backfill loop (RB12-CAPTURE-GAP) and the Arbitrum sequencer-inbox loop", names)
+	}
+	// a switch that is not a switch is refused by name (an *envvar.Refusal; the process announces switch_invalid)
 	t.Setenv(finality.ChainEnv(finality.ChainBaseSepolia), "sometimes")
 	cfg, err := ConfigFromEnv()
 	if err != nil {
@@ -105,7 +110,7 @@ func TestRTWireTakesTheEnvironmentSwitchesAndBounds(t *testing.T) {
 	}
 	_, err = Wire(cfg, Deps{Registry: finality.NewRegistry(), Store: finality.NewMemCaptureStore()})
 	if err == nil || !strings.Contains(err.Error(), finality.ChainEnv(finality.ChainBaseSepolia)) {
-		t.Fatalf("a bad switch must refuse startup naming the variable: %v", err)
+		t.Fatalf("a bad switch must be refused naming the variable: %v", err)
 	}
 }
 

@@ -73,6 +73,14 @@ var (
 		Name: "certen_finality_build_failures_total",
 		Help: "Finality builds that ended in a named state other than finality_pending.",
 	}, []string{"chain", "code"})
+	finalityBuildHeld = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "certen_finality_build_held_total",
+		Help: "Finality asks held by the environment instead of failed (RB12-GO-INT F17): a state that is a fact about this process or its capture store, such as l1_capture_gap, by chain and state code. A held leg is asked again at the bounded poll and is not counted in certen_finality_build_failures_total.",
+	}, []string{"chain", "code"})
+	finalityCaptureForeignInboxTx = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "certen_finality_capture_foreign_inbox_tx_total",
+		Help: "Transactions sent to the batch inbox by a key that is not the SystemConfig batcher at that block, skipped by the capture (RB12-GO-INT D2), by chain.",
+	}, []string{"chain"})
 	finalityPending = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "certen_finality_pending_total",
 		Help: "Finality builds that ended in finality_pending (the level reached is proven; the next one is not yet buildable).",
@@ -136,7 +144,7 @@ var (
 	}, []string{"chain", "code"})
 	finalityHeapInUse = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "certen_finality_heap_inuse_bytes",
-		Help: "Go heap in use by this validator process, sampled once per upgrader pass (the figure the finality memory gate compares with its budget).",
+		Help: "Go heap in use by this validator process, refreshed every few seconds while the upgrader runs, independent of its passes (the figure the finality memory gate compares with its budget).",
 	})
 	finalityMemoryBudget = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "certen_finality_memory_budget_bytes",
@@ -175,7 +183,9 @@ var finalityHealth = struct {
 	mu              sync.Mutex
 	upgraderKnown   bool
 	upgraderEnabled bool
-	chains          map[uint64]*finalityChainHealth
+	// upgraderReason is the named state that switched the whole upgrader off (empty while it is on or not yet reported).
+	upgraderReason string
+	chains         map[uint64]*finalityChainHealth
 }{chains: map[uint64]*finalityChainHealth{}}
 
 // finalityChain returns the chain's record; the caller holds finalityHealth.mu.
@@ -191,7 +201,7 @@ func finalityChain(chain uint64) *finalityChainHealth {
 // FinalityHealth is the staged-finality block of /health/detailed: JSON-ready, secret-free (chain ids, counts, block numbers and
 // the name of the setting that switched something off, never a URL or a key). Layout:
 //
-//	{"upgrader_enabled": bool,
+//	{"upgrader_enabled": bool, "upgrader_disabled_reason": string (only while the whole upgrader is off: the named state, e.g. config_invalid with the variable and entry),
 //	 "chains": {"<chain id>": {"enabled": bool (once known), "disabled_reason": string, "last_captured_block": n,
 //	            "capture_lag_blocks": n, "pending_legs_by_level": {"<level>": n}, "last_append_unixtime": n,
 //	            "capturer_restarts": n, "capturers": {"<name>": {"last_captured_block": n, "capture_lag_blocks": n}}}}}
@@ -205,6 +215,9 @@ func FinalityHealth() map[string]any {
 	out := map[string]any{}
 	if finalityHealth.upgraderKnown {
 		out["upgrader_enabled"] = finalityHealth.upgraderEnabled
+	}
+	if finalityHealth.upgraderReason != "" {
+		out["upgrader_disabled_reason"] = finalityHealth.upgraderReason
 	}
 	chains := map[string]any{}
 	ids := make([]uint64, 0, len(finalityHealth.chains))
@@ -256,12 +269,23 @@ func FinalityHealth() map[string]any {
 func SetFinalityUpgraderEnabled(on bool) {
 	finalityHealth.mu.Lock()
 	finalityHealth.upgraderKnown, finalityHealth.upgraderEnabled = true, on
+	if on {
+		finalityHealth.upgraderReason = ""
+	}
 	finalityHealth.mu.Unlock()
 	if on {
 		finalityEnabled.Set(1)
 		return
 	}
 	finalityEnabled.Set(0)
+}
+
+// SetFinalityUpgraderDisabledReason records, for the health block, the named state that switched the whole upgrader off (the state's
+// text: its code, the setting and the entry position, never a URL or a key). Reporting the upgrader on clears it.
+func SetFinalityUpgraderDisabledReason(reason string) {
+	finalityHealth.mu.Lock()
+	finalityHealth.upgraderReason = reason
+	finalityHealth.mu.Unlock()
 }
 
 // SetFinalityLegs reports how many legs stand at a level on a chain.
@@ -293,6 +317,16 @@ func IncFinalityAppended(chain uint64, level string) {
 	finalityHealth.mu.Lock()
 	finalityChain(chain).lastAppend = now
 	finalityHealth.mu.Unlock()
+}
+
+// IncFinalityCaptureForeignInboxTx counts a batch-inbox transaction the capture skipped because the batcher did not send it.
+func IncFinalityCaptureForeignInboxTx(chain uint64) {
+	finalityCaptureForeignInboxTx.WithLabelValues(chainLabel(chain)).Inc()
+}
+
+// IncFinalityBuildHeld counts an ask held by the environment (a state of the environment class, see pkg/finality/state_class.go).
+func IncFinalityBuildHeld(chain uint64, code string) {
+	finalityBuildHeld.WithLabelValues(chainLabel(chain), code).Inc()
 }
 
 // IncFinalityBuildFailure counts a build that ended in a named state.
@@ -414,6 +448,11 @@ func SetFinalityHeap(heapInUse uint64, budget, reserved int64) {
 	finalityMemoryReserved.Set(float64(reserved))
 }
 
+// SetFinalityMemoryReserved reports the bytes currently reserved against the memory budget; the budget calls it on every reservation and release.
+func SetFinalityMemoryReserved(reserved int64) {
+	finalityMemoryReserved.Set(float64(reserved))
+}
+
 // IncFinalityMemoryRefused counts a reservation (or an attempt) refused by the memory budget; chain 0 is a refusal about no chain.
 func IncFinalityMemoryRefused(chain uint64, what string) {
 	finalityMemoryRefused.WithLabelValues(chainLabel(chain), what).Inc()
@@ -433,6 +472,8 @@ func registerFinalityMetrics() {
 	prometheus.MustRegister(finalityUnrecordedSettlements)
 	prometheus.MustRegister(finalityAppended)
 	prometheus.MustRegister(finalityBuildFailures)
+	prometheus.MustRegister(finalityBuildHeld)
+	prometheus.MustRegister(finalityCaptureForeignInboxTx)
 	prometheus.MustRegister(finalityPending)
 	prometheus.MustRegister(finalityChainBroken)
 	prometheus.MustRegister(finalityStatus)
@@ -452,4 +493,5 @@ func registerFinalityMetrics() {
 	prometheus.MustRegister(finalityMemoryBudget)
 	prometheus.MustRegister(finalityMemoryReserved)
 	prometheus.MustRegister(finalityMemoryRefused)
+	registerFinalityGapMetrics()
 }

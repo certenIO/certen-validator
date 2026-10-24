@@ -80,8 +80,12 @@ type Config struct {
 	BlobGiveUpTicks int
 	// UnavailableEvery: a batch without a proof gets an UnavailableRecord every this many ticks (default 20).
 	UnavailableEvery int
-	// RebuildBlocks: on the first tick, batches captured within this many L1 blocks of the head are re-examined (default 7200).
+	// RebuildBlocks: on the first tick, batches captured within this many L1 blocks of the head are re-examined with their blob rows read
+	// and checked; EVERY older batch is re-examined too (RB12-CAPTURE-GAP), by key listing alone, and an incomplete one is a recorded gap
+	// (default 7200).
 	RebuildBlocks uint64
+	// OldRetryEvery: an old incomplete batch (older than RebuildBlocks when found) is retried every this many ticks (default 10).
+	OldRetryEvery int
 	Logf          func(format string, args ...any)
 }
 
@@ -119,6 +123,9 @@ func (c Config) withDefaults() Config {
 	if c.RebuildBlocks == 0 {
 		c.RebuildBlocks = 7200
 	}
+	if c.OldRetryEvery == 0 {
+		c.OldRetryEvery = 10
+	}
 	return c
 }
 
@@ -135,6 +142,8 @@ type Capturer struct {
 	needBlobs   map[uint64]*pendBlob // N -> record awaiting its blobs
 	needProof   map[uint64]*pendProof
 	wantDelayed map[uint64]*pendProof
+	ticks       int
+	gaps        map[uint64]BatchRecord // batches recorded as an incomplete-capture gap and not yet closed
 }
 
 type pendBlob struct {
@@ -142,16 +151,18 @@ type pendBlob struct {
 	ts     uint64
 	tries  int
 	gaveUp bool
+	old    bool // found incomplete beyond RebuildBlocks: retried at the bounded cadence
 }
 type pendProof struct {
 	rec   BatchRecord
 	ticks int
+	old   bool
 }
 
 // NewCapturer returns a Capturer with defaults applied.
 func NewCapturer(store CaptureStore, l1 L1Source, beacon BeaconSource, cfg Config) *Capturer {
 	return &Capturer{Store: store, L1: l1, Beacon: beacon, Cfg: cfg.withDefaults(),
-		needBlobs: map[uint64]*pendBlob{}, needProof: map[uint64]*pendProof{}, wantDelayed: map[uint64]*pendProof{}}
+		needBlobs: map[uint64]*pendBlob{}, needProof: map[uint64]*pendProof{}, wantDelayed: map[uint64]*pendProof{}, gaps: map[uint64]BatchRecord{}}
 }
 
 // WantDelayed asks the capturer to capture the delayedInboxAccs[k] and [k-1] proofs at the next tick (k >= 1).
@@ -208,6 +219,7 @@ func (c *Capturer) Tick(ctx context.Context) (Report, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	var rep Report
+	c.ticks++
 	head, err := c.L1.HeadNumber(ctx)
 	if err != nil {
 		return rep, fmt.Errorf("capture: head: %w", ethrpc.RedactError(err))
@@ -227,7 +239,26 @@ func (c *Capturer) Tick(ctx context.Context) (Report, error) {
 	c.fetchBlobs(ctx, &rep)
 	// (b) proofs near the head
 	c.captureProofs(ctx, head, &rep)
+	c.closeGaps(ctx, &rep)
 	return rep, nil
+}
+
+// dueOld reports whether an old incomplete batch is retried at this tick: the first tick of the process and then every OldRetryEvery.
+func (c *Capturer) dueOld() bool { return (c.ticks-1)%c.Cfg.OldRetryEvery == 0 }
+
+// closeGaps records a fill for every batch that was recorded as an incomplete-capture gap and now has its blobs and its proof.
+func (c *Capturer) closeGaps(ctx context.Context, rep *Report) {
+	for n, rec := range c.gaps {
+		if c.needBlobs[n] != nil || c.needProof[n] != nil {
+			continue
+		}
+		if err := finality.RecordGapFill(ctx, c.Store, c.Cfg.Chain, rec.L1Block, rec.L1Hash, true); err != nil {
+			rep.fail(c, "fill of the gap of batch %d: %v", n, err)
+			continue
+		}
+		delete(c.gaps, n)
+		c.logf("capture: batch %d at L1 block %d is complete (blobs and proof): its capture gap is closed", n, rec.L1Block)
+	}
 }
 
 // rebuild reloads what a previous process left incomplete: batches within RebuildBlocks of the head without all their blobs
@@ -248,10 +279,21 @@ func (c *Capturer) rebuild(ctx context.Context, head uint64) error {
 			have[n] = true
 		}
 	}
-	for _, k := range keys {
-		if k.L1Block+c.Cfg.RebuildBlocks < head {
-			continue
+	// the blob rows by batch, from the keys alone: an old batch's blob rows are not read to find out whether they are all there
+	bk, err := c.Store.ListByRange(ctx, c.Cfg.Chain, 0, finality.MaxCaptureBlock, "blob/")
+	if err != nil {
+		return err
+	}
+	blobRows := map[uint64]int{}
+	for _, k := range bk {
+		var n uint64
+		var j int
+		if _, e := fmt.Sscanf(k.Item, "blob/%d/%d", &n, &j); e == nil {
+			blobRows[n]++
 		}
+	}
+	for _, k := range keys {
+		old := k.L1Block+c.Cfg.RebuildBlocks < head
 		b, ok, err := c.Store.Get(ctx, k)
 		if err != nil || !ok {
 			return fmt.Errorf("capture: row %s unreadable", k)
@@ -260,15 +302,23 @@ func (c *Capturer) rebuild(ctx context.Context, head uint64) error {
 		if err != nil {
 			return err
 		}
+		var missing []finality.GapClass
 		if !have[rec.N] {
-			c.needProof[rec.N] = &pendProof{rec: rec}
+			c.needProof[rec.N] = &pendProof{rec: rec, old: old}
+			missing = append(missing, finality.GapStateProofUnavailable)
 		}
 		if rec.DataLocation == LocBlob {
-			blobs, err := LoadBlobs(ctx, c.Store, c.Cfg.Chain, rec)
-			if err != nil {
-				return err
+			complete := false
+			if old {
+				complete = blobRows[rec.N] >= len(rec.VersionedHashes)
+			} else {
+				blobs, err := LoadBlobs(ctx, c.Store, c.Cfg.Chain, rec)
+				if err != nil {
+					return err
+				}
+				complete = len(blobs) >= len(rec.VersionedHashes)
 			}
-			if len(blobs) < len(rec.VersionedHashes) {
+			if !complete {
 				hk := Key{Chain: c.Cfg.Chain, L1Block: rec.L1Block, L1Hash: rec.L1Hash, Item: ItemHeader}
 				hb, ok, _ := c.Store.Get(ctx, hk)
 				if !ok {
@@ -278,7 +328,20 @@ func (c *Capturer) rebuild(ctx context.Context, head uint64) error {
 				if err != nil {
 					return err
 				}
-				c.needBlobs[rec.N] = &pendBlob{rec: rec, ts: hf.Timestamp}
+				c.needBlobs[rec.N] = &pendBlob{rec: rec, ts: hf.Timestamp, old: old}
+				missing = append(missing, finality.GapBlobUnavailable)
+			}
+		}
+		// an incomplete batch is a durable, named gap until it is complete (the framework's gap rows, at the batch's L1 block)
+		for _, class := range missing {
+			if err := finality.RecordGap(ctx, c.Store, c.Cfg.Chain, rec.L1Block, rec.L1Block, class); err != nil {
+				return fmt.Errorf("capture: recording the gap of batch %d: %w", rec.N, err)
+			}
+		}
+		if len(missing) > 0 {
+			c.gaps[rec.N] = rec
+			if old {
+				c.logf("capture: batch %d at L1 block %d (%d blocks before the head) is incomplete after a restart: recorded as a capture gap, retried every %d ticks", rec.N, rec.L1Block, head-rec.L1Block, c.Cfg.OldRetryEvery)
 			}
 		}
 	}
@@ -467,19 +530,18 @@ func (c *Capturer) captureBatch(ctx context.Context, lg Log, rep *Report) (*uint
 	if !rec.ConsistentAcc(data) {
 		return nil, fmt.Errorf("batch %d: keccak256(beforeAcc || dataHash || delayedAcc) differs from the event's afterAcc (the capture cannot reproduce the accumulator)", rec.N)
 	}
-	if err := putRow(ctx, c.Store, hdrKey(c.Cfg.Chain, h, ItemHeader), h.RLP); err != nil {
-		return nil, err
-	}
+	// The header, the calldata and the batch record are written as ONE unit (finality.PutBlock): the batch record names the batch as
+	// captured, so it is never stored without the rows it is attested from (RB11-DBFIX D7).
+	rows := []finality.CaptureRow{{CaptureKey: hdrKey(c.Cfg.Chain, h, ItemHeader), Bytes: h.RLP}}
 	if rec.DataLocation == LocTxInput || rec.DataLocation == LocSeparateBatchEvent {
 		raw := data
 		if rec.DataLocation == LocTxInput {
 			raw = tx.Input
 		}
-		if err := putRow(ctx, c.Store, Key{Chain: c.Cfg.Chain, L1Block: h.Number, L1Hash: h.Hash, Item: ItemCalldata(rec.N)}, raw); err != nil {
-			return nil, err
-		}
+		rows = append(rows, finality.CaptureRow{CaptureKey: Key{Chain: c.Cfg.Chain, L1Block: h.Number, L1Hash: h.Hash, Item: ItemCalldata(rec.N)}, Bytes: raw})
 	}
-	if err := putRow(ctx, c.Store, bk, rec.Encode()); err != nil {
+	rows = append(rows, finality.CaptureRow{CaptureKey: bk, Bytes: rec.Encode()})
+	if err := finality.PutBlock(ctx, c.Store, rows); err != nil {
 		return nil, err
 	}
 	c.needProof[rec.N] = &pendProof{rec: rec}
@@ -518,6 +580,9 @@ func (c *Capturer) fetchBlobs(ctx context.Context, rep *Report) {
 	sort.Slice(ns, func(i, j int) bool { return ns[i] < ns[j] })
 	for _, n := range ns {
 		p := c.needBlobs[n]
+		if p.old && !c.dueOld() {
+			continue
+		}
 		slot := (p.ts - c.Cfg.GenesisTime) / 12
 		scs, err := c.Beacon.Sidecars(ctx, slot, p.rec.VersionedHashes)
 		if err != nil {
@@ -607,6 +672,9 @@ func (c *Capturer) captureProofs(ctx context.Context, head uint64, rep *Report) 
 	}
 	sort.Slice(ns, func(i, j int) bool { return ns[i] < ns[j] })
 	for _, n := range ns {
+		if c.needProof[n].old && !c.dueOld() {
+			continue
+		}
 		jobs = append(jobs, proofJob{ProofBatchAcc, n, [][32]byte{ArraySlot(SequencerAccSlot, n)}, c.needProof[n]})
 	}
 	ks := make([]uint64, 0, len(c.wantDelayed))

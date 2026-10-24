@@ -13,8 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/certen/independant-validator/pkg/finality"
 )
 
@@ -23,7 +21,12 @@ import (
 func TestFinalityStatusRowIsReplacedByTheNextPassAndCarriesLevelNextAndEta(t *testing.T) {
 	ctx := context.Background()
 	repo := NewFinalityStatusRepository(NewClientFromDB(testDB))
-	pid := uuid.NewString()
+	// a leg that really holds its l1_posted addendum: the rows below claim that level was reached (RB11-DBFIX D1: a claim of a stored
+	// level is written only for a proof that holds it)
+	pid, leg := storeLeg(t, "base_sepolia_47368146")
+	if _, err := NewFinalityAddendaRepository(NewClientFromDB(testDB)).Append(ctx, appendRequest(t, kindRegistry(t, nil), pid, leg, finality.LevelL1Posted, "x")); err != nil {
+		t.Fatal(err)
+	}
 	eta := time.Date(2026, 10, 25, 3, 4, 5, 0, time.UTC)
 	pd := &finality.PendingState{Chain: finality.ChainBaseSepolia, LevelReached: finality.LevelL1Posted, NextLevel: finality.LevelFinalized, Reason: "game_unresolved", ETA: eta}
 	pending := finality.BuilderStatusOf(pid, finality.ChainBaseSepolia, finality.LevelFinalized, finality.LevelL1Posted, pd, nil, false, time.Now())
@@ -205,8 +208,8 @@ func TestFinalityCaptureStoreIsInsertOnlyAndTheTableRefusesAnyOtherWriter(t *tes
 			t.Fatal("the row changed")
 		}
 	})
-	t.Run("the store has Put and reads, and no method that changes or removes a row", func(t *testing.T) {
-		want := map[string]bool{"Put": true, "Get": true, "ListByBlock": true, "ListByRange": true, "BlockBounds": true}
+	t.Run("the store has Put, PutBlock (insert-only, one transaction) and reads (including BlockBounds and BlockSizes), and no method that changes or removes a row", func(t *testing.T) {
+		want := map[string]bool{"Put": true, "PutBlock": true, "Get": true, "ListByBlock": true, "ListByRange": true, "BlockBounds": true, "BlockSizes": true}
 		typ := reflect.TypeOf(store)
 		for i := 0; i < typ.NumMethod(); i++ {
 			if !want[typ.Method(i).Name] {

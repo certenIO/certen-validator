@@ -12,9 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
-	"github.com/ethereum/go-ethereum/rlp"
 
 	"github.com/certen/independant-validator/pkg/finality"
 	"github.com/certen/independant-validator/pkg/finality/arbposted/capture"
@@ -26,11 +24,8 @@ import (
 // rtHeader is a raw RLP execution header of block n and its hash (15 items: every positional slot ReadHeader needs).
 func rtHeader(t testing.TB, n uint64) ([]byte, [32]byte) {
 	t.Helper()
-	raw, err := rlp.EncodeToBytes(&types.Header{Number: new(big.Int).SetUint64(n), Difficulty: big.NewInt(0)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return raw, [32]byte(crypto.Keccak256Hash(raw))
+	raw, h := rtHeaderFor(n, [][]byte{{0x02}}) // the one (junk) transaction of the failing blocks of rtBaseL1: the header commits to it
+	return raw, h
 }
 
 // rtScript is the scripted clock of a loop: After records the wait it is asked for and answers at once; the stopAfter-th wait
@@ -115,18 +110,25 @@ type rtBaseL1 struct {
 	failing map[uint64]bool
 	calls   map[uint64]int // Block calls per number
 	order   []uint64
+	onBlock func(n uint64) // told of every block read, after it was counted (tests that stop the process mid-round)
 }
 
 func (f *rtBaseL1) Head(context.Context) (uint64, error) { return f.head, f.headErr }
 
-func (f *rtBaseL1) Block(_ context.Context, n uint64) (baseposted.L1BlockData, error) {
+func (f *rtBaseL1) Block(ctx context.Context, n uint64) (baseposted.L1BlockData, error) {
+	if err := ctx.Err(); err != nil { // a provider call made after the process was told to stop fails, as it does in production
+		return baseposted.L1BlockData{}, err
+	}
 	if f.calls == nil {
 		f.calls = map[uint64]int{}
 	}
 	f.calls[n]++
 	f.order = append(f.order, n)
+	if f.onBlock != nil {
+		f.onBlock(n)
+	}
 	if !f.failing[n] {
-		return baseposted.L1BlockData{Number: n}, nil // no transactions: nothing to capture
+		return rtEmptyBlock(n), nil // no transactions: nothing to capture
 	}
 	hdr, hash := rtHeader(f.t, n)
 	return baseposted.L1BlockData{Number: n, Hash: hash, HeaderRLP: hdr, Timestamp: 1_700_000_000,
@@ -142,7 +144,7 @@ func rtBaseLoop(t testing.TB, l1 *rtBaseL1, st finality.BuilderStatusStore) (*Ba
 	l1.t = t
 	mem := finality.NewMemCaptureStore()
 	lg := &rtLog{}
-	c := &baseposted.Capturer{Chain: finality.ChainBaseSepolia, Pins: &baseposted.Pins{BatchInbox: rtInbox}, L1: l1, Store: mem, SlotSeconds: 12}
+	c := &baseposted.Capturer{Chain: finality.ChainBaseSepolia, Pins: rtPins(), L1: l1, Store: mem, SlotSeconds: 12}
 	return &BasePostedLoop{Cap: c, Store: mem, Status: st, Every: 12 * time.Second, StartBack: 2, Logf: lg.logf,
 		retry: map[uint64]*retryEntry{}, lastState: map[uint64]*finality.StateError{}}, mem, lg
 }
@@ -238,7 +240,8 @@ func TestRTBaseLoopRetryGapDoublesAndEndsOutsideTheWindowWithoutAnArchiveProvide
 		t.Fatalf("block 99 was read at ticks %v, want [1 2 4 8 16] (gaps 1,2,4,8)", at)
 	}
 
-	// no archive provider: outside ProofWindow the block is given up, logged by name, and never read again
+	// no archive provider: outside ProofWindow the loop hands the block to the durable gap backfill (RB12-CAPTURE-GAP: nothing is given up),
+	// logs it by name, and stops reading it itself
 	l1 = &rtBaseL1{head: 100, failing: map[uint64]bool{99: true}}
 	loop, _, lg := rtBaseLoop(t, l1, nil)
 	loop.ProofWindow = 10
@@ -252,13 +255,13 @@ func TestRTBaseLoopRetryGapDoublesAndEndsOutsideTheWindowWithoutAnArchiveProvide
 		}
 	}
 	if l1.calls[99] != 1 {
-		t.Fatalf("block 99 was read %d times, want 1: a block outside the window with no archive is not retried", l1.calls[99])
+		t.Fatalf("block 99 was read %d times, want 1: the loop does not retry a block outside the window with no archive (the backfill does)", l1.calls[99])
 	}
-	if !lg.has("given up at head 111") || !lg.has("archive provider configured: false") {
-		t.Fatalf("the give-up was not logged by name: %v", lg.lines)
+	if !lg.has("handed to the gap backfill at head 111") || !lg.has("archive provider configured: false") {
+		t.Fatalf("the handover was not logged by name: %v", lg.lines)
 	}
 	if _, held := loop.retry[99]; held {
-		t.Fatal("a given-up block is still held for retry")
+		t.Fatal("a handed-over block is still held for retry by the loop")
 	}
 
 	// an archive provider keeps the block retryable until MaxRetryAge
@@ -282,10 +285,10 @@ func TestRTBaseLoopRetryGapDoublesAndEndsOutsideTheWindowWithoutAnArchiveProvide
 		}
 	}
 	if l1.calls[99] != 2 {
-		t.Fatalf("block 99 was read %d times, want 2: beyond MaxRetryAge it is given up", l1.calls[99])
+		t.Fatalf("block 99 was read %d times, want 2: beyond MaxRetryAge the loop hands it to the gap backfill", l1.calls[99])
 	}
-	if !lg.has("given up at head 151") || !lg.has("archive provider configured: true") {
-		t.Fatalf("the give-up was not logged by name: %v", lg.lines)
+	if !lg.has("handed to the gap backfill at head 151") || !lg.has("archive provider configured: true") {
+		t.Fatalf("the handover was not logged by name: %v", lg.lines)
 	}
 }
 
