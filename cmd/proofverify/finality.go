@@ -50,7 +50,7 @@ import (
 // addenda stored for the leg, and each stored level's evidence, judged by the registered Kinds against the pins. D0 is
 // recomputed from the verified Settlement's block; the stored addenda never supply it.
 func reportFinality(ctx context.Context, w io.Writer, db *sql.DB, id uuid.UUID, reg *finality.Registry, pins *finality.Pins) int {
-	repo := database.NewFinalityAddendaRepository(database.NewClientFromDB(db))
+	repo := database.NewFinalityAddendaRepository(database.NewClientFromDB(db)).WithLegacyHeaders(database.NewFinalityCaptureStore(database.NewClientFromDB(db)))
 	ref, err := repo.LegRef(ctx, id.String())
 	if err != nil {
 		if n, ok := finality.AsNamed(err); ok {
@@ -247,7 +247,7 @@ func settlementFromDB(ctx context.Context, dsn, proofID string) (*legSettlement,
 		return nil, err
 	}
 	defer db.Close()
-	repo := database.NewFinalityAddendaRepository(database.NewClientFromDB(db))
+	repo := database.NewFinalityAddendaRepository(database.NewClientFromDB(db)).WithLegacyHeaders(database.NewFinalityCaptureStore(database.NewClientFromDB(db)))
 	ref, err := repo.LegRef(ctx, proofID)
 	if err != nil {
 		return nil, err

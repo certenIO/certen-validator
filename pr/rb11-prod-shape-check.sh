@@ -38,6 +38,14 @@ MAX_GZ=$((12 * 1024 * 1024))           # compressed bundle bound for sampling
 case "$SAMPLE" in ''|*[!0-9]*) SAMPLE=20 ;; esac
 [ "$SAMPLE" -gt 20 ] && SAMPLE=20
 [ "$SAMPLE" -lt 1 ] && SAMPLE=1
+LEGACY_SCAN="${LEGACY_SCAN:-1500}"   # (b4) at most this many of the OLDEST settled legs are looked at to find the legacy bundles
+case "$LEGACY_SCAN" in ''|*[!0-9]*) LEGACY_SCAN=1500 ;; esac
+[ "$LEGACY_SCAN" -gt 5000 ] && LEGACY_SCAN=5000
+[ "$LEGACY_SCAN" -lt 1 ] && LEGACY_SCAN=1
+LEGACY_SAMPLE="${LEGACY_SAMPLE:-$SAMPLE}"   # (b4) legacy bundles examined by SQL (default = SAMPLE, at most 1000: all 191 take about a minute)
+case "$LEGACY_SAMPLE" in ''|*[!0-9]*) LEGACY_SAMPLE=$SAMPLE ;; esac
+[ "$LEGACY_SAMPLE" -gt 1000 ] && LEGACY_SAMPLE=1000
+[ "$LEGACY_SAMPLE" -lt 1 ] && LEGACY_SAMPLE=1
 
 # The supported chains of the S7 table (pkg/finality/table.go): Sepolia, Base Sepolia, Arbitrum Sepolia, Adiri.
 CHAINS_SQL="11155111,84532,421614,2017"
@@ -1232,6 +1240,163 @@ else
 fi
 
 # ==============================================================================================================================
+# (b4) RB12-LEGACY-191: the LEGACY bundles (a component 5 written before block_header_rlp was captured): the assumptions
+#      pkg/finality/legacyhdr and database.FinalityAddendaRepository.LegacyLegs make about them, on the OLDEST bundles of settled legs
+# ==============================================================================================================================
+section "(b4) legacy bundles (execution proof WITHOUT block_header_rlp): looking through the oldest bundles of settled legs (at most $LEGACY_SCAN) for $LEGACY_SAMPLE legacy ones to examine"
+FACTSL="$tmp/factsl.txt"; : >"$FACTSL"
+L_EXAMINED=0; L_FOUND=0; L_NOCOMP=0; L_WITHHDR=0; L_BAD=0; L_DISAGREE=0
+
+# SQL boolean: the 32-integer array $1 renders (lower-case hex, 0x-prefixed) as the string in the jsonb text $2
+arrhex_eq() {
+  printf "((SELECT '0x' || string_agg(lpad(to_hex((e.v)::int), 2, '0'), '' ORDER BY e.o) FROM jsonb_array_elements_text(%s) WITH ORDINALITY AS e(v, o)) = lower(%s))" "$1" "$2"
+}
+
+legacy_facts_sql() {  # $1 = settlement_block_number, $2 = settlement_tx_hash, $3 = summary chain_id (all validated), JSON file $4
+  local C="j #> '{$P5}'"
+  printf 'BEGIN TRANSACTION READ ONLY;\nWITH b0 AS (SELECT $%s$' "$TAG"
+  cat "$4"
+  printf '$%s$::jsonb AS j), b AS (SELECT j, (jsonb_typeof(j #> %s)=%s) AS c5 FROM b0), l AS (SELECT j, c5, (c5 AND (j #> %s) <> %s::jsonb AND coalesce(j #>> %s,%s)=%s) AS leg FROM b)\n' "$TAG" "'{$P5}'" "'object'" "'{$P5}'" "'{}'" "'{$P5,block_header_rlp}'" "''" "''"
+  echo "SELECT 'L:legacy', CASE WHEN NOT c5 OR (j #> '{$P5}') = '{}'::jsonb THEN 'no_component' WHEN leg THEN 'legacy' ELSE 'with_header' END FROM l"
+  # key set: every member is one of the 13 the live legacy bundles hold (logs is absent in some); the 8 the code reads are present
+  echo " UNION ALL SELECT 'L:keys.known', CASE WHEN NOT leg THEN 'n/a' WHEN NOT EXISTS (SELECT 1 FROM jsonb_object_keys($C) k WHERE k NOT IN ('block_hash','block_number','chain_id','logs','raw_receipt','receipt_inclusion_proof','receipts_root','status','transactions_root','tx_hash','tx_inclusion_proof','verified_at','verified_by')) THEN 'ok' ELSE 'bad' END FROM l"
+  echo " UNION ALL SELECT 'L:keys.required', CASE WHEN NOT leg THEN 'n/a' WHEN (SELECT count(*) FROM jsonb_object_keys($C) k WHERE k IN ('block_hash','block_number','chain_id','receipt_inclusion_proof','receipts_root','transactions_root','tx_hash','tx_inclusion_proof'))=8 THEN 'ok' ELSE 'bad' END FROM l"
+  local f
+  for f in block_hash tx_hash transactions_root receipts_root; do
+    echo " UNION ALL SELECT 'L:$f.hex', CASE WHEN NOT leg THEN 'n/a' WHEN jsonb_typeof(j #> '{$P5,$f}')='string' AND (j #>> '{$P5,$f}') ~ '^0x[0-9a-fA-F]{64}\$' THEN 'ok' ELSE 'bad' END FROM l"
+  done
+  echo " UNION ALL SELECT 'L:block_number.uint', CASE WHEN NOT leg THEN 'n/a' WHEN jsonb_typeof(j #> '{$P5,block_number}')='number' AND (j #>> '{$P5,block_number}') ~ '^[0-9]{1,18}\$' THEN 'ok' ELSE 'bad' END FROM l"
+  echo " UNION ALL SELECT 'L:chain_id.decimal_in_table', CASE WHEN NOT leg THEN 'n/a' WHEN jsonb_typeof(j #> '{$P5,chain_id}')='string' AND (j #>> '{$P5,chain_id}') ~ '^[0-9]{1,18}\$' AND (j #>> '{$P5,chain_id}')::numeric IN ($CHAINS_SQL) THEN 'ok' ELSE 'bad' END FROM l"
+  echo " UNION ALL SELECT 'L:chain_id.equals_summary', CASE WHEN NOT leg THEN 'n/a' WHEN (j #>> '{$P5,chain_id}') = '$3' THEN 'ok' ELSE 'bad' END FROM l"
+  echo " UNION ALL SELECT 'L:settlement_columns.set', CASE WHEN NOT leg THEN 'n/a' WHEN '$1' <> '' AND '$2' <> '' THEN 'ok' ELSE 'absent' END FROM l"
+  echo " UNION ALL SELECT 'L:block_number.equals_settlement', CASE WHEN NOT leg OR '$1' = '' THEN 'n/a' WHEN (j #>> '{$P5,block_number}') = '$1' THEN 'ok' ELSE 'bad' END FROM l"
+  echo " UNION ALL SELECT 'L:tx_hash.equals_settlement', CASE WHEN NOT leg OR '$2' = '' THEN 'n/a' WHEN lower(j #>> '{$P5,tx_hash}') = lower('$2') THEN 'ok' ELSE 'bad' END FROM l"
+  # the stored proofs: the shapes ethproof.InclusionProof reads (the same facts as the new-shape check), and that the roots are PRESENT and agree
+  local ip X
+  for ip in tx_inclusion_proof receipt_inclusion_proof; do
+    X="(j #> '{$P5,$ip}')"
+    echo " UNION ALL SELECT 'L:$ip.arrays', CASE WHEN NOT leg THEN 'n/a' WHEN jsonb_typeof($X)<>'object' THEN 'bad' WHEN $(arr32 "$X->'leaf_hash'") AND $(arr32 "$X->'expected_root'") AND jsonb_typeof($X->'proof_hashes')='array' AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements($X->'proof_hashes') h WHERE NOT ($(arr32 h))) THEN 'ok' ELSE 'bad' END FROM l"
+    echo " UNION ALL SELECT 'L:$ip.nodes_leaf', CASE WHEN NOT leg THEN 'n/a' WHEN jsonb_typeof($X)<>'object' THEN 'bad' WHEN jsonb_typeof($X->'proof_nodes')='array' AND jsonb_array_length($X->'proof_nodes')>0 AND jsonb_array_length($X->'proof_nodes')=jsonb_array_length($X->'proof_hashes') AND jsonb_typeof($X->'leaf_value')='string' AND ($X->>'leaf_value') ~ '^[A-Za-z0-9+/]+={0,2}\$' AND jsonb_typeof($X->'leaf_index')='number' AND ($X->>'leaf_index') ~ '^[0-9]+\$' THEN 'ok' ELSE 'bad' END FROM l"
+  done
+  echo " UNION ALL SELECT 'L:tx_root.equals_proof_root', CASE WHEN NOT leg OR NOT $(arr32 "(j #> '{$P5,tx_inclusion_proof,expected_root}')") THEN 'n/a' WHEN $(arrhex_eq "(j #> '{$P5,tx_inclusion_proof,expected_root}')" "(j #>> '{$P5,transactions_root}')") THEN 'ok' ELSE 'bad' END FROM l"
+  echo " UNION ALL SELECT 'L:receipts_root.equals_proof_root', CASE WHEN NOT leg OR NOT $(arr32 "(j #> '{$P5,receipt_inclusion_proof,expected_root}')") THEN 'n/a' WHEN $(arrhex_eq "(j #> '{$P5,receipt_inclusion_proof,expected_root}')" "(j #>> '{$P5,receipts_root}')") THEN 'ok' ELSE 'bad' END FROM l"
+  echo " UNION ALL SELECT 'L:tx_leaf_hash.equals_tx_hash', CASE WHEN NOT leg OR NOT $(arr32 "(j #> '{$P5,tx_inclusion_proof,leaf_hash}')") THEN 'n/a' WHEN $(arrhex_eq "(j #> '{$P5,tx_inclusion_proof,leaf_hash}')" "(j #>> '{$P5,tx_hash}')") THEN 'ok' ELSE 'bad' END FROM l"
+  echo " UNION ALL SELECT 'L:tx_leaf_index.equals_receipt_leaf_index', CASE WHEN NOT leg THEN 'n/a' WHEN (j #>> '{$P5,tx_inclusion_proof,leaf_index}') = (j #>> '{$P5,receipt_inclusion_proof,leaf_index}') THEN 'ok' ELSE 'bad' END FROM l"
+  # POST-DEPLOY progress: is the reconstructed header of THIS leg in proof_finality_capture (item legacyleg/header, keyed by the bundle's own
+  # chain, block number and block hash, 1..16384 bytes)? 'absent' is the state before the deploy and during the first ~15 minutes after it.
+  local HR="CASE WHEN NOT leg THEN 'n/a' WHEN NOT (jsonb_typeof(j #> '{$P5,chain_id}')='string' AND (j #>> '{$P5,chain_id}') ~ '^[0-9]{1,18}\$' AND jsonb_typeof(j #> '{$P5,block_number}')='number' AND (j #>> '{$P5,block_number}') ~ '^[0-9]{1,18}\$' AND jsonb_typeof(j #> '{$P5,block_hash}')='string' AND (j #>> '{$P5,block_hash}') ~ '^0x[0-9a-fA-F]{64}\$') THEN 'n/a' WHEN EXISTS (SELECT 1 FROM proof_finality_capture c WHERE c.chain = (j #>> '{$P5,chain_id}')::bigint AND c.l1_block = (j #>> '{$P5,block_number}')::bigint AND c.l1_hash = decode(substr(j #>> '{$P5,block_hash}', 3), 'hex') AND c.item = 'legacyleg/header' AND octet_length(c.bytes) BETWEEN 1 AND 16384) THEN 'ok' ELSE 'absent' END"
+  echo " UNION ALL SELECT 'L:header_row', $HR FROM l"
+  echo " UNION ALL SELECT CASE WHEN leg AND jsonb_typeof(j #> '{$P5,chain_id}')='string' AND (j #>> '{$P5,chain_id}') ~ '^[0-9]{1,18}\$' THEN 'L:header_row@' || (j #>> '{$P5,chain_id}') ELSE 'L:header_row@none' END, $HR FROM l"
+  echo ";"
+  echo "ROLLBACK;"
+}
+
+if [ "$HAVE_TOOLS" -eq 1 ] && llist=$(sqlro <<SQL
+SELECT pb.bundle_id, octet_length(pb.bundle_data), COALESCE(pa.settlement_block_number::text,''), COALESCE(pa.settlement_tx_hash,''), COALESCE(pa.artifact_json->>'chain_id','')
+  FROM proof_artifacts pa JOIN LATERAL (SELECT bundle_id, bundle_data FROM proof_bundles WHERE proof_id = pa.proof_id ORDER BY created_at DESC, bundle_id DESC LIMIT 1) pb ON true
+ ORDER BY pa.created_at ASC, pa.proof_id ASC LIMIT $LEGACY_SCAN;
+SQL
+); then
+  LLIST_N=$(printf '%s\n' "$llist" | grep -c .)
+  while IFS='|' read -r bid size sbn stx sch; do
+    [ -n "$bid" ] || continue
+    [ "$L_FOUND" -lt "$LEGACY_SAMPLE" ] || break
+    printf '%s' "$bid" | grep -Eq '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' || { L_BAD=$((L_BAD + 1)); continue; }
+    printf '%s' "$sbn" | grep -Eq '^[0-9]*$' || sbn=''
+    printf '%s' "$stx" | grep -Eq '^(0x)?[0-9a-fA-F]*$' || stx=''
+    printf '%s' "$sch" | grep -Eq '^[0-9A-Za-z_.:-]*$' || sch='?'
+    L_EXAMINED=$((L_EXAMINED + 1))
+    if [ "${size:-0}" -gt "$MAX_GZ" ]; then L_BAD=$((L_BAD + 1)); continue; fi
+    echo "SELECT replace(encode(bundle_data,'base64'), E'\\n', '') FROM proof_bundles WHERE bundle_id = '$bid';" | sqlro >"$tmp/lb.b64" || { L_BAD=$((L_BAD + 1)); continue; }
+    base64 -d "$tmp/lb.b64" 2>/dev/null | gzip -dc 2>"$tmp/lgz.err" | head -c $((MAX_JSON + 1)) >"$tmp/lb.json"
+    jsz=$(wc -c <"$tmp/lb.json" | tr -d ' ')
+    if [ -s "$tmp/lgz.err" ] || [ "$jsz" -eq 0 ] || [ "$jsz" -gt "$MAX_JSON" ]; then L_BAD=$((L_BAD + 1)); continue; fi
+    # cheap prefilter on the decompressed text (the writer's JSON is compact): a component 5 that is empty or absent, or that holds a
+    # header, is not a candidate. The SQL below classifies the candidates authoritatively (L:legacy), so a miss here can only lose a
+    # candidate, never admit a wrong one; the counts printed say how many bundles each way.
+    if ! grep -Eq '"5_execution_proof"[[:space:]]*:[[:space:]]*{[[:space:]]*"' "$tmp/lb.json"; then L_NOCOMP=$((L_NOCOMP + 1)); rm -f "$tmp/lb.b64" "$tmp/lb.json"; continue; fi
+    if grep -Eq '"block_header_rlp"[[:space:]]*:[[:space:]]*"0x' "$tmp/lb.json"; then L_WITHHDR=$((L_WITHHDR + 1)); rm -f "$tmp/lb.b64" "$tmp/lb.json"; continue; fi
+    legacy_facts_sql "$sbn" "$stx" "$sch" "$tmp/lb.json" >"$tmp/lfacts.sql"
+    if [ -n "$PSQL_LOCAL_URL" ]; then
+      PGOPTIONS='-c default_transaction_read_only=on -c client_min_messages=warning' psql -X -q -At -F '|' -v ON_ERROR_STOP=1 -P pager=off "$PSQL_LOCAL_URL" <"$tmp/lfacts.sql" >"$tmp/lfacts.out" 2>"$ERRF"
+    else
+      docker exec -i -e PGOPTIONS='-c default_transaction_read_only=on -c client_min_messages=warning' "$PGCONTAINER" \
+        sh -c 'db=$1; shift; exec psql -U "$POSTGRES_USER" -d "$db" -X -q -At -F "|" -v ON_ERROR_STOP=1 -P pager=off "$@"' _ "$PGDB" <"$tmp/lfacts.sql" >"$tmp/lfacts.out" 2>"$ERRF"
+    fi
+    if [ $? -ne 0 ]; then L_BAD=$((L_BAD + 1)); echo "        bundle $L_EXAMINED: not examinable as jsonb: $(errline)"; rm -f "$tmp/lb.b64" "$tmp/lb.json" "$tmp/lfacts.sql" "$tmp/lfacts.out"; continue; fi
+    kind=$(awk -F'|' '$1=="L:legacy"{print $2}' "$tmp/lfacts.out" | tr -d '\r')
+    case "$kind" in
+      legacy) L_FOUND=$((L_FOUND + 1)); tr -d '\r' <"$tmp/lfacts.out" >>"$FACTSL" ;;
+      with_header) L_WITHHDR=$((L_WITHHDR + 1)); L_DISAGREE=$((L_DISAGREE + 1)) ;;
+      *) L_NOCOMP=$((L_NOCOMP + 1)); L_DISAGREE=$((L_DISAGREE + 1)) ;;
+    esac
+    rm -f "$tmp/lb.b64" "$tmp/lb.json" "$tmp/lfacts.sql" "$tmp/lfacts.out"
+  done <<EOF
+$llist
+EOF
+  awk -F'|' '{c[$1"|"$2]++} END{for(k in c) print k"|"c[k]}' "$FACTSL" | sort >"$tmp/lagg.txt"
+  lcnt() { awk -F'|' -v k="$1|$2" '($1"|"$2)==k{print $3; f=1} END{if(!f) print 0}' "$tmp/lagg.txt"; }
+  info "looked through $L_EXAMINED of the oldest bundles: $L_FOUND legacy (examined), $L_WITHHDR with a header, $L_NOCOMP without an execution proof, $L_BAD unreadable or too big; the SQL disagreed with the text prefilter on $L_DISAGREE"
+  if [ "$L_FOUND" -eq 0 ]; then
+    rec WARN L1 "legacy bundles (execution proof without block_header_rlp) exist among the oldest settled legs" ">= 1 (Addendum G: 191 of 782)" "none among the $L_EXAMINED oldest looked through (raise LEGACY_SCAN)"
+  else
+    if [ "$L_DISAGREE" -eq 0 ]; then st=PASS; else st=FAIL; fi
+    rec $st L1 "legacy bundles (execution proof without block_header_rlp) exist among the oldest settled legs, and the text prefilter and the SQL classification agree" ">= 1 (Addendum G: 191 of 782); 0 disagreements" "$L_FOUND examined in the $L_EXAMINED oldest looked through; $L_DISAGREE disagreements"
+    n=2
+    for f in keys.known:"every member is one of the 13 live legacy members (the code reads 8 of them)" keys.required:"the 8 members legacyhdr.ParseLeg requires are present (chain_id block_number block_hash tx_hash transactions_root receipts_root and both proofs)" \
+        block_hash.hex:"0x + 64 hex (common.Hash)" tx_hash.hex:"0x + 64 hex" transactions_root.hex:"0x + 64 hex" receipts_root.hex:"0x + 64 hex" \
+        block_number.uint:"JSON number, decimal integer (the header's number must equal it)" chain_id.decimal_in_table:"decimal string, one of $CHAINS_SQL" chain_id.equals_summary:"equals the proof's summary chain_id (LegSettlement refuses a disagreement)" \
+        settlement_columns.set:"proof_artifacts.settlement_block_number and settlement_tx_hash are set (the cross-check LegSettlement makes)" block_number.equals_settlement:"equals proof_artifacts.settlement_block_number" tx_hash.equals_settlement:"equals proof_artifacts.settlement_tx_hash" \
+        tx_inclusion_proof.arrays:"leaf_hash, expected_root, proof_hashes are arrays of 32 integers (ethproof.InclusionProof JSON)" receipt_inclusion_proof.arrays:"leaf_hash, expected_root, proof_hashes are arrays of 32 integers" \
+        tx_inclusion_proof.nodes_leaf:"proof_nodes non-empty and as long as proof_hashes, leaf_value base64, leaf_index a non-negative integer" receipt_inclusion_proof.nodes_leaf:"proof_nodes non-empty and as long as proof_hashes, leaf_value base64, leaf_index a non-negative integer" \
+        tx_root.equals_proof_root:"transactions_root equals the tx proof's expected_root (the roots are present and agree)" receipts_root.equals_proof_root:"receipts_root equals the receipt proof's expected_root" \
+        tx_leaf_hash.equals_tx_hash:"the tx proof's leaf_hash equals tx_hash" tx_leaf_index.equals_receipt_leaf_index:"both proofs are for the same index"; do
+      nm=${f%%:*}; desc=${f#*:}
+      ok=$(lcnt "L:$nm" ok); bad=$(lcnt "L:$nm" bad); ab=$(lcnt "L:$nm" absent); na=$(lcnt "L:$nm" "n/a")
+      if [ "$bad" -gt 0 ] || [ "$ab" -gt 0 ]; then st=FAIL; elif [ "$ok" -eq 0 ]; then st=WARN; elif [ "$na" -gt 0 ]; then st=WARN; else st=PASS; fi
+      rec $st "L$n" "legacy component 5 .$nm: $desc" "$L_FOUND of $L_FOUND ok" "ok $ok, bad $bad, absent $ab, not applicable $na"
+      n=$((n + 1))
+    done
+    # POST-DEPLOY: the reconstructed headers (item legacyleg/header of proof_finality_capture). C7 above covers only the syntax of every row
+    # (chain in the table, item-name pattern, 32-byte hash); these say whether the rows are the RIGHT ones.
+    hr_ok=$(lcnt "L:header_row" ok); hr_ab=$(lcnt "L:header_row" absent); hr_na=$(lcnt "L:header_row" "n/a")
+    if [ "$hr_na" -gt 0 ]; then st=FAIL; elif [ "$hr_ab" -gt 0 ]; then st=WARN; else st=PASS; fi
+    rec $st "L$n" "reconstructed header present for each examined legacy leg (proof_finality_capture item legacyleg/header at the bundle's own chain, block number and block hash, 1..16384 bytes)" "$L_FOUND of $L_FOUND present once reconstruction has finished (WARN before the deploy and during the first ~15 min after it)" "present $hr_ok, absent $hr_ab, not checkable $hr_na"
+    n=$((n + 1))
+    if out=$(echo "SELECT count(*), count(*) FILTER (WHERE octet_length(bytes) NOT BETWEEN 1 AND 16384 OR octet_length(l1_hash) <> 32), count(DISTINCT chain) FROM proof_finality_capture WHERE item = \$\$legacyleg/header\$\$;" | sqlro); then
+      IFS='|' read -r h_n h_bad h_chains <<EOF
+$out
+EOF
+      [ "$h_bad" -eq 0 ] && st=PASS || st=FAIL
+      rec $st "L$n" "every legacyleg/header row is 1..16384 bytes with a 32-byte hash" "0 violations" "$h_bad violations in $h_n rows over $h_chains chains"
+      n=$((n + 1))
+    else rec FAIL "L$n" "legacyleg/header rows query" "query answers" "failed: $(errline)"; n=$((n + 1)); fi
+    # every stored row must belong to a legacy bundle: when ALL legacy bundles were looked at, rows per chain <= present per chain
+    if [ "$L_FOUND" -lt "$LEGACY_SAMPLE" ] && [ "$LLIST_N" -lt "$LEGACY_SCAN" ]; then
+      if rows=$(echo "SELECT chain, count(*) FROM proof_finality_capture WHERE item = \$\$legacyleg/header\$\$ GROUP BY 1 ORDER BY 1;" | sqlro); then
+        orphan=0; total=0
+        while IFS='|' read -r rc rn; do
+          [ -n "$rc" ] || continue
+          total=$((total + rn))
+          have=$(lcnt "L:header_row@$rc" ok)
+          [ "$rn" -le "$have" ] || orphan=$((orphan + rn - have))
+        done <<EOF
+$rows
+EOF
+        [ "$orphan" -eq 0 ] && st=PASS || st=FAIL
+        rec $st "L$n" "no legacyleg/header row exists beyond the legacy bundles of its chain (all $L_FOUND legacy bundles looked at)" "rows per chain <= legacy bundles with a row on that chain" "$total rows in all; rows that match no legacy bundle: $orphan"
+        n=$((n + 1))
+      else rec FAIL "L$n" "legacyleg/header per chain" "query answers" "failed: $(errline)"; n=$((n + 1)); fi
+    else
+      info "rows-that-match-no-legacy-bundle check skipped: only $L_FOUND legacy bundles were examined (LEGACY_SAMPLE=$LEGACY_SAMPLE, LEGACY_SCAN=$LEGACY_SCAN); run with LEGACY_SAMPLE=1000 for the exhaustive form"
+    fi
+    info "what this cannot show (N4): that the header the providers serve hashes to block_hash and that the proofs resolve from it. That is legacyhdr.Leg.Verify; 'finalitylegacyheaders' runs it offline over extracted components."
+  fi
+elif [ "$HAVE_TOOLS" -eq 1 ]; then
+  rec FAIL L1 "list the oldest bundles of settled legs" "query answers" "failed: $(errline)"
+fi
+
+# ==============================================================================================================================
 # what this script CANNOT check read-only
 # ==============================================================================================================================
 section "NOT CHECKABLE read-only from here (assumptions that live elsewhere)"
@@ -1242,6 +1407,7 @@ cat <<'EOF'
  N2  Provider behaviour: public RPC / light-client / beacon availability and rate limits, eth_getProof windows, and whether the
      provider text redaction holds. These are runtime facts of RB11's runtime tests, not data shapes.
  N3  The CONTENT of bundles older than the newest SAMPLE (default and maximum 20): only SQL-level facts (existence, format, size) are known for them.
+     EXCEPT the oldest legacy bundles examined by (b4) (RB12-LEGACY-191).
      Re-run with a different window by editing the ORDER BY of the sampling query in a copy, or sample by proof via proofverify.
  N4  Whether the decoded Settlement VERIFIES (keccak256(header) = block_hash, MPT proofs resolve): PostgreSQL has no keccak256 or
      RLP. Shape (hex lengths, array widths, base64) is examined here; verification is `proofverify --finality` / the Go tests on the

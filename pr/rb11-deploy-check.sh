@@ -101,9 +101,15 @@ SQL
 
 echo; echo "-- captured L1 bytes (proof_finality_capture; insert-only, never deleted)"
 sql <<'SQL'
+-- the LIVE capture loops' rows: the legacy-header rows (RB12-LEGACY-191, item legacyleg/header) are keyed by the rollup's OWN block number
+-- and are written by a reconstruction that finishes within ~15 minutes of a deploy, so they are left out here: counted with them, max_l1_block
+-- of chains 84532 / 421614 would read 46.4M / 313.9M and rows_last_30m would be > 0 even with a dead capture loop.
 SELECT chain, count(*) AS rows, max(l1_block) AS max_l1_block, pg_size_pretty(sum(octet_length(bytes))::bigint) AS bytes,
        count(*) FILTER (WHERE created_at > now() - interval '30 minutes') AS rows_last_30m, max(created_at) AS newest
-  FROM proof_finality_capture GROUP BY 1 ORDER BY 1;
+  FROM proof_finality_capture WHERE item <> 'legacyleg/header' GROUP BY 1 ORDER BY 1;
+-- the reconstructed headers of legacy legs, apart (insert-only; 191 in all once reconstruction has finished: Base 119, Sepolia 65, Arbitrum 7)
+SELECT chain, count(*) AS legacy_header_rows, min(l1_block) AS min_block, max(l1_block) AS max_block, max(created_at) AS newest
+  FROM proof_finality_capture WHERE item = 'legacyleg/header' GROUP BY 1 ORDER BY 1;
 SELECT chain, max(l1_block) AS cursor_block, max(created_at) AS cursor_written
   FROM proof_finality_capture WHERE item IN ('runtime/cursor', 'cursor') GROUP BY 1 ORDER BY 1;
 SQL
@@ -159,7 +165,8 @@ exit "$fail"
 #         build; the leg is asked again at the pending interval and nothing failed. Many of these with certen_finality_memory_refused_total
 #         rising is a budget (CERTEN_FINALITY_MEMORY_BUDGET_BYTES) or concurrency question, not a defect of a leg.
 #     capture pseudo rows: none in a healthy first hour; a row there is a capture loop's named unavailability state (see the deploy guide, 3.2).
-#     proof_finality_capture: chain 84532 and 421614 rows_last_30m > 0 whenever those chains posted batches in the window (Base posts about
+#     proof_finality_capture (live capture rows only; the legacyleg/header rows are the separate legacy_header_rows table below it, growing to 119 / 65 / 7
+#       rows on 84532 / 11155111 / 421614 within about 15 minutes of the deploy and then still): chain 84532 and 421614 rows_last_30m > 0 whenever those chains posted batches in the window (Base posts about
 #       every few minutes, Arbitrum batches likewise), and the cursor block within about 60 L1 blocks of the Sepolia head.
 #
 # FAILURE (investigate now): any panic line; any "stored addendum chain does not verify" (certen_finality_chain_broken_total); capture

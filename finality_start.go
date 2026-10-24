@@ -66,9 +66,13 @@ func startFinality(ctx context.Context, dbClient *database.Client, logf func(str
 		finality.AnnounceUpgraderDisabled(logf, finruntime.StartFailure(logf, err))
 		return nil
 	}
-	repo := database.NewFinalityAddendaRepository(dbClient)
+	// The header of a legacy leg (a bundle whose execution proof was written before block_header_rlp was captured) is read from the capture
+	// store the legacy-header loop (pkg/finality/legacyhdr, RB12-LEGACY-191) fills; the store is not trusted, the stored proofs are verified
+	// against the header like any other. Without this wiring the 191 legs stay no_block_header: TestTheProcessWiresTheLegacyHeaderLoopAndItsHeaderStore.
+	capture := database.NewFinalityCaptureStore(dbClient)
+	repo := database.NewFinalityAddendaRepository(dbClient).WithLegacyHeaders(capture)
 	wire, err := finruntime.Wire(cfg, finruntime.Deps{
-		Registry: finalityRegistry, Store: database.NewFinalityCaptureStore(dbClient),
+		Registry: finalityRegistry, Store: capture, Legacy: repo,
 		Status: database.NewFinalityStatusRepository(dbClient), Logf: logf,
 	})
 	if err != nil {
