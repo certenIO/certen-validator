@@ -368,9 +368,32 @@ func captureSlack(cfg Config) uint64 {
 func wireArb(reg *finality.Registry, env Env, d Deps, clock loopClock, logf func(string, ...any), cache *lcCache) error {
 	cfg := env.Config
 	hdr := &baseposted.JSONRPCSource{BlockURLs: env.L1Block, ProofURLs: env.L1Proof, Client: env.HTTP}
-	if err := reg.RegisterProver(&arbposted.Builder{Store: env.Store, L2: &ArbL2{URLs: cfg.ArbL2, HTTP: env.HTTP},
+	builder := &arbposted.Builder{Store: env.Store, L2: &ArbL2{URLs: cfg.ArbL2, HTTP: env.HTTP},
 		L1: &ArbL1{LC: lcPlain{cache}, Headers: hdr}, Pins: env.Pins, Now: d.Now,
-		Prefix: finality.PrefixPolicy{MaxBlocks: cfg.PrefixMax, Floor: cfg.PrefixFloor}}); err != nil {
+		Prefix: finality.PrefixPolicy{MaxBlocks: cfg.PrefixMax, Floor: cfg.PrefixFloor}}
+	// the batch index (RB12-INDEX-B): built as batches are captured, read by the builder; off by CERTEN_FINALITY_ARB_INDEX=off, and named off by a
+	// bad setting (finality_index_disabled), in which case the builder reads every captured batch as before
+	var indexer finality.CaptureIndexer
+	if cfg.ArbIndexDisabled != nil {
+		finality.AnnounceIndexDisabled(logf, cfg.ArbIndexDisabled)
+	}
+	if cfg.ArbIndex {
+		r, err := arbposted.NewIndexReader(env.Store, env.Pins, cfg.ArbIndexGeneration)
+		if err != nil {
+			return err
+		}
+		builder.Index = r
+		durable := env.Durable
+		if durable == nil {
+			durable = env.Store
+		}
+		ix, err := arbposted.NewIndexer(durable, env.Pins, cfg.ArbIndexGeneration, arbposted.IndexConfig{BlocksPerStep: cfg.IndexBlocks, StepBudget: cfg.IndexStep, Logf: logf})
+		if err != nil {
+			return err
+		}
+		indexer = ix
+	}
+	if err := reg.RegisterProver(builder); err != nil {
 		return err
 	}
 	if err := reg.RegisterProver(&arbbuild.Prover{Pins: env.Pins, Store: env.Store,
@@ -392,7 +415,18 @@ func wireArb(reg *finality.Registry, env Env, d Deps, clock loopClock, logf func
 	}
 	arbLease.Span, arbLease.Chunk = cfg.PrefixLease, uint64(cfg.PrefixArbScan)
 	cp.Prefix = &capture.PrefixScan{Lease: arbLease, Blocks: uint64(cfg.PrefixArbScan), Now: d.Now}
-	return reg.RegisterCapturer(&ArbPostedLoop{Cap: cp, Providers: Hosts(providers), Status: d.Status, Pins: env.Pins, Every: cfg.CaptureEvery, Logf: logf, Clock: clock})
+	var noter finality.LateBlockNoter
+	if nt, ok := indexer.(finality.LateBlockNoter); ok {
+		noter = nt
+	}
+	if err := reg.RegisterCapturer(&ArbPostedLoop{Cap: cp, Providers: Hosts(providers), Status: d.Status, Pins: env.Pins, Every: cfg.CaptureEvery, Logf: logf, Clock: clock,
+		Notes: noter}); err != nil {
+		return err
+	}
+	if indexer == nil {
+		return nil
+	}
+	return reg.RegisterCapturer(&ArbIndexLoop{Index: indexer, Store: env.Store, Memory: env.Memory, Status: d.Status, Pins: env.Pins, Every: cfg.CaptureEvery, Logf: logf, Clock: clock})
 }
 
 // sepoliaSpineGap is the floor of the gap between two requests to the Sepolia execution endpoints, for all legs together: the spine is

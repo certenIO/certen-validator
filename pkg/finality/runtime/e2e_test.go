@@ -181,8 +181,8 @@ func TestRuntimeWiringEndToEndAgainstFakeProviders(t *testing.T) {
 			t.Fatalf("chain %d has no prover after Wire", chain)
 		}
 	}
-	if got := len(reg.Capturers()); got != 3 {
-		t.Fatalf("%d capture loops registered, want the Base inbox loop, the Base gap backfill loop and the Arbitrum sequencer-inbox loop", got)
+	if got := len(reg.Capturers()); got != 4 {
+		t.Fatalf("%d capture loops registered, want the Base inbox loop, the Base gap backfill loop, the Arbitrum sequencer-inbox loop and the Arbitrum batch-index loop", got)
 	}
 
 	lctx, stop := context.WithCancel(ctx)

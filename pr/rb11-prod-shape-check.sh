@@ -1161,6 +1161,190 @@ EOF
 else rec FAIL C12 "prefix requests query" "query answers" "failed: $(errline)"; fi
 
 # ==============================================================================================================================
+# (h2) RB12-INDEX-B: the stored-data assumptions of the Arbitrum batch index and of the indexed build (READ-ONLY, aggregates only)
+# ==============================================================================================================================
+# The index reads the Arbitrum (421614) capture rows through ListByRange/Get and the aggregate BlockBounds query over the capture's own cursor rows.
+# Every number it assumes about those rows is checked here against the live table: the batch record layout (magic ACB1; the item's N, the record's
+# L1 block and hash are the row's own key), the header row of every batch's block (the indexer takes the L1 timestamp from it), the blob rows
+# (131,168 bytes, contiguous from 0, as many as the record's versioned hashes), the time bounds (the lookup window assumes a width the caps allow),
+# dense batch numbers (a gap is a capture hole), the proofs (a batch with none is kept by every reader and named l1_proof_window_unavailable), the
+# capture cursor rows, the index rows themselves, and the plans of the statements a build runs. Positions and counts only; nothing of a row is printed.
+section "(h2) Arbitrum batch index (RB12-INDEX-B): batch records, header rows, blobs, time bounds, dense numbers, proofs, cursor rows, index rows, plans"
+if out=$(sqlro <<'SQL'
+WITH b AS (SELECT l1_block, l1_hash, item, bytes, octet_length(bytes) AS len, split_part(item,'/',2)::bigint AS n
+           FROM proof_finality_capture WHERE chain=421614 AND item ~ '^batch/[0-9]+$'),
+f AS (SELECT *,
+  CASE WHEN len >= 237 THEN ('x'||encode(substring(bytes from 5 for 8),'hex'))::bit(64)::bigint END AS rn,
+  CASE WHEN len >= 237 THEN ('x'||encode(substring(bytes from 150 for 8),'hex'))::bit(64)::bigint END AS rblock,
+  CASE WHEN len >= 237 THEN substring(bytes from 158 for 32) END AS rhash,
+  CASE WHEN len >= 237 THEN get_byte(bytes,148) END AS loc,
+  CASE WHEN len >= 237 THEN ('x'||encode(substring(bytes from 109 for 8),'hex'))::bit(64)::bigint END AS mints,
+  CASE WHEN len >= 237 THEN ('x'||encode(substring(bytes from 117 for 8),'hex'))::bit(64)::bigint END AS maxts
+  FROM b)
+SELECT count(*),
+  count(*) FILTER (WHERE len < 237 OR substring(bytes from 1 for 4) <> 'ACB1'::bytea),
+  count(*) FILTER (WHERE len >= 237 AND (rn <> n OR rblock <> l1_block OR rhash <> l1_hash)),
+  count(*) FILTER (WHERE len >= 237 AND loc NOT IN (0,1,2,3)),
+  count(*) FILTER (WHERE len >= 237 AND mints > maxts),
+  coalesce(max(maxts - mints) FILTER (WHERE len >= 237),0),
+  count(*) FILTER (WHERE len >= 237 AND maxts - mints > 104000),
+  (SELECT count(*) FROM f x WHERE NOT EXISTS (SELECT 1 FROM proof_finality_capture h WHERE h.chain=421614 AND h.l1_block=x.l1_block AND h.l1_hash=x.l1_hash AND h.item='header' AND octet_length(h.bytes) BETWEEN 400 AND 2000))
+FROM f;
+SQL
+); then
+  IFS='|' read -r j_n j_bad j_key j_loc j_inv j_wmax j_wide j_nohdr <<EOF
+$out
+EOF
+  if [ "$j_n" -eq 0 ]; then rec WARN J1 "Arbitrum batch records have the ACB1 layout and are the batch their key names" "rows to examine" "no batch rows"
+  else
+    [ "$((j_bad + j_key + j_loc + j_inv))" -eq 0 ] && st=PASS || st=FAIL
+    rec $st J1 "every batch/N row is an ACB1 record whose N, L1 block and L1 hash are its own key's, with a known data location and minTs <= maxTs (the indexer records anything else as index_block_unindexable{batch_row_malformed})" "0 violations in $j_n rows" "bad magic or length $j_bad; N/block/hash differ from the key $j_key; unknown data location $j_loc; minTs > maxTs $j_inv"
+    [ "$j_nohdr" -eq 0 ] && st=PASS || st=FAIL
+    rec $st J2 "the block of every batch has its header row (the indexer takes the L1 timestamp of the batch from it; a block without one is index_block_unindexable{header_row_malformed})" "0 batches without a header row" "$j_nohdr of $j_n"
+    [ "$j_wide" -eq 0 ] && st=PASS || st=WARN
+    rec $st J3 "the time bounds of every batch are no wider than the lookup window assumes (delay cap 100000 s + future cap 4000 s; a wider batch is index_block_unindexable{window_beyond_cap}: the SequencerInbox time variation would have been raised)" "max width <= 104000 s" "widest $j_wmax s; wider than the caps allow: $j_wide of $j_n"
+  fi
+else rec FAIL J1 "batch record query" "query answers" "failed: $(errline)"; fi
+
+if out=$(sqlro <<'SQL'
+WITH b AS (SELECT l1_block, l1_hash, split_part(item,'/',2)::bigint AS n, bytes, octet_length(bytes) AS len
+           FROM proof_finality_capture WHERE chain=421614 AND item ~ '^batch/[0-9]+$' AND octet_length(bytes) >= 237),
+v AS (SELECT l1_block, l1_hash, n, get_byte(bytes,148) AS loc,
+        ('x'||encode(substring(bytes from 230 for 4),'hex'))::bit(32)::bigint AS txlen, bytes, len FROM b),
+w AS (SELECT l1_block, l1_hash, n, loc, CASE WHEN 237 + txlen <= len THEN ('x'||encode(substring(bytes from (234 + txlen)::int for 4),'hex'))::bit(32)::bigint END AS nvh FROM v),
+r AS (SELECT l1_block, l1_hash, split_part(item,'/',2)::bigint AS n, split_part(item,'/',3)::int AS j, octet_length(bytes) AS len
+      FROM proof_finality_capture WHERE chain=421614 AND item ~ '^blob/[0-9]+/[0-9]+$'),
+g AS (SELECT l1_block, l1_hash, n, count(*) AS have, min(j) AS mn, max(j) AS mx, count(*) FILTER (WHERE len <> 131168) AS badlen FROM r GROUP BY 1,2,3)
+SELECT (SELECT count(*) FROM w WHERE loc = 3),
+  (SELECT count(*) FROM w WHERE loc = 3 AND nvh IS NULL),
+  (SELECT count(*) FROM w LEFT JOIN g USING (l1_block, l1_hash, n) WHERE w.loc = 3 AND w.nvh IS NOT NULL AND coalesce(g.have,0) < w.nvh),
+  (SELECT count(*) FROM w JOIN g USING (l1_block, l1_hash, n) WHERE w.loc = 3 AND (g.mn <> 0 OR g.mx + 1 <> g.have OR g.have > w.nvh)),
+  (SELECT coalesce(sum(badlen),0) FROM g),
+  (SELECT count(*) FROM g WHERE NOT EXISTS (SELECT 1 FROM w WHERE w.l1_block=g.l1_block AND w.l1_hash=g.l1_hash AND w.n=g.n)),
+  (SELECT count(*) FROM w WHERE loc IN (0,1) AND NOT EXISTS (SELECT 1 FROM proof_finality_capture c WHERE c.chain=421614 AND c.l1_block=w.l1_block AND c.l1_hash=w.l1_hash AND c.item='calldata/'||w.n));
+SQL
+); then
+  IFS='|' read -r k_blob k_nonvh k_open k_gap k_len k_orphan k_nocd <<EOF
+$out
+EOF
+  [ "$k_nonvh" -eq 0 ] && [ "$k_gap" -eq 0 ] && [ "$k_len" -eq 0 ] && [ "$k_orphan" -eq 0 ] && [ "$k_nocd" -eq 0 ] && st=PASS || st=FAIL
+  rec $st J4 "blob rows are 131168 bytes, contiguous from index 0, never more than the record's versioned hashes, and belong to a batch record; calldata batches have their calldata row (the indexer reads exactly this)" "0 violations among $k_blob blob batches" "record whose versioned-hash count cannot be read $k_nonvh; non-contiguous or surplus blob rows $k_gap; blob rows not 131168 bytes $k_len; blob rows of no batch record $k_orphan; calldata batches without their row $k_nocd"
+  [ "$k_open" -eq 0 ] && st=PASS || st=WARN
+  rec $st J5 "every blob batch has all its blob rows (an open batch has no entry, is named l1_blob_unavailable to a leg whose window holds it, and is indexed by the next step once its blobs arrive)" "0 open batches" "$k_open of $k_blob blob batches have fewer blob rows than versioned hashes"
+else rec FAIL J4 "blob rows query" "query answers" "failed: $(errline)"; fi
+
+if out=$(sqlro <<'SQL'
+WITH b AS (SELECT split_part(item,'/',2)::bigint AS n, l1_block FROM proof_finality_capture WHERE chain=421614 AND item ~ '^batch/[0-9]+$'),
+d AS (SELECT DISTINCT n FROM b),
+gaps AS (SELECT n, lead(n) OVER (ORDER BY n) AS nx FROM d)
+SELECT (SELECT count(*) FROM b), (SELECT count(*) FROM d), coalesce((SELECT min(n) FROM d),0), coalesce((SELECT max(n) FROM d),0),
+  (SELECT count(*) FROM gaps WHERE nx IS NOT NULL AND nx > n + 1),
+  (SELECT count(*) FROM (SELECT n FROM b GROUP BY n HAVING count(*) > 1) t),
+  (SELECT count(*) FROM (SELECT n, l1_block, lag(l1_block) OVER (ORDER BY n, l1_block) AS pl FROM b) t WHERE pl IS NOT NULL AND l1_block < pl);
+SQL
+); then
+  IFS='|' read -r n_rows n_dist n_min n_max n_gaps n_twins n_back <<EOF
+$out
+EOF
+  [ "$n_gaps" -eq 0 ] && st=PASS || st=WARN
+  rec $st J6 "batch numbers are dense (a gap between two captured batches is a capture hole a leg may be told of as l1_capture_gap, only when the Bridge holds both neighbours)" "0 gaps" "rows $n_rows, distinct N $n_dist ($n_min..$n_max); gaps $n_gaps"
+  [ "$n_back" -eq 0 ] && st=PASS || st=WARN
+  rec $st J7 "batch numbers rise with the L1 block (the window of a lookup relies on the L1 timestamp rising with N); reorg twins (one N under two blocks) are served in (N, L1 block) order and the one the Bridge does not hold is skipped" "0 decreases of the L1 block along N" "decreases $n_back; N under more than one row (reorg twins) $n_twins"
+else rec FAIL J6 "batch number query" "query answers" "failed: $(errline)"; fi
+
+if out=$(sqlro <<'SQL'
+WITH b AS (SELECT l1_block, split_part(item,'/',2)::bigint AS n FROM proof_finality_capture WHERE chain=421614 AND item ~ '^batch/[0-9]+$')
+SELECT (SELECT count(*) FROM b),
+  (SELECT count(*) FROM b WHERE NOT EXISTS (SELECT 1 FROM proof_finality_capture p WHERE p.chain=421614 AND p.l1_block >= b.l1_block AND p.l1_block <= b.l1_block + 16384 AND p.item = 'proof/'||b.n)),
+  (SELECT count(*) FROM proof_finality_capture p WHERE p.chain=421614 AND p.item ~ '^proof/[0-9]+$' AND EXISTS (SELECT 1 FROM b WHERE b.n = split_part(p.item,'/',2)::bigint AND p.l1_block < b.l1_block)),
+  (SELECT count(*) FROM proof_finality_capture p WHERE p.chain=421614 AND p.item ~ '^proof/[0-9]+$' AND NOT EXISTS (SELECT 1 FROM proof_finality_capture h WHERE h.chain=421614 AND h.l1_block=p.l1_block AND h.l1_hash=p.l1_hash AND h.item='header'));
+SQL
+); then
+  IFS='|' read -r p_n p_none p_below p_nohdr <<EOF
+$out
+EOF
+  [ "$p_none" -eq 0 ] && st=PASS || st=WARN
+  rec $st J8 "every batch has a captured proof within 16384 blocks of its own block (the proof listing widens 64 / 1024 / 16384 / table; a batch with none is UNPROVEN: kept by every reader, l1_proof_window_unavailable to a build)" "0 batches without a nearby proof" "$p_none of $p_n batches have none"
+  [ "$p_below" -eq 0 ] && st=PASS || st=WARN
+  rec $st J9 "no proof row lies BELOW the block of its own batch (the capturer tries the head and the two blocks under it; a proof below the batch shows the slot still empty and is never used: BuildFor starts at the batch's block)" "0 proofs below their batch" "$p_below proof rows lie below the batch they are for"
+  [ "$p_nohdr" -eq 0 ] && st=PASS || st=WARN
+  rec $st J10 "every proof row has the header row of its proof block (AuthorizeBatch takes the state root from it; a proof without one judges nothing)" "0 proofs without a header row" "$p_nohdr proof rows"
+else rec FAIL J8 "proof query" "query answers" "failed: $(errline)"; fi
+
+if out=$(sqlro <<'SQL'
+SELECT count(*), count(*) FILTER (WHERE octet_length(bytes) <> 40),
+  count(*) FILTER (WHERE octet_length(bytes) = 40 AND (('x'||encode(substring(bytes from 1 for 8),'hex'))::bit(64)::bigint <> l1_block OR substring(bytes from 9 for 32) <> l1_hash)),
+  coalesce(min(l1_block),0), coalesce(max(l1_block),0)
+FROM proof_finality_capture WHERE chain=421614 AND item='cursor';
+SQL
+); then
+  IFS='|' read -r c_n c_len c_val c_min c_max <<EOF
+$out
+EOF
+  if [ "$c_n" -eq 0 ]; then rec WARN J11 "Arbitrum capture cursor rows (item cursor) are 40 bytes, block and hash of their own key (the reader and the loop read their bounds with one aggregate query)" "rows to examine" "no cursor rows"
+  else
+    [ "$((c_len + c_val))" -eq 0 ] && st=PASS || st=FAIL
+    rec $st J11 "Arbitrum capture cursor rows are 40 bytes, be64(block) || hash of their own key; the index steps to the highest and starts its search a first-scan slack (512) below the lowest" "0 violations in $c_n rows" "length != 40: $c_len; value differs from the key: $c_val; first cursor block $c_min, latest $c_max"
+  fi
+else rec FAIL J11 "cursor query" "query answers" "failed: $(errline)"; fi
+
+if out=$(sqlro <<'SQL'
+SELECT (SELECT coalesce(min(l1_block),0) FROM proof_finality_capture WHERE chain=421614 AND item ~ '^batch/[0-9]+$'),
+  (SELECT coalesce(min(l1_block),0) FROM proof_finality_capture WHERE chain=421614 AND item='cursor');
+SQL
+); then
+  IFS='|' read -r x_first x_cur <<EOF
+$out
+EOF
+  if [ "$x_first" -eq 0 ] || [ "$x_cur" -eq 0 ]; then rec WARN J12 "no batch lies more than 512 blocks below the first capture cursor row (the time search starts there; a batch captured by a prefix scan below it needs the reader's Floor hook)" "rows to examine" "no batch or cursor rows"
+  else
+    [ "$x_first" -ge "$((x_cur - 512))" ] && st=PASS || st=WARN
+    rec $st J12 "no batch lies more than 512 blocks below the first capture cursor row (the time search starts there; a batch captured by a prefix scan below it needs the reader's Floor hook)" "lowest batch block >= first cursor block - 512" "lowest batch block $x_first, first cursor block $x_cur"
+  fi
+else rec FAIL J12 "first-block query" "query answers" "failed: $(errline)"; fi
+
+if out=$(sqlro <<'SQL'
+SELECT count(*),
+  count(*) FILTER (WHERE item !~ '^idx/g[0-9]+/arb/(f/[0-9]+|e/[0-9]+/[0-9]+/[0-9]+|q/[0-9]+|u|cursor)$'),
+  count(*) FILTER (WHERE item ~ '^idx/g[0-9]+/arb/f/'),
+  count(*) FILTER (WHERE item ~ '^idx/g[0-9]+/arb/e/'),
+  count(*) FILTER (WHERE item ~ '^idx/g[0-9]+/arb/q/'),
+  count(*) FILTER (WHERE item ~ '^idx/g[0-9]+/arb/u$'),
+  count(*) FILTER (WHERE item ~ '^idx/g[0-9]+/arb/cursor$' AND (octet_length(bytes) <> 8 OR l1_hash <> decode(repeat('00',32),'hex'))),
+  count(*) FILTER (WHERE item ~ '^idx/g[0-9]+/arb/(f|e)/' AND NOT EXISTS (SELECT 1 FROM proof_finality_capture s WHERE s.chain=421614 AND s.l1_block=p.l1_block AND s.l1_hash=p.l1_hash AND s.item ~ '^batch/[0-9]+$')),
+  coalesce(sum(octet_length(bytes)),0)
+FROM proof_finality_capture p WHERE chain=421614 AND item LIKE 'idx/%';
+SQL
+); then
+  IFS='|' read -r y_n y_name y_f y_e y_q y_u y_cur y_nobatch y_bytes <<EOF
+$out
+EOF
+  if [ "$y_n" -eq 0 ]; then rec WARN J13 "Arbitrum index rows (idx/g<G>/arb/...) have the documented names, sit at captured batch blocks and are small" "rows to examine" "no index rows yet (expected before the first deploy of the index; run again after the backfill)"
+  else
+    [ "$((y_name + y_cur + y_nobatch))" -eq 0 ] && st=PASS || st=FAIL
+    rec $st J13 "every Arbitrum index row has a documented name, digests and entries sit at blocks that hold a batch record, cursor rows are 8 bytes at the zero hash" "0 violations in $y_n rows" "bad names $y_name; cursor rows malformed $y_cur; digests/entries at a block with no batch record $y_nobatch; digests $y_f; entries $y_e; quarantine records $y_q (a self-check mismatch); unindexable records $y_u; index bytes $y_bytes"
+  fi
+else rec FAIL J13 "index row query" "query answers" "failed: $(errline)"; fi
+
+# the statements a build runs on this table, as plans (EXPLAIN without ANALYZE executes nothing)
+if plan=$(printf '%s\n' "EXPLAIN SELECT l1_block, l1_hash, item FROM proof_finality_capture WHERE chain = 421614 AND l1_block BETWEEN 11958043 AND 11958107 AND starts_with(item, 'proof/884511') ORDER BY l1_block, l1_hash, item;" | sqlro); then
+  case "$plan" in
+    *"Seq Scan"*) rec WARN J14 "the proof listing (chain, l1_block range of 65 blocks, item prefix) is served by the primary key index" "an Index Scan on proof_finality_capture_pkey" "the planner chose a sequential scan: $(printf '%s' "$plan" | head -1 | cut -c1-120) (acceptable only while the table is small)" ;;
+    *Index*) rec PASS J14 "the proof listing (chain, l1_block range of 65 blocks, item prefix) is served by the primary key index" "an Index Scan on proof_finality_capture_pkey" "$(printf '%s' "$plan" | head -1 | cut -c1-120)" ;;
+    *) rec WARN J14 "the proof listing plan" "an Index Scan" "unrecognised plan: $(printf '%s' "$plan" | head -1 | cut -c1-120)" ;;
+  esac
+else rec FAIL J14 "proof listing plan" "EXPLAIN answers" "failed: $(errline)"; fi
+if plan=$(printf '%s\n' "EXPLAIN SELECT l1_block, l1_hash, item FROM proof_finality_capture WHERE chain = 421614 AND l1_block BETWEEN 11958043 AND 11972000 AND starts_with(item, 'idx/g1/arb/e/') ORDER BY l1_block, l1_hash, item;" | sqlro); then
+  case "$plan" in
+    *Index*) rec PASS J15 "the entry name listing of a lookup window (chain, l1_block range, item prefix) is served by the primary key index" "an Index Scan on proof_finality_capture_pkey" "$(printf '%s' "$plan" | head -1 | cut -c1-120)" ;;
+    *) rec WARN J15 "the entry name listing of a lookup window" "an Index Scan on the primary key" "$(printf '%s' "$plan" | head -1 | cut -c1-120) (acceptable only while the table is small)" ;;
+  esac
+else rec FAIL J15 "entry listing plan" "EXPLAIN answers" "failed: $(errline)"; fi
+if plan=$(printf '%s\n' "EXPLAIN SELECT min(l1_block), max(l1_block) FROM proof_finality_capture WHERE chain = 421614 AND item = 'cursor';" | sqlro); then
+  rec PASS J16 "the capture cursor bounds (one aggregate query per build and per tick) are a plan the database can run" "a plan" "$(printf '%s' "$plan" | head -1 | cut -c1-140)"
+else rec FAIL J16 "cursor aggregate plan" "EXPLAIN answers" "failed: $(errline)"; fi
+
+# ==============================================================================================================================
 # (f) container environment hygiene (names only, never values)
 # ==============================================================================================================================
 section "(f) validator containers: finality and provider variables (SET / EMPTY / UNSET only; values are never read out) and /health/detailed"

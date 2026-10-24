@@ -204,7 +204,13 @@ type Report struct {
 	Proofs      []uint64
 	ProofBlock  uint64
 	Unavailable []uint64
-	Errors      []string // redacted
+	// Foreign lists the batches whose record the chain does not hold: the proof just stored shows another accumulator at slot N than the
+	// record's afterAcc (AuthorizeBatch). Their rows stay (the table is insert-only); no reader serves them.
+	Foreign []uint64
+	// BlobBlocks are the L1 blocks of the batches whose blob rows were all stored this tick: the data of a block the index may have passed while it was
+	// incomplete (the capture loop notes them to the indexer).
+	BlobBlocks []uint64
+	Errors     []string // redacted
 	// RB12-ARCHIVE-BACKFILL
 	PrefixScanned     uint64 // L1 blocks of prefix windows scanned this tick
 	PrefixBatches     int    // batches those scans captured
@@ -667,6 +673,7 @@ func (c *Capturer) fetchBlobs(ctx context.Context, rep *Report) {
 		}
 		if ok {
 			delete(c.needBlobs, n)
+			rep.BlobBlocks = append(rep.BlobBlocks, p.rec.L1Block)
 		}
 	}
 }
@@ -858,6 +865,15 @@ func (c *Capturer) proveAt(ctx context.Context, h Header, stateRoot [32]byte, jo
 			if j.kind == ProofBatchAcc {
 				delete(c.needProof, j.index)
 				rep.Proofs = append(rep.Proofs, j.index)
+				// the same authorization every reader applies: a record the stored proof contradicts is counted and reported here
+				if j.rec != nil && j.rec.rec.N == j.index {
+					view := ProofView{Rec: pr, Block: h.Number, StateRoot: stateRoot}
+					if AuthorizeBatch(j.rec.rec, c.Cfg.Bridge, SequencerAccSlot, []ProofView{view}) == AuthForeign {
+						rep.Foreign = append(rep.Foreign, j.index)
+						metrics.AddFinalityCaptureForeignTxs(c.Cfg.Chain, 1)
+						c.logf("capture: batch %d recorded at L1 block %d is not the batch the Bridge holds at slot %d (proof block %d): its record is foreign and is never served", j.index, j.rec.rec.L1Block, j.index, h.Number)
+					}
+				}
 			} else {
 				delete(c.wantDelayed, j.index)
 			}

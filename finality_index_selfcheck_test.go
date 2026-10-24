@@ -35,3 +35,14 @@ func TestFinalityIndexSelfCheckArguments(t *testing.T) {
 		t.Fatalf("a bad argument is the usage and its own exit code 5 (1 is a mismatch): %d %q", code, errw.String())
 	}
 }
+
+// RB12-INDEX-B: `validator finality-arb-index-selfcheck` has the same strict arguments and the same usage code.
+func TestFinalityArbIndexSelfCheckUsageIsExitCode5(t *testing.T) {
+	var out, errw bytes.Buffer
+	for _, args := range [][]string{{"--sample", "0"}, {"--sample"}, {"sample", "4"}, {"--sample", "1025"}} {
+		errw.Reset()
+		if code := runFinalityArbIndexSelfCheck(args, &out, &errw); code != 5 || !strings.Contains(errw.String(), "usage: certen-validator finality-arb-index-selfcheck") {
+			t.Fatalf("%v: want the usage and exit code 5 (1 is a mismatch), got %d %q", args, code, errw.String())
+		}
+	}
+}

@@ -53,8 +53,8 @@ func l1BlockNumberOf(raw []byte) (uint64, bool) {
 
 // coverage judges a leg whose batch is not among the captured batches: it returns the named state when the window in which the batch can lie
 // predates the capture (not requested, or requested and not yet scanned), holds an unfilled block, or was scanned completely without it; nil
-// means the batch may simply not be posted yet.
-func (b *Builder) coverage(ctx context.Context, ref finality.BlockRef, hdr finality.HeaderFields, txs [][]byte) (*finality.StateError, error) {
+// means the batch may simply not be posted yet. infer, when given, is the index path's own inference (see above).
+func (b *Builder) coverage(ctx context.Context, ref finality.BlockRef, hdr finality.HeaderFields, txs [][]byte, infer func() (*finality.StateError, error)) (*finality.StateError, error) {
 	hasStd := false
 	for _, tx := range txs {
 		if ethproof.TxType(tx) <= 4 {
@@ -120,6 +120,15 @@ func (b *Builder) coverage(ctx context.Context, ref finality.BlockRef, hdr final
 	}
 	if gs := gapState(pieces, start, end); gs != nil {
 		return gs, nil
+	}
+	// the index path's inference of a capture hole no record names (two proven batches with numbers missing between them) comes after the
+	// records and before the determinate verdict, as on Base: a window with a hole in the batch numbers was not scanned completely
+	if infer != nil {
+		if gs, err := infer(); err != nil {
+			return nil, err
+		} else if gs != nil {
+			return gs, nil
+		}
 	}
 	if last >= windowCompleteMargin && end <= last-windowCompleteMargin {
 		return finality.NewState(CodeWindowNoChannel, "chain", b.Chain(), "kind", KindName, "from", start, "to", end, "covered_to", last), nil
