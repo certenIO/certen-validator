@@ -237,6 +237,12 @@ func TestE1StatedOutcomes(t *testing.T) {
 		if res, err := capture.CaptureAttest(ctx, fc.config(src), capture.AttestRequest{TxHash: fc.attTx}); res != nil && res.Stated != nil && res.Stated.Reason == ci.StatedBlockTooLarge {
 			t.Fatalf("4096 transactions refused as too large: %v", err)
 		}
+		// and exactly 1 MiB of transactions is within the byte bound
+		src, _ = fc.source(honest)
+		src.oversize = &ethproof.Block{Header: hdr, Txs: [][]byte{bytes.Repeat([]byte{1}, lim.MaxBlockTxsBytes)}, Receipts: rcs}
+		if res, err := capture.CaptureAttest(ctx, fc.config(src), capture.AttestRequest{TxHash: fc.attTx}); res != nil && res.Stated != nil && res.Stated.Reason == ci.StatedBlockTooLarge {
+			t.Fatalf("1 MiB of transactions refused as too large: %v", err)
+		}
 	})
 }
 
