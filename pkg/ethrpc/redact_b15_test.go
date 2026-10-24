@@ -88,10 +88,11 @@ var b15Shapes = []struct{ name, text string }{
 // allocates (the cost model, measured as the smallest of three runs so that a goroutine of another test cannot add to it) and a gate that
 // holds the redaction at a chosen point while the mutex is probed. No test below reads a clock.
 
-// b15Cost is the bytes f allocates, the smallest of three runs.
+// b15Cost is the bytes f allocates, the smallest of five runs. TotalAlloc counts the allocations of every goroutine of the process, so a
+// goroutine of the runtime or of an earlier test can add a few KiB to a run on a loaded machine; the smallest run is the one it missed.
 func b15Cost(f func()) uint64 {
 	best := ^uint64(0)
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 5; i++ {
 		var a, b runtime.MemStats
 		runtime.ReadMemStats(&a)
 		f()
@@ -124,7 +125,12 @@ func TestB15_D1_FourMiBOfEveryShapeIsRedactedInABoundedTime(t *testing.T) {
 		quarter := sh.text[:len(sh.text)/4]
 		small := b15Cost(func() { _ = RedactText(quarter) })
 		t.Logf("%s: %d bytes allocated for %d, %d for %d", sh.name, big, len(sh.text), small, len(quarter))
-		if big > small+4096 || small > big+4096 {
+		// a cost that grew with the length would be four times as large for four times the text; what is allowed is the noise above
+		slack := small / 50
+		if slack < 16384 {
+			slack = 16384
+		}
+		if big > small+slack || small > big+slack {
 			t.Errorf("%s: RedactText of %d bytes allocated %d, of %d bytes %d: the cost depends on the length of the text", sh.name, len(sh.text), big, len(quarter), small)
 		}
 		if big > b15CostBound {
@@ -178,7 +184,7 @@ func b15Within(t *testing.T, ch <-chan struct{}, what string) {
 	t.Helper()
 	select {
 	case <-ch:
-	case <-time.After(2 * time.Minute):
+	case <-time.After(45 * time.Second):
 		t.Fatalf("hung: %s", what)
 	}
 }
