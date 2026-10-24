@@ -73,6 +73,7 @@ member makes the vector invalid (the loader refuses the set).
 | `reorder` | `container` | `list` (`codes`, `nodes`, `hopHeaders`, `spine`, `blockTxs`) | decode, reverse that list, re-encode WITHOUT validation (`EncodeUnvalidated`) |
 | `set_field` | `container`, `context`, `manifest`, `extension`, `world` | `path` (dot path in the JSON form of the target), `value` (JSON) | set a member of the structured form; for `container` the result is re-encoded WITHOUT validation; for `manifest` the manifest hash pin is recomputed unless the vector is about the pin (`world` decides) |
 | `unset_field` | `container`, `context`, `manifest`, `extension`, `world` | `path` | remove a member (a context member becomes zero / nil) |
+| `set_pin` | `manifest` | `value` (the pin: 64 lowercase hex digits) | make the pin the manifest bytes are loaded against that value instead of the sha256 of the (possibly edited) bytes: with unmodified or edited bytes and a pin that is not their hash the vector is about a corrupt manifest (VS8-001: stale pin) [F12] |
 
 The structured JSON form of `container` is `{chain, leg:{number,hash}, codes:[{address,runtime}], settle:{tag,stated?}, attest:{tag,stated?|attest?}, nodes:[hex]}`
 with hex for every byte string and decimal strings for integers; `context` is the `LegContext` members by the lower-case tokens of Freeze item 2a
@@ -125,7 +126,7 @@ set has, besides `<id>.json` (provenance: base, mutations, expected):
 |---|---|
 | `<id>.inputs.json` | `{format:"certen-contract-identity-inputs/1", id, container, manifest, extension, context}` (below) |
 | `<id>.expected.json` | exactly the `expected` object of `<id>.json` (a loader refuses a set in which they differ) |
-| `<id>.container.hex` | lowercase hex of the container bytes the Verifier receives (always present when `container` is not null) |
+| `<id>.inputs.container.hex` | lowercase hex of the container bytes the Verifier receives (always present when `container` is not null). It has its own name: the vector-level `<id>.container.hex` of the file table above is a different thing (a hand-built container that the mutation list may still modify), and a loader never reads one for the other [F11] |
 | `manifest.<sha256>.json`, `extension.<sha256>.json` | the raw manifest / extension DOCUMENTS, named by the sha256 of their bytes (identical documents are stored once per set) |
 
 `container` and `extension` are `null` or `{file, sha256}`; `manifest` is `{file, sha256, pin}` where `pin` (0x hex) is the hash the manifest bytes must have when loaded:

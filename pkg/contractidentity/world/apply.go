@@ -33,6 +33,7 @@ import (
 //	          set_field / unset_field on container      structured edit of the container, re-encoded WITHOUT validation
 //	          set_field / unset_field on context        edit one LegContext member
 //	          set_field / unset_field on manifest, extension   edit the manifest document (its pin is recomputed) / the extension document
+//	          set_pin on manifest                       make the pin the manifest bytes are loaded against that value (a stale pin: VS8-001)
 //
 // A header field can be forged without re-derivation through blocks.<name>.fields.<field> (an override of a derived header field); the
 // first mutations of a vector may select the profile with set_field world `chain` (a chain id) and `variant` (h0, s6silent, hops).
@@ -289,6 +290,7 @@ func Apply(m *ci.Manifest, spec *Spec, muts []ci.Mutation, container []byte) (*B
 	manifestRaw := ci.EmbeddedManifestBytes()
 	var extRaw []byte
 	var mTree, eTree any
+	var setPin *[32]byte
 	for i, mu := range muts {
 		switch mu.Target {
 		case "container":
@@ -300,6 +302,18 @@ func Apply(m *ci.Manifest, spec *Spec, muts []ci.Mutation, container []byte) (*B
 				return nil, fmt.Errorf("mutation %d (%s context %s): %w", i, mu.Op, mu.Path, err)
 			}
 		case "manifest":
+			if mu.Op == "set_pin" {
+				var hv string
+				_ = json.Unmarshal(mu.Value, &hv)
+				p, perr := hex.DecodeString(hv)
+				if perr != nil || len(p) != 32 {
+					return nil, fmt.Errorf("mutation %d (set_pin manifest): the value is not a sha256", i)
+				}
+				var pp [32]byte
+				copy(pp[:], p)
+				setPin = &pp
+				continue
+			}
 			if mTree == nil {
 				if mTree, err = fromJSON(manifestRaw); err != nil {
 					return nil, err
@@ -325,7 +339,12 @@ func Apply(m *ci.Manifest, spec *Spec, muts []ci.Mutation, container []byte) (*B
 		}
 		h := ci.ManifestHash(manifestRaw)
 		pin = &h
-		if mf, err = ci.LoadManifest(manifestRaw, h); err != nil {
+	}
+	if setPin != nil {
+		pin = setPin // the vector is about the pin: it is NOT recomputed
+	}
+	if pin != nil {
+		if mf, err = ci.LoadManifest(manifestRaw, *pin); err != nil {
 			st, ok := ci.AsState(err)
 			if !ok {
 				return nil, fmt.Errorf("the edited manifest: %w", err)
@@ -870,7 +889,7 @@ func VectorFile(id string, muts []ci.Mutation, expected ci.Expected) ([]byte, er
 }
 
 // WriteSet writes a published vector set: world.json (the Spec), one `<id>.json` per vector, the MATERIALISED files of every vector
-// (`<id>.inputs.json`, `<id>.expected.json`, `<id>.container.hex` and the content-addressed `manifest.<sha256>.json` /
+// (`<id>.inputs.json`, `<id>.expected.json`, `<id>.inputs.container.hex` and the content-addressed `manifest.<sha256>.json` /
 // `extension.<sha256>.json`, FORMAT.md) and the MANIFEST of sha256 lines (sorted by file name, LF line ends) [C2]. Every vector is built through
 // Builder.Build from the world.json being written, so a runner without a world builder (TypeScript) judges exactly the inputs a Go runner
 // with this world builder would build, and the whole set is computed before the first file is written: a vector that cannot be built leaves

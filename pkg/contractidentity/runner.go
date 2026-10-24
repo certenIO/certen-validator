@@ -415,6 +415,8 @@ func earlyReport(ctx LegContext, m *Manifest, st *StateError) (Report, error) {
 		return Report{}, err
 	}
 	r := Report{Headline: h, Residuals: FixedResiduals(), Chain: ctx.Chain, ManifestSHA256: m.SHA256, ManifestSource: m.Source}
-	r.S6 = s6Report(ctx)
+	if s := s6Report(ctx); s.validate() == nil {
+		r.S6 = s // a valid triple is printed; an incomplete or invalid one is not (F8)
+	}
 	return r, nil
 }

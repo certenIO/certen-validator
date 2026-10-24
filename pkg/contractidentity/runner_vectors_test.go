@@ -172,7 +172,7 @@ func TestMaterialisedSetLoaderRefusals(t *testing.T) {
 			delete(m, manifestName)
 		},
 		"manifest file missing":  func(m map[string]string) { delete(m, manifestName) },
-		"container file altered": func(m map[string]string) { m["VS8-010.container.hex"] = "00\n" },
+		"container file altered": func(m map[string]string) { m["VS8-010.inputs.container.hex"] = "00\n" },
 		"unknown member in inputs": func(m map[string]string) {
 			m[inputsName] = strings.Replace(m[inputsName], `"format"`, `"extra": 1, "format"`, 1)
 		},
@@ -195,7 +195,7 @@ func TestMaterialisedSetLoaderRefusals(t *testing.T) {
 		t.Error("materialised without the manifest document")
 	}
 	// the container hex is the full container
-	if got := files["VS8-010.container.hex"]; strings.TrimSpace(got) != hex.EncodeToString(cont) {
+	if got := files["VS8-010.inputs.container.hex"]; strings.TrimSpace(got) != hex.EncodeToString(cont) {
 		t.Errorf("container.hex %s", got)
 	}
 }

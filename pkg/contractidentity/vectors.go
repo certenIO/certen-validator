@@ -35,7 +35,7 @@ const (
 )
 
 // MutationOps is the CLOSED vocabulary of mutation operations a vector may use (FORMAT.md lists the same set).
-var MutationOps = []string{"set_byte", "replace_hex", "truncate", "append_hex", "drop_node", "add_node", "reorder", "set_field", "unset_field"}
+var MutationOps = []string{"set_byte", "replace_hex", "truncate", "append_hex", "drop_node", "add_node", "reorder", "set_field", "unset_field", "set_pin"}
 
 // MutationTargets are the artifacts a mutation can address.
 var MutationTargets = []string{"container", "context", "manifest", "extension", "world"}
@@ -121,6 +121,9 @@ func LoadVectorIndex(raw []byte, reg *Registry) (*VectorIndex, error) {
 	return idx, nil
 }
 
+// pinRe is the value of a set_pin mutation.
+var pinRe = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
 // Mutation is one step of a vector's mutation list. Which of the optional members each operation uses is fixed in FORMAT.md and checked
 // by Validate.
 type Mutation struct {
@@ -175,7 +178,7 @@ func (m Mutation) Validate() error {
 	if m.Path != "" && m.Op != "set_field" && m.Op != "unset_field" {
 		unused = append(unused, "path")
 	}
-	if len(m.Value) > 0 && m.Op != "set_byte" && m.Op != "append_hex" && m.Op != "add_node" && m.Op != "set_field" {
+	if len(m.Value) > 0 && m.Op != "set_byte" && m.Op != "append_hex" && m.Op != "add_node" && m.Op != "set_field" && m.Op != "set_pin" {
 		unused = append(unused, "value")
 	}
 	if len(unused) > 0 {
@@ -239,6 +242,13 @@ func (m Mutation) Validate() error {
 		if !ok {
 			return fmt.Errorf("mutation reorder: list %q is not one of %v", m.List, reorderLists)
 		}
+	case "set_pin":
+		if err := targetOK("manifest"); err != nil {
+			return err
+		}
+		if !pinRe.MatchString(hexValue) {
+			return fmt.Errorf("mutation set_pin needs a value: the pin as 64 lowercase hex digits (the sha256 the manifest bytes are loaded against)")
+		}
 	case "set_field", "unset_field":
 		if err := targetOK("container", "context", "manifest", "extension", "world"); err != nil {
 			return err
@@ -289,6 +299,9 @@ func (v Vector) SpecID() string { return strings.SplitN(v.ID, ".", 2)[0] }
 func (v Vector) Validate() error {
 	if !regexp.MustCompile(`^VS8-\d{3}(\.[A-Za-z0-9_-]+)?$`).MatchString(v.ID) {
 		return fmt.Errorf("vector id %q", v.ID)
+	}
+	if c := strings.SplitN(v.ID, ".", 2); len(c) == 2 && (c[1] == "inputs" || c[1] == "expected") {
+		return fmt.Errorf("vector %s: the case names inputs and expected are reserved (they would collide with the materialised files <id>.inputs.json, <id>.expected.json)", v.ID)
 	}
 	if v.Base != "H0" {
 		return fmt.Errorf("vector %s: base %q (the only base world is H0)", v.ID, v.Base)
@@ -391,6 +404,7 @@ func LoadVectorSet(dir string) (*VectorSet, error) {
 		names = append(names, n)
 	}
 	sort.Strings(names)
+	materialisedContainers := map[string]bool{}
 	for _, n := range names {
 		switch {
 		case n == "world.json" || n == "SUPERSEDED.md":
@@ -403,6 +417,9 @@ func LoadVectorSet(dir string) (*VectorSet, error) {
 			materialised[strings.TrimSuffix(n, ".inputs.json")] = true
 		case strings.HasSuffix(n, ".expected.json"):
 			expectedFiles[strings.TrimSuffix(n, ".expected.json")] = true
+		case strings.HasSuffix(n, ".inputs.container.hex"):
+			// the container of a MATERIALISED vector: referenced (and hash-checked) by <id>.inputs.json, never a vector-level container
+			materialisedContainers[strings.TrimSuffix(n, ".inputs.container.hex")] = true
 		case strings.HasSuffix(n, ".container.hex"):
 			id := strings.TrimSuffix(n, ".container.hex")
 			b, err := hex.DecodeString(strings.TrimSpace(string(files[n])))
@@ -429,6 +446,11 @@ func LoadVectorSet(dir string) (*VectorSet, error) {
 			set.Vectors = append(set.Vectors, v)
 		default:
 			return nil, fmt.Errorf("contractidentity: vector set %s: unexpected file %s", dir, n)
+		}
+	}
+	for id := range materialisedContainers {
+		if !materialised[id] {
+			return nil, fmt.Errorf("contractidentity: vector set %s: %s.inputs.container.hex has no %s.inputs.json", dir, id, id)
 		}
 	}
 	for id := range expectedFiles {

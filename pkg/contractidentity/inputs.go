@@ -24,7 +24,7 @@ import (
 //
 //	<id>.inputs.json     the resolved Inputs (this file's InputsFile)
 //	<id>.expected.json   the Expected of the vector (the same document as `expected` in <id>.json)
-//	<id>.container.hex   the container bytes the Verifier receives
+//	<id>.inputs.container.hex   the container bytes the Verifier receives (its own name: a vector-level <id>.container.hex is a different file)
 //	manifest.<sha256>.json, extension.<sha256>.json   the raw manifest / extension documents, named by the sha256 of their bytes
 //
 // Every file is listed in the set's MANIFEST. The encoding of a LegContext is canonical-style JSON: bytes as 0x hex, integers as decimal
@@ -452,7 +452,7 @@ func Materialise(id string, in Inputs, expected Expected) (MaterialisedFiles, er
 	}
 	f := InputsFile{Format: InputsFormat, ID: id, Context: ctx}
 	if in.Container != nil {
-		name := id + ".container.hex"
+		name := id + ".inputs.container.hex"
 		files[name] = []byte(hex.EncodeToString(in.Container) + "\n")
 		f.Container = &FileRef{File: name, SHA256: sha256Hex(files[name])}
 	}

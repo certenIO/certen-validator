@@ -161,6 +161,48 @@ func TestVS8_003_ShadowIsAResultThroughRunSet(t *testing.T) {
 	}
 }
 
+// VS8-001 with a STALE PIN (F12): set_pin on the manifest makes the pin something other than the hash of the bytes, whether the bytes are the
+// embedded ones or an edited copy; the refusal is manifest_corrupt, the result of the vector, and the verifier is never reached. A set_pin that
+// equals the real pin changes nothing.
+func TestVS8_001_StalePinIsAResultThroughRunSet(t *testing.T) {
+	_, _, raw := worldJSON(t, sepolia, VariantH0)
+	embeddedPin := hex.EncodeToString(func() []byte { h := ci.ManifestHash(ci.EmbeddedManifestBytes()); return h[:] }())
+	reached := 0
+	ver := ci.VerifierFunc(func(ci.LegContext, []byte, *ci.Manifest) (ci.Report, error) {
+		reached++
+		return okReport(), nil
+	})
+	edit := mutation("set_field", "manifest", "policy.minimumGovernanceLevel.min", 0)
+	for name, tc := range map[string]struct {
+		muts    []ci.Mutation
+		corrupt bool
+	}{
+		"unmodified bytes, another pin":     {[]ci.Mutation{mutation("set_pin", "manifest", "", strings.Repeat("ab", 32))}, true},
+		"edited bytes, the embedded pin":    {[]ci.Mutation{edit, mutation("set_pin", "manifest", "", embeddedPin)}, true},
+		"set_pin before the edit also wins": {[]ci.Mutation{mutation("set_pin", "manifest", "", embeddedPin), edit}, true},
+		"unmodified bytes, the real pin":    {[]ci.Mutation{mutation("set_pin", "manifest", "", embeddedPin)}, false},
+	} {
+		exp := ci.Expected{Headline: ci.HeadlineVerified}
+		if tc.corrupt {
+			exp = refusedExpected(ci.CodeManifestCorrupt, `{}`)
+		}
+		v := ci.Vector{ID: "VS8-001.stale_pin", Base: "H0", Mutations: tc.muts, Expected: exp}
+		before := reached
+		res := ci.RunSet(&ci.VectorSet{Vectors: []ci.Vector{v}, World: raw}, Builder{}, ver)
+		if len(res) != 1 || res[0].Outcome != ci.OutcomePass {
+			t.Errorf("%s: %+v", name, res)
+		}
+		if (reached-before == 1) == tc.corrupt {
+			t.Errorf("%s: verifier reached %d times for corrupt=%v", name, reached-before, tc.corrupt)
+		}
+	}
+	// the pin is carried in the inputs: the stale value, not the hash of the bytes
+	in, err := Builder{}.Build(raw, ci.Vector{ID: "VS8-001.stale_pin", Base: "H0", Mutations: []ci.Mutation{mutation("set_pin", "manifest", "", strings.Repeat("ab", 32))}}, nil)
+	if err != nil || in.ManifestPin == nil || hex.EncodeToString(in.ManifestPin[:]) != strings.Repeat("ab", 32) {
+		t.Fatalf("inputs pin %v (%v)", in.ManifestPin, err)
+	}
+}
+
 // ---- WriteSet writes the materialised files (C2) ----
 
 func okReport() ci.Report {
@@ -195,6 +237,8 @@ func TestWriteSetMaterialisesEveryVector(t *testing.T) {
 		{ID: "VS8-012.append", Base: "H0", Mutations: []ci.Mutation{{Op: "append_hex", Target: "container", Value: json.RawMessage(`"00"`)}}, Expected: ci.Expected{Headline: ci.HeadlineVerified}},
 		{ID: "VS8-003.eip2935", Base: "H0", Mutations: []ci.Mutation{shadowMutation(t)}, Expected: refusedExpected(ci.CodeManifestShadow, `{"table":"eip2935","key":"84532"}`)},
 		{ID: "VS8-100.edited", Base: "H0", Mutations: []ci.Mutation{mutation("set_field", "manifest", "policy.minimumGovernanceLevel.min", 0)}, Expected: ci.Expected{Headline: ci.HeadlineVerified}},
+		// a stale pin: the bytes are the embedded ones, the pin is another hash (VS8-001, F12)
+		{ID: "VS8-001.stale_pin", Base: "H0", Mutations: []ci.Mutation{mutation("set_pin", "manifest", "", strings.Repeat("ab", 32))}, Expected: refusedExpected(ci.CodeManifestCorrupt, `{}`)},
 		{ID: "VS8-102.hops_base", Base: "H0", Mutations: []ci.Mutation{Set("chain", 84532), Set("variant", "hops")}, Expected: ci.Expected{Headline: ci.HeadlineVerified}},
 	}
 	dir := filepath.Join(t.TempDir(), "worldmat1")
@@ -210,7 +254,7 @@ func TestWriteSetMaterialisesEveryVector(t *testing.T) {
 		listed[strings.SplitN(l, "  ", 2)[1]] = true
 	}
 	for _, v := range vecs {
-		for _, suffix := range []string{".json", ".inputs.json", ".expected.json", ".container.hex"} {
+		for _, suffix := range []string{".json", ".inputs.json", ".expected.json", ".inputs.container.hex"} {
 			if !listed[v.ID+suffix] {
 				t.Errorf("MANIFEST does not list %s%s", v.ID, suffix)
 			}
@@ -262,8 +306,8 @@ func TestWriteSetMaterialisesEveryVector(t *testing.T) {
 			t.Errorf("%s: %s %s", r.ID, r.Outcome, r.Detail)
 		}
 	}
-	if len(seen) != len(vecs)-1 {
-		t.Errorf("the verifier was reached %d times, want %d (the shadow vector is a step 0 result)", len(seen), len(vecs)-1)
+	if len(seen) != len(vecs)-2 {
+		t.Errorf("the verifier was reached %d times, want %d (the shadow and the stale-pin vectors are step 0 results)", len(seen), len(vecs)-2)
 	}
 
 	// deterministic: a second write of the same input is byte-identical

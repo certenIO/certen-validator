@@ -189,27 +189,54 @@ func (r Report) Validate() error {
 			return fmt.Errorf("contractidentity: report: rules_judged id %q outside the vocabulary", id)
 		}
 	}
-	if !Check("s6_status", string(r.S6.Status)) {
-		return fmt.Errorf("contractidentity: report: s6 status %q", r.S6.Status)
-	}
-	switch r.S6.Status {
-	case S6Silent:
-		if !Check("s6_reason", r.S6.Reason) || r.S6.State != "" {
-			return fmt.Errorf("contractidentity: report: s6_silent needs a reason and no state")
+	if r.S6 == (S6Report{}) {
+		// the s6 object is printed in every outcome of step 3 onwards; a framework refusal of steps 0-1b happens before S6 is judged and the
+		// context's own triple may be exactly what was incomplete (context_incomplete{s6}), so it prints none [F8]
+		if !r.isPreludeRefusal() {
+			return fmt.Errorf("contractidentity: report: the s6 object is missing")
 		}
-	case S6NotProven:
-		if r.S6.State == "" || r.S6.Reason != "" {
-			return fmt.Errorf("contractidentity: report: s6_not_proven needs a state and no reason")
-		}
-	default:
-		if r.S6.Reason != "" || r.S6.State != "" {
-			return fmt.Errorf("contractidentity: report: s6_proven carries no reason and no state")
-		}
+	} else if err := r.S6.validate(); err != nil {
+		return err
 	}
 	if !Check("manifest_source", r.ManifestSource) {
 		return fmt.Errorf("contractidentity: report: manifest_source %q", r.ManifestSource)
 	}
 	return nil
+}
+
+// validate checks the s6 triple: a status of the vocabulary with the reason or state it requires and nothing else.
+func (s S6Report) validate() error {
+	if !Check("s6_status", string(s.Status)) {
+		return fmt.Errorf("contractidentity: report: s6 status %q", s.Status)
+	}
+	switch s.Status {
+	case S6Silent:
+		if !Check("s6_reason", s.Reason) || s.State != "" {
+			return fmt.Errorf("contractidentity: report: s6_silent needs a reason and no state")
+		}
+	case S6NotProven:
+		if s.State == "" || s.Reason != "" {
+			return fmt.Errorf("contractidentity: report: s6_not_proven needs a state and no reason")
+		}
+	default:
+		if s.Reason != "" || s.State != "" {
+			return fmt.Errorf("contractidentity: report: s6_proven carries no reason and no state")
+		}
+	}
+	return nil
+}
+
+// isPreludeRefusal is a refused headline whose first refusal is a framework state and that carries no part: the run ended in steps 0-1b.
+func (r Report) isPreludeRefusal() bool {
+	if r.Headline.Kind != HeadlineRefused || r.Headline.First == nil || len(r.Parts) != 0 {
+		return false
+	}
+	reg, err := DefaultRegistry()
+	if err != nil {
+		return false
+	}
+	rows := reg.RowsOf(r.Headline.First.Code)
+	return len(rows) > 0 && rows[0].Class == "FR"
 }
 
 // Map renders the report with the JSON keys of item 2b, ready for Canonical.
@@ -279,14 +306,16 @@ func (r Report) Map() (map[string]any, error) {
 		}
 		out["authority"] = m
 	}
-	s6 := map[string]any{"status": string(r.S6.Status)}
-	if r.S6.Reason != "" {
-		s6["reason"] = r.S6.Reason
+	if r.S6 != (S6Report{}) {
+		s6 := map[string]any{"status": string(r.S6.Status)}
+		if r.S6.Reason != "" {
+			s6["reason"] = r.S6.Reason
+		}
+		if r.S6.State != "" {
+			s6["state"] = r.S6.State
+		}
+		out["s6"] = s6
 	}
-	if r.S6.State != "" {
-		s6["state"] = r.S6.State
-	}
-	out["s6"] = s6
 	out["judged_at_level"] = r.JudgedAtLevel
 	out["state_root_authenticated"] = r.StateRootAuthenticated
 	out["s7_finalized_status"] = r.S7FinalizedStatus
