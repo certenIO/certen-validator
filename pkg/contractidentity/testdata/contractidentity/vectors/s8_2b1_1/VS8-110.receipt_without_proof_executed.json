@@ -1,0 +1,27 @@
+{
+ "id": "VS8-110.receipt_without_proof_executed",
+ "base": "H0",
+ "mutations": [
+  {
+   "op": "set_field",
+   "target": "world",
+   "path": "attestation.logs",
+   "value": []
+  }
+ ],
+ "expected": {
+  "headline": "refused",
+  "parts": {
+   "authorization_attest": "refused"
+  },
+  "states": [
+   {
+    "part": "authorization_attest",
+    "code": "contract_identity_attest_mismatch",
+    "fields": {
+     "field": "log"
+    }
+   }
+  ]
+ }
+}

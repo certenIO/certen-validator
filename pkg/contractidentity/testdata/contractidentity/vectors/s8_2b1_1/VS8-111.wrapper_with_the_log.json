@@ -1,0 +1,29 @@
+{
+ "id": "VS8-111.wrapper_with_the_log",
+ "base": "H0",
+ "mutations": [
+  {
+   "op": "set_field",
+   "target": "world",
+   "path": "blocks.attest.txs.5.wire",
+   "value": "0x02e983aa36a7010101825208942222222222222222222222222222222222222222808401020304c0808080"
+  }
+ ],
+ "expected": {
+  "headline": "unproven",
+  "parts": {
+   "authorization_attest": "unproven"
+  },
+  "states": [
+   {
+    "part": "authorization_attest",
+    "code": "contract_identity_unproven",
+    "fields": {
+     "reason": "attest_indirect_call",
+     "selector": "0x01020304",
+     "to": "0x2222222222222222222222222222222222222222"
+    }
+   }
+  ]
+ }
+}
