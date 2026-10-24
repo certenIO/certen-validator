@@ -133,3 +133,25 @@ func TestHeaderNumberedKeepsNotCoveredForABlockOffTheSpine(t *testing.T) {
 		t.Errorf("wrong position: %v", err)
 	}
 }
+
+// BlockHeaderUnreadable relabels only the framework header reader's own refusal; any other cause is returned untouched (it is already a named
+// state or an error that must not be given a name that means something else), and a refusal without an item index carries none.
+func TestBlockHeaderUnreadableRelabelsOnlyTheHeaderReadersRefusal(t *testing.T) {
+	other := finality.NewState("some_other_state", "reason", "x")
+	if got := BlockHeaderUnreadable(7, 9, other); got != error(other) {
+		t.Errorf("a named state that is not a malformed-evidence refusal was relabelled: %v", got)
+	}
+	plain := fmt.Errorf("a plain error")
+	if got := BlockHeaderUnreadable(7, 9, plain); got != plain {
+		t.Errorf("a plain error was relabelled: %v", got)
+	}
+	st, ok := finality.AsNamed(BlockHeaderUnreadable(7, 9, finality.Malformed("header", finality.ReasonHeaderTooFewItems, 3, 12)))
+	if !ok || st.Code != CodeBlockHeaderUnreadable || len(st.Fields) != 3 || fmt.Sprint(st.Fields["block_number"]) != "7" ||
+		fmt.Sprint(st.Fields["finalized_exec_number"]) != "9" || fmt.Sprint(st.Fields["reason"]) != string(finality.ReasonHeaderTooFewItems) {
+		t.Errorf("no-index refusal: %+v", st)
+	}
+	st, ok = finality.AsNamed(BlockHeaderUnreadable(7, 9, finality.MalformedAt("header", 5, finality.ReasonHeaderItemIsList, 3, 32)))
+	if !ok || len(st.Fields) != 4 || fmt.Sprint(st.Fields["index"]) != "5" {
+		t.Errorf("indexed refusal: %+v", st)
+	}
+}
