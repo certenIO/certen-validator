@@ -193,6 +193,11 @@ func IndexBlockUnindexable(chain, block uint64, reason string) *StateError {
 // next step instead of waiting for its rotating walk of the whole table. The walk stays the guarantee; the note is the speed.
 type LateBlockNoter interface{ NoteLate(block uint64) }
 
+// LateRangeNoter is implemented by an indexer that can be told a RANGE of blocks was filled after its cursor passed it (the archive backfill's
+// prefix scan stores whole windows of batches below the capture's first block): one bounded note instead of one per block. Both notes are folded,
+// never dropped: a full set of single-block notes becomes ranges.
+type LateRangeNoter interface{ NoteLateRange(from, to uint64) }
+
 // GapStateUnrecorded is the gap_state of an l1_capture_gap the index INFERS: no durable gap record names the hole, but captured channels of
 // later L2 time exist past the capture retry window and none covers the leg. The record-backed states are GapOpen, GapUnavailableProven and
 // GapRetentionExpired (gaps.go); the registry (testdata/finality/states.json) requires each producer's own fields by this discriminator.

@@ -201,7 +201,7 @@ type authCase struct {
 	verdict capture.Authorization
 }
 
-// The capture's rule (AuthorizeBatch), the reference reader, the index writer and the indexed reader keep exactly the same records.
+// The capture's rule (AuthorizeBatch), the reference reader and the indexed reader serve exactly the same records; the writer indexes all of them.
 func TestRB12ArbAuthorizationIsOneRuleForEveryReader(t *testing.T) {
 	w := newIxWorld(t)
 	cases := []authCase{
@@ -248,8 +248,8 @@ func TestRB12ArbAuthorizationIsOneRuleForEveryReader(t *testing.T) {
 		if (ref.N == c.n) != keep || ref != idx {
 			t.Errorf("batch %d: the reference serves %s, the index %s, the rule keeps %v", c.n, ref, idx, keep)
 		}
-		if entries[c.n] != keep {
-			t.Errorf("batch %d: the index writer's entry exists=%v, the rule keeps %v", c.n, entries[c.n], keep)
+		if !entries[c.n] {
+			t.Errorf("batch %d: the index writer made no entry: the writer indexes every record the block holds (whether a proof has arrived is not a fact of the rows), the readers authorize", c.n)
 		}
 	}
 }

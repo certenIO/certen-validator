@@ -508,6 +508,12 @@ func (l *ArbPostedLoop) noteBlobs(rep capture.Report) {
 	for _, b := range rep.PrefixBlocks {
 		l.Notes.NoteLate(b)
 	}
+	// and the closed range itself, so a range that held no batch at all is a range the index has looked at, not only the blocks of batches it found
+	if rn, ok := l.Notes.(finality.LateRangeNoter); ok {
+		for _, r := range rep.PrefixRanges {
+			rn.NoteLateRange(r[0], r[1])
+		}
+	}
 }
 
 // ArbIndexLoop drives the Arbitrum batch index (RB12-INDEX-B) in its own goroutine, so that indexing - a backfill of a whole table takes many steps - can never

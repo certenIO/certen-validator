@@ -29,7 +29,11 @@ type IndexConfig struct {
 	SelfCheckSample int           // entries and digests recomputed per self-check (default 4)
 	RecentSpan      uint64        // L1 blocks below the cursor every step re-examines first (default 512): late data lies near the cursor
 	MaxFps          int           // message fingerprints one entry stores; a batch with more is entryOverflow, named at lookup (default 131,072)
-	Logf            func(string, ...any)
+	// Floor, when set, is the lowest L1 block that holds a batch the capture did not scan itself (the archive backfill's prefix scan): the rotating
+	// walk starts there instead of at the capture's first cursor row, so the region below the capture start is reached too. It is the same function the
+	// IndexReader's time search starts from (runtime wiring gives both the same one).
+	Floor func(ctx context.Context) (block uint64, ok bool, err error)
+	Logf  func(string, ...any)
 	// OnState receives the named inconsistency a self-check or a corrupt row found (the runner records it in the status table).
 	OnState func(*finality.StateError)
 }
@@ -114,6 +118,7 @@ type Indexer struct {
 	rng          *rand.Rand
 	hintMu       sync.Mutex
 	hints        map[uint64]bool
+	ranges       [][2]uint64 // pending range notes, ascending, disjoint (NoteLateRange, and the single notes a full set folds into)
 	dropLogged   bool
 	selfRes      SelfCheckResult
 }
@@ -374,12 +379,17 @@ func (ix *Indexer) entryOf(blk *blockRows, br batchRows, hold *finality.Hold) (*
 	return e, nil
 }
 
-// withinCaps reports whether the batch's time bounds are inside the distances the lookup's window assumes.
+// withinCaps reports whether the batch's time bounds are inside the distances the lookup's normal window assumes.
 func withinCaps(t, minTs, maxTs uint64) bool {
-	if t > minTs && t-minTs > windowDelayCap {
+	return distancesWithin(t, minTs, maxTs, windowDelayCap, windowFutureCap)
+}
+
+// distancesWithin reports whether the batch is posted at most delay seconds after minTs and at most future seconds before maxTs.
+func distancesWithin(t, minTs, maxTs, delay, future uint64) bool {
+	if t > minTs && t-minTs > delay {
 		return false
 	}
-	if maxTs > t && maxTs-t > windowFutureCap {
+	if maxTs > t && maxTs-t > future {
 		return false
 	}
 	return true
@@ -435,21 +445,16 @@ func (ix *Indexer) indexGroup(ctx context.Context, g blockGroup, rep *finality.S
 		return groupDone, err
 	}
 	for _, br := range blk.batches {
-		if !withinCaps(blk.t, br.rec.Header40[0], br.rec.Header40[1]) {
+		if !distancesWithin(blk.t, br.rec.Header40[0], br.rec.Header40[1], windowHardLimit, windowHardLimit) {
 			return groupDone, ix.recordUnindexable(ctx, g.key, &unindexableError{Reason: finality.UnindexableWindowBeyondCap,
-				Err: errors.New("the batch's time bounds are wider than the lookup window assumes")})
+				Err: errors.New("the batch's time bounds are wider than any real SequencerInbox configuration")})
 		}
 	}
 	d := &arbDigest{Block: g.key.L1Block, Hash: g.key.L1Hash, T: blk.t, Pins: ix.pins}
 	for _, br := range blk.batches {
 		rep.BytesRead += int64(len(br.row)) + int64(br.dataLen)
-		ok, err := ix.authorizedRecord(ctx, br.rec)
-		if err != nil {
-			return groupDone, err
-		}
-		if !ok {
-			continue // a record the Bridge does not hold: no entry (the readers refuse it too)
-		}
+		// every record the block holds is indexed, whatever the Bridge proofs captured so far say: whether a proof has ARRIVED is not a fact of the
+		// captured rows at this moment, so the bytes must not depend on it (V-INDEX-B B1, class 11). Every reader authorizes at read time.
 		e, err := ix.entryOf(blk, br, hold)
 		if err != nil {
 			return groupDone, err
@@ -457,6 +462,12 @@ func (ix *Indexer) indexGroup(ctx context.Context, g blockGroup, rep *finality.S
 		ek := withItem(g.key, entryItem(ix.Gen, e.MinTs, e.MaxTs, e.N))
 		if err := finality.IndexPut(ctx, ix.Store, FamilyArb, ek, e.encode()); err != nil {
 			return groupDone, err
+		}
+		if !withinCaps(blk.t, e.MinTs, e.MaxTs) {
+			// a batch the normal window of a lookup would miss: a pointer the lookup lists (written after the entry it points to, before the digest)
+			if err := finality.IndexPut(ctx, ix.Store, FamilyArb, wideKey(ix.Gen, e.MinTs, e.MaxTs, e.N), wideBody(g.key.L1Block, g.key.L1Hash)); err != nil {
+				return groupDone, err
+			}
 		}
 		metrics.AddFinalityIndexWritten(ix.Chain(), FamilyArb, 0, 1, 0)
 		rep.Entries++
@@ -467,20 +478,6 @@ func (ix *Indexer) indexGroup(ctx context.Context, g blockGroup, rep *finality.S
 	}
 	metrics.AddFinalityIndexWritten(ix.Chain(), FamilyArb, 1, 0, 0)
 	return groupWritten, nil
-}
-
-// authorizedRecord applies THE authorization (capture.AuthorizeBatch) to a record the indexer is about to index: a record a verified proof
-// contradicts is foreign and gets no entry. Unproven records are indexed (the leg's verifier decides).
-func (ix *Indexer) authorizedRecord(ctx context.Context, rec capture.BatchRecord) (bool, error) {
-	verdict, err := capture.AuthorizeStored(ctx, ix.Store, ix.Chain(), rec, ix.arb.bridge, ix.arb.Layout.AccArraySlot)
-	if err != nil {
-		return false, err
-	}
-	if verdict == capture.AuthForeign {
-		metrics.AddFinalityCaptureForeignTxs(ix.Chain(), 1)
-		return false, nil
-	}
-	return true, nil
 }
 
 // recordUnindexable writes the insert-only record of a captured block the indexer cannot read and lets the cursor pass it. The record is
@@ -697,8 +694,20 @@ func (ix *Indexer) reconcileRecent(ctx context.Context, rep *finality.StepReport
 // block that was filled long after the cursor passed it is found at last.
 func (ix *Indexer) reconcileRotate(ctx context.Context, rep *finality.StepReport, deadline time.Time, done int) error {
 	lo, _, ok, err := finality.BlockBoundsOf(ctx, ix.Store, ix.Chain(), capture.ItemCursor)
-	if err != nil || !ok {
+	if err != nil {
 		return err
+	}
+	if f := ix.Cfg.Floor; f != nil {
+		fb, fok, ferr := f(ctx)
+		if ferr != nil {
+			return ferr
+		}
+		if fok && (!ok || fb < lo) {
+			lo, ok = fb, true
+		}
+	}
+	if !ok {
+		return nil
 	}
 	if ix.reconcilePos < lo || ix.reconcilePos > ix.cursor {
 		ix.reconcilePos = lo
@@ -731,14 +740,92 @@ func (ix *Indexer) NoteLate(block uint64) {
 		ix.hints = map[uint64]bool{}
 	}
 	if _, noted := ix.hints[block]; !noted && len(ix.hints) >= maxHints {
+		// never lost: a note past the set's bound is folded into the range notes (counted: it is the signal that notes are arriving faster than steps
+		// work them off)
+		ix.addRangeLocked(block, block)
 		metrics.IncFinalityIndexNoteDropped(ix.Chain(), FamilyArb)
 		if !ix.dropLogged {
 			ix.dropLogged = true
-			ix.Cfg.logf("[FINALITY] index arb: %d late-block notes are pending, further notes are dropped and counted (certen_finality_index_notes_dropped_total); the rotating walk reaches those blocks", maxHints)
+			ix.Cfg.logf("[FINALITY] index arb: %d late-block notes are pending, further notes are folded into ranges and still worked off (certen_finality_index_notes_dropped_total counts them)", maxHints)
 		}
 		return
 	}
 	ix.hints[block] = true
+}
+
+// maxHintRanges bounds the pending range notes; past it the two nearest ranges are merged (a wider range, never a lost one).
+const maxHintRanges = 256
+
+// NoteLateRange tells the indexer that the blocks of [from, to] may hold batches stored after its cursor passed them (finality.LateRangeNoter): the
+// archive backfill's prefix scan stores a window of batches below the capture's first block and cannot name each block. The range is worked off in
+// chunks under the step's limits; a range above the cursor is left to the forward step. It is safe to call from any goroutine.
+func (ix *Indexer) NoteLateRange(from, to uint64) {
+	if from > to {
+		from, to = to, from
+	}
+	ix.hintMu.Lock()
+	defer ix.hintMu.Unlock()
+	ix.addRangeLocked(from, to)
+}
+
+var _ finality.LateRangeNoter = (*Indexer)(nil)
+
+// addRangeLocked adds [a, b] to the ascending, disjoint range notes, merging what overlaps or touches it and, past maxHintRanges, the nearest pair.
+func (ix *Indexer) addRangeLocked(a, b uint64) {
+	out := make([][2]uint64, 0, len(ix.ranges)+1)
+	placed := false
+	for _, r := range ix.ranges {
+		switch {
+		case r[1]+1 < a && r[1] != ^uint64(0): // entirely below and not touching
+			out = append(out, r)
+		case b+1 < r[0] && b != ^uint64(0): // entirely above and not touching
+			if !placed {
+				out = append(out, [2]uint64{a, b})
+				placed = true
+			}
+			out = append(out, r)
+		default: // overlaps or touches: absorbed
+			if r[0] < a {
+				a = r[0]
+			}
+			if r[1] > b {
+				b = r[1]
+			}
+		}
+	}
+	if !placed {
+		out = append(out, [2]uint64{a, b})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i][0] < out[j][0] })
+	for len(out) > maxHintRanges {
+		best, gap := 0, ^uint64(0)
+		for i := 0; i+1 < len(out); i++ {
+			if g := out[i+1][0] - out[i][1]; g < gap {
+				best, gap = i, g
+			}
+		}
+		out[best][1] = out[best+1][1]
+		out = append(out[:best+1], out[best+2:]...)
+	}
+	ix.ranges = out
+}
+
+// subtractRangeLocked removes [a, b] from the range notes (the part a step has worked off).
+func (ix *Indexer) subtractRangeLocked(a, b uint64) {
+	var out [][2]uint64
+	for _, r := range ix.ranges {
+		if r[1] < a || r[0] > b {
+			out = append(out, r)
+			continue
+		}
+		if r[0] < a {
+			out = append(out, [2]uint64{r[0], a - 1})
+		}
+		if r[1] > b {
+			out = append(out, [2]uint64{b + 1, r[1]})
+		}
+	}
+	ix.ranges = out
 }
 
 // reconcileHints indexes the noted blocks at or below the cursor, lowest first, under the same limits as the rest of the step. A note
@@ -771,6 +858,49 @@ func (ix *Indexer) reconcileHints(ctx context.Context, rep *finality.StepReport,
 		work += n
 		if n == 0 {
 			work++ // an empty note still counts as the height worked on, so the limits bound a flood of notes
+		}
+	}
+	return ix.reconcileRangeNotes(ctx, rep, deadline, work)
+}
+
+// reconcileRangeNotes works off the range notes (NoteLateRange, and the single notes a full set folded) below the cursor, lowest first, in chunks of
+// at most ReconcileSpan blocks, under the same limits as the rest of the step: a chunk the limits end stays noted. A range is key listings first
+// (reconcileBlocks indexes only the blocks that have batch rows and no digest), so a wide range costs listings, not rows. The part above the
+// cursor stays for the forward step.
+func (ix *Indexer) reconcileRangeNotes(ctx context.Context, rep *finality.StepReport, deadline time.Time, work int) (int, error) {
+	ix.hintMu.Lock()
+	ranges := append([][2]uint64(nil), ix.ranges...)
+	ix.hintMu.Unlock()
+	for _, r := range ranges {
+		a, b := r[0], r[1]
+		if b > ix.cursor {
+			b = ix.cursor
+		}
+		for a <= b {
+			if work > 0 && (ix.stopCause(ctx, work, rep.Late, deadline) != "" || work >= ix.Cfg.blocks()) {
+				return work, nil
+			}
+			end := b
+			if span := ix.Cfg.span(); end-a >= span {
+				end = a + span - 1
+			}
+			next, n, err := ix.reconcileBlocks(ctx, rep, deadline, a, end, work)
+			if err != nil {
+				return work, err
+			}
+			if next > a { // the part [a, next-1] is worked off
+				ix.hintMu.Lock()
+				ix.subtractRangeLocked(a, next-1)
+				ix.hintMu.Unlock()
+			}
+			work += n
+			if n == 0 {
+				work++
+			}
+			if next <= end {
+				return work, nil // the step's limits ended it; the rest stays noted
+			}
+			a = end + 1
 		}
 	}
 	return work, nil
@@ -948,13 +1078,7 @@ func (ix *Indexer) referenceDigest(ctx context.Context, k finality.CaptureKey) (
 	}
 	d := &arbDigest{Block: blk.key.L1Block, Hash: blk.key.L1Hash, T: blk.t, Pins: ix.pins}
 	for _, br := range blk.batches {
-		ok, err := ix.authorizedRecord(ctx, br.rec)
-		if err != nil {
-			return nil, err
-		}
-		if ok {
-			d.Batches = append(d.Batches, digestBatch{N: br.rec.N, Loc: br.rec.DataLocation, Parts: br.parts, RowLen: uint32(len(br.row)), DataBytes: br.dataLen})
-		}
+		d.Batches = append(d.Batches, digestBatch{N: br.rec.N, Loc: br.rec.DataLocation, Parts: br.parts, RowLen: uint32(len(br.row)), DataBytes: br.dataLen})
 	}
 	return d.encode(), nil
 }

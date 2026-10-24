@@ -171,6 +171,7 @@ func (c *Capturer) scanPrefixRange(ctx context.Context, a, b uint64, rep *Report
 		return fmt.Errorf("recording the scan of L1 blocks %d-%d: %w", a, b, err)
 	}
 	rep.PrefixScanned += b - a + 1
+	rep.PrefixRanges = append(rep.PrefixRanges, [2]uint64{a, b})
 	rep.PrefixBatches += len(fresh)
 	return nil
 }

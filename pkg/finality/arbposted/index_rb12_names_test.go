@@ -19,6 +19,7 @@ func TestRB12ArbIndexLongestNamesFitTheProductionTable(t *testing.T) {
 		"digest":     "idx/g4294967295/arb/f/18446744073709551615",
 		"entry":      "idx/g4294967295/arb/e/18446744073709551615/18446744073709551615/18446744073709551615",
 		"quarantine": "idx/g4294967295/arb/q/18446744073709551615",
+		"wide":       "idx/g4294967295/arb/w/18446744073709551615/18446744073709551615/18446744073709551615",
 		"unindexed":  "idx/g4294967295/arb/u",
 		"cursor":     "idx/g4294967295/arb/cursor",
 	}
@@ -26,6 +27,7 @@ func TestRB12ArbIndexLongestNamesFitTheProductionTable(t *testing.T) {
 		"digest":     digestItem(gen, max),
 		"entry":      entryItem(gen, max, max, max),
 		"quarantine": quarantineItem(gen, max),
+		"wide":       wideItem(gen, max, max, max),
 		"unindexed":  unindexedItem(gen),
 		"cursor":     finality.IndexCursorItem(gen, FamilyArb),
 	}

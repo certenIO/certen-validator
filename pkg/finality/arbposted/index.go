@@ -23,6 +23,9 @@ import (
 //	e/<minTs>/<maxTs>/<N>    batch entry at the same key: the batch's time bounds, what its payload decoded to (the fingerprints of its
 //	                         messages' standard-transaction lists) and the binding to the batch row it was made from
 //	q/<N>                    self-check quarantine record at the entry's key
+//	w/<minTs>/<maxTs>/<N>    (only for a batch whose time bounds are wider than the lookup window below) pointer at key (0, zero hash) to the batch's entry:
+//	                         its block and hash. A lookup lists this point range (empty in production: every batch has the same bounds) and adds the
+//	                         entries whose bounds hold the timestamp to its candidates, so no batch the reference could serve is outside the lookup
 //	u                        record of a captured block the indexer cannot read (insert-only, the reason as content)
 //	cursor                   the L1 block the indexer has processed through (8 bytes, zero hash)
 //
@@ -54,6 +57,7 @@ const (
 	ixEntry      = "e"
 	ixQuarantine = "q"
 	ixUnindexed  = "u"
+	ixWide       = "w"
 )
 
 const (
@@ -73,12 +77,16 @@ const (
 const maxFps = 1 << 17
 
 // The time bounds of the SequencerInbox are f(block.timestamp): minTs = T - delaySeconds, maxTs = T + futureSeconds (SequencerInbox
-// getTimeBounds, owner-configurable). A lookup finds the batches that can hold a timestamp ts by the time T of their L1 block, which needs a
-// bound on both distances. Production: 86,400 and 768 for every one of the 3,229 captured batches. A batch beyond a cap is recorded as
-// index_block_unindexable{window_beyond_cap} (named, never silently dropped) and the caps belong to the pins digest.
+// getTimeBounds; setMaxTimeVariation is onlyRollupOwner and has no upper bound, so no cap derived from the contract can be proven safe). A lookup
+// finds the batches that can hold a timestamp ts by the time T of their L1 block, which needs a bound on both distances: the NORMAL window,
+// delay 100,000 s and future 4,000 s against 86,400 and 768 on the live inbox (the pins digest carries them). A batch beyond either distance
+// is indexed all the same and also pointed at by a "w" row (see above), so the lookup serves it exactly as the reference does; there is no cap
+// beyond which a batch the verifier can accept becomes unservable. Only a window wider than windowHardLimit (400 days: no real configuration)
+// is recorded as index_block_unindexable{window_beyond_cap}, named and never silently dropped.
 const (
 	windowDelayCap  uint64 = 100_000
 	windowFutureCap uint64 = 4_000
+	windowHardLimit uint64 = 400 * 86_400
 )
 
 // ---- digest ----
@@ -389,8 +397,8 @@ func hasFp(fps [][8]byte, f [8]byte) bool {
 // batch the Bridge holds (the Bridge and its accumulator slot), the chain, the window caps that decide where a lookup looks, and the
 // fingerprint version.
 func pinsDigest(a *arbPins) [8]byte {
-	s := sha256.Sum256([]byte(fmt.Sprintf("certen/arbposted-index/1|chain=%d|parent=%d|bridge=%x|accslot=%d|maxblobs=%d|maxseg=%d|maxuncomp=%d|dcap=%d|fcap=%d|fp=1",
-		a.ChainID, a.ParentChainID, a.bridge[:], a.Layout.AccArraySlot, a.MaxBlobs, a.MaxSegments, a.MaxUncompressedBatch, windowDelayCap, windowFutureCap)))
+	s := sha256.Sum256([]byte(fmt.Sprintf("certen/arbposted-index/1|chain=%d|parent=%d|bridge=%x|accslot=%d|maxblobs=%d|maxseg=%d|maxuncomp=%d|dcap=%d|fcap=%d|hard=%d|fp=1",
+		a.ChainID, a.ParentChainID, a.bridge[:], a.Layout.AccArraySlot, a.MaxBlobs, a.MaxSegments, a.MaxUncompressedBatch, windowDelayCap, windowFutureCap, windowHardLimit)))
 	var out [8]byte
 	copy(out[:], s[:8])
 	return out
@@ -414,6 +422,38 @@ func quarantineItem(gen uint32, n uint64) string {
 
 func unindexedItem(gen uint32) string { return ixItem(gen, ixUnindexed) }
 
+func wideItem(gen uint32, minTs, maxTs, n uint64) string {
+	return ixItem(gen, ixWide, strconv.FormatUint(minTs, 10), strconv.FormatUint(maxTs, 10), strconv.FormatUint(n, 10))
+}
+
+// wideKey is where the pointer of a wide batch lives: a fixed key per generation, so that a lookup lists it without a block range.
+func wideKey(gen uint32, minTs, maxTs, n uint64) finality.CaptureKey {
+	return finality.CaptureKey{Chain: finality.ChainArbitrumSepolia, L1Block: 0, Item: wideItem(gen, minTs, maxTs, n)}
+}
+
+// wideBody is the content of a "w" row: the key of the batch's entry (its block and hash), checksummed.
+func wideBody(block uint64, hash [32]byte) []byte {
+	var w finality.Writer
+	w.U64(block)
+	w.B32(hash)
+	return append(w.Bytes(), sumTrailer(w.Bytes())...)
+}
+
+func decodeWideBody(b []byte) (block uint64, hash [32]byte, err error) {
+	body, err := checked(b)
+	if err != nil {
+		return 0, hash, err
+	}
+	r := finality.NewReader(body, finality.DefaultLimits())
+	if block, err = r.U64("wide.block"); err != nil {
+		return 0, hash, err
+	}
+	if hash, err = r.B32("wide.hash"); err != nil {
+		return 0, hash, err
+	}
+	return block, hash, r.End("wide")
+}
+
 // entryName is an entry key as the key listing shows it.
 type entryName struct {
 	Key          finality.CaptureKey
@@ -423,7 +463,16 @@ type entryName struct {
 
 // parseEntryName reads idx/g<gen>/arb/e/<minTs>/<maxTs>/<N>.
 func parseEntryName(gen uint32, k finality.CaptureKey) (entryName, bool) {
-	prefix := ixItem(gen, ixEntry) + "/"
+	return parseBoundsName(gen, ixEntry, k)
+}
+
+// parseWideName reads idx/g<gen>/arb/w/<minTs>/<maxTs>/<N>.
+func parseWideName(gen uint32, k finality.CaptureKey) (entryName, bool) {
+	return parseBoundsName(gen, ixWide, k)
+}
+
+func parseBoundsName(gen uint32, kind string, k finality.CaptureKey) (entryName, bool) {
+	prefix := ixItem(gen, kind) + "/"
 	if !strings.HasPrefix(k.Item, prefix) {
 		return entryName{}, false
 	}

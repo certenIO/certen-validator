@@ -292,16 +292,24 @@ func TestRTArbWiringSetsTheCapturersOneAuthorization(t *testing.T) {
 
 // RB12-TRAIN3-INT duty (2): the Arbitrum prefix scan's stored batches reach the batch index (NoteLate) and the index reader's Floor follows the
 // archive backfill's windows, so a batch stored far below the index cursor is found within one step, not after a walk of the table.
-type arbNotes struct{ noted []uint64 }
+type arbNotes struct {
+	noted  []uint64
+	ranges [][2]uint64
+}
 
-func (n *arbNotes) NoteLate(b uint64) { n.noted = append(n.noted, b) }
+func (n *arbNotes) NoteLate(b uint64)         { n.noted = append(n.noted, b) }
+func (n *arbNotes) NoteLateRange(a, b uint64) { n.ranges = append(n.ranges, [2]uint64{a, b}) }
 
 func TestRTArbPrefixScanBatchesAreNotedToTheIndexAndTheFloorFollowsTheWindows(t *testing.T) {
 	notes := &arbNotes{}
 	l := &ArbPostedLoop{Notes: notes}
-	l.noteBlobs(capture.Report{BlobBlocks: []uint64{500}, PrefixBlocks: []uint64{12, 7}})
-	if len(notes.noted) != 3 || notes.noted[1] != 12 || notes.noted[2] != 7 {
+	// the prefix scan closes ranges highest-first, far below the index cursor: every range and every stored batch is told, in that order
+	l.noteBlobs(capture.Report{BlobBlocks: []uint64{500}, PrefixBlocks: []uint64{905, 805}, PrefixRanges: [][2]uint64{{900, 909}, {800, 809}}})
+	if len(notes.noted) != 3 || notes.noted[1] != 905 || notes.noted[2] != 805 {
 		t.Fatalf("blob blocks and prefix-scan blocks are both told: %v", notes.noted)
+	}
+	if len(notes.ranges) != 2 || notes.ranges[0] != [2]uint64{900, 909} || notes.ranges[1] != [2]uint64{800, 809} {
+		t.Fatalf("a closed gapscan range is told as a range, highest first as scanned: %v", notes.ranges)
 	}
 	rtProviderEnv(t)
 	w, reg, _ := rtWire(t)
@@ -317,5 +325,23 @@ func TestRTArbPrefixScanBatchesAreNotedToTheIndexAndTheFloorFollowsTheWindows(t 
 	}
 	if _, ok, err := floor(context.Background()); err != nil || ok {
 		t.Fatalf("with no prefix window there is no floor: %v %v", ok, err)
+	}
+}
+
+// RB12-TRAIN3-INT duty (1): the default floor of the Arbitrum index is read from the SAME rows the archive backfill's prefix scan works on.
+func TestRTArbDefaultFloorIsTheLowestRecordedPrefixWindow(t *testing.T) {
+	ctx := context.Background()
+	st := finality.NewMemCaptureStore()
+	floor := prefixFloorOf(st, finality.ChainArbitrumSepolia)
+	if _, ok, err := floor(ctx); err != nil || ok {
+		t.Fatalf("no window, no floor: %v %v", ok, err)
+	}
+	for _, w := range [][2]uint64{{9_000, 9_099}, {4_000, 4_099}} { // recorded out of order, as the scan closes them
+		if err := finality.RecordGap(ctx, st, finality.ChainArbitrumSepolia, w[0], w[1], finality.GapCapturePrefix); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if lo, ok, err := floor(ctx); err != nil || !ok || lo != 4_000 {
+		t.Fatalf("the floor is the lowest block of the recorded windows: %d %v %v", lo, ok, err)
 	}
 }
