@@ -865,6 +865,54 @@ EOF
   else rec PASS C11 "status rows carry pinsSha256 only as 64 lowercase hex characters" "0 malformed" "$p_has of $p_n rows carry it, all well-formed"; fi
 else rec FAIL C11 "status pinsSha256 query" "query answers" "failed: $(errline)"; fi
 
+# RB12-SEPOLIA-SPINE (SP1, SP2): the Sepolia execution-header spine is kept as insert-only capture rows (chain 11155111, item spine/n<count>) and
+# its progress is a finality_pending{awaiting_spine} status row. Empty before the first deploy of the fix; on the live store afterwards.
+if out=$(sqlro <<SQL
+SELECT count(*),
+  count(*) FILTER (WHERE octet_length(l1_hash)<>32),
+  count(*) FILTER (WHERE item !~ '^spine/n[0-9]{1,2}$' OR (CASE WHEN item ~ '^spine/n[0-9]{1,2}$' THEN substring(item from 8)::int END) NOT BETWEEN 1 AND 40),
+  count(*) FILTER (WHERE l1_block % 40 <> 39),
+  count(*) FILTER (WHERE get_byte(bytes,0) < 192),
+  count(*) FILTER (WHERE item ~ '^spine/n[0-9]{1,2}$' AND (octet_length(bytes) < 400*substring(item from 8)::int OR octet_length(bytes) > 2048*substring(item from 8)::int)),
+  COALESCE(min(l1_block),0), COALESCE(max(l1_block),0)
+  FROM proof_finality_capture WHERE chain = 11155111 AND item LIKE 'spine/%';
+SQL
+); then
+  IFS='|' read -r sp_n sp_hash sp_item sp_bound sp_list sp_size sp_lo sp_hi <<EOF
+$out
+EOF
+  if [ "$sp_n" -eq 0 ]; then
+    rec WARN SP1 "Sepolia spine chunk rows (proof_finality_capture, chain 11155111, item spine/n<1..40>) are 32-byte-hash rows of whole header windows" "rows to examine" "none yet (expected until the spine fix is deployed and a Sepolia leg has been attempted)"
+  else
+    [ "$((sp_hash + sp_item + sp_bound + sp_list + sp_size))" -eq 0 ] && st=PASS || st=FAIL
+    rec $st SP1 "Sepolia spine chunk rows are 32-byte-hash rows of whole header windows: item spine/n<1..40>, every row, a window cut at a leg block too, ends at a block = 39 mod 40, the bytes are one RLP list of 400..2048 bytes per header" "0 violations in $sp_n rows (blocks $sp_lo..$sp_hi)" "bad hash length $sp_hash; bad item $sp_item; row off the window boundary $sp_bound; not an RLP list $sp_list; implausible size $sp_size"
+  fi
+else rec FAIL SP1 "spine rows query" "query answers" "failed: $(errline)"; fi
+
+if out=$(sqlro <<SQL
+WITH f AS (SELECT chain, state->>'class' AS cls, state->'state'->>'code' AS code, state->'state'->'fields' AS fl FROM proof_finality_status)
+SELECT count(*) FILTER (WHERE code = 'finality_pending' AND fl->>'reason' = 'awaiting_spine'),
+  count(*) FILTER (WHERE code = 'finality_pending' AND fl->>'reason' = 'awaiting_spine' AND (
+      NOT (fl ? 'have' AND fl ? 'need' AND fl ? 'next_attempt_at')
+      OR COALESCE(fl->>'have','') !~ '^[0-9]+$' OR COALESCE(fl->>'need','') !~ '^[0-9]+$'
+      OR COALESCE(fl->>'next_attempt_at','') !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+(Z|[+-][0-9:]+)$'
+      OR (CASE WHEN COALESCE(fl->>'have','') ~ '^[0-9]+$' AND COALESCE(fl->>'need','') ~ '^[0-9]+$' THEN (fl->>'have')::numeric > (fl->>'need')::numeric ELSE true END))),
+  count(*) FILTER (WHERE chain = 11155111 AND cls = 'unavailable' AND code = 'finality_build_timeout'),
+  count(*) FILTER (WHERE chain <> 11155111 AND code = 'finality_pending' AND fl->>'reason' = 'awaiting_spine')
+  FROM f;
+SQL
+); then
+  IFS='|' read -r as_n as_bad as_to as_other <<EOF
+$out
+EOF
+  if [ "$as_n" -eq 0 ]; then
+    rec WARN SP2 "awaiting_spine status rows carry numeric have <= need and a next_attempt_at time" "rows to examine" "none yet; Sepolia finality_build_timeout rows still present: $as_to (they are replaced by awaiting_spine rows on the first attempts after the fix is deployed)"
+  else
+    [ "$((as_bad + as_other))" -eq 0 ] && st=PASS || st=FAIL
+    rec $st SP2 "awaiting_spine status rows (only Sepolia legs) carry numeric have <= need and a next_attempt_at time" "0 violations in $as_n rows" "malformed $as_bad; on a chain other than Sepolia $as_other; Sepolia finality_build_timeout rows still present: $as_to"
+  fi
+else rec FAIL SP2 "awaiting_spine status query" "query answers" "failed: $(errline)"; fi
+
 # ==============================================================================================================================
 # (f) container environment hygiene (names only, never values)
 # ==============================================================================================================================

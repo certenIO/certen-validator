@@ -317,11 +317,17 @@ func wireArb(reg *finality.Registry, env Env, d Deps, clock loopClock, logf func
 	return reg.RegisterCapturer(&ArbPostedLoop{Cap: cp, Providers: Hosts(providers), Status: d.Status, Pins: env.Pins, Every: cfg.CaptureEvery, Logf: logf, Clock: clock})
 }
 
+// sepoliaSpineGap is the floor of the gap between two requests to the Sepolia execution endpoints, for all legs together: the spine is
+// fetched in windows of ethsepolia.SpineWindow headers, one request each, and a public provider that is asked faster answers 429.
+const sepoliaSpineGap = 100 * time.Millisecond
+
 // wireSepolia registers the Ethereum Sepolia finalized prover: the light-client objects come from the ordered CERTEN_FINALITY_LC_URLS
 // list (availability only, in order), the execution headers of the spine from the validator's Sepolia endpoints (JSON-RPC batches
 // of at most MaxBatch, 429 retried with a bounded backoff by the shared transport and by the source itself), and the ledger link
-// files are the embedded ones. A spine of several thousand headers takes minutes on a public endpoint: the prover runs only in the
-// background upgrader pass, under the pass's BuildTimeout (CERTEN_FINALITY_BUILD_TIMEOUT_SECONDS), never on the settlement path.
+// files are the embedded ones. A spine of several thousand headers takes minutes on a public endpoint: the prover fetches it in chunks
+// that are kept (capture rows, so every validator and every later attempt starts where the last stopped), spends at most its attempt
+// budget on new fetches per attempt, and answers finality_pending{awaiting_spine} until the spine is complete. It runs only in the
+// background upgrader pass, never on the settlement path.
 func wireSepolia(reg *finality.Registry, env Env, d Deps) error {
 	cfg := env.Config
 	links, err := finality.EmbeddedLedgerLinks()
@@ -332,6 +338,7 @@ func wireSepolia(reg *finality.Registry, env Env, d Deps) error {
 	for _, u := range cfg.LC {
 		srcs = append(srcs, &ethsepolia.HTTPSource{Base: strings.TrimRight(u, "/"), Client: env.HTTP})
 	}
-	return reg.RegisterProver(&ethsepolia.Prover{Source: srcs, Exec: &ethsepolia.RPCHeaders{Endpoints: env.L1Block, Client: env.HTTP, BatchSize: cfg.MaxBatch},
-		Pins: env.Pins, Verifier: ethsepolia.New(), Now: d.Now, ExtraLinks: links})
+	return reg.RegisterProver(&ethsepolia.Prover{Source: srcs,
+		Exec: &ethsepolia.RPCHeaders{Endpoints: env.L1Block, Client: env.HTTP, BatchSize: cfg.MaxBatch, MinGap: sepoliaSpineGap},
+		Pins: env.Pins, Verifier: ethsepolia.New(), Now: d.Now, ExtraLinks: links, Store: env.Store, Logf: env.Logf})
 }

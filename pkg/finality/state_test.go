@@ -86,6 +86,10 @@ var section7PendingReasons = []string{
 	"l1_proof_window_unavailable", "l1_state_unavailable", "finality_lc_unavailable", "finality_ledger_incomplete", "history_proof_unavailable",
 }
 
+// operationalPendingReasons are the pending reasons that are not section 7 reasons: progress states of builders (go_operational in spirit; they
+// ride the one finality_pending code and its closed reason set). RB12-SEPOLIA-SPINE: awaiting_spine.
+var operationalPendingReasons = []string{"awaiting_spine"}
+
 func TestTheRegistryHoldsEveryCodeOfSection7AndNothingElseUnderSpecScope(t *testing.T) {
 	reg := loadRegistry(t)
 	if reg.Format != "certen-finality-states/2" {
@@ -119,8 +123,13 @@ func TestTheRegistryHoldsEveryCodeOfSection7AndNothingElseUnderSpecScope(t *test
 			t.Errorf("pending reason %q is not in states.json", r)
 		}
 	}
-	if len(reg.PendingReasons) != len(section7PendingReasons) {
-		t.Errorf("the pending reason set is closed: %d registered, %d in section 7", len(reg.PendingReasons), len(section7PendingReasons))
+	for _, r := range operationalPendingReasons {
+		if _, ok := reg.PendingReasons[r]; !ok {
+			t.Errorf("operational pending reason %q is not in states.json", r)
+		}
+	}
+	if len(reg.PendingReasons) != len(section7PendingReasons)+len(operationalPendingReasons) {
+		t.Errorf("the pending reason set is closed: %d registered, %d in section 7 and %d operational", len(reg.PendingReasons), len(section7PendingReasons), len(operationalPendingReasons))
 	}
 }
 
