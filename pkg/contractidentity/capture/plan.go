@@ -280,7 +280,6 @@ func (p *planner) authSet(st string, flip bool) {
 				p.code(st, G)
 			}
 		}
-		p.code(st, V)
 	}
 	p.code(st, A)
 	for i, o := range owners { // C01: the owner accounts of rule IB, once each

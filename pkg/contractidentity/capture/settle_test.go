@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/big"
 	"runtime"
 	"strings"
 	"sync"
@@ -17,6 +18,7 @@ import (
 
 	ci "github.com/certen/independant-validator/pkg/contractidentity"
 	"github.com/certen/independant-validator/pkg/contractidentity/capture"
+	"github.com/certen/independant-validator/pkg/contractidentity/world"
 	"github.com/certen/independant-validator/pkg/ethproof"
 )
 
@@ -51,6 +53,61 @@ func TestE2HonestCaptureEqualsTheWorldContainerByteForByte(t *testing.T) {
 				}
 				if len(res.Codes) != 5 {
 					t.Fatalf("%d codes carried, want anchor, verifier, generated, factory, account", len(res.Codes))
+				}
+			})
+		}
+	}
+}
+
+// enrich fills the settlement station with unrelated storage, so that a read of a wrong or missing slot visits other trie nodes than the
+// plan reads (in the minimal world several slots share the one root node and a dropped read is invisible).
+func enrich(sp *world.Spec) {
+	st := sp.Stations[world.StationSettle]
+	put := func(addr string, slot, val common.Hash) {
+		for k, a := range st.Accounts {
+			if strings.EqualFold(k, addr) {
+				if a.Storage == nil {
+					a.Storage = map[string]string{}
+				}
+				a.Storage[slot.Hex()] = val.Hex()
+				return
+			}
+		}
+		st.Accounts[addr] = &world.AcctSpec{Storage: map[string]string{slot.Hex(): val.Hex()}}
+	}
+	one := common.BigToHash(big.NewInt(1))
+	for i := byte(1); i <= 7; i++ {
+		noise := common.BytesToHash(bytes.Repeat([]byte{i * 17}, 32))
+		put(sp.Roles.History, ci.SlotIndex(uint64(i)*911), noise)
+		put(sp.Roles.Factory, ci.MappingSlotAt(ci.KeyAddress(common.BytesToAddress(noise[:20])), 2), one)
+		put(sp.Roles.Factory, ci.MappingSlotAt(ci.KeyBytes32(noise), 3), noise)
+		put(sp.Roles.Account, ci.MappingSlotAt(ci.KeyBytes4([4]byte{i, i, i, i}), 8), noise)
+		put(sp.Roles.Account, ci.PageSlot(10, noise, uint64(i)), one)
+		put(sp.Roles.Anchor, ci.MappingSlotAt(ci.KeyBytes32(noise), 4), one)
+		put(sp.Roles.Anchor, ci.MappingSlotAt(ci.KeyBytes32(noise), 1), noise)
+	}
+	book := common.HexToHash(sp.Settlement.AuthorityBook)
+	put(sp.Roles.Account, ci.PageSlot(10, book, sp.Settlement.AuthorityPage), one)
+	put(sp.Roles.Account, ci.PageSlot(9, book, sp.Settlement.AuthorityPage), common.BigToHash(big.NewInt(3)))
+	for _, l := range sp.Settlement.Legs {
+		if d := common.FromHex(l.Data); len(d) >= 4 {
+			put(sp.Roles.Account, ci.MappingSlotAt(ci.KeyBytes4([4]byte(d[:4])), 8), common.BigToHash(big.NewInt(2)))
+		}
+	}
+}
+
+func TestE2RichStorageEveryReadIsInTheEvidence(t *testing.T) {
+	for _, chain := range chains {
+		for _, variant := range []string{"h0", "hops"} {
+			t.Run(fmt.Sprintf("%d/%s", chain, variant), func(t *testing.T) {
+				fc := newFakeChainWith(t, chain, variant, enrich)
+				src, _ := fc.source(honest)
+				res, err := capture.CaptureSettle(context.Background(), fc.config(src), fc.request())
+				if err != nil || res.Stated != nil {
+					t.Fatalf("CaptureSettle: %v %+v", err, res)
+				}
+				if got := capturedContainer(t, fc, res); !bytes.Equal(got, fc.w.ContainerBytes) {
+					t.Fatalf("assembled container (%d B) differs from the world's (%d B)", len(got), len(fc.w.ContainerBytes))
 				}
 			})
 		}
@@ -320,6 +377,33 @@ func TestE2PanicBecomesAnErrorAndSettlementNotAccountIsNamed(t *testing.T) {
 	}
 	if _, err := capture.CaptureSettle(context.Background(), capture.Config{}, fc.request()); err == nil {
 		t.Fatal("a Config without source, manifest and chain was accepted")
+	}
+}
+
+func TestE2FailuresAreBoundedAndAPanicReleasesTheSlot(t *testing.T) {
+	fc := newFakeChain(t, 11155111, "h0")
+	src := &fakeSource{fc: fc}
+	for i := 0; i < 70; i++ {
+		src.providers = append(src.providers, &fakeProvider{name: fmt.Sprintf("https://h%02d.example", i), fc: fc, mode: down})
+	}
+	cfg := fc.config(src)
+	cfg.Clock, cfg.Passes, cfg.Backoff = ethproof.NewVirtualClock(time.Unix(1_700_000_000, 0)), 1, time.Second
+	res, err := capture.CaptureSettle(context.Background(), cfg, fc.request())
+	if err != nil || res.Stated == nil || len(res.Stated.Failures) != ci.DefaultLimits().MaxFailures {
+		t.Fatalf("%v %+v", err, res)
+	}
+	if _, err := capture.EncodeStated(res.Stated); err != nil {
+		t.Fatal(err)
+	}
+	// a source that panics while the capture holds its slot: the slot is released on the way out and the process lives on
+	gate := capture.NewGate(1)
+	psrc, _ := fc.source(honest)
+	psrc.panicOn = "providers"
+	cfg = fc.config(psrc)
+	cfg.Gate = gate
+	var pe *capture.PanicError
+	if _, err := capture.CaptureSettle(context.Background(), cfg, fc.request()); !errors.As(err, &pe) || gate.InUse() != 0 {
+		t.Fatalf("panic under the gate: err %v in use %d", err, gate.InUse())
 	}
 }
 

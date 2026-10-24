@@ -244,7 +244,8 @@ func (c *collector) accept(st string, a common.Address, slots []common.Hash, raw
 	return nil
 }
 
-// serve fetches everything the last plan pass wanted: one eth_getProof per contract and station with all its wanted slots, then the codes.
+// serve fetches everything the last plan pass wanted: one eth_getProof per contract and station with ALL its wanted slots (a slot that depends
+// on a proven value, such as a validator or a string tail, is wanted by a later pass and fetched with that pass), then the codes.
 func (c *collector) serve(ctx context.Context) error {
 	groups := map[acctKey]bool{}
 	for k := range c.wantAcct {

@@ -40,6 +40,12 @@ type fakeChain struct {
 
 func newFakeChain(t testing.TB, chain uint64, variant string) *fakeChain {
 	t.Helper()
+	return newFakeChainWith(t, chain, variant, nil)
+}
+
+// newFakeChainWith edits the world spec before it is derived (richer storage, so that a read of the wrong slot visits other nodes).
+func newFakeChainWith(t testing.TB, chain uint64, variant string, edit func(*world.Spec)) *fakeChain {
+	t.Helper()
 	m, err := ci.Embedded()
 	if err != nil {
 		t.Fatal(err)
@@ -47,6 +53,9 @@ func newFakeChain(t testing.TB, chain uint64, variant string) *fakeChain {
 	sp, err := world.Generate(m, chain, variant)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if edit != nil {
+		edit(sp)
 	}
 	w, err := world.Derive(m, sp)
 	if err != nil {
@@ -301,7 +310,12 @@ func (s *fakeSource) HeaderByNumber(_ context.Context, n *big.Int) (*types.Heade
 	return h, nil
 }
 
-func (s *fakeSource) Providers() []capture.Provider { return s.providers }
+func (s *fakeSource) Providers() []capture.Provider {
+	if s.panicOn == "providers" {
+		panic("hostile provider list")
+	}
+	return s.providers
+}
 
 func (fc *fakeChain) source(modes ...hostile) (*fakeSource, []*fakeProvider) {
 	src := &fakeSource{fc: fc}

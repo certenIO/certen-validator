@@ -61,7 +61,8 @@ type Config struct {
 	Backoff  time.Duration        // between passes over the providers, on Clock; default DefaultBackoff
 	Passes   int                  // passes over the providers per read; default DefaultPasses
 	Gate     *Gate                // per-chain concurrency (optional)
-	// MaxPoolBytes bounds the proof nodes held while a capture runs (default 2 x the container cap): peak memory is bounded by it.
+	// MaxPoolBytes bounds the verified proof nodes a capture holds (default 2 x the container cap); on top of it comes one provider answer of
+	// at most MaxResponseBytes while it is parsed. Past the pool bound the capture ends with ErrTooLarge and stores nothing.
 	MaxPoolBytes int
 	Logf         func(string, ...interface{})
 }
