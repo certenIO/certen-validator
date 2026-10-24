@@ -74,16 +74,21 @@ func SignedMessage(digest [32]byte) []byte {
 	return append([]byte{0x01, 0x00, 0x01, 0x20}, digest[:]...)
 }
 
-// RecordDigests computes digest(i) for every record of the chain (parent_digest(0) = 0^32).
-func (c *CFA1) RecordDigests() [][32]byte {
+// RecordDigests computes digest(i) for every record of the chain (parent_digest(0) = 0^32). It is exported and digests any CFA1, so it
+// applies the table-index rule of DecodeCFA1 to every record before it indexes the tables: a record that names a table that is not there
+// is the named finality_evidence_malformed{cfa1.record, cfa1_table_index_out_of_range, index} (never a panic, never a digest).
+func (c *CFA1) RecordDigests() ([][32]byte, error) {
 	out := make([][32]byte, len(c.Records))
 	var parent [32]byte
 	for i := range c.Records {
 		r := c.Records[i]
+		if err := checkRecordTables(i, r, len(c.Tables)); err != nil {
+			return nil, err
+		}
 		out[i] = Digest(bcsRecord(uint32(i), c.Tables[r.CommitteeIdx], c.Tables[r.NextIdx], parent, r.FinalState, r.FinalConsensus))
 		parent = out[i]
 	}
-	return out
+	return out, nil
 }
 
 // MinCommitteeFloor is the least min_committee_size a pin may carry: Telcoin's own rule lets a committee shrink only to at least 4
