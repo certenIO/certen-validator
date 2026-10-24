@@ -995,20 +995,58 @@ func TestEndToEndHeadlineAgreesWithTheOracle(t *testing.T) {
 	}
 	rng := rand.New(rand.NewSource(8))
 	ctx0, raw, m := skInputs(t)
-	for i := 0; i < 1500; i++ {
+	// 1500 random part tables, then every single-part variation of the all-verified table (each part x each status x registry9 x
+	// authenticated x an extra Open entry): the cases where ONE part decides the headline, which random tables almost never isolate
+	const randomCombos = 1500
+	type single struct {
+		part string
+		st   PartStatus
+	}
+	var singles []single
+	for _, part := range JudgedParts {
+		seen := map[PartStatus]bool{}
+		for _, r9 := range []bool{true, false} {
+			for _, st := range allowedStatuses(part, r9) {
+				if !seen[st] {
+					seen[st] = true
+					singles = append(singles, single{part, st})
+				}
+			}
+		}
+	}
+	for i := 0; i < randomCombos+8*len(singles); i++ {
 		ctx := ctx0
-		registry9 := rng.Intn(2) == 0
+		var registry9, auth, extra bool
+		var parts []PartResult
+		if i < randomCombos {
+			registry9, auth, extra = rng.Intn(2) == 0, rng.Intn(2) == 0, rng.Intn(4) == 0
+			for _, part := range JudgedParts {
+				sts := allowedStatuses(part, registry9)
+				parts = append(parts, mkPart(part, sts[rng.Intn(len(sts))], extra))
+			}
+		} else {
+			k := i - randomCombos
+			flags, sg := k%8, singles[k/8]
+			registry9, auth, extra = flags&1 != 0, flags&2 != 0, flags&4 != 0
+			allowed := false
+			for _, st := range allowedStatuses(sg.part, registry9) {
+				allowed = allowed || st == sg.st
+			}
+			if !allowed {
+				continue
+			}
+			for _, part := range JudgedParts {
+				st := StatusVerified
+				if part == sg.part {
+					st = sg.st
+				}
+				parts = append(parts, mkPart(part, st, extra))
+			}
+		}
 		if registry9 {
 			ctx.Registry9 = skRegistry9()
 		}
-		auth := rng.Intn(2) == 0
-		extra := rng.Intn(4) == 0
-		var parts []PartResult
-		for _, part := range JudgedParts {
-			sts := allowedStatuses(part, registry9)
-			parts = append(parts, mkPart(part, sts[rng.Intn(len(sts))], extra))
-		}
-		if rng.Intn(6) == 0 { // the verified/open mix only: no refusals, so that verified and verified_core are exercised
+		if i < randomCombos && rng.Intn(6) == 0 { // the verified/open mix only: no refusals, so that verified and verified_core are exercised
 			for k := range parts {
 				if parts[k].Status == StatusRefused || parts[k].Status == StatusUnproven {
 					parts[k] = mkPart(parts[k].Part, StatusVerified, false)
