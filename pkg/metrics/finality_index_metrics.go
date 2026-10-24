@@ -18,7 +18,8 @@
 //	certen_finality_index_step_seconds{chain,family}      wall time of one indexer step (histogram)
 //	certen_finality_index_selfcheck_skipped_total{chain,family}  self-checks not run because the memory budget refused the rows (never silent)
 //	certen_finality_index_unindexable_blocks_total{chain,family,reason}  captured blocks the indexer could not read (index_block_unindexable)
-//	certen_finality_index_notes_dropped_total{chain,family}  late-block notes dropped because the set of pending notes was full (the rotation still reaches the block)
+//	certen_finality_index_notes_dropped_total{chain,family}  late-block notes beyond the pending set's bound (Base drops them, the rotation still reaches the block; Arbitrum folds them into range notes)
+//	certen_finality_index_wide_pointers{chain,family}     pointer rows of batches wider than the normal lookup window, as the last lookup listed them (0 in production)
 //	certen_finality_index_disabled{chain,family,key,reason}      1 while a bad setting has switched the index off (finality_index_disabled)
 //	certen_finality_capture_foreign_txs_total{chain}      batch-inbox transactions skipped because the batcher of their block did not send them (F19)
 //	certen_finality_capture_batcher_unestablished_total{chain}   blocks whose captured rows cannot establish the batcher (their frames are not filtered)
@@ -69,7 +70,11 @@ var (
 	}, []string{"chain", "family", "reason"})
 	finalityIndexNotesDropped = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "certen_finality_index_notes_dropped_total",
-		Help: "Late-block notes dropped because the set of pending notes was full; the rotating walk still reaches the block, later.",
+		Help: "Late-block notes beyond the pending set's bound: the Base index drops them (the rotating walk reaches the block, later), the Arbitrum index folds them into range notes and still works them off.",
+	}, []string{"chain", "family"})
+	finalityIndexWidePointers = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "certen_finality_index_wide_pointers",
+		Help: "Pointer rows of batches whose time bounds are wider than the normal lookup window, as the last lookup listed them (a lookup names coverage_overflow above the bound).",
 	}, []string{"chain", "family"})
 	finalityIndexSelfCheckSkipped = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "certen_finality_index_selfcheck_skipped_total",
@@ -118,6 +123,7 @@ func registerFinalityIndexMetrics() {
 	prometheus.MustRegister(finalityIndexStepSeconds)
 	prometheus.MustRegister(finalityIndexSelfCheckSkipped)
 	prometheus.MustRegister(finalityIndexNotesDropped)
+	prometheus.MustRegister(finalityIndexWidePointers)
 	prometheus.MustRegister(finalityIndexUnindexable)
 	prometheus.MustRegister(finalityIndexDisabled)
 	prometheus.MustRegister(finalityForeignTxs)
@@ -204,6 +210,11 @@ func IncFinalityBatcherUnestablished(chain uint64) {
 // IncFinalityIndexUnindexable counts a captured block recorded as unindexable.
 func IncFinalityIndexUnindexable(chain uint64, family, reason string) {
 	finalityIndexUnindexable.WithLabelValues(chainLabel(chain), family, reason).Inc()
+}
+
+// SetFinalityIndexWidePointers reports how many wide-batch pointer rows the last lookup listed.
+func SetFinalityIndexWidePointers(chain uint64, family string, n int) {
+	finalityIndexWidePointers.WithLabelValues(chainLabel(chain), family).Set(float64(n))
 }
 
 // IncFinalityIndexNoteDropped counts a late-block note dropped because the set of pending notes was full.

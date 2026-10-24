@@ -444,12 +444,6 @@ func (ix *Indexer) indexGroup(ctx context.Context, g blockGroup, rep *finality.S
 		}
 		return groupDone, err
 	}
-	for _, br := range blk.batches {
-		if !distancesWithin(blk.t, br.rec.Header40[0], br.rec.Header40[1], windowHardLimit, windowHardLimit) {
-			return groupDone, ix.recordUnindexable(ctx, g.key, &unindexableError{Reason: finality.UnindexableWindowBeyondCap,
-				Err: errors.New("the batch's time bounds are wider than any real SequencerInbox configuration")})
-		}
-	}
 	d := &arbDigest{Block: g.key.L1Block, Hash: g.key.L1Hash, T: blk.t, Pins: ix.pins}
 	for _, br := range blk.batches {
 		rep.BytesRead += int64(len(br.row)) + int64(br.dataLen)
@@ -465,7 +459,7 @@ func (ix *Indexer) indexGroup(ctx context.Context, g blockGroup, rep *finality.S
 		}
 		if !withinCaps(blk.t, e.MinTs, e.MaxTs) {
 			// a batch the normal window of a lookup would miss: a pointer the lookup lists (written after the entry it points to, before the digest)
-			if err := finality.IndexPut(ctx, ix.Store, FamilyArb, wideKey(ix.Gen, e.MinTs, e.MaxTs, e.N), wideBody(g.key.L1Block, g.key.L1Hash)); err != nil {
+			if err := finality.IndexPut(ctx, ix.Store, FamilyArb, wideKey(ix.Gen, e.MinTs, e.MaxTs, e.N, g.key.L1Hash), wideBody(g.key.L1Block, g.key.L1Hash)); err != nil {
 				return groupDone, err
 			}
 		}
@@ -917,6 +911,7 @@ type SelfCheckResult struct {
 	Digests    int
 	Skipped    int
 	Mismatches int
+	Pointers   int // pointer rows of wide batches compared (sampled from the pointers, and checked for each sampled wide entry)
 }
 
 // SelfCheckReport runs SelfCheck and returns what it did.
@@ -979,7 +974,7 @@ func (ix *Indexer) SelfCheck(ctx context.Context, sample int) error {
 		if !found {
 			continue
 		}
-		want, err := ix.referenceEntry(ctx, n)
+		want, wide, err := ix.referenceEntry(ctx, n)
 		if err != nil {
 			if memoryRefusal(err) {
 				ix.skipped("entry", k)
@@ -991,9 +986,56 @@ func (ix *Indexer) SelfCheck(ctx context.Context, sample int) error {
 			note(finality.IndexInconsistent(ix.Chain(), FamilyArb, finality.IndexSelfCheckMismatch, "item", k.Item, "l1_block", k.L1Block))
 			ix.quarantine(ctx, k, n.N)
 		}
+		if wide { // a wide batch without its pointer is a candidate no lookup can find
+			pk := wideKey(ix.Gen, n.MinTs, n.MaxTs, n.N, k.L1Hash)
+			got, present, err := ix.Store.Get(ctx, pk)
+			if err != nil {
+				return err
+			}
+			ix.selfRes.Pointers++
+			if !present || !bytes.Equal(got, wideBody(k.L1Block, k.L1Hash)) {
+				note(finality.IndexInconsistent(ix.Chain(), FamilyArb, finality.IndexSelfCheckMismatch, "item", pk.Item, "l1_block", k.L1Block))
+			}
+		}
 		checked++
 	}
 	ix.selfRes.Entries = checked
+	// the pointers: they live at block 0, outside the sampled block range, so they are sampled from their own listing
+	pkeys, err := ix.Store.ListByRange(ctx, ix.Chain(), 0, 0, ixItem(ix.Gen, ixWide)+"/")
+	if err != nil {
+		return err
+	}
+	ix.rng.Shuffle(len(pkeys), func(i, j int) { pkeys[i], pkeys[j] = pkeys[j], pkeys[i] })
+	for i, k := range pkeys {
+		if i >= sample {
+			break
+		}
+		n, good := parseWideName(ix.Gen, k)
+		if !good {
+			note(finality.IndexInconsistent(ix.Chain(), FamilyArb, finality.IndexEntryCorrupt, "item", k.Item, "l1_block", k.L1Block))
+			ix.selfRes.Pointers++
+			continue
+		}
+		stored, found, err := ix.Store.Get(ctx, k)
+		if err != nil {
+			return err
+		}
+		if !found {
+			continue
+		}
+		want, err := ix.referencePointer(ctx, k, n, stored)
+		if err != nil {
+			if memoryRefusal(err) {
+				ix.skipped("pointer", k)
+				continue
+			}
+			return err
+		}
+		ix.selfRes.Pointers++
+		if !bytes.Equal(stored, want) {
+			note(finality.IndexInconsistent(ix.Chain(), FamilyArb, finality.IndexSelfCheckMismatch, "item", k.Item, "l1_block", k.L1Block))
+		}
+	}
 	dkeys, err := ix.Store.ListByRange(ctx, ix.Chain(), at, at+span, ixItem(ix.Gen, ixDigest)+"/")
 	if err != nil {
 		return err
@@ -1084,11 +1126,38 @@ func (ix *Indexer) referenceDigest(ctx context.Context, k finality.CaptureKey) (
 }
 
 // referenceEntry recomputes the stored bytes of one entry from the rows of its batch alone (one batch row, its blobs or calldata and its
-// block's header). An entry whose batch is not whole any more is a certain mismatch.
-func (ix *Indexer) referenceEntry(ctx context.Context, n entryName) ([]byte, error) {
+// block's header), and whether the batch is wider than the normal lookup window (so it needs a pointer). An entry whose batch is not whole any more
+// is a certain mismatch.
+func (ix *Indexer) referenceEntry(ctx context.Context, n entryName) (want []byte, wide bool, _ error) {
 	hold, done := ix.hold(ctx, "arb_index_selfcheck")
 	defer done()
 	g := blockGroup{key: withItem(n.Key, ""), nums: []uint64{n.N}}
+	blk, err := ix.readBlock(ctx, g, hold)
+	if err != nil {
+		var ue *unindexableError
+		if errors.Is(err, errBlockOpen) || errors.As(err, &ue) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	e, err := ix.entryOf(blk, blk.batches[0], hold)
+	if err != nil {
+		return nil, false, err
+	}
+	return e.encode(), !withinCaps(blk.t, e.MinTs, e.MaxTs), nil
+}
+
+// referencePointer recomputes the stored bytes of the pointer k (named n, holding stored) from the captured rows: the block it names must be the one
+// whose hash it lives under, hold the batch it names with exactly the bounds in its name, and that batch must be wider than the normal window. Nil
+// (a certain mismatch) when the rows say otherwise.
+func (ix *Indexer) referencePointer(ctx context.Context, k finality.CaptureKey, n entryName, stored []byte) ([]byte, error) {
+	block, hash, err := decodeWideBody(stored)
+	if err != nil || hash != k.L1Hash {
+		return nil, nil
+	}
+	hold, done := ix.hold(ctx, "arb_index_selfcheck")
+	defer done()
+	g := blockGroup{key: finality.CaptureKey{Chain: ix.Chain(), L1Block: block, L1Hash: hash}, nums: []uint64{n.N}}
 	blk, err := ix.readBlock(ctx, g, hold)
 	if err != nil {
 		var ue *unindexableError
@@ -1097,9 +1166,12 @@ func (ix *Indexer) referenceEntry(ctx context.Context, n entryName) ([]byte, err
 		}
 		return nil, err
 	}
-	e, err := ix.entryOf(blk, blk.batches[0], hold)
-	if err != nil {
-		return nil, err
+	if len(blk.batches) != 1 {
+		return nil, nil
 	}
-	return e.encode(), nil
+	rec := blk.batches[0].rec
+	if rec.N != n.N || rec.Header40[0] != n.MinTs || rec.Header40[1] != n.MaxTs || withinCaps(blk.t, n.MinTs, n.MaxTs) {
+		return nil, nil
+	}
+	return wideBody(block, hash), nil
 }

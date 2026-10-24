@@ -95,7 +95,7 @@ func RunArbIndexSelfCheck(ctx context.Context, w io.Writer, cfg Config, ix ArbIn
 		return IndexSelfCheckNotRunning
 	}
 	res, err := ix.SelfCheckReport(ctx, sample)
-	line := fmt.Sprintf("generation=%d around_l1_block=%d entries=%d digests=%d skipped=%d mismatches=%d", res.Generation, res.Around, res.Entries, res.Digests, res.Skipped, res.Mismatches)
+	line := fmt.Sprintf("generation=%d around_l1_block=%d entries=%d digests=%d skipped=%d mismatches=%d pointers=%d", res.Generation, res.Around, res.Entries, res.Digests, res.Skipped, res.Mismatches, res.Pointers)
 	if err != nil {
 		if st, named := finality.AsNamed(err); named {
 			fmt.Fprintf(w, "finality-arb-index-selfcheck: MISMATCH %s\n%s\n", line, st.Error())
