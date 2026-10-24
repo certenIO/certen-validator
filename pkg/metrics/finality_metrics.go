@@ -55,7 +55,19 @@ var (
 	}, []string{"chain", "level"})
 	finalityLegsWithoutSettlement = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "certen_finality_legs_without_settlement",
-		Help: "Legs whose newest bundle holds no execution proof (component 5): finality_included_unavailable, held back quietly and not read again until the proof has a newer bundle, as of the last upgrader pass.",
+		Help: "Legs whose L6 evidence is unavailable (finality_included_unavailable): the newest bundle holds no execution proof (component 5; not read again until the proof has a newer bundle) or an execution proof without its block header (read again every HeaderRetry until its header is reconstructed), held back quietly, as of the last upgrader pass.",
+	}, []string{"chain"})
+	finalityLegacyHeaders = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "certen_finality_legacy_headers",
+		Help: "Legacy legs (stored execution proof without block_header_rlp) by chain and reconstruction state as of the last reconstruction tick: pending (not yet judged), reconstructed (header stored and the leg's proofs verify), unserved (no configured provider served the block; asked again with backoff) or invalid (the header is the block's own and the stored component contradicts it, or the component cannot be read).",
+	}, []string{"chain", "state"})
+	finalityLegacyScanFailing = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "certen_finality_legacy_scan_failing",
+		Help: "1 while the last scan of the legacy-leg list of a chain failed (the leg counts of certen_finality_legacy_headers are then the legs known before it, and zeros mean nothing), 0 after a scan that succeeded.",
+	}, []string{"chain"})
+	finalityLegacyUnwired = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "certen_finality_legacy_unwired",
+		Help: "1 when the legacy-header reconstruction loop of a chain could not be registered at startup (the validator runs without it; its legacy legs stay finality_included_unavailable{no_block_header}), 0 when it is registered.",
 	}, []string{"chain"})
 	finalityLegsWithoutProver = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "certen_finality_legs_no_prover",
@@ -172,11 +184,18 @@ type finalityChainHealth struct {
 	enabledKnown   bool
 	enabled        bool
 	disabledReason string
+	prefixReason   string            // the named states of an archive backfill switched off by a bad setting (RB12-TRAIN3-INT)
+	indexReason    string            // the named state of a capture index switched off by a bad setting (RB12-INDEX-FIX D2)
 	captured       map[string]uint64 // capturer -> last captured parent-chain block
 	lag            map[string]uint64 // capturer -> lag in parent-chain blocks
 	legs           map[string]int    // level -> settled legs standing there
 	lastAppend     int64
 	restarts       int
+
+	legacy            map[string]int // legacy legs by reconstruction state (RB12-LEGACY-191)
+	legacyScanKnown   bool
+	legacyScanFailing bool
+	legacyUnwired     string
 }
 
 var finalityHealth = struct {
@@ -192,7 +211,7 @@ var finalityHealth = struct {
 func finalityChain(chain uint64) *finalityChainHealth {
 	c := finalityHealth.chains[chain]
 	if c == nil {
-		c = &finalityChainHealth{captured: map[string]uint64{}, lag: map[string]uint64{}, legs: map[string]int{}}
+		c = &finalityChainHealth{captured: map[string]uint64{}, lag: map[string]uint64{}, legs: map[string]int{}, legacy: map[string]int{}}
 		finalityHealth.chains[chain] = c
 	}
 	return c
@@ -204,7 +223,11 @@ func finalityChain(chain uint64) *finalityChainHealth {
 //	{"upgrader_enabled": bool, "upgrader_disabled_reason": string (only while the whole upgrader is off: the named state, e.g. config_invalid with the variable and entry),
 //	 "chains": {"<chain id>": {"enabled": bool (once known), "disabled_reason": string, "last_captured_block": n,
 //	            "capture_lag_blocks": n, "pending_legs_by_level": {"<level>": n}, "last_append_unixtime": n,
-//	            "capturer_restarts": n, "capturers": {"<name>": {"last_captured_block": n, "capture_lag_blocks": n}}}}}
+//	            "capturer_restarts": n, "capturers": {"<name>": {"last_captured_block": n, "capture_lag_blocks": n}},
+//	            "legacy_headers": {"<state>": n, "scan_failing": bool, "unwired": string}}}}
+//
+// legacy_headers (RB12-LEGACY-191) is present once the legacy-header loop of the chain has reported: its legs by state (pending,
+// reconstructed, unserved, invalid), whether the last scan of the leg list failed, and why the loop is not registered (absent when it is).
 //
 // last_captured_block and capture_lag_blocks of a chain are the highest block and the largest lag over its capture loops (the
 // loop furthest behind decides the alert); the per-loop values are under capturers. upgrader_enabled is absent until the
@@ -231,6 +254,12 @@ func FinalityHealth() map[string]any {
 			"disabled_reason":      c.disabledReason,
 			"last_append_unixtime": c.lastAppend,
 			"capturer_restarts":    c.restarts,
+		}
+		if c.indexReason != "" {
+			m["index_disabled_reason"] = c.indexReason
+		}
+		if c.prefixReason != "" {
+			m["prefix_disabled_reason"] = c.prefixReason
 		}
 		if c.enabledKnown {
 			m["enabled"] = c.enabled
@@ -259,6 +288,19 @@ func FinalityHealth() map[string]any {
 			legs[lvl] = n
 		}
 		m["pending_legs_by_level"] = legs
+		if len(c.legacy) > 0 || c.legacyScanKnown || c.legacyUnwired != "" {
+			lh := map[string]any{}
+			for state, n := range c.legacy {
+				lh[state] = n
+			}
+			if c.legacyScanKnown {
+				lh["scan_failing"] = c.legacyScanFailing
+			}
+			if c.legacyUnwired != "" {
+				lh["unwired"] = c.legacyUnwired
+			}
+			m["legacy_headers"] = lh
+		}
 		chains[chainLabel(id)] = m
 	}
 	out["chains"] = chains
@@ -299,6 +341,39 @@ func SetFinalityLegs(chain uint64, level string, n int) {
 // SetFinalityLegsWithoutSettlement reports how many legs of a chain are held back because their newest bundle holds no execution proof.
 func SetFinalityLegsWithoutSettlement(chain uint64, n int) {
 	finalityLegsWithoutSettlement.WithLabelValues(chainLabel(chain)).Set(float64(n))
+}
+
+// SetFinalityLegacyHeaders reports how many legacy legs of a chain stand in one reconstruction state.
+func SetFinalityLegacyHeaders(chain uint64, state string, n int) {
+	finalityLegacyHeaders.WithLabelValues(chainLabel(chain), state).Set(float64(n))
+	finalityHealth.mu.Lock()
+	finalityChain(chain).legacy[state] = n
+	finalityHealth.mu.Unlock()
+}
+
+// SetFinalityLegacyScan reports whether the last scan of a chain's legacy-leg list failed.
+func SetFinalityLegacyScan(chain uint64, failing bool) {
+	v := 0.0
+	if failing {
+		v = 1
+	}
+	finalityLegacyScanFailing.WithLabelValues(chainLabel(chain)).Set(v)
+	finalityHealth.mu.Lock()
+	c := finalityChain(chain)
+	c.legacyScanKnown, c.legacyScanFailing = true, failing
+	finalityHealth.mu.Unlock()
+}
+
+// SetFinalityLegacyUnwired reports why a chain's legacy-header loop is not registered ("" when it is).
+func SetFinalityLegacyUnwired(chain uint64, reason string) {
+	v := 0.0
+	if reason != "" {
+		v = 1
+	}
+	finalityLegacyUnwired.WithLabelValues(chainLabel(chain)).Set(v)
+	finalityHealth.mu.Lock()
+	finalityChain(chain).legacyUnwired = reason
+	finalityHealth.mu.Unlock()
 }
 
 // SetFinalityUnrecordedSettlements reports how many legs of the last pass were served before their proof row recorded the settlement.
@@ -372,6 +447,22 @@ func SetFinalityChainEnabled(chain uint64, on bool) {
 func SetFinalityChainDisabledReason(chain uint64, reason string) {
 	finalityHealth.mu.Lock()
 	finalityChain(chain).disabledReason = reason
+	finalityHealth.mu.Unlock()
+}
+
+// SetFinalityChainIndexDisabledReason records, for the health block, the named state of a capture index that a bad setting switched off
+// (the chain itself keeps running with the window reader).
+func SetFinalityChainIndexDisabledReason(chain uint64, reason string) {
+	finalityHealth.mu.Lock()
+	finalityChain(chain).indexReason = reason
+	finalityHealth.mu.Unlock()
+}
+
+// SetFinalityChainPrefixDisabledReason records, for the health block, the named states of an archive backfill that a bad setting switched off
+// on the chain (the chain itself keeps running).
+func SetFinalityChainPrefixDisabledReason(chain uint64, reason string) {
+	finalityHealth.mu.Lock()
+	finalityChain(chain).prefixReason = reason
 	finalityHealth.mu.Unlock()
 }
 
@@ -469,6 +560,9 @@ func registerFinalityMetrics() {
 	prometheus.MustRegister(finalityLegs)
 	prometheus.MustRegister(finalityLegsWithoutSettlement)
 	prometheus.MustRegister(finalityLegsWithoutProver)
+	prometheus.MustRegister(finalityLegacyHeaders)
+	prometheus.MustRegister(finalityLegacyScanFailing)
+	prometheus.MustRegister(finalityLegacyUnwired)
 	prometheus.MustRegister(finalityUnrecordedSettlements)
 	prometheus.MustRegister(finalityAppended)
 	prometheus.MustRegister(finalityBuildFailures)
@@ -494,4 +588,6 @@ func registerFinalityMetrics() {
 	prometheus.MustRegister(finalityMemoryReserved)
 	prometheus.MustRegister(finalityMemoryRefused)
 	registerFinalityGapMetrics()
+	registerFinalitySpineMetrics()
+	registerFinalityPrefixMetrics()
 }

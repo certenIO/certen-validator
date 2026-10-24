@@ -26,6 +26,16 @@ const (
 )
 
 var stateClasses = map[string]StateClass{
+	// index_block_unindexable: the stored rows of the block do not parse, and stored rows do not change: persistent, so the failure back-off.
+	"index_block_unindexable": ClassFailure,
+	// index_inconsistent is environment only for the reason that heals (fieldClassRules: a MISSING row arrives by the reconcile or a backfill);
+	// every other reason is persistent until a new index generation and backs off like a failure.
+	"index_inconsistent": ClassEnvironment,
+	// finality_index_disabled is a fact about this process (a bad setting switched the capture index off). It is announced at wiring and never
+	// reaches a leg; classified so that, if it ever did, it would hold the leg and not back it off.
+	"finality_index_disabled": ClassEnvironment,
+	// finality_prefix_disabled is the same kind of fact about the process (a bad setting switched the prefix backfill of a chain off), announced at wiring.
+	"finality_prefix_disabled":             ClassEnvironment,
 	"adiri_incarnation_mismatch":           ClassFailure,
 	"assertion_history_unavailable":        ClassFailure,
 	"assertion_machine_not_finished":       ClassFailure,
@@ -53,6 +63,7 @@ var stateClasses = map[string]StateClass{
 	"evidence_pin_mismatch":                ClassFailure,
 	"finality_addendum_malformed":          ClassFailure,
 	"finality_append_conflict":             ClassFailure,
+	"finality_block_header_unreadable":     ClassFailure,
 	"finality_block_mismatch":              ClassFailure,
 	"finality_block_not_covered":           ClassFailure,
 	"finality_bootstrap_invalid":           ClassFailure,
@@ -87,6 +98,7 @@ var stateClasses = map[string]StateClass{
 	"finality_prover_panicked":             ClassFailure,
 	"finality_signature_invalid":           ClassFailure,
 	"finality_source_unavailable":          ClassFailure,
+	"finality_spine_row_invalid":           ClassFailure,
 	"finality_upgrader_disabled":           ClassFailure,
 	"finality_verifier_failed":             ClassFailure,
 	"game_blacklisted":                     ClassFailure,
@@ -107,10 +119,12 @@ var stateClasses = map[string]StateClass{
 	"l1_finality_unproven":                 ClassFailure,
 	"l1_posted_content_not_found":          ClassFailure,
 	"l1_posted_delayed_origin_unproven":    ClassFailure,
+	"l1_posted_not_found":                  ClassFailure,
 	"l1_state_proof_invalid":               ClassFailure,
 	"l1_system_paused":                     ClassFailure,
 	"l1_tx_proof_invalid":                  ClassFailure,
 	"l2_block_not_canonical":               ClassFailure,
+	"l2_block_content_mismatch":            ClassFailure,
 	"l2_header_unavailable":                ClassFailure,
 	"l2_headers_unavailable":               ClassFailure,
 	"level_already_present":                ClassFailure,
@@ -161,6 +175,17 @@ var fieldClassRules = map[string]FieldClassRule{
 		"open":               ClassEnvironment,
 		"unavailable_proven": ClassFailure,
 		"retention_expired":  ClassFailure,
+		// unrecorded: the index infers a hole from the L2 timeline that no durable record names; the audit records it and the backfill can close it
+		"unrecorded": ClassEnvironment,
+	}},
+	"index_inconsistent": {Field: "reason", Classes: map[string]StateClass{
+		"row_missing":                 ClassEnvironment,
+		"entry_corrupt":               ClassFailure,
+		"rows_disagree":               ClassFailure,
+		"pins_changed":                ClassFailure,
+		"coverage_overflow":           ClassFailure,
+		"duplicate_frame_after_close": ClassFailure,
+		"self_check_mismatch":         ClassFailure,
 	}},
 }
 

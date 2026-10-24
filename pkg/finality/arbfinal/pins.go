@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"encoding/json"
+	"sort"
 	"strings"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -156,12 +157,19 @@ func LoadPins(p *finality.Pins) (*Pins, error) {
 		return nil, PinMismatch("confirm_path.validator_wallet_impl")
 	}
 	out.WalletImpl = common.BytesToAddress(b)
-	for k, v := range j.LogicPins {
+	// The keys are read in sorted order and two spellings of one hash (hex digits are accepted in either case) that name different
+	// roles are refused, so the table is a function of the file and not of the order a Go map is visited in (RB12-OPS-A1, B-ARB-1): the
+	// same role under both spellings is one entry.
+	for _, k := range sortedNames(j.LogicPins) {
 		kb, ok := hexN(k, 32)
 		if !ok {
 			return nil, PinMismatch("logic_pins")
 		}
-		out.LogicPins[common.BytesToHash(kb)] = v
+		h := common.BytesToHash(kb)
+		if prev, dup := out.LogicPins[h]; dup && prev != j.LogicPins[k] {
+			return nil, PinMismatch("logic_pins")
+		}
+		out.LogicPins[h] = j.LogicPins[k]
 	}
 	// The wallet route needs both identities pinned: a pins file without either could never prove a wallet, and a role pinned on a
 	// code hash that an account without code, or an absent account, also has would prove one. Absent or unusable is pin_mismatch.
@@ -180,19 +188,24 @@ func LoadPins(p *finality.Pins) (*Pins, error) {
 			return nil, PinMismatch("logic_pins." + role)
 		}
 	}
-	for name, dst := range map[string]*[4]byte{
+	// Several bad pins are judged in sorted-name order: the field named is the first bad one by name, not by map order (B-ARB-1).
+	selectorDst := map[string]*[4]byte{
 		"confirm_assertion": &out.Sel.Confirm, "force_confirm_assertion": &out.Sel.Force, "fast_confirm_assertion": &out.Sel.Fast,
 		"fast_confirm_new_assertion": &out.Sel.FastNew, "wallet_execute_transaction": &out.Sel.WalletTx,
 		"wallet_execute_transactions": &out.Sel.WalletTxs, "wallet_execute_transaction_with_gas_refunder": &out.Sel.WalletTxRefund,
 		"wallet_execute_transactions_with_gas_refunder": &out.Sel.WalletTxsRef,
-	} {
+	}
+	for _, name := range sortedNames(selectorDst) {
+		dst := selectorDst[name]
 		sb, ok := hexN(j.ConfirmPath.Selectors[name], 4)
 		if !ok || bytes.Equal(sb, []byte{0, 0, 0, 0}) { // a zero selector is also refused: it is what a call without a selector reads as
 			return nil, PinMismatch("confirm_path.selectors." + name)
 		}
 		copy(dst[:], sb)
 	}
-	for name, dst := range map[string]*common.Hash{"assertion_confirmed": &out.Topic.Confirmed, "assertion_force_confirmed": &out.Topic.ForceConfirmed} {
+	topicDst := map[string]*common.Hash{"assertion_confirmed": &out.Topic.Confirmed, "assertion_force_confirmed": &out.Topic.ForceConfirmed}
+	for _, name := range sortedNames(topicDst) {
+		dst := topicDst[name]
 		tb, ok := hexN(j.ConfirmPath.Topics[name], 32)
 		if !ok {
 			return nil, PinMismatch("confirm_path.topics." + name)
@@ -200,6 +213,17 @@ func LoadPins(p *finality.Pins) (*Pins, error) {
 		*dst = common.BytesToHash(tb)
 	}
 	return out, nil
+}
+
+// sortedNames is the keys of m in ascending byte order: every loop of this file that can end in a pin_mismatch walks a map through it, so
+// the field a refusal names does not depend on the order the runtime visits the map in.
+func sortedNames[V any](m map[string]V) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // roleOf returns the logic_pins role of a code hash ("" when not pinned).

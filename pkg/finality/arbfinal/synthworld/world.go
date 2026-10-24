@@ -84,6 +84,7 @@ type Parts struct {
 	Status       uint64 // the node's status byte
 	ConfigWord   *common.Hash
 	FastConfirm  common.Address
+	FastS, FastK *common.Address // the anyTrustFastConfirmer address at S / at K when it differs from FastConfirm (nil: FastConfirm): with S != K a verifier that reads the confirmer under another block's storage root answers differently (RB12-ARBFINAL-FIX)
 	AdminCodeS   common.Hash
 	UserCodeS    common.Hash
 	AdminCodeK   common.Hash
@@ -112,7 +113,23 @@ type Parts struct {
 	// Wallet, when non-nil, adds the ValidatorWallet identity accounts and proofs of the confirmation transaction's callee to the state
 	// at K (RB11-E1-RAISE). Nil builds none: finality_arb_final1 and finality_arb_final2 carry no wallet proof.
 	Wallet *WalletState
+
+	// OddL1 makes the header of the L1 block with this number (any block of the spine) an odd one: the light-client spine reader accepts it (it reads
+	// parent hash, state root, number and timestamp) and the framework header reader refuses it (RB12-ARBFINAL-FIX). Nil: every L1 header is regular.
+	OddL1 map[uint64]OddHeader
 }
+
+// OddHeader is the way an L1 header differs from a regular one.
+type OddHeader string
+
+const (
+	// OddTxRoot31: the transactionsRoot item (4) is 31 bytes.
+	OddTxRoot31 OddHeader = "tx_root_31_bytes"
+	// OddReceiptsRoot33: the receiptsRoot item (5) is 33 bytes.
+	OddReceiptsRoot33 OddHeader = "receipts_root_33_bytes"
+	// OddWithdrawalsList: the header has 17 items and item 16 (the withdrawals root slot) is a list.
+	OddWithdrawalsList OddHeader = "withdrawals_slot_is_a_list"
+)
 
 // confIndex is the position of the confirmation transaction in K's block.
 func (p Parts) confIndex() int {
@@ -166,8 +183,24 @@ func (w *World) Rebuild() error {
 }
 
 func header(parent common.Hash, state, txRoot, rcRoot common.Hash, number, ts uint64, salt string) []byte {
+	return oddHeader(parent, state, txRoot, rcRoot, number, ts, salt, "")
+}
+
+// oddHeader is header with the item of the given odd shape edited before the header is encoded ("": a regular header).
+func oddHeader(parent common.Hash, state, txRoot, rcRoot common.Hash, number, ts uint64, salt string, odd OddHeader) []byte {
 	items := []any{parent.Bytes(), bytes.Repeat([]byte{0x1d}, 32), make([]byte, 20), state.Bytes(), txRoot.Bytes(), rcRoot.Bytes(),
 		make([]byte, 256), uint64(0), number, uint64(30_000_000), uint64(1), ts, []byte(salt), bytes.Repeat([]byte{0x05}, 32), make([]byte, 8)}
+	switch odd {
+	case "":
+	case OddTxRoot31:
+		items[4] = txRoot.Bytes()[:31]
+	case OddReceiptsRoot33:
+		items[5] = append(append([]byte(nil), rcRoot.Bytes()...), 0x01)
+	case OddWithdrawalsList:
+		items = append(items, uint64(7), []any{bytes.Repeat([]byte{0x09}, 32)})
+	default:
+		panic("synthworld: unknown odd header " + string(odd))
+	}
 	raw, err := rlp.EncodeToBytes(items)
 	if err != nil {
 		panic(err)
@@ -255,7 +288,7 @@ func word(a common.Address) common.Hash { var h common.Hash; copy(h[12:], a[:]);
 
 func u64w(v uint64) common.Hash { var h common.Hash; binary.BigEndian.PutUint64(h[24:], v); return h }
 
-func (p Parts) rollupState(admin, user common.Hash, adminWord, userWord *common.Hash, assertion [32]byte, absentRollup bool, omit []string, wb *walletBuild) (common.Hash, [][]byte) {
+func (p Parts) rollupState(fastOv *common.Address, admin, user common.Hash, adminWord, userWord *common.Hash, assertion [32]byte, absentRollup bool, omit []string, wb *walletBuild) (common.Hash, [][]byte) {
 	aw, uw := word(AdminLogic), word(UserLogic)
 	if adminWord != nil {
 		aw = *adminWord
@@ -269,7 +302,11 @@ func (p Parts) rollupState(admin, user common.Hash, adminWord, userWord *common.
 	if p.ConfigWord != nil {
 		cfg = *p.ConfigWord
 	}
-	fast := word(p.FastConfirm)
+	fastA := p.FastConfirm
+	if fastOv != nil {
+		fastA = *fastOv
+	}
+	fast := word(fastA)
 	fastWord := common.BigToHash(new(big.Int).Lsh(new(big.Int).SetBytes(fast[:]), 8))
 	rollup := acct{addr: Rollup, code: crypto.Keccak256Hash([]byte("rollup proxy")), storage: map[common.Hash]common.Hash{
 		AdminSlot: aw, UserSlot: uw,
@@ -533,8 +570,8 @@ func Assemble(p Parts) *World {
 	// States at S and K. The wallet accounts go to K's state (the verifier reads K) or, with AtS, to S's; when S == K there is one state.
 	S, K := p.F-p.SBack, p.F-p.SBack-p.KBack
 	wbS, wbK := p.Wallet.builds(to, S == K)
-	rootS, nodesS := p.rollupState(p.AdminCodeS, p.UserCodeS, p.AdminWordS, p.UserWordS, assertion, p.RollupAbsent, p.OmitS, wbS)
-	rootK, nodesK := p.rollupState(p.AdminCodeK, p.UserCodeK, p.AdminWordK, p.UserWordK, assertion, false, p.OmitK, wbK)
+	rootS, nodesS := p.rollupState(p.FastS, p.AdminCodeS, p.UserCodeS, p.AdminWordS, p.UserWordS, assertion, p.RollupAbsent, p.OmitS, wbS)
+	rootK, nodesK := p.rollupState(p.FastK, p.AdminCodeK, p.UserCodeK, p.AdminWordK, p.UserWordK, assertion, false, p.OmitK, wbK)
 	if S == K {
 		rootK, nodesK = rootS, nodesS
 	}
@@ -640,7 +677,7 @@ func Assemble(p Parts) *World {
 		if n == K {
 			st, tr, rr = rootK, txTrie.Hash(), rcTrie.Hash()
 		}
-		raw := header(parent, st, tr, rr, n, 1_790_000_000+n*12, "l1")
+		raw := oddHeader(parent, st, tr, rr, n, 1_790_000_000+n*12, "l1", p.OddL1[n])
 		l1 = append([][]byte{raw}, l1...)
 		parent = crypto.Keccak256Hash(raw)
 	}

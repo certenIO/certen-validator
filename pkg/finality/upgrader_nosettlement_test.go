@@ -398,7 +398,9 @@ func TestUpgraderReportsNoProverLegsPerChain(t *testing.T) {
 }
 
 // A bundle whose component 5 has no block header (the legacy bundles) is quiet like any other unavailable state: counted, not logged
-// per leg, read once.
+// per leg. Since RB12-LEGACY-191 it is NOT remembered against its bundle id (the header is reconstructed in the background and
+// appears in the capture store without the bundle changing): it is read again once HeaderRetry has passed and not before, however
+// many passes run (the exact schedule is in upgrader_legacyheader_test.go).
 func TestUpgraderStaysQuietForALegacyBundleWithoutABlockHeader(t *testing.T) {
 	ctx := context.Background()
 	f := newFixture(t, allLevels(t), UpgraderConfig{}, nil)
@@ -408,9 +410,15 @@ func TestUpgraderStaysQuietForALegacyBundleWithoutABlockHeader(t *testing.T) {
 	if rep := f.u.RunOnce(ctx); rep.NoSettlement != 1 || rep.Unusable != 0 || rep.Failed != 0 || len(f.rec.failures) != 0 || f.logs.Joined() != "" {
 		t.Fatalf("%+v %v\n%s", rep, f.rec.failures, f.logs.Joined())
 	}
+	if rep := f.u.RunOnce(ctx); rep.NotDue != 1 || rep.Attempts != 0 || src.total() != 1 {
+		t.Fatalf("read again in the same instant: %+v calls %d", rep, src.total())
+	}
 	f.clock.Advance(3 * time.Hour)
-	if rep := f.u.RunOnce(ctx); rep.NoSettlement != 1 || rep.Attempts != 0 || src.total() != 1 {
-		t.Fatalf("%+v calls %d", rep, src.total())
+	if rep := f.u.RunOnce(ctx); rep.NoSettlement != 1 || rep.Attempts != 1 || rep.Unusable != 0 || src.total() != 2 || f.logs.Joined() != "" {
+		t.Fatalf("%+v calls %d %s", rep, src.total(), f.logs.Joined())
+	}
+	if rep := f.u.RunOnce(ctx); rep.NotDue != 1 || rep.Attempts != 0 || src.total() != 2 {
+		t.Fatalf("read on every pass: %+v calls %d", rep, src.total())
 	}
 }
 

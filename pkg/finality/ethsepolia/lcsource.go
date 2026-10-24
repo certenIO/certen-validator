@@ -38,10 +38,19 @@ type EndpointFailure struct {
 	Op       string
 	HTTP     int
 	Reason   string
+	// Throttled marks a provider that answered 429 and was not waited out inside the call; RetryAfter is the time to come back after
+	// (the provider's own Retry-After; ZERO when it stated none, so that a caller escalates its own wait instead of taking a backoff for a request).
+	// Both are zero for every other failure.
+	Throttled  bool
+	RetryAfter time.Duration
 }
 
 func (f EndpointFailure) String() string {
-	return fmt.Sprintf("%s %s http=%d: %s", f.Endpoint, f.Op, f.HTTP, f.Reason)
+	s := fmt.Sprintf("%s %s http=%d: %s", f.Endpoint, f.Op, f.HTTP, f.Reason)
+	if f.Throttled && f.RetryAfter > 0 {
+		s += fmt.Sprintf(" (retry after %s)", f.RetryAfter.Round(time.Second))
+	}
+	return s
 }
 
 // SourceError is the error of an LCSource call: the failure per endpoint tried. It is not a verdict about any block.
@@ -53,6 +62,20 @@ func (e *SourceError) Error() string {
 		parts[i] = f.String()
 	}
 	return "light-client source unavailable: " + strings.Join(parts, "; ")
+}
+
+// Throttle reports whether at least one endpoint of the call answered 429 and was not waited out, and the time to come back after: the
+// longest RetryAfter any throttled endpoint gave (0 when none gave one). The text of every other failure stays in the error.
+func (e *SourceError) Throttle() (retryAfter time.Duration, throttled bool) {
+	for _, f := range e.Failures {
+		if f.Throttled {
+			throttled = true
+			if f.RetryAfter > retryAfter {
+				retryAfter = f.RetryAfter
+			}
+		}
+	}
+	return retryAfter, throttled
 }
 
 // HTTPSource is a Lodestar-compatible Beacon API endpoint (also serves Lighthouse where that serves the object).

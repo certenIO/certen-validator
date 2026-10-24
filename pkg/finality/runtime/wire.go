@@ -22,6 +22,8 @@ import (
 	"github.com/certen/independant-validator/pkg/finality/baseposted"
 	"github.com/certen/independant-validator/pkg/finality/ethl1"
 	"github.com/certen/independant-validator/pkg/finality/ethsepolia"
+	"github.com/certen/independant-validator/pkg/finality/legacyhdr"
+	"github.com/certen/independant-validator/pkg/metrics"
 )
 
 // LCFeed is the light-client source the wiring needs: the L1-finality part of the evidence and the beacon head slot it observed.
@@ -40,8 +42,13 @@ type Env struct {
 	Logf    func(string, ...any)
 	L1Block []string // Sepolia execution endpoints
 	L1Proof []string // near-head proof providers followed by the archive provider
-	// Memory is the process memory budget the upgrader's builders and the gap backfill reserve from (one budget, one process).
+	// Memory is the process memory budget the upgrader's builders, the gap backfill and the capture index reserve from (one budget, one process).
 	Memory *finality.MemoryBudget
+	// Durable is the store without the per-leg capture bound: index rows are not capture bytes.
+	Durable finality.CaptureStore
+	// ArbFloor is the lowest L1 block that holds an Arbitrum batch the capture loop did not scan itself (the archive backfill's prefix scan); the
+	// Arbitrum index reader's time search and the indexer's rotating walk both start there (nil: every batch lies at or above the capture's first scan).
+	ArbFloor func(ctx context.Context) (uint64, bool, error)
 }
 
 // Deps are the process-level collaborators of the wiring.
@@ -50,6 +57,13 @@ type Deps struct {
 	Store    finality.CaptureStore // the durable store (database.FinalityCaptureStore)
 	Status   finality.BuilderStatusStore
 	Logf     func(string, ...any)
+	// Legacy lists the legs whose stored execution proof has no block header (pkg/database.FinalityAddendaRepository). When set, a
+	// legacy-header reconstruction loop is registered for each chain that has legacy legs to serve (RB12-LEGACY-191); the wiring
+	// line says "legacy_headers=off (no leg lister)" when it is not.
+	Legacy legacyhdr.LegLister
+
+	// ArbFloor is Env.ArbFloor: the integration of the archive backfill's Arbitrum prefix scan supplies it.
+	ArbFloor func(ctx context.Context) (uint64, bool, error)
 
 	// Test hooks.
 	HTTP  *http.Client
@@ -72,6 +86,12 @@ type Wiring struct {
 	// Disabled maps each chain that will not build to its named finality_upgrader_disabled state.
 	Disabled map[uint64]*finality.StateError
 	Config   Config
+	// LegacyLoops are the registered legacy-header reconstruction loops (one per chain). Their counts, the state of their last scan and the
+	// chains that could not be wired reach /health/detailed and the scrape through pkg/metrics (SetFinalityLegacy*), not through this field.
+	LegacyLoops []*LegacyHeaderLoop
+	// LegacyUnwired maps each chain whose legacy-header loop could not be registered to its named finality_upgrader_disabled state.
+	// The validator keeps running without that loop; a registration problem is never fatal for a consensus node.
+	LegacyUnwired map[uint64]*finality.StateError
 }
 
 // WireError is a failure of Wire that is not a refused setting (a refused setting is an *envvar.Refusal, a refused provider entry a
@@ -173,6 +193,7 @@ func Wire(cfg Config, d Deps) (*Wiring, error) {
 		return nil, &WireError{Stage: finality.StartStageKinds, Err: err}
 	}
 
+	mem := finality.NewMemoryBudget(cfg.MemoryBudget)
 	hc := d.HTTP
 	if hc == nil {
 		hc = NewTransport(cfg).Client(90 * time.Second)
@@ -185,8 +206,14 @@ func Wire(cfg Config, d Deps) (*Wiring, error) {
 	}
 	cache := &lcCache{inner: lcf, now: now}
 	l1Proof := cfg.proofURLs()
-	mem := finality.NewMemoryBudget(cfg.MemoryBudget)
-	env := Env{Pins: pins, Config: cfg, LC: cache, HTTP: hc, Store: store, Logf: logf, L1Block: cfg.L1RPC, L1Proof: l1Proof, Memory: mem}
+	// ArbFloor: the lowest L1 block that holds an Arbitrum batch the capture loop did not scan itself. Unless a caller supplies one, it is read from the
+	// SAME rows the archive backfill's Arbitrum prefix scan works on (the recorded prefix windows, which the configured floor bounds): one source for
+	// the scan that fills below the cursor and for the index that has to look there.
+	arbFloor := d.ArbFloor
+	if arbFloor == nil {
+		arbFloor = prefixFloorOf(store, finality.ChainArbitrumSepolia)
+	}
+	env := Env{Pins: pins, Config: cfg, LC: cache, HTTP: hc, Store: store, Logf: logf, L1Block: cfg.L1RPC, L1Proof: l1Proof, Memory: mem, Durable: d.Store, ArbFloor: arbFloor}
 
 	w := &Wiring{Registry: reg, Pins: pins, PinsSource: source, PinsSHA256: sha, Store: store, Disabled: map[uint64]*finality.StateError{}, Config: cfg}
 
@@ -221,6 +248,16 @@ func Wire(cfg Config, d Deps) (*Wiring, error) {
 				fmt.Sprintf("the %s builders could not be built (%s); no finality addenda are appended for chain %d by this validator", s.name, ethrpc.RedactText(err.Error()), s.chain))
 		}
 	}
+	legacyState := "off (no leg lister)"
+	if d.Legacy != nil {
+		legacyState = "on"
+		if w.LegacyUnwired = wireLegacy(w, reg, env, d, clock, logf, mem, legacyChains); len(w.LegacyUnwired) > 0 {
+			legacyState = fmt.Sprintf("on, unwired for chains %v", sortedChains(w.LegacyUnwired))
+			for _, c := range sortedChains(w.LegacyUnwired) {
+				logf("[FINALITY] legacy-header loop DISABLED: %s", w.LegacyUnwired[c].Error())
+			}
+		}
+	}
 	// the per-chain switches (CERTEN_FINALITY_CHAIN_<id>_ENABLED) join the missing-configuration chains
 	off, err := finality.DisabledChainsFromEnv(reg.Chains())
 	if err != nil {
@@ -245,7 +282,7 @@ func Wire(cfg Config, d Deps) (*Wiring, error) {
 		chains = append(chains, c)
 	}
 	sort.Slice(chains, func(i, j int) bool { return chains[i] < chains[j] })
-	logf("[FINALITY] runtime wiring: pins_source=%s pins_sha256=%s chains_off_by_configuration=%v config=%v", source, sha, chains, cfg.Describe())
+	logf("[FINALITY] runtime wiring: pins_source=%s pins_sha256=%s chains_off_by_configuration=%v legacy_headers=%s config=%v", source, sha, chains, legacyState, cfg.Describe())
 	return w, nil
 }
 
@@ -255,15 +292,31 @@ func wireBase(reg *finality.Registry, env Env, d Deps, clock loopClock, logf fun
 	if err != nil {
 		return err
 	}
+	if cfg.IndexDisabled != nil {
+		finality.AnnounceIndexDisabled(logf, cfg.IndexDisabled)
+	}
+	finality.AnnouncePrefixDisabled(logf, cfg.prefixStates(finality.ChainBaseSepolia))
 	fp, err := basefinal.ParsePins(env.Pins)
 	if err != nil {
 		return err
 	}
 	l1 := &baseposted.JSONRPCSource{BlockURLs: env.L1Block, ProofURLs: env.L1Proof, Client: env.HTTP}
 	cache := env.LC.(*lcCache)
-	if err := reg.RegisterProver(&baseposted.Builder{Pins: env.Pins, Store: env.Store, L1: l1, Headers: l1,
+	builder := &baseposted.Builder{Pins: env.Pins, Store: env.Store, L1: l1, Headers: l1,
 		L2: &baseposted.L2JSONRPC{URLs: cfg.BaseL2}, LC: lcPlain{cache}, Now: d.Now,
-		CursorSlack: captureSlack(cfg), HasArchive: len(cfg.Archive) > 0}); err != nil {
+		CursorSlack: captureSlack(cfg), HasArchive: len(cfg.Archive) > 0,
+		Prefix: cfg.prefixPolicy(finality.ChainBaseSepolia)}
+	// the capture index (RB12-INDEX-A): built as captures arrive, read by the builder; off by CERTEN_FINALITY_BASE_INDEX=off
+	var indexer finality.CaptureIndexer
+	if cfg.BaseIndex {
+		builder.Index = baseposted.NewIndexReader(env.Store, bp, cfg.IndexGeneration)
+		durable := env.Durable
+		if durable == nil {
+			durable = env.Store
+		}
+		indexer = baseposted.NewIndexer(durable, bp, cfg.IndexGeneration, baseposted.IndexConfig{BlocksPerStep: cfg.IndexBlocks, StepBudget: cfg.IndexStep, Logf: logf})
+	}
+	if err := reg.RegisterProver(builder); err != nil {
 		return err
 	}
 	rpc := &basefinal.RPC{BlockURLs: env.L1Block, ProofURLs: env.L1Proof, L2URLs: cfg.BaseL2, Client: env.HTTP}
@@ -274,15 +327,46 @@ func wireBase(reg *finality.Registry, env Env, d Deps, clock loopClock, logf fun
 	capt := &baseposted.Capturer{Chain: finality.ChainBaseSepolia, Pins: bp, L1: l1, Beacon: &baseposted.BeaconHTTP{Bases: cfg.Beacon, Client: env.HTTP},
 		Store: env.Store, GenesisTime: capture.BeaconGenesisTime, SlotSeconds: 12}
 	if err := reg.RegisterCapturer(&BasePostedLoop{Cap: capt, Store: env.Store, Status: d.Status, Pins: env.Pins, Every: cfg.CaptureEvery, MaxPerTick: cfg.CaptureBlocks,
-		StartBack: 32, HasArchive: len(cfg.Archive) > 0, Logf: logf, Clock: clock}); err != nil {
+		StartBack: 32, HasArchive: len(cfg.Archive) > 0, Logf: logf, Clock: clock, Index: indexer, Memory: env.Memory}); err != nil {
 		return err
 	}
 	// RB12-CAPTURE-GAP: the loop that closes the recorded capture gaps with the same capture call (the providers are the same, plus the archive
 	// provider when one is configured), one block at a time, inside the process memory budget
+	// the prefix of the capture store (legs posted before the capture started): claims keep seven validators on different chunks, and a block
+	// proven unavailable is asked again once a day
+	lease, err := baseposted.NewLease(env.Store, finality.ChainBaseSepolia)
+	if err != nil {
+		return err
+	}
+	lease.Span, lease.Chunk = cfg.PrefixLease, uint64(cfg.PrefixChunk)
+	pol := baseposted.DefaultBackfillPolicy()
+	pol.ReprobeEvery = cfg.PrefixReprobe
 	bf := &baseposted.Backfiller{Chain: finality.ChainBaseSepolia, Store: env.Store, Capturer: baseposted.CapturerOf(capt), Providers: Hosts(cfg.Beacon),
-		Policy: baseposted.DefaultBackfillPolicy(), Now: d.Now, Logf: logf}
+		Policy: pol, Lease: lease, Now: d.Now, Logf: logf, NoPrefix: cfg.prefixOff(finality.ChainBaseSepolia)}
+	// every block the backfill closes (a gap block or a PREFIX block, which arrive out of order and far below the index cursor) is told to the capture
+	// index right after its fill row: the indexer digests it and completes its channels at its next step (duty a of the Train 3 integration)
+	if nt, ok := indexer.(finality.LateBlockNoter); ok {
+		bf.OnFill = func(n uint64, hasInbox bool) {
+			if hasInbox {
+				nt.NoteLate(n)
+			}
+		}
+	}
 	return reg.RegisterCapturer(&GapBackfillLoop{ChainID: finality.ChainBaseSepolia, Store: env.Store, Backfill: bf, Every: cfg.CaptureEvery, PerTick: cfg.GapBlocks,
-		AuditSpacing: uint64(cfg.GapAuditSpacing), Memory: env.Memory, Logf: logf, Clock: clock})
+		AuditSpacing: uint64(cfg.GapAuditSpacing), Memory: env.Memory, Logf: logf, Clock: clock, OnFilled: lateNoter(indexer)})
+}
+
+// lateNoter is the gap backfill's hook into the capture index: the blocks it fills are noted to the indexer (nil when there is none).
+func lateNoter(ix finality.CaptureIndexer) func([]uint64) {
+	nt, ok := ix.(finality.LateBlockNoter)
+	if !ok {
+		return nil
+	}
+	return func(blocks []uint64) {
+		for _, b := range blocks {
+			nt.NoteLate(b)
+		}
+	}
 }
 
 // captureSlack is how many blocks before its first cursor row the Base capture loop may have started scanning: its first range ends
@@ -298,8 +382,36 @@ func captureSlack(cfg Config) uint64 {
 func wireArb(reg *finality.Registry, env Env, d Deps, clock loopClock, logf func(string, ...any), cache *lcCache) error {
 	cfg := env.Config
 	hdr := &baseposted.JSONRPCSource{BlockURLs: env.L1Block, ProofURLs: env.L1Proof, Client: env.HTTP}
-	if err := reg.RegisterProver(&arbposted.Builder{Store: env.Store, L2: &ArbL2{URLs: cfg.ArbL2, HTTP: env.HTTP},
-		L1: &ArbL1{LC: lcPlain{cache}, Headers: hdr}, Pins: env.Pins, Now: d.Now}); err != nil {
+	builder := &arbposted.Builder{Store: env.Store, L2: &ArbL2{URLs: cfg.ArbL2, HTTP: env.HTTP},
+		L1: &ArbL1{LC: lcPlain{cache}, Headers: hdr}, Pins: env.Pins, Now: d.Now,
+		Prefix: cfg.prefixPolicy(finality.ChainArbitrumSepolia)}
+	finality.AnnouncePrefixDisabled(logf, cfg.prefixStates(finality.ChainArbitrumSepolia))
+	// the batch index (RB12-INDEX-B): built as batches are captured, read by the builder; off by CERTEN_FINALITY_ARB_INDEX=off, and named off by a
+	// bad setting (finality_index_disabled), in which case the builder reads every captured batch as before
+	var indexer finality.CaptureIndexer
+	if cfg.ArbIndexDisabled != nil {
+		finality.AnnounceIndexDisabled(logf, cfg.ArbIndexDisabled)
+	} else if !cfg.ArbIndex {
+		logf("[FINALITY] arbitrum batch index OFF by %s: the reference reader serves (it reads every captured batch and decodes every batch of a leg's window)", EnvArbIndex)
+	}
+	if cfg.ArbIndex {
+		r, err := arbposted.NewIndexReader(env.Store, env.Pins, cfg.ArbIndexGeneration)
+		if err != nil {
+			return err
+		}
+		r.Floor = env.ArbFloor
+		builder.Index = r
+		durable := env.Durable
+		if durable == nil {
+			durable = env.Store
+		}
+		ix, err := arbposted.NewIndexer(durable, env.Pins, cfg.ArbIndexGeneration, arbposted.IndexConfig{BlocksPerStep: cfg.IndexBlocks, StepBudget: cfg.IndexStep, Floor: env.ArbFloor, Logf: logf})
+		if err != nil {
+			return err
+		}
+		indexer = ix
+	}
+	if err := reg.RegisterProver(builder); err != nil {
 		return err
 	}
 	if err := reg.RegisterProver(&arbbuild.Prover{Pins: env.Pins, Store: env.Store,
@@ -314,14 +426,43 @@ func wireArb(reg *finality.Registry, env Env, d Deps, clock loopClock, logf func
 	bc := capture.NewHTTPBeacon(cfg.Beacon...)
 	bc.Client = env.HTTP
 	cp := capture.NewCapturer(env.Store, l1, bc, capture.Config{Logf: logf, StartBack: 32})
-	return reg.RegisterCapturer(&ArbPostedLoop{Cap: cp, Providers: Hosts(providers), Status: d.Status, Pins: env.Pins, Every: cfg.CaptureEvery, Logf: logf, Clock: clock})
+	// the batches posted before the capture started: scanned for the legs that asked for them, one range per tick, claimed per range
+	arbLease, err := finality.NewLease(env.Store, finality.ChainArbitrumSepolia)
+	if err != nil {
+		return err
+	}
+	arbLease.Span, arbLease.Chunk = cfg.PrefixLease, uint64(cfg.PrefixArbScan)
+	if !cfg.prefixOff(finality.ChainArbitrumSepolia) { // a refused prefix setting (finality_prefix_disabled): the capturer scans no window
+		cp.Prefix = &capture.PrefixScan{Lease: arbLease, Blocks: uint64(cfg.PrefixArbScan), Now: d.Now}
+	}
+	// THE authorization of a captured batch (capture/authorize.go): the live capture and the batches the prefix scan stores both judge a batch by it
+	// once its accumulator proof is stored, and the reference reader, the indexed reader and the index writer apply the same function
+	cp.Authorize = capture.AuthorizeBatch
+	var noter finality.LateBlockNoter
+	if nt, ok := indexer.(finality.LateBlockNoter); ok {
+		noter = nt
+	}
+	if err := reg.RegisterCapturer(&ArbPostedLoop{Cap: cp, Providers: Hosts(providers), Status: d.Status, Pins: env.Pins, Every: cfg.CaptureEvery, Logf: logf, Clock: clock,
+		Notes: noter}); err != nil {
+		return err
+	}
+	if indexer == nil {
+		return nil
+	}
+	return reg.RegisterCapturer(&ArbIndexLoop{Index: indexer, Store: env.Store, Memory: env.Memory, Status: d.Status, Pins: env.Pins, Every: cfg.CaptureEvery, Logf: logf, Clock: clock})
 }
+
+// sepoliaSpineGap is the floor of the gap between two requests to the Sepolia execution endpoints, for all legs together: the spine is
+// fetched in windows of ethsepolia.SpineWindow headers, one request each, and a public provider that is asked faster answers 429.
+const sepoliaSpineGap = 100 * time.Millisecond
 
 // wireSepolia registers the Ethereum Sepolia finalized prover: the light-client objects come from the ordered CERTEN_FINALITY_LC_URLS
 // list (availability only, in order), the execution headers of the spine from the validator's Sepolia endpoints (JSON-RPC batches
 // of at most MaxBatch, 429 retried with a bounded backoff by the shared transport and by the source itself), and the ledger link
-// files are the embedded ones. A spine of several thousand headers takes minutes on a public endpoint: the prover runs only in the
-// background upgrader pass, under the pass's BuildTimeout (CERTEN_FINALITY_BUILD_TIMEOUT_SECONDS), never on the settlement path.
+// files are the embedded ones. A spine of several thousand headers takes minutes on a public endpoint: the prover fetches it in chunks
+// that are kept (capture rows, so every validator and every later attempt starts where the last stopped), spends at most its attempt
+// budget on new fetches per attempt, and answers finality_pending{awaiting_spine} until the spine is complete. It runs only in the
+// background upgrader pass, never on the settlement path.
 func wireSepolia(reg *finality.Registry, env Env, d Deps) error {
 	cfg := env.Config
 	links, err := finality.EmbeddedLedgerLinks()
@@ -332,6 +473,81 @@ func wireSepolia(reg *finality.Registry, env Env, d Deps) error {
 	for _, u := range cfg.LC {
 		srcs = append(srcs, &ethsepolia.HTTPSource{Base: strings.TrimRight(u, "/"), Client: env.HTTP})
 	}
-	return reg.RegisterProver(&ethsepolia.Prover{Source: srcs, Exec: &ethsepolia.RPCHeaders{Endpoints: env.L1Block, Client: env.HTTP, BatchSize: cfg.MaxBatch},
-		Pins: env.Pins, Verifier: ethsepolia.New(), Now: d.Now, ExtraLinks: links})
+	return reg.RegisterProver(&ethsepolia.Prover{Source: srcs,
+		Exec: &ethsepolia.RPCHeaders{Endpoints: env.L1Block, Client: env.HTTP, BatchSize: cfg.MaxBatch, MinGap: sepoliaSpineGap},
+		Pins: env.Pins, Verifier: ethsepolia.New(), Now: d.Now, ExtraLinks: links, Store: env.Store, Logf: env.Logf})
+}
+
+// legacyChains are the chains that hold legacy legs (the stored execution proofs written before block_header_rlp was captured).
+var legacyChains = []uint64{finality.ChainSepolia, finality.ChainBaseSepolia, finality.ChainArbitrumSepolia}
+
+// legacyUnwiredState is the named state of a chain whose legacy-header loop could not be registered: a refused registration of a kind or
+// profile is finality_upgrader_disabled{reason: wiring_failed, stage: kinds} (the closed vocabulary of RB12-GO-INT F14), raised per chain
+// and never fatal; the effect says what stays as it was.
+func legacyUnwiredState(chain uint64, err error) *finality.StateError {
+	st := finality.StartFailedState(finality.DisabledWiringFailed, finality.StartStageKinds, "", err.Error())
+	st.Fields["chain"] = chain
+	st.Fields["effect"] = "no legacy-header reconstruction for chain " + fmt.Sprint(chain) + " by this validator; its legacy legs stay finality_included_unavailable{no_block_header}"
+	return st
+}
+
+// wireLegacy registers the legacy-header reconstruction loop of each chain whose legs can carry the stored execution proof of the
+// pre-2026-10-04 bundles: Ethereum Sepolia, Base Sepolia and Arbitrum Sepolia. Their providers are the chain's own configured
+// execution endpoints in the order the validator uses them (a pruning primary is followed by the others; for Sepolia the OD4
+// archive provider comes last): availability only, every header is verified against the hash the bundle stores. A chain whose
+// providers are missing is switched off by the wiring (Missing) and the supervisor does not start its loop.
+func wireLegacy(w *Wiring, reg *finality.Registry, env Env, d Deps, clock loopClock, logf func(string, ...any), mem *finality.MemoryBudget, chains []uint64) map[uint64]*finality.StateError {
+	unwired := map[uint64]*finality.StateError{}
+	cfg := env.Config
+	urls := map[uint64][]string{
+		finality.ChainSepolia:         ethrpc.ParseEndpoints(append(append([]string(nil), cfg.L1RPC...), cfg.Archive...)...),
+		finality.ChainBaseSepolia:     cfg.BaseL2,
+		finality.ChainArbitrumSepolia: cfg.ArbL2,
+	}
+	src := &legacyhdr.RPCSource{URLs: urls, Client: env.HTTP}
+	for _, chain := range chains {
+		profile, err := reg.Profile(chain)
+		if err != nil {
+			unwired[chain] = legacyUnwiredState(chain, err)
+			metrics.SetFinalityLegacyUnwired(chain, "no_profile")
+			continue
+		}
+		var targets []finality.Level
+		for _, lv := range profile.Levels {
+			if lv.Stored() {
+				targets = append(targets, lv)
+			}
+		}
+		loop := &LegacyHeaderLoop{ChainID: chain, Legs: d.Legacy, Source: src, Store: env.Store, Status: d.Status, Targets: targets, Budget: mem,
+			Logf: logf, Clock: clock}
+		if err := reg.RegisterCapturer(loop); err != nil {
+			unwired[chain] = legacyUnwiredState(chain, err)
+			metrics.SetFinalityLegacyUnwired(chain, "registration_refused")
+			continue
+		}
+		metrics.SetFinalityLegacyUnwired(chain, "")
+		w.LegacyLoops = append(w.LegacyLoops, loop)
+	}
+	return unwired
+}
+
+func sortedChains(m map[uint64]*finality.StateError) []uint64 {
+	out := make([]uint64, 0, len(m))
+	for c := range m {
+		out = append(out, c)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
+// prefixFloorOf is the lowest block of the recorded prefix windows of chain (ok false: no window yet).
+func prefixFloorOf(store finality.CaptureStore, chain uint64) func(ctx context.Context) (uint64, bool, error) {
+	return func(ctx context.Context) (uint64, bool, error) {
+		ws, err := finality.PrefixWindowsOf(ctx, store, chain)
+		if err != nil {
+			return 0, false, err
+		}
+		lo, ok := finality.PrefixLowest(finality.MergePrefixWindows(ws))
+		return lo, ok, nil
+	}
 }

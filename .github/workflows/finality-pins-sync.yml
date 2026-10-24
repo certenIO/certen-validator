@@ -1,0 +1,95 @@
+name: finality-pins-sync
+
+# The job that pkg/finality/pins.go names (V2_SPEC_S7 4.1): the pins file of this repository (pkg/finality/pins/finality-pins.json, its links in
+# pkg/finality/pins-links/) and the PinsSHA256 constant of pkg/finality/pins.go must equal the file published in certenIO/certen-contracts
+# (evm/deployments/finality-pins.json) and the copy and constant in certenIO/certen-sdk. The comparison is scripts/finality-pins-sync.mjs of
+# certen-contracts (offline, no dependency but node); it fails, naming each check, on any difference or any missing file.
+#
+# A change of the pins is merged in certen-contracts FIRST: this job compares against its main branch, so a pins change that is not
+# published there is red here on purpose.
+#
+# It reads certenIO/certen-contracts and certenIO/certen-sdk (private) with the read-only token in the repository secret
+# FINALITY_PINS_SYNC_TOKEN. Without the secret the job FAILS with a message; it never skips the comparison. Every checkout drops its
+# credential (the token is not left in any .git/config), no code of the other repositories is executed (the script is the vendored
+# pr/finality-pins-sync.mjs, proved equal to the published one by cmp), and the workflow never runs on the privileged pull-request event.
+#
+# Do NOT make this check a required status until the TS stack is merged into certen-sdk: it compares against certen-sdk main, which has no
+# finality directory yet, so it is red by design until then.
+
+on:
+  pull_request:
+    paths:
+      - 'pkg/finality/pins.go'
+      - 'pkg/finality/pins/**'
+      - 'pkg/finality/pins-links/**'
+      - 'pr/finality-pins-sync.mjs'
+      - '.github/workflows/finality-pins-sync.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'pkg/finality/pins.go'
+      - 'pkg/finality/pins/**'
+      - 'pkg/finality/pins-links/**'
+      - 'pr/finality-pins-sync.mjs'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  finality-pins-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: The token that reads the other repositories is present
+        env:
+          TOKEN: ${{ secrets.FINALITY_PINS_SYNC_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::error::finality-pins-sync needs the repository secret FINALITY_PINS_SYNC_TOKEN (read-only contents access to certenIO/certen-contracts and certenIO/certen-sdk); the three copies were NOT compared"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          repository: certenIO/certen-contracts
+          ref: main
+          path: contracts
+          token: ${{ secrets.FINALITY_PINS_SYNC_TOKEN }}
+          persist-credentials: false
+          sparse-checkout: |
+            /scripts/finality-pins-sync.mjs
+            /evm/deployments/finality-pins.json
+            /evm/deployments/finality-pins.sha256
+            /evm/deployments/finality-pins-links/
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/checkout@v4
+        with:
+          repository: certenIO/certen-sdk
+          ref: main
+          path: sdk
+          token: ${{ secrets.FINALITY_PINS_SYNC_TOKEN }}
+          persist-credentials: false
+          sparse-checkout: |
+            /packages/verify/src/proof-v2/finality/finality-pins.json
+            /packages/verify/src/proof-v2/finality/pins.ts
+            /packages/verify/src/proof-v2/finality/pins-embedded.ts
+            /packages/verify/src/proof-v2/finality/pins-links-embedded.ts
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # The script that runs is pr/finality-pins-sync.mjs of THIS repository. Nothing from certen-contracts or certen-sdk is executed: both
+      # are read as data (and carry no credential after their checkout). The vendored script must be byte for byte the one certen-contracts
+      # publishes; a difference is a failure that says so, fixed by copying the published script here.
+      - name: The vendored script is the published one
+        run: cmp contracts/scripts/finality-pins-sync.mjs pr/finality-pins-sync.mjs
+
+      - name: The three copies and both constants agree
+        run: node pr/finality-pins-sync.mjs --validator . --sdk sdk --contracts contracts

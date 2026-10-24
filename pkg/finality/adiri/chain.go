@@ -51,7 +51,10 @@ func VerifyCommitteeChain(par *Params, c *CFA1, mode Mode, rnd io.Reader) (*Chai
 		}
 	}
 	keys := newKeyCache()
-	digests := c.RecordDigests()
+	digests, err := c.RecordDigests()
+	if err != nil {
+		return nil, err
+	}
 	res := &ChainResult{Epoch: uint64(len(c.Records) - 1), Digests: digests}
 
 	// O1: committee(0) as a SET equals the pinned genesis committee; record(0).final_state equals the pinned one.

@@ -304,6 +304,13 @@ func (e *StatusError) Error() string {
 	return fmt.Sprintf("beacon blob answer HTTP %d", e.Status)
 }
 
+// prunedAnswer: HTTP 400 whose message says the node no longer holds enough data columns to rebuild the blobs. Teku (publicnode) answers so on
+// every blob route beyond its custody period, where Lodestar answers 404 (recorded answers: testdata/beacon_gone). It is the same statement
+// "this node has not got it" as a 404/410, and any other 400 (a malformed request, a pre-Deneb block) is not.
+func prunedAnswer(status int, body []byte) bool {
+	return status == http.StatusBadRequest && bytes.Contains(bytes.ToLower(body), []byte("insufficient data columns"))
+}
+
 func (b *BeaconHTTP) Blobs(ctx context.Context, slot uint64) ([][]byte, error) {
 	cl := b.Client
 	if cl == nil {
@@ -333,7 +340,7 @@ func (b *BeaconHTTP) Blobs(ctx context.Context, slot uint64) ([][]byte, error) {
 			}
 			if resp.StatusCode != 200 {
 				last = &StatusError{Status: resp.StatusCode}
-				if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone {
+				if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone || prunedAnswer(resp.StatusCode, body) {
 					goneAnswers++
 				}
 				continue

@@ -6,11 +6,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math/big"
 	"strings"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/core/types"
 
 	"github.com/certen/independant-validator/pkg/ethproof"
 	"github.com/certen/independant-validator/pkg/finality"
@@ -175,7 +173,7 @@ func (c *Capturer) CaptureBlock(ctx context.Context, number uint64) (bool, error
 	// the EIP-1967 implementation and its pinned code hash), and only the inbox transactions whose sender is that batcher are kept (the rule
 	// of verifyChannel, "Authentication"). A proof that does not verify stores nothing and leaves the gap open; a transaction another key
 	// sent is skipped and counted. The live capture and the backfill are this same function.
-	batcher, err := systemConfigAt(newNodeDB(sc.Nodes), c.Pins, hdr.StateRoot, blk.Number)
+	auth, err := authorizerAt(c.Pins, sc.Nodes, hdr.StateRoot, blk.Number)
 	if err != nil {
 		s := finality.NewState("batcher_state_unavailable", "l1_block", blk.Number)
 		if c.Record != nil {
@@ -183,15 +181,11 @@ func (c *Capturer) CaptureBlock(ctx context.Context, number uint64) (bool, error
 		}
 		return false, fmt.Errorf("%s: the SystemConfig proof does not verify under the state root of the header (nothing stored): %w", s.Error(), err)
 	}
-	signer := types.LatestSignerForChainID(new(big.Int).SetUint64(c.Pins.L1ChainID))
 	kept := idx[:0:0]
 	for _, i := range idx {
-		var tx types.Transaction
-		if tx.UnmarshalBinary(blk.TxRaw[i]) == nil {
-			if from, err := signer.Sender(&tx); err == nil && [20]byte(from) == batcher {
-				kept = append(kept, i)
-				continue
-			}
+		if auth.sent(blk.TxRaw[i]) { // the one authorization (authorize.go), shared with the readers
+			kept = append(kept, i)
+			continue
 		}
 		metrics.IncFinalityCaptureForeignInboxTx(c.Chain)
 	}

@@ -115,8 +115,9 @@ func TestFinalityAddendaAreAppendOnly(t *testing.T) {
 		}
 	})
 	t.Run("the repository has no method that changes or removes a row", func(t *testing.T) {
-		// the whole method set, by name: Append writes new rows only; the rest read
-		want := map[string]bool{"Append": true, "Chain": true, "SettledLegs": true, "LegSettlement": true, "LegRef": true}
+		// the whole method set, by name: Append writes new rows only; the rest read. LegacyLegs lists the legacy legs (a read) and
+		// WithLegacyHeaders sets the store the leg source READS reconstructed headers from (RB12-LEGACY-191); neither writes a row.
+		want := map[string]bool{"Append": true, "Chain": true, "SettledLegs": true, "LegSettlement": true, "LegRef": true, "LegacyLegs": true, "WithLegacyHeaders": true}
 		typ := reflect.TypeOf(repo)
 		for i := 0; i < typ.NumMethod(); i++ {
 			if !want[typ.Method(i).Name] {

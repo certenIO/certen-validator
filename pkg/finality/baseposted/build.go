@@ -15,6 +15,7 @@ import (
 	"github.com/certen/independant-validator/pkg/finality"
 	"github.com/certen/independant-validator/pkg/finality/ethl1"
 	"github.com/certen/independant-validator/pkg/finality/l1adapt"
+	"github.com/certen/independant-validator/pkg/metrics"
 )
 
 // L2BlockData is a Base Sepolia block as the builder needs it: its transactions (EIP-2718 encodings, deposits first).
@@ -56,6 +57,13 @@ type Builder struct {
 	// HasArchive is whether an archive provider (OD4) is configured; it is carried by the capture-not-covering state so an operator can
 	// see whether a deeper source exists.
 	HasArchive bool
+	// Index, when set, answers 'which channel carries this timestamp' from the capture index (index.go) instead of reading and
+	// decompressing the leg's window; the evidence is still assembled from the captured rows and judged by Kind.Verify.
+	Index *IndexReader
+	// Prefix is the policy for extending the capture store BELOW the first block its loop scanned (RB12-ARCHIVE-BACKFILL): a leg whose
+	// window lies there asks for its window to be captured (finality.RequestPrefix) and is judged l1_capture_gap until it is. The zero
+	// value is off: such a leg is l1_capture_not_covering, as before.
+	Prefix finality.PrefixPolicy
 
 	// heldMu guards held: the last HELD answer (l1_capture_gap) of each window (RB12-GO-INT D4).
 	heldMu sync.Mutex
@@ -79,6 +87,15 @@ const maxHeldMemos = 512
 const (
 	// CodeCaptureNotCovering: the L1 blocks that can hold the leg's batch were not scanned by this validator's capture loop.
 	CodeCaptureNotCovering = "l1_capture_not_covering"
+	// CodeL2BlockContentMismatch: the L2 provider's answer for the leg's block does not hash to the transactions root of the leg's own header, so
+	// nothing in it (the L1 origin of its first deposit least of all) is used: a window is never derived from an unauthenticated word.
+	CodeL2BlockContentMismatch = "l2_block_content_mismatch"
+	// CodeWindowNoChannel: every L1 block of the leg's sequencer window was captured (or is a recorded, filled prefix) and the cursor is past it,
+	// and no channel in it carries the leg's batch: the statement is determinate, not "not posted yet".
+	CodeWindowNoChannel = "l1_posted_not_found"
+	// windowCompleteMargin is how far behind the capture cursor the end of a window must lie before it is called complete: the capture loop
+	// retries a failed block for its 96-block window, and a block that near the head can still be re-orged.
+	windowCompleteMargin = 96
 )
 
 // The window of L1 blocks that can hold a leg's frames is [E, E+SeqWindowSize] with E the L1 origin of its L2 block (the verifier
@@ -129,6 +146,10 @@ func (b *Builder) loadRange(ctx context.Context, bp *Pins, from, to uint64, hold
 		if err := reserve(len(raw)); err != nil {
 			return nil, err
 		}
+		flt, err := loadSenderFilter(ctx, b.Store, k, bp, hold, false) // F19: only the batcher's transactions carry channels
+		if err != nil {
+			return nil, err
+		}
 		r := finality.NewReader(raw, finality.DefaultLimits())
 		n, err := r.Count("inbox", 4096, 4)
 		if err != nil {
@@ -153,6 +174,10 @@ func (b *Builder) loadRange(ctx context.Context, bp *Pins, from, to uint64, hold
 			var tx txView
 			if err := tx.parse(txb); err != nil {
 				return nil, err
+			}
+			if flt.foreign(txb) {
+				metrics.AddFinalityCaptureForeignTxs(uint64(Chain), 1)
+				continue // not the batcher's: no blob row is read and no frame is taken
 			}
 			if tx.isBlob {
 				for j := 0; ; j++ {
@@ -232,6 +257,9 @@ func (b *Builder) Build(ctx context.Context, s *ethproof.Settlement, have finali
 		return nil, nil, err
 	}
 	ch, frameTxs, bt, l2blk := sr.ch, sr.frameTxs, sr.bt, sr.l2blk
+	if ch == nil && sr.pending != "" {
+		return pend(sr.pending, sr.judged)
+	}
 	if ch == nil {
 		return pend("l1_posted_unproven", map[string]any{"l2_timestamp": l2.Timestamp, "last_scanned_l1": sr.lastScanned})
 	}
@@ -339,6 +367,10 @@ type searched struct {
 	bt          *Batch
 	lastScanned uint64
 	l2blk       *L2BlockData
+	// pending, when set with no channel, is the named pending reason of the index path (with the position it was judged at);
+	// without it a missing channel is l1_posted_unproven.
+	pending string
+	judged  map[string]any
 }
 
 // search finds the channel that carries the batch of the leg's L2 block in the captured rows, reading the window of the store the leg
@@ -390,16 +422,45 @@ func (b *Builder) search(ctx context.Context, bp *Pins, l2 finality.HeaderFields
 		}
 		sr.lastScanned = cov.Last
 	}
-	notCovering := func() error {
+	notCovering := func(extra ...any) error {
 		archive := "unset"
 		if b.HasArchive {
 			archive = "set"
 		}
-		return st(CodeCaptureNotCovering, "chain", uint64(Chain), "kind", KindName, "epoch_l1_block", origin, "window_end_l1_block", end,
-			"capture_first_l1_block", cov.First, "capture_slack", slackOf(b.CursorSlack), "archive_provider", archive)
+		return st(CodeCaptureNotCovering, append([]any{"chain", uint64(Chain), "kind", KindName, "epoch_l1_block", origin, "window_end_l1_block", end,
+			"capture_first_l1_block", cov.First, "capture_slack", slackOf(b.CursorSlack), "archive_provider", archive}, extra...)...)
+	}
+	// The L2 provider is untrusted: where its answer decides coverage BELOW the scanned region (a durable request, or the verdict that the
+	// leg predates the capture) it is the leg's block only if its transactions hash to the transactions root of the leg's own header. Elsewhere
+	// the origin only selects rows and the verifier re-proves the batch against the header.
+	authentic := func() error {
+		if [32]byte(ethproof.TrieRoot(blk.Txs)) != l2.TransactionRoot {
+			return st(CodeL2BlockContentMismatch, "block", l2.Number)
+		}
+		return nil
+	}
+	// belowScanned judges the part of the window that lies below the region the loop scanned: nil when it is a requested prefix (its blocks are
+	// captured, and the index digests them as late blocks), l1_capture_not_covering (with the prefix state) when it is not. The window reader
+	// and the index path ask the same question here.
+	belowScanned := func() error {
+		if err := authentic(); err != nil {
+			return err
+		}
+		if ok, extra, err := b.prefixCovers(ctx, origin, end, lower); err != nil {
+			return err
+		} else if !ok {
+			return notCovering(extra...)
+		}
+		return nil
 	}
 	if known && end < lower {
-		return sr, notCovering()
+		if err := belowScanned(); err != nil {
+			return sr, err
+		}
+	}
+	if b.Index != nil {
+		err := b.searchIndexed(ctx, bp, l2, hold, &sr, origin, end, cov, known, lower, belowScanned, authentic)
+		return sr, err
 	}
 	// A held ask rebuilds no evidence and used to read the whole window (up to ~300 MB of rows) before the gap lookup. The lookups that decide
 	// whether the answer could have changed are key-only (the gap pieces of the window and the number of captured blocks in it); when
@@ -439,25 +500,64 @@ func (b *Builder) search(ctx context.Context, bp *Pins, l2 finality.HeaderFields
 		next = hi + 1
 	}
 	if sr.ch == nil && known && origin < lower {
-		return sr, notCovering() // part of the window was never scanned: the channel may have been posted there
-	}
-	if sr.ch == nil {
-		// RB12-CAPTURE-GAP: a recorded gap inside the window may hold the channel; "not posted yet" cannot be said while it is open
-		pieces, err := finality.GapsIn(ctx, b.Store, uint64(Chain), origin, end)
-		if err != nil {
+		// part of the window was never scanned by the loop: the channel may have been posted there, unless that part is a requested prefix
+		if err := belowScanned(); err != nil {
 			return sr, err
 		}
-		if gs := gapState(pieces, origin, end, b.HasArchive); gs != nil {
+	}
+	if sr.ch == nil {
+		aerr := b.absentChannel(ctx, origin, end, cov, known, authentic, nil)
+		if gs, ok := finality.AsNamed(aerr); ok && gs.Code == CodeCaptureGap { // the held answer of this window (RB12-GO-INT D4)
 			b.heldMu.Lock()
 			if b.held == nil || len(b.held) >= maxHeldMemos {
 				b.held = map[heldKey]heldMemo{}
 			}
 			b.held[hk] = heldMemo{fingerprint: fp, state: gs}
 			b.heldMu.Unlock()
-			return sr, gs
 		}
+		return sr, aerr
 	}
 	return sr, nil
+}
+
+// absentChannel is what a search that found NO channel answers, for the window reader and the index path alike (one function, so the two
+// cannot diverge again: RB12-TRAIN3-INT N-I1). In order: a recorded gap inside the window may hold the channel, so "not posted yet" cannot be
+// said while it is open (RB12-CAPTURE-GAP), and a terminal one carries the evidence of what closes it (the archive backfill's goneEvidence);
+// then infer, when given (the index path's inference of a hole no record names, which the window reader has no way to make); then, when the
+// capture is known to have covered the window, the determinate verdict that no channel was posted in it (l1_posted_not_found), which is as
+// determinate as the origin it was derived from, so authentic() comes first. nil means "not posted yet": the caller's pending.
+func (b *Builder) absentChannel(ctx context.Context, origin, end uint64, cov finality.CaptureCoverage, known bool, authentic func() error,
+	infer func() (*finality.StateError, error)) error {
+	pieces, err := finality.GapsIn(ctx, b.Store, uint64(Chain), origin, end)
+	if err != nil {
+		return err
+	}
+	if gs := gapState(pieces, origin, end, b.HasArchive); gs != nil {
+		extra, err := b.goneEvidence(ctx, gs, pieces, end)
+		if err != nil {
+			return err
+		}
+		if len(extra) > 0 {
+			gs = finality.NewState(gs.Code, append(stateKV(gs), extra...)...)
+		}
+		return gs
+	}
+	if infer != nil {
+		gs, err := infer()
+		if err != nil {
+			return err
+		}
+		if gs != nil {
+			return gs
+		}
+	}
+	if known && cov.Last >= windowCompleteMargin && end <= cov.Last-windowCompleteMargin {
+		if err := authentic(); err != nil {
+			return err
+		}
+		return st(CodeWindowNoChannel, "chain", uint64(Chain), "kind", KindName, "from", origin, "to", end, "covered_to", cov.Last)
+	}
+	return nil
 }
 
 // windowFingerprint is the key-only description of the store as a search of [origin, end] sees it: the recorded gap pieces and the number
@@ -471,7 +571,18 @@ func (b *Builder) windowFingerprint(ctx context.Context, origin, end uint64) (st
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("%v|%d", pieces, len(inbox)), nil
+	// the held answer also depends on WHICH inbox transactions are the batcher's, and that is decided by the header row and the syscfg row of
+	// each block (authorize.go): a block whose rows complete after the answer was held can change who is authorized, so their counts are part
+	// of the question (RB12-INDEX-FIX; key listings only)
+	sys, err := b.Store.ListByRange(ctx, uint64(Chain), origin, end, ItemSysCfg)
+	if err != nil {
+		return "", err
+	}
+	hdr, err := b.Store.ListByRange(ctx, uint64(Chain), origin, end, ItemHeader)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%v|%d|%d|%d", pieces, len(inbox), len(sys), len(hdr)), nil
 }
 
 // stateKV is the key/value list of a state's fields, in key order, for NewState.
@@ -609,6 +720,7 @@ func faultCode(err error) string {
 // txView reads the two things the builder needs of a batch-inbox transaction without a signature check (the verifier checks).
 type txView struct {
 	isBlob bool
+	nBlobs int // the blobs the transaction names
 	data   []byte
 }
 
@@ -618,6 +730,7 @@ func (v *txView) parse(raw []byte) error {
 		return err
 	}
 	v.isBlob = t.Type() == types.BlobTxType
+	v.nBlobs = len(t.BlobHashes())
 	v.data = t.Data()
 	return nil
 }
@@ -705,3 +818,32 @@ var (
 
 // RegisterProver adds a configured Builder to the registry (explicit; there is no init()).
 func RegisterProver(reg *finality.Registry, b *Builder) error { return reg.RegisterProver(b) }
+
+// prefixCovers decides whether the part of the window [origin, end] that lies below the scanned region (lower) is a requested prefix,
+// asking for it when the policy allows. It returns the extra fields of l1_capture_not_covering when it is not: prefix_state (off,
+// below_floor, over_budget), the lowest block any recorded window reaches and the blocks they hold. Only keys are read.
+func (b *Builder) prefixCovers(ctx context.Context, origin, end, lower uint64) (bool, []any, error) {
+	below := end
+	if below >= lower {
+		below = lower - 1
+	}
+	ws, err := finality.PrefixWindowsOf(ctx, b.Store, uint64(Chain))
+	if err != nil {
+		return false, nil, err
+	}
+	merged := finality.MergePrefixWindows(ws)
+	if ok, _ := finality.PrefixCovers(merged, origin, below); ok {
+		return true, nil, nil
+	}
+	verdict := finality.PrefixOff
+	if b.Prefix.Enabled() {
+		if verdict, err = finality.RequestPrefix(ctx, b.Store, uint64(Chain), origin, below, b.Prefix); err != nil {
+			return false, nil, err
+		}
+		if verdict == finality.PrefixRecorded || verdict == finality.PrefixKnown {
+			return true, nil, nil
+		}
+	}
+	lowest, _ := finality.PrefixLowest(merged)
+	return false, []any{"prefix_state", string(verdict), "prefix_lowest_l1_block", lowest, "prefix_blocks", finality.PrefixBlocks(merged)}, nil
+}

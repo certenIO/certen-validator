@@ -137,32 +137,65 @@ func CaptureBlockHashOf(ctx context.Context, c *Capturer, n uint64) ([32]byte, b
 // of the gap INSIDE the window and the most urgent state among its pieces: an open block outranks a proved-unavailable one, which
 // outranks an expired one (the backfill is still working where it is open).
 func gapState(pieces []finality.GapRange, origin, end uint64, archive bool) *finality.StateError {
-	if len(pieces) == 0 {
-		return nil
-	}
-	rank := map[finality.GapState]int{finality.GapOpen: 3, finality.GapUnavailableProven: 2, finality.GapRetentionExpired: 1}
-	best := pieces[0].State
-	for _, p := range pieces {
-		if rank[p.State] > rank[best] {
-			best = p.State
-		}
-	}
-	var first *finality.GapRange
-	var ranges, blocks uint64
-	for i := range pieces {
-		if pieces[i].State != best {
-			continue
-		}
-		if first == nil {
-			first = &pieces[i]
-		}
-		ranges++
-		blocks += pieces[i].Blocks()
-	}
 	arch := "unset"
 	if archive {
 		arch = "set"
 	}
-	return finality.NewState(CodeCaptureGap, "chain", uint64(Chain), "kind", KindName, "from", first.From, "to", first.To, "gap_state", string(best),
-		"ranges", ranges, "blocks", blocks, "epoch_l1_block", origin, "window_end_l1_block", end, "archive_provider", arch)
+	return finality.CaptureGapState(uint64(Chain), KindName, pieces, origin, end, arch) // the one builder, shared with Arbitrum
+}
+
+// goneEvidence is the extra fields of an l1_capture_gap whose worst piece is terminal (the providers proved the blobs unavailable, or their
+// retention elapsed): the NEWEST such block of the window, the beacon slot it was asked at and how many beacon hosts said so (the end
+// record), the oldest slot at which a block of the window WAS served (the first captured batch-inbox block above it), and what closes
+// the gap: a blob archive (OD4). Nothing is invented: a field whose evidence is not in the store is left out.
+func (b *Builder) goneEvidence(ctx context.Context, gs *finality.StateError, pieces []finality.GapRange, end uint64) ([]any, error) {
+	best, _ := gs.Fields["gap_state"].(string)
+	if best != string(finality.GapUnavailableProven) && best != string(finality.GapRetentionExpired) {
+		return nil, nil
+	}
+	var newest uint64
+	for _, p := range pieces {
+		if string(p.State) == best && p.To > newest {
+			newest = p.To
+		}
+	}
+	kv := []any{"needs", "blob_archive", "newest_gone_l1_block", newest}
+	slot, ok, err := finality.GapSlotOf(ctx, b.Store, uint64(Chain), newest)
+	if err != nil {
+		return nil, err
+	}
+	if ok {
+		kv = append(kv, "newest_gone_slot", slot)
+	}
+	ends, err := finality.GapEndsOf(ctx, b.Store, uint64(Chain), newest)
+	if err != nil {
+		return nil, err
+	}
+	for _, e := range ends {
+		if string(e.Kind) == best {
+			kv = append(kv, "gone_hosts", uint64(len(e.Providers)))
+			break
+		}
+	}
+	if newest < end {
+		keys, err := finality.CaptureKeysOfItemIn(ctx, b.Store, uint64(Chain), newest+1, end, ItemInbox)
+		if err != nil {
+			return nil, err
+		}
+		if len(keys) > 0 {
+			hk := keys[0]
+			hk.Item = ItemHeader
+			raw, found, err := b.Store.Get(ctx, hk)
+			if err != nil {
+				return nil, err
+			}
+			if found {
+				// a header row that does not parse is not evidence of a slot: the field is left out (the verifier names such a row when a build reads it)
+				if hf, err := finality.ReadHeader(raw); err == nil && hf.Timestamp >= SepoliaBeaconGenesis {
+					kv = append(kv, "oldest_served_slot", (hf.Timestamp-SepoliaBeaconGenesis)/12)
+				}
+			}
+		}
+	}
+	return kv, nil
 }

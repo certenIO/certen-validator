@@ -47,11 +47,12 @@ const (
 	GapOutageUnscanned       GapClass = "outage_unscanned"        // the loop was not running (or too far behind its provider window) while the block was produced
 	GapSpacingUnproven       GapClass = "spacing_unproven"        // no captured block for a run longer than the audit spacing: not proven scanned (spacing audit)
 	GapOperatorDeclared      GapClass = "operator_declared"       // recorded by an operator for a range known from logs
+	// GapCapturePrefix (prefix.go) is declared there: the store is to be extended below the first block the capture loop scanned.
 )
 
 var gapClasses = map[GapClass]bool{
 	GapBlockUnavailable: true, GapStateProofUnavailable: true, GapBlobUnavailable: true, GapCaptureFailed: true,
-	GapOutageUnscanned: true, GapSpacingUnproven: true, GapOperatorDeclared: true,
+	GapOutageUnscanned: true, GapSpacingUnproven: true, GapOperatorDeclared: true, GapCapturePrefix: true,
 }
 
 // Valid reports whether c is one of the closed set.
@@ -379,6 +380,32 @@ func gapScan(ctx context.Context, s CaptureStore, chain, from, to uint64) (gapSc
 		}
 		filled[b] = struct{}{}
 	}
+	// scan rows close every gap block of their range (RB12-ARCHIVE-BACKFILL)
+	scans, err := s.ListByRange(ctx, chain, 0, hi, GapScanPrefix)
+	if err != nil {
+		return res, err
+	}
+	for _, k := range scans {
+		st, _, err := blockOfItem(k.Item, GapScanPrefix)
+		if err != nil {
+			return res, err
+		}
+		if st < k.L1Block {
+			return res, fmt.Errorf("finality: malformed scan row %s: it ends before it starts", k)
+		}
+		for _, u := range union {
+			from0, to0 := k.L1Block, st
+			if from0 < u.from {
+				from0 = u.from
+			}
+			if to0 > u.to {
+				to0 = u.to
+			}
+			for b := from0; b <= to0 && from0 <= to0; b++ {
+				filled[b] = struct{}{}
+			}
+		}
+	}
 	ends, err := s.ListByRange(ctx, chain, lo, hi, GapEndPrefix)
 	if err != nil {
 		return res, err
@@ -515,4 +542,57 @@ func AuditSpacing(ctx context.Context, s CaptureStore, chain uint64, item string
 		prev, have = k.L1Block, true
 	}
 	return found, nil
+}
+
+// GapScanPrefix is the item prefix of the scan rows (RB12-ARCHIVE-BACKFILL, Arbitrum).
+const GapScanPrefix = "gapscan/"
+
+const scanMagic = "CGSC1"
+
+// RecordGapScan records that every SequencerInbox-style event of the blocks [from, to] was read (a complete log answer) and captured: the
+// gap blocks in that range are closed, as by a fill, for chains whose captured items are sparse events and whose blocks therefore have no
+// row to fill under. The row is "gapscan/<to>" at (from, zero hash) with "CGSC1" || u64 from || u64 to, a function of the range alone.
+func RecordGapScan(ctx context.Context, s CaptureStore, chain, from, to uint64) error {
+	if to < from || to > MaxCaptureBlock {
+		return fmt.Errorf("finality: bad scan range %d-%d", from, to)
+	}
+	var w Writer
+	w.Fixed([]byte(scanMagic))
+	w.U64(from)
+	w.U64(to)
+	return s.Put(ctx, CaptureKey{Chain: chain, L1Block: from, Item: fmt.Sprintf("%s%d", GapScanPrefix, to)}, w.Bytes())
+}
+
+// CaptureGapState is THE l1_capture_gap of a leg whose window [origin, end] holds capture-gap pieces (RB12-ARCHIVE-BACKFILL F-ab-9: one
+// builder for every family, so the Base and Arbitrum states cannot diverge): the state names the part of the gap INSIDE the window and the
+// most urgent state among its pieces (an open block outranks a proved-unavailable one, which outranks an expired one: the backfill is still
+// working where it is open), as the first range of that state in block order, the number of its ranges and blocks, the window, and whether
+// an archive provider is configured (archive: "set", "unset", or "n/a" for a family without one). nil when the window holds no piece.
+func CaptureGapState(chain uint64, kind string, pieces []GapRange, origin, end uint64, archive string) *StateError {
+	if len(pieces) == 0 {
+		return nil
+	}
+	ps := append([]GapRange(nil), pieces...)
+	sort.SliceStable(ps, func(i, j int) bool { return ps[i].From < ps[j].From })
+	rank := map[GapState]int{GapOpen: 3, GapUnavailableProven: 2, GapRetentionExpired: 1}
+	best := ps[0].State
+	for _, p := range ps {
+		if rank[p.State] > rank[best] {
+			best = p.State
+		}
+	}
+	var first *GapRange
+	var ranges, blocks uint64
+	for i := range ps {
+		if ps[i].State != best {
+			continue
+		}
+		if first == nil {
+			first = &ps[i]
+		}
+		ranges++
+		blocks += ps[i].Blocks()
+	}
+	return NewState(CodeCaptureGap, "chain", chain, "kind", kind, "from", first.From, "to", first.To, "gap_state", string(best),
+		"ranges", ranges, "blocks", blocks, "epoch_l1_block", origin, "window_end_l1_block", end, "archive_provider", archive)
 }

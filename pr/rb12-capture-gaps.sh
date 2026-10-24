@@ -70,7 +70,8 @@ SQL
 STATE_CTE="
 WITH g AS (SELECT chain, l1_block AS f, split_part(item, '/', 2)::bigint AS t FROM proof_finality_capture WHERE item LIKE 'gap/%'),
      b AS (SELECT DISTINCT chain, generate_series(f, t) AS blk FROM g),
-     fl AS (SELECT DISTINCT chain, l1_block AS blk FROM proof_finality_capture WHERE item LIKE 'gapfill/%'),
+     fl AS (SELECT DISTINCT chain, l1_block AS blk FROM proof_finality_capture WHERE item LIKE 'gapfill/%'
+            UNION SELECT chain, generate_series(l1_block, split_part(item, '/', 2)::bigint) FROM proof_finality_capture WHERE item LIKE 'gapscan/%'),
      en AS (SELECT chain, l1_block AS blk, max(split_part(item, '/', 3)) AS kind FROM proof_finality_capture WHERE item LIKE 'gapend/%' GROUP BY 1, 2),
      s AS (SELECT b.chain, b.blk, COALESCE(en.kind, 'open') AS state FROM b LEFT JOIN fl USING (chain, blk) LEFT JOIN en USING (chain, blk) WHERE fl.blk IS NULL),
      i AS (SELECT chain, blk, state, blk - row_number() OVER (PARTITION BY chain, state ORDER BY blk) AS grp FROM s)"
@@ -111,6 +112,27 @@ SELECT count(*) FROM d WHERE z - a > $SPACING
 SQL
 )
 
+echo; echo "== capture-store PREFIX windows (class capture_prefix: legs posted before the capture loop started; RB12-ARCHIVE-BACKFILL)"
+echo "   positions and counts only: window, its blocks, filled, proven unavailable / past retention, open"
+sql <<'SQL'
+WITH w AS (SELECT chain, l1_block AS f, split_part(item, '/', 2)::bigint AS t FROM proof_finality_capture WHERE item LIKE 'gap/%/capture_prefix'),
+     b AS (SELECT chain, f, t, generate_series(f, t) AS blk FROM w),
+     fl AS (SELECT DISTINCT chain, l1_block AS blk FROM proof_finality_capture WHERE item LIKE 'gapfill/%'
+            UNION SELECT chain, generate_series(l1_block, split_part(item, '/', 2)::bigint) FROM proof_finality_capture WHERE item LIKE 'gapscan/%'),
+     en AS (SELECT chain, l1_block AS blk, max(split_part(item, '/', 3)) AS kind FROM proof_finality_capture WHERE item LIKE 'gapend/%' GROUP BY 1, 2)
+SELECT b.chain, b.f AS window_from, b.t AS window_to, count(*) AS blocks,
+       count(*) FILTER (WHERE fl.blk IS NOT NULL) AS filled,
+       count(*) FILTER (WHERE fl.blk IS NULL AND en.kind IS NOT NULL) AS gone,
+       count(*) FILTER (WHERE fl.blk IS NULL AND en.kind IS NULL) AS open
+  FROM b LEFT JOIN fl USING (chain, blk) LEFT JOIN en USING (chain, blk)
+ GROUP BY 1, 2, 3 ORDER BY 1, 2 LIMIT 60;
+SQL
+echo "   claims on prefix chunks (gapclaim rows, one per chunk and 10-minute period) beacon-slot evidence of ended blocks (gapslot rows) and the L1 ranges whose SequencerInbox logs a prefix scan read (gapscan rows, Arbitrum 421614):"
+sql <<'SQL'
+SELECT chain, split_part(item, '/', 1) AS kind, count(*) AS rows, min(l1_block) AS first_block, max(l1_block) AS last_block
+  FROM proof_finality_capture WHERE item LIKE 'gapclaim/%' OR item LIKE 'gapslot/%' OR item LIKE 'gapscan/%' GROUP BY 1, 2 ORDER BY 1, 2;
+SQL
+
 for v in "$OPEN" "$PROVEN" "$UNAUDITED"; do
   case "$v" in
     ""|*[!0-9]*) echo; echo "RESULT: the counts could not be read (a query failed above)"; exit 2 ;;
@@ -137,6 +159,10 @@ exit 0
 #   (the public https://rpc.sepolia.ethpandaops.io answered it at every height on 2026-10-23) the open count goes to 0.
 #   Blobs are retained ~18 days by the beacon nodes: the current holes expire about 2026-11-10; after that a still-open blob block becomes
 #   retention_expired (an end row), never an open block for ever.
+#   PREFIX windows (RB12-ARCHIVE-BACKFILL): each Base leg posted before the capture started asks for its window once (one gap row of class
+#   capture_prefix per window; the 31 legs of 2026-10-23 are 26 windows, 7 merged runs, 41,316 blocks); the table above shows each window with
+#   its filled / gone / open counts. A window with gone > 0 cannot complete from the default providers: its leg is l1_capture_gap
+#   {gap_state=unavailable_proven, needs=blob_archive} until a blob archive (OD4) serves the block.
 #   Arbitrum (421614) is gapless; its rows by kind show gap only for a batch found incomplete after a restart, and a gapfill when it completes.
 #
 # FAILURE: open gap blocks that do not decrease over an hour while no validator logs "gap backfill"; unaudited runs that stay above 0 after

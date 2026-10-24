@@ -80,7 +80,8 @@ func (kp *keyPool) slotVector(c slot5) (vec, []byte) {
 	cf := &adiri.CFA1{Tables: [][][]byte{kp.keysOf(g5)}, Records: []adiri.Record{{
 		FinalState: adiri.NumHash{Number: c.f, Hash: fHash}, FinalConsensus: adiri.NumHash{Number: 9000, Hash: fc}, Signers: []uint8{0, 1, 2, 3, 4},
 	}}}
-	digests := cf.RecordDigests()
+	digests, derr := cf.RecordDigests()
+	must(derr)
 	var sigs []*bls.Signature
 	for _, s := range cf.Records[0].Signers {
 		sigs = append(sigs, kp.sk[s].Sign(adiri.SignedMessage(digests[0])))

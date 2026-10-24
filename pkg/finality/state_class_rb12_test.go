@@ -44,8 +44,8 @@ func TestRB12F17TheEnvironmentClassIsExactlyTheProcessAndStoreStates(t *testing.
 		}
 	}
 	sort.Strings(got)
-	want := []string{"finality_memory_budget_exceeded", "l1_capture_gap"}
-	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+	want := []string{"finality_index_disabled", "finality_memory_budget_exceeded", "finality_prefix_disabled", "index_inconsistent", "l1_capture_gap"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] || got[3] != want[3] || got[4] != want[4] {
 		t.Fatalf("environment states: %v, want %v", got, want)
 	}
 	for _, code := range want {
@@ -123,5 +123,22 @@ func TestRB12F17EveryValueOfAFieldWithAClassRuleHasAClass(t *testing.T) {
 	}
 	if ClassOfStateError(nil) != ClassFailure || ClassOfStateError(NewState("finality_memory_budget_exceeded")) != ClassEnvironment {
 		t.Fatal("nil is a failure; a code without a field rule is classed by its code")
+	}
+}
+
+// Train 3: index_inconsistent is environment ONLY for a missing row (the reconcile or a backfill writes it); every other reason is persistent
+// until a new index generation, so it keeps the failure back-off. A leg is held or backed off by the reason of its state.
+func TestRB12F17IndexInconsistentIsEnvironmentOnlyForAMissingRow(t *testing.T) {
+	for _, reason := range loadRegistry(t).States["index_inconsistent"].Enums["reason"] {
+		st := IndexInconsistent(84532, "bi", reason)
+		if got, want := IsEnvironment(st), reason == IndexRowMissing; got != want {
+			t.Errorf("%s: environment=%v, want %v (only row_missing clears by a retry)", reason, got, want)
+		}
+	}
+	if IsEnvironment(NewState("index_inconsistent", "chain", uint64(84532), "family", "bi", "reason", "unheard_of")) {
+		t.Error("an unknown reason keeps the failure back-off")
+	}
+	if !IsEnvironment(NewState("l1_capture_gap", "gap_state", GapStateUnrecorded)) {
+		t.Error("an inferred hole (unrecorded) is held like an open one")
 	}
 }

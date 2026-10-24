@@ -71,7 +71,7 @@ func TestCFA1AndBodyRoundTripOnTheLiveChain(t *testing.T) {
 // (research/R11-adiri.md M3), taken from Telcoin's own certificates (epoch_hash), not from this code.
 func TestRecordDigestsEqualTheMeasuredAnchors(t *testing.T) {
 	_, _, cf, _, _ := liveParts(t, "live-513643-epoch651")
-	d := cf.RecordDigests()
+	d := mustDigests(t, cf)
 	for e, want := range map[int]string{
 		0:   "f07c39528bea398d8a8470a3188a4464da2c569b713831935bd190933d8939a7",
 		1:   "d2e939960b3d79616d5ca42bf3f5fc12d67bdaad06510a251595efcddbefd713",

@@ -4,6 +4,7 @@
 #   bash rb11-deploy-check.sh                       # last 30 minutes of the 7 validators' logs + the three finality tables
 #   SINCE=2h bash rb11-deploy-check.sh              # a longer log window
 #   ssh claude@host 'bash -s' < rb11-deploy-check.sh   # from the orchestrator, without copying anything to the host
+#   bash rb11-deploy-check.sh --selftest            # offline (no docker, no database): proves this file is read-only (RB12-OPS-A1, F9)
 #
 # What it does (and nothing else):
 #   (a) per validator container: counts of the named finality states in `docker logs --since $SINCE`; the finality_upgrader_disabled,
@@ -23,6 +24,27 @@ VALIDATORS="${VALIDATORS:-1 2 3 4 5 6 7}"
 PGCONTAINER="${PGCONTAINER:-certen-postgres}"
 PGDB="${PGDB:-certen_proofs}"
 PSEUDO='ffffffff-ffff-4fff-8fff-%'      # CaptureStatusProofID(chain): the capture loops' rows in proof_finality_status
+
+if [ "${1:-}" = "--selftest" ]; then
+  # Offline. The SQL of this file is what the sql() helper below sends: the bodies of the `sql <<'SQL'` / `sql <<SQL` heredocs. The check is
+  # that every statement in them is a SELECT, that none carries a write or DDL keyword, and that the helper wraps them in a READ ONLY
+  # transaction on a read-only session. A statement that is not a SELECT, or a helper that is not read-only, fails the selftest.
+  bad=0
+  body=$(awk -v q="'" '$0 ~ ("<<" q "?SQL" q "?[[:space:]]*$") { insql = 1; next } /^SQL$/ { insql = 0; next } insql { print }' "$0")
+  nstmt=$(printf '%s\n' "$body" | tr '\n' ' ' | awk -F';' '{ n = 0; for (i = 1; i <= NF; i++) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", $i); if ($i != "") n++ } print n }')
+  nsel=$(printf '%s\n' "$body" | tr '\n' ' ' | awk -F';' '{ n = 0; for (i = 1; i <= NF; i++) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", $i); if (toupper(substr($i, 1, 7)) == "SELECT ") n++ } print n }')
+  [ "$nstmt" -gt 0 ] && [ "$nstmt" -eq "$nsel" ] || { echo "selftest: $nstmt SQL statements, $nsel of them SELECT"; bad=1; }
+  if printf '%s\n' "$body" | grep -Eiq '\b(insert|update|delete|drop|alter|create|truncate|grant|revoke|copy|vacuum|reindex|cluster|refresh|lock|call|execute|set|reset)\b'; then
+    echo "selftest: a write, DDL or session keyword in the SQL"; printf '%s\n' "$body" | grep -Ein '\b(insert|update|delete|drop|alter|create|truncate|grant|revoke|copy|vacuum|reindex|cluster|refresh|lock|call|execute|set|reset)\b' | head -3; bad=1
+  fi
+  # the helper itself (its text only: this selftest's own words must not satisfy its own checks)
+  fn=$(awk '/^sql\(\) \{/ { f = 1 } f { print } f && /^\}/ { exit }' "$0")
+  printf '%s\n' "$fn" | grep -q "echo 'BEGIN TRANSACTION READ ONLY;'" || { echo "selftest: sql() does not open a READ ONLY transaction"; bad=1; }
+  printf '%s\n' "$fn" | grep -q "default_transaction_read_only=on" || { echo "selftest: sql() does not set default_transaction_read_only=on"; bad=1; }
+  printf '%s\n' "$fn" | grep -q "echo 'ROLLBACK;'" || { echo "selftest: sql() does not end with ROLLBACK"; bad=1; }
+  [ "$bad" -eq 0 ] && echo "selftest ok: $nstmt SQL statements, all SELECT, in READ ONLY transactions"
+  exit "$bad"
+fi
 
 fail=0
 tmp=$(mktemp -d) || exit 2
@@ -101,9 +123,15 @@ SQL
 
 echo; echo "-- captured L1 bytes (proof_finality_capture; insert-only, never deleted)"
 sql <<'SQL'
+-- the LIVE capture loops' rows: the legacy-header rows (RB12-LEGACY-191, item legacyleg/header) are keyed by the rollup's OWN block number
+-- and are written by a reconstruction that finishes within ~15 minutes of a deploy, so they are left out here: counted with them, max_l1_block
+-- of chains 84532 / 421614 would read 46.4M / 313.9M and rows_last_30m would be > 0 even with a dead capture loop.
 SELECT chain, count(*) AS rows, max(l1_block) AS max_l1_block, pg_size_pretty(sum(octet_length(bytes))::bigint) AS bytes,
        count(*) FILTER (WHERE created_at > now() - interval '30 minutes') AS rows_last_30m, max(created_at) AS newest
-  FROM proof_finality_capture GROUP BY 1 ORDER BY 1;
+  FROM proof_finality_capture WHERE item <> 'legacyleg/header' GROUP BY 1 ORDER BY 1;
+-- the reconstructed headers of legacy legs, apart (insert-only; 191 in all once reconstruction has finished: Base 119, Sepolia 65, Arbitrum 7)
+SELECT chain, count(*) AS legacy_header_rows, min(l1_block) AS min_block, max(l1_block) AS max_block, max(created_at) AS newest
+  FROM proof_finality_capture WHERE item = 'legacyleg/header' GROUP BY 1 ORDER BY 1;
 SELECT chain, max(l1_block) AS cursor_block, max(created_at) AS cursor_written
   FROM proof_finality_capture WHERE item IN ('runtime/cursor', 'cursor') GROUP BY 1 ORDER BY 1;
 SQL
@@ -146,11 +174,14 @@ exit "$fail"
 #     proof_finality_status (legs): codes finality_pending (awaiting_*; Sepolia: the block-not-yet-covered reason until the finalized head
 #       passes the leg) and 'verified' rows ('-' code, class verified). The CLASS of a row and its CODE are different things; do not read one as
 #       the other:
-#       - class 'refused' = evidence was BUILT and the registered Kind refused it (nothing stored); the code is that Kind's own named refusal
-#         (finality_verifier_failed is one of them). Any class 'refused' row for an honest leg is a bug to report.
-#       - code finality_verifier_failed, whatever its class, means evidence was built and failed verification: a bug to report. A builder error
-#         that carries no name of its own (a capture row that vanished, a database or provider error) is class 'unavailable' with the code
-#         finality_builder_error{stage=build|append}, never finality_verifier_failed.
+#       - class 'refused' = evidence was BUILT and its APPEND was refused; nothing stored (pkg/finality/status.go, BuilderRefused). The class
+#         names the event, never the reason: the CODE says who refused - the registered Kind's own named state, the registry's catch-all
+#         finality_verifier_failed (a verifier judged the evidence and failed it), the store's chain checks (finality_chain_broken,
+#         finality_block_mismatch{leg}) or the table guard (finality_guard_refused). Any class 'refused' row for an honest leg is a bug to report.
+#       - finality_verifier_failed is a CODE, not a class. (refused, finality_verifier_failed) = a verifier rejected built evidence: a bug to
+#         report. (unavailable, finality_verifier_failed) = a prover raised that code for a failure that built no evidence (a labelling defect,
+#         not a verdict on the leg): report the row with its cause. A builder error that carries no name of its own (a capture row that
+#         vanished, a database or provider error) is class 'unavailable' with the code finality_builder_error{stage=build|append}.
 #       - class 'unavailable' = the builder could not obtain or build what it needs: l1_proof_window_unavailable / batcher_state_unavailable /
 #         l1_blob_unavailable (a missed provider window; OD4 removes the usual cause), l1_capture_not_covering (a leg older than the capture,
 #         decided at once with the block it was judged at), finality_game_source_unavailable / finality_covering_game_unavailable,
@@ -159,7 +190,8 @@ exit "$fail"
 #         build; the leg is asked again at the pending interval and nothing failed. Many of these with certen_finality_memory_refused_total
 #         rising is a budget (CERTEN_FINALITY_MEMORY_BUDGET_BYTES) or concurrency question, not a defect of a leg.
 #     capture pseudo rows: none in a healthy first hour; a row there is a capture loop's named unavailability state (see the deploy guide, 3.2).
-#     proof_finality_capture: chain 84532 and 421614 rows_last_30m > 0 whenever those chains posted batches in the window (Base posts about
+#     proof_finality_capture (live capture rows only; the legacyleg/header rows are the separate legacy_header_rows table below it, growing to 119 / 65 / 7
+#       rows on 84532 / 11155111 / 421614 within about 15 minutes of the deploy and then still): chain 84532 and 421614 rows_last_30m > 0 whenever those chains posted batches in the window (Base posts about
 #       every few minutes, Arbitrum batches likewise), and the cursor block within about 60 L1 blocks of the Sepolia head.
 #
 # FAILURE (investigate now): any panic line; any "stored addendum chain does not verify" (certen_finality_chain_broken_total); capture

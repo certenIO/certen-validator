@@ -54,7 +54,7 @@ func (f *f1Fix) chain(t *testing.T, committeeIdx, nextIdx uint8, signers []uint8
 	cf := &adiri.CFA1{Tables: [][][]byte{f.keys}, Records: []adiri.Record{{
 		FinalState: adiri.NumHash{Number: 5, Hash: [32]byte{1}}, FinalConsensus: adiri.NumHash{Number: 6, Hash: [32]byte{2}}, Signers: signers,
 	}}}
-	digest := cf.RecordDigests()[0]
+	digest := mustDigests(t, cf)[0]
 	var sigs []*bls.Signature
 	for _, s := range signers {
 		sk := f.sks[0]
@@ -68,7 +68,7 @@ func (f *f1Fix) chain(t *testing.T, committeeIdx, nextIdx uint8, signers []uint8
 		t.Fatal(err)
 	}
 	copy(cf.Records[0].Signature[:], agg.Bytes())
-	// the indices are set after the digest is computed: RecordDigests indexes the tables unchecked
+	// the indices are set after the digest is computed: RecordDigests refuses an index outside the tables
 	cf.Records[0].CommitteeIdx, cf.Records[0].NextIdx = committeeIdx, nextIdx
 	par := &adiri.Params{ChainID: 2017, Codec: adiri.Codec, GenesisCommittee: f.keys, Epoch0FinalState: cf.Records[0].FinalState, MinCommittee: 4, MaxHeaders: 16}
 	return par, cf

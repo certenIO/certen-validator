@@ -95,11 +95,13 @@ func rbStore(t *testing.T, firstBlock uint64, blocks int, cursor bool) *counting
 // rbLeg is a pre-Denim Base leg (settlement header) whose L2 block opens with the L1-info deposit naming origin.
 func rbLeg(t *testing.T, origin uint64) (*ethproof.Settlement, fixedL2) {
 	t.Helper()
-	hdr, err := rlp.EncodeToBytes(&types.Header{Number: big.NewInt(48333406), Time: 1792400000, Difficulty: big.NewInt(0), BaseFee: big.NewInt(1)})
+	txs := [][]byte{l1InfoDeposit(origin, [32]byte{9})}
+	// the header commits to the transactions of the L2 block, as a real one does (the builder checks the provider's answer against it)
+	hdr, err := rlp.EncodeToBytes(&types.Header{Number: big.NewInt(48333406), Time: 1792400000, Difficulty: big.NewInt(0), BaseFee: big.NewInt(1), TxHash: ethproof.TrieRoot(txs)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &ethproof.Settlement{Header: hdr}, fixedL2{txs: [][]byte{l1InfoDeposit(origin, [32]byte{9})}}
+	return &ethproof.Settlement{Header: hdr}, fixedL2{txs: txs}
 }
 
 func rbBuilder(t *testing.T, st finality.CaptureStore, l2 fixedL2) *Builder {

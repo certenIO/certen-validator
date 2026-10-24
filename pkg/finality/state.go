@@ -210,6 +210,10 @@ const (
 	// the header was captured do. Without the header the leg binding D0 cannot be recomputed, so nothing is judged; it is not corrupt
 	// evidence and not a failure.
 	IncludedNoBlockHeader IncludedReason = "no_block_header"
+	// IncludedLegacyHeaderUnserved: the header of a legacy leg (see IncludedNoBlockHeader) was asked of every provider the validator is
+	// configured with for the leg's chain and none served the block (pruned, unknown, unreachable, wrong block or oversized; the state
+	// carries the chain, the block and the counts). pkg/finality/legacyhdr; the reconstruction asks again.
+	IncludedLegacyHeaderUnserved IncludedReason = "legacy_header_unserved"
 )
 
 // FinalizedBlockReason is the reason of finality_finalized_block_unavailable: a verified finalized level whose leg block cannot

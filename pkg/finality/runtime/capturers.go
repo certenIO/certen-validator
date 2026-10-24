@@ -121,6 +121,10 @@ type BasePostedLoop struct {
 	cursor       uint64
 	cursorHave   bool
 	cursorKnown  bool
+	// Index, when set, is stepped after every tick (RB12-INDEX-A): it digests the blocks the capture has stored and indexes the channels
+	// they complete. Memory is the per-process budget its working set is reserved against.
+	Index  finality.CaptureIndexer
+	Memory *finality.MemoryBudget
 }
 
 type retryEntry struct {
@@ -234,6 +238,7 @@ func (l *BasePostedLoop) Tick(ctx context.Context, tick int) error {
 	}
 	if from > head {
 		metrics.SetFinalityCaptureLag(chain, l.Name(), 0)
+		l.runIndex(ctx, sink, cur)
 		return nil
 	}
 	to := head
@@ -295,6 +300,7 @@ func (l *BasePostedLoop) Tick(ctx context.Context, tick int) error {
 	l.mu.Unlock()
 	metrics.SetFinalityLastCapturedBlock(chain, l.Name(), safeTo)
 	metrics.SetFinalityCaptureLag(chain, l.Name(), head-safeTo)
+	l.runIndex(ctx, sink, safeTo)
 	return nil
 }
 
@@ -318,6 +324,28 @@ func (l *BasePostedLoop) recordGap(ctx context.Context, n uint64, st *finality.S
 		l.Logf("[FINALITY] capturer %s: the note of the gap at L1 block %d was not recorded: %v", l.Name(), n, ethrpc.RedactError(err))
 	}
 	return nil
+}
+
+// noteLate tells the capture index (when it can be told) that block was captured after the index cursor may have passed it.
+func (l *BasePostedLoop) noteLate(block uint64) {
+	if nt, ok := l.Index.(finality.LateBlockNoter); ok {
+		nt.NoteLate(block)
+	}
+}
+
+// runIndex steps the capture index towards the capture cursor. Indexing never stops the capture: a failed step is logged (redacted) and a
+// named inconsistency is recorded in the status table under the chain's capture pseudo id.
+func (l *BasePostedLoop) runIndex(ctx context.Context, sink statusSink, upTo uint64) {
+	if l.Index == nil || ctx.Err() != nil {
+		return
+	}
+	ictx := finality.WithMemoryBudget(ctx, l.Memory)
+	if _, err := l.Index.Step(ictx, upTo); err != nil && ctx.Err() == nil {
+		if st, ok := finality.AsNamed(err); ok {
+			sink.put(ctx, l.Chain(), finality.LevelL1Posted, st)
+		}
+		l.Logf("[FINALITY] index %s: step to L1 block %d: %v", l.Index.Family(), upTo, ethrpc.RedactError(err))
+	}
 }
 
 // retryFailed retries the held blocks with a doubling gap between attempts. A block older than the provider window without an
@@ -365,6 +393,7 @@ func (l *BasePostedLoop) retryFailed(ctx context.Context, tick int, head uint64,
 				l.Logf("[FINALITY] capturer %s: the fill of L1 block %d was not recorded (the gap backfill closes it): %v", l.Name(), n, ethrpc.RedactError(ferr))
 			}
 			l.Logf("[FINALITY] capturer %s: L1 block %d captured on retry (inbox transactions: %t)", l.Name(), n, inbox)
+			l.noteLate(n)
 		} else if e != nil {
 			e.attempts++
 			gap := 1 << uint(min(e.attempts, 6))
@@ -389,6 +418,9 @@ type ArbPostedLoop struct {
 	Every     time.Duration
 	Logf      func(string, ...any)
 	Clock     loopClock
+	// Notes, when set, is told which blocks got the last of their blob rows this tick (the batch index may have passed them while they were incomplete).
+	// The index itself runs in its own loop (ArbIndexLoop): it can never delay a capture tick.
+	Notes finality.LateBlockNoter
 }
 
 var _ finality.Capturer = (*ArbPostedLoop)(nil)
@@ -421,15 +453,125 @@ func (l *ArbPostedLoop) Run(ctx context.Context) error {
 			for _, e := range rep.Errors {
 				l.Logf("[FINALITY] capturer %s: %s", l.Name(), e)
 			}
+			l.reportPrefix(ctx, rep)
 			if len(rep.Unavailable) > 0 {
 				st := finality.NewState("l1_proof_window_unavailable", "l1_block", rep.Head, "providers", l.Providers)
 				sink.put(ctx, l.Chain(), finality.LevelL1Posted, st)
 				l.Logf("[FINALITY] capturer %s: %s (batches %v)", l.Name(), st.Error(), rep.Unavailable)
 			}
+			l.noteBlobs(rep)
 		}
 		if !l.Clock.wait(ctx, every) {
 			return nil
 		}
 	}
 	return nil
+}
+
+// reportPrefix sets the prefix gauges of the Arbitrum store (every tick, from the first), counts the scan and names it once when it did something.
+func (l *ArbPostedLoop) reportPrefix(ctx context.Context, rep capture.Report) {
+	chain := l.Chain()
+	metrics.AddFinalityPrefixBackfilled(chain, int(rep.PrefixScanned))
+	metrics.AddFinalityPrefixLease(chain, "lost", rep.PrefixLeaseLost)
+	metrics.AddFinalityPrefixLease(chain, "error", rep.PrefixLeaseErrors)
+	wins, err := finality.PrefixWindowsOf(ctx, l.Cap.Store, chain)
+	if err != nil {
+		l.Logf("[FINALITY] capturer %s: the prefix windows could not be read: %v", l.Name(), ethrpc.RedactError(err))
+		return
+	}
+	pieces, err := finality.GapsIn(ctx, l.Cap.Store, chain, 0, finality.MaxCaptureBlock)
+	if err != nil {
+		l.Logf("[FINALITY] capturer %s: the capture gaps could not be read: %v", l.Name(), ethrpc.RedactError(err))
+		return
+	}
+	st := baseposted.PrefixWindowStates(wins, pieces)
+	metrics.SetFinalityPrefixWindows(chain, st[baseposted.PrefixWindowComplete], st[baseposted.PrefixWindowOpen],
+		st[baseposted.PrefixWindowUnavailableProven], st[baseposted.PrefixWindowRetentionExpired], finality.PrefixBlocks(finality.MergePrefixWindows(wins)))
+	if rep.PrefixScanned > 0 {
+		l.Logf("[FINALITY] capturer %s: prefix scan: %d L1 blocks scanned, %d batches captured (%d prefix windows: %d complete, %d being scanned)",
+			l.Name(), rep.PrefixScanned, rep.PrefixBatches, len(wins), st[baseposted.PrefixWindowComplete], st[baseposted.PrefixWindowOpen])
+	}
+}
+
+// noteBlobs tells the batch index (when there is one) which blocks got the last of their blob rows this tick: the index may have passed them while
+// they were incomplete. Any other filler of batch rows below the index cursor (the archive backfill's Arbitrum prefix scan) calls the same
+// finality.LateBlockNoter.
+func (l *ArbPostedLoop) noteBlobs(rep capture.Report) {
+	if l.Notes == nil {
+		return
+	}
+	for _, b := range rep.BlobBlocks {
+		l.Notes.NoteLate(b)
+	}
+	// the batches the archive backfill's prefix scan stored lie far below the index cursor, in ranges that close out of order: each is told the
+	// moment its row exists (its blobs, when it has some, are told again when they are whole)
+	for _, b := range rep.PrefixBlocks {
+		l.Notes.NoteLate(b)
+	}
+	// and the closed range itself, so a range that held no batch at all is a range the index has looked at, not only the blocks of batches it found
+	if rn, ok := l.Notes.(finality.LateRangeNoter); ok {
+		for _, r := range rep.PrefixRanges {
+			rn.NoteLateRange(r[0], r[1])
+		}
+	}
+}
+
+// ArbIndexLoop drives the Arbitrum batch index (RB12-INDEX-B) in its own goroutine, so that indexing - a backfill of a whole table takes many steps - can never
+// delay or starve a capture tick (V-INDEX note 1: the Base index runs inside the capture goroutine). Each tick it steps the indexer towards the highest cursor
+// row the capture has written, under the process memory budget; a failed step is logged (redacted) and a named inconsistency is recorded in the status
+// table under the chain's capture pseudo id. It implements finality.Capturer.
+type ArbIndexLoop struct {
+	Index  finality.CaptureIndexer
+	Store  finality.CaptureStore // the store the capture cursor rows are read from
+	Memory *finality.MemoryBudget
+	Status finality.BuilderStatusStore
+	Pins   *finality.Pins
+	Every  time.Duration
+	Logf   func(string, ...any)
+	Clock  loopClock
+}
+
+var _ finality.Capturer = (*ArbIndexLoop)(nil)
+
+// Chain implements finality.Capturer.
+func (l *ArbIndexLoop) Chain() uint64 { return finality.ChainArbitrumSepolia }
+
+// Name implements finality.Capturer.
+func (l *ArbIndexLoop) Name() string { return "arbitrum-sepolia/batch-index" }
+
+// Run implements finality.Capturer: step, wait Every, until ctx ends.
+func (l *ArbIndexLoop) Run(ctx context.Context) error {
+	every := l.Every
+	if every < finality.MinPoll {
+		every = finality.MinPoll
+	}
+	sink := statusSink{store: l.Status, logf: l.Logf, now: l.Clock.Now, pins: l.Pins}
+	for ctx.Err() == nil {
+		l.runIndex(ctx, sink)
+		if !l.Clock.wait(ctx, every) {
+			return nil
+		}
+	}
+	return nil
+}
+
+// runIndex steps the batch index towards the capture cursor.
+func (l *ArbIndexLoop) runIndex(ctx context.Context, sink statusSink) {
+	if l.Index == nil || ctx.Err() != nil {
+		return
+	}
+	_, upTo, ok, err := finality.BlockBoundsOf(ctx, l.Store, l.Chain(), capture.ItemCursor)
+	if err != nil || !ok {
+		if err != nil && ctx.Err() == nil {
+			l.Logf("[FINALITY] index %s: the capture cursor is unreadable: %v", l.Index.Family(), ethrpc.RedactError(err))
+		}
+		return
+	}
+	ictx := finality.WithMemoryBudget(ctx, l.Memory)
+	if _, err := l.Index.Step(ictx, upTo); err != nil && ctx.Err() == nil {
+		if st, named := finality.AsNamed(err); named {
+			sink.put(ctx, l.Chain(), finality.LevelL1Posted, st)
+		}
+		l.Logf("[FINALITY] index %s: step to L1 block %d: %v", l.Index.Family(), upTo, ethrpc.RedactError(err))
+	}
 }
