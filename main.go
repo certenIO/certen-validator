@@ -1665,6 +1665,7 @@ func startValidator(
 	if sErr != nil {
 		return nil, nil, fmt.Errorf("batch path: stack assembly: %w", sErr)
 	}
+	contractIdentityBundles.Store(stack) // S8 capture: the hop ticks' deadlines are read from this stack (contract_identity_deadline.go)
 	// The heartbeat of every settlement chain whose blocks stop when idle (RB7 D7); none on the chains whose blocks never
 	// stop.
 	stack.RunChainHeartbeats(context.Background())

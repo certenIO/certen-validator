@@ -68,7 +68,7 @@ func startContractIdentityCapture(ctx context.Context, logf func(string, ...any)
 		man = nil
 	}
 	var readers sync.Map
-	rt, _ := capture.Start(ctx, set, capture.Deps{Store: store, Manifest: man, Logf: logf,
+	rt, _ := capture.Start(ctx, set, capture.Deps{Store: store, Manifest: man, Logf: logf, Deadline: contractIdentityDeadline(),
 		SourceFor: func(chain uint64) (capture.AttestSource, error) {
 			if v, ok := readers.Load(chain); ok {
 				return v.(capture.AttestSource), nil

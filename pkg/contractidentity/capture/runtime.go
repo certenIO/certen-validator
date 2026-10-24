@@ -479,9 +479,9 @@ func (r *Runtime) track(cfg Config, res *AttestResult) {
 	t := r.tickers[cfg.Chain]
 	if t == nil && r.ctx.Err() == nil {
 		tc := TickConfig{Config: cfg, Store: r.d.Store, Poll: r.d.TickPoll, Reserve: func() (func(), bool) { return r.mem.reserve(TickWorkingSetBytes) }}
-		if r.d.Deadline != nil {
+		if dl := safeDeadline(r.d.Deadline); dl != nil {
 			chain := cfg.Chain
-			tc.Deadline = func(a [32]byte) (time.Time, bool) { return r.d.Deadline(chain, a) }
+			tc.Deadline = func(a [32]byte) (time.Time, bool) { return dl(chain, a) }
 		}
 		nt, err := NewTicker(tc)
 		if err != nil {
