@@ -209,6 +209,13 @@ type Built struct {
 	Inputs ci.Inputs
 	// ManifestRaw / ExtensionRaw are the manifest and extension documents after the mutations (nil extension: none).
 	ManifestRaw, ExtensionRaw []byte
+	// ManifestPin is the hash the manifest bytes are loaded against: nil for the unmodified embedded manifest (the embedded pin), the hash of
+	// the edited bytes when a mutation edited the manifest (the pin is recomputed, FORMAT.md) [C1].
+	ManifestPin *[32]byte
+	// Step0 is the step-0 refusal the manifest and extension documents produce (manifest_corrupt, manifest_shadow, manifest_unknown); nil when
+	// they load. A vector about such a document is expressible only because Apply does NOT fail on it: the runner resolves the same refusal from
+	// Inputs.ManifestRaw / ManifestPin / ExtensionRaw and the refusal is the vector's RESULT [C1]. Inputs.Manifest is then the base manifest.
+	Step0 *ci.StateError
 }
 
 // Apply applies the mutations, in order, to the world of spec and returns the inputs. The mutations of target world come first in effect:
@@ -311,24 +318,42 @@ func Apply(m *ci.Manifest, spec *Spec, muts []ci.Mutation, container []byte) (*B
 		}
 	}
 	mf := m
+	var pin *[32]byte
 	if mTree != nil {
 		if manifestRaw, err = json.Marshal(mTree); err != nil {
 			return nil, err
 		}
-		if mf, err = ci.LoadManifest(manifestRaw, ci.ManifestHash(manifestRaw)); err != nil {
-			return nil, fmt.Errorf("the edited manifest: %w", err)
+		h := ci.ManifestHash(manifestRaw)
+		pin = &h
+		if mf, err = ci.LoadManifest(manifestRaw, h); err != nil {
+			st, ok := ci.AsState(err)
+			if !ok {
+				return nil, fmt.Errorf("the edited manifest: %w", err)
+			}
+			b.Step0, mf = st, m
 		}
 	}
 	if eTree != nil {
 		if extRaw, err = json.Marshal(eTree); err != nil {
 			return nil, err
 		}
-		if mf, err = mf.WithExtension(extRaw); err != nil {
-			return nil, fmt.Errorf("the extension: %w", err)
+		if b.Step0 == nil {
+			if mf, err = mf.WithExtension(extRaw); err != nil {
+				st, ok := ci.AsState(err)
+				if !ok {
+					return nil, fmt.Errorf("the extension: %w", err)
+				}
+				b.Step0, mf = st, m
+			}
 		}
 	}
-	b.Inputs = ci.Inputs{Ctx: ctx, Container: cbytes, Manifest: mf}
-	b.ManifestRaw, b.ExtensionRaw = manifestRaw, extRaw
+	// the raw documents are carried whenever they describe the manifest the world was built on: the embedded one, or an edited copy of it
+	var rawOut []byte
+	if mTree != nil || m.SHA256 == ci.ManifestHash(ci.EmbeddedManifestBytes()) {
+		rawOut = manifestRaw
+	}
+	b.Inputs = ci.Inputs{Ctx: ctx, Container: cbytes, Manifest: mf, ManifestRaw: rawOut, ManifestPin: pin, ExtensionRaw: extRaw}
+	b.ManifestRaw, b.ExtensionRaw, b.ManifestPin = manifestRaw, extRaw, pin
 	return b, nil
 }
 
@@ -844,14 +869,15 @@ func VectorFile(id string, muts []ci.Mutation, expected ci.Expected) ([]byte, er
 	return json.MarshalIndent(v, "", " ")
 }
 
-// WriteSet writes a published vector set: world.json (the Spec), one `<id>.json` per vector and the MANIFEST of sha256 lines (sorted by file
-// name, LF line ends). It refuses to write into a directory that already has a MANIFEST (a published set is never edited).
+// WriteSet writes a published vector set: world.json (the Spec), one `<id>.json` per vector, the MATERIALISED files of every vector
+// (`<id>.inputs.json`, `<id>.expected.json`, `<id>.container.hex` and the content-addressed `manifest.<sha256>.json` /
+// `extension.<sha256>.json`, FORMAT.md) and the MANIFEST of sha256 lines (sorted by file name, LF line ends) [C2]. Every vector is built through
+// Builder.Build from the world.json being written, so a runner without a world builder (TypeScript) judges exactly the inputs a Go runner
+// with this world builder would build, and the whole set is computed before the first file is written: a vector that cannot be built leaves
+// no partial set. It refuses to write into a directory that already has a MANIFEST (a published set is never edited).
 func WriteSet(dir string, spec *Spec, vectors []ci.Vector) error {
 	if _, err := os.Stat(filepath.Join(dir, "MANIFEST")); err == nil {
 		return fmt.Errorf("%s is a published set: a published set is never edited, write a new one", dir)
-	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
 	}
 	files := map[string][]byte{}
 	wj, err := spec.MarshalIndent()
@@ -859,12 +885,37 @@ func WriteSet(dir string, spec *Spec, vectors []ci.Vector) error {
 		return err
 	}
 	files["world.json"] = append(wj, '\n')
+	put := func(name string, content []byte) error {
+		if prev, dup := files[name]; dup && !bytes.Equal(prev, content) {
+			return fmt.Errorf("file %s is produced twice with different content", name)
+		}
+		files[name] = content
+		return nil
+	}
 	for _, v := range vectors {
 		b, err := VectorFile(v.ID, v.Mutations, v.Expected)
 		if err != nil {
 			return err
 		}
-		files[v.ID+".json"] = append(b, '\n')
+		if err := put(v.ID+".json", append(b, '\n')); err != nil {
+			return err
+		}
+		in, err := Builder{}.Build(files["world.json"], v, nil)
+		if err != nil {
+			return fmt.Errorf("vector %s: %w", v.ID, err)
+		}
+		mf, err := ci.Materialise(v.ID, in, v.Expected)
+		if err != nil {
+			return fmt.Errorf("vector %s: %w", v.ID, err)
+		}
+		for name, content := range mf {
+			if err := put(name, content); err != nil {
+				return fmt.Errorf("vector %s: %w", v.ID, err)
+			}
+		}
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
 	}
 	names := make([]string, 0, len(files))
 	for n := range files {
