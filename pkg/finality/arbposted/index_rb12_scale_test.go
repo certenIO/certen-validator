@@ -90,6 +90,12 @@ func (l *lazyArb) header(block uint64) ([]byte, [32]byte) {
 const scaleBlobs = 3
 
 // rec is the batch record of batch i: a function of i alone (it names the versioned hashes, not the blobs).
+func (l *lazyArb) dropCache() {
+	l.mu.Lock()
+	l.cache = map[uint64][][]byte{}
+	l.mu.Unlock()
+}
+
 func (l *lazyArb) rec(i uint64) (capture.BatchRecord, []byte) {
 	_, hash := l.header(l.blockOf(i))
 	T := l.timeOf(i)
@@ -464,6 +470,7 @@ func TestRB12ArbIndexCostIsIndependentOfTheTableAndEqualsTheReference(t *testing
 			txs := [][]byte{store.tx(i, int(i)%scaleMsgs)}
 			ts := store.timeOf(i) + 30
 			var c scaleCost
+			store.dropCache() // the generator's own cache is not the lookup's heap
 			meter.reset()
 			c.heap, c.wall = sampleHeap(func() {
 				loc, pend, err := r.Locate(context.Background(), b, finality.HeaderFields{Number: 5, Timestamp: ts}, standardTxs(txs), arb)
@@ -508,13 +515,15 @@ func TestRB12ArbIndexCostIsIndependentOfTheTableAndEqualsTheReference(t *testing
 
 		// a leg no batch holds: no blob row at all
 		var absent scaleCost
+		store.dropCache()
 		meter.reset()
 		absent.heap, absent.wall = sampleHeap(func() {
 			absent.out = w0(r, b, arb, store.timeOf(n/2)+30, [][]byte{ixTx(7_777_777)})
 		})
 		absent.bytes, absent.keys = meter.bytes.Load(), meter.keys.Load()
 		t.Logf("scale %.2fx ABSENT leg: %s, %d KB read, %d key names, wall %s, heap +%d KB", scale, absent.out, absent.bytes>>10, absent.keys, absent.wall.Round(time.Millisecond), absent.heap>>10)
-		if absent.out.State != PendingAwaitingBatchPost || absent.bytes > 1<<20 {
+		// the entries of the ~1,083 batches whose bounds hold the timestamp, 400 fingerprints (3.2 KB) each: about 3.5 MB, whatever the table
+		if absent.out.State != PendingAwaitingBatchPost || absent.bytes > 8<<20 {
 			t.Errorf("scale %v: an unmatched leg is %s and read %d KB", scale, absent.out, absent.bytes>>10)
 		}
 

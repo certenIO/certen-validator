@@ -418,9 +418,9 @@ type ArbPostedLoop struct {
 	Every     time.Duration
 	Logf      func(string, ...any)
 	Clock     loopClock
-	// Index, when set, is stepped towards the capture cursor after every tick (RB12-INDEX-B); Memory is the process budget its rows are reserved from.
-	Index  finality.CaptureIndexer
-	Memory *finality.MemoryBudget
+	// Notes, when set, is told which blocks got the last of their blob rows this tick (the batch index may have passed them while they were incomplete).
+	// The index itself runs in its own loop (ArbIndexLoop): it can never delay a capture tick.
+	Notes finality.LateBlockNoter
 }
 
 var _ finality.Capturer = (*ArbPostedLoop)(nil)
@@ -459,7 +459,6 @@ func (l *ArbPostedLoop) Run(ctx context.Context) error {
 				l.Logf("[FINALITY] capturer %s: %s (batches %v)", l.Name(), st.Error(), rep.Unavailable)
 			}
 			l.noteBlobs(rep)
-			l.runIndex(ctx, sink)
 		}
 		if !l.Clock.wait(ctx, every) {
 			return nil
@@ -468,24 +467,63 @@ func (l *ArbPostedLoop) Run(ctx context.Context) error {
 	return nil
 }
 
-// noteBlobs tells the capture index (when it can be told) which blocks got the last of their blob rows this tick: the index may have passed them
-// while they were incomplete. Any other filler of batch rows below the index cursor (the archive backfill's Arbitrum prefix scan) calls the same
+// noteBlobs tells the batch index (when there is one) which blocks got the last of their blob rows this tick: the index may have passed them while
+// they were incomplete. Any other filler of batch rows below the index cursor (the archive backfill's Arbitrum prefix scan) calls the same
 // finality.LateBlockNoter.
 func (l *ArbPostedLoop) noteBlobs(rep capture.Report) {
-	if nt, ok := l.Index.(finality.LateBlockNoter); ok {
-		for _, b := range rep.BlobBlocks {
-			nt.NoteLate(b)
-		}
+	if l.Notes == nil {
+		return
+	}
+	for _, b := range rep.BlobBlocks {
+		l.Notes.NoteLate(b)
 	}
 }
 
-// runIndex steps the batch index towards the capture cursor (the highest cursor row the capture has written). Indexing never stops the capture: a
-// failed step is logged (redacted) and a named inconsistency is recorded in the status table under the chain's capture pseudo id.
-func (l *ArbPostedLoop) runIndex(ctx context.Context, sink statusSink) {
+// ArbIndexLoop drives the Arbitrum batch index (RB12-INDEX-B) in its own goroutine, so that indexing - a backfill of a whole table takes many steps - can never
+// delay or starve a capture tick (V-INDEX note 1: the Base index runs inside the capture goroutine). Each tick it steps the indexer towards the highest cursor
+// row the capture has written, under the process memory budget; a failed step is logged (redacted) and a named inconsistency is recorded in the status
+// table under the chain's capture pseudo id. It implements finality.Capturer.
+type ArbIndexLoop struct {
+	Index  finality.CaptureIndexer
+	Store  finality.CaptureStore // the store the capture cursor rows are read from
+	Memory *finality.MemoryBudget
+	Status finality.BuilderStatusStore
+	Pins   *finality.Pins
+	Every  time.Duration
+	Logf   func(string, ...any)
+	Clock  loopClock
+}
+
+var _ finality.Capturer = (*ArbIndexLoop)(nil)
+
+// Chain implements finality.Capturer.
+func (l *ArbIndexLoop) Chain() uint64 { return finality.ChainArbitrumSepolia }
+
+// Name implements finality.Capturer.
+func (l *ArbIndexLoop) Name() string { return "arbitrum-sepolia/batch-index" }
+
+// Run implements finality.Capturer: step, wait Every, until ctx ends.
+func (l *ArbIndexLoop) Run(ctx context.Context) error {
+	every := l.Every
+	if every < finality.MinPoll {
+		every = finality.MinPoll
+	}
+	sink := statusSink{store: l.Status, logf: l.Logf, now: l.Clock.Now, pins: l.Pins}
+	for ctx.Err() == nil {
+		l.runIndex(ctx, sink)
+		if !l.Clock.wait(ctx, every) {
+			return nil
+		}
+	}
+	return nil
+}
+
+// runIndex steps the batch index towards the capture cursor.
+func (l *ArbIndexLoop) runIndex(ctx context.Context, sink statusSink) {
 	if l.Index == nil || ctx.Err() != nil {
 		return
 	}
-	_, upTo, ok, err := finality.BlockBoundsOf(ctx, l.Cap.Store, l.Chain(), capture.ItemCursor)
+	_, upTo, ok, err := finality.BlockBoundsOf(ctx, l.Store, l.Chain(), capture.ItemCursor)
 	if err != nil || !ok {
 		if err != nil && ctx.Err() == nil {
 			l.Logf("[FINALITY] index %s: the capture cursor is unreadable: %v", l.Index.Family(), ethrpc.RedactError(err))

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/certen/independant-validator/pkg/finality"
 	"github.com/certen/independant-validator/pkg/finality/arbposted"
@@ -95,17 +96,23 @@ func TestRTArbIndexOffLeavesNoIndexerAndNoReaderAndOnWiresBoth(t *testing.T) {
 
 func assertArbIndexWiring(t *testing.T, reg *finality.Registry, want bool) {
 	t.Helper()
-	var loops, builders int
+	var loops, indexLoops, builders int
 	for _, c := range reg.Capturers() {
 		if l, ok := c.(*ArbPostedLoop); ok {
 			loops++
-			if (l.Index != nil) != want {
-				t.Errorf("the Arbitrum capture loop has an indexer: %v, want %v", l.Index != nil, want)
-			}
-			if want && l.Memory == nil {
-				t.Error("the indexer runs without the process memory budget")
+			if (l.Notes != nil) != want {
+				t.Errorf("the Arbitrum capture loop notes blobs to an indexer: %v, want %v", l.Notes != nil, want)
 			}
 		}
+		if l, ok := c.(*ArbIndexLoop); ok {
+			indexLoops++
+			if l.Index == nil || l.Memory == nil {
+				t.Error("the index loop runs without its indexer or the process memory budget")
+			}
+		}
+	}
+	if (indexLoops == 1) != want || indexLoops > 1 {
+		t.Errorf("%d index loops registered, want one: %v", indexLoops, want)
 	}
 	for _, p := range reg.Provers(finality.ChainArbitrumSepolia) {
 		if b, ok := p.(*arbposted.Builder); ok {
@@ -141,16 +148,20 @@ func (r *rtArbIndexer) Step(ctx context.Context, upTo uint64) (finality.StepRepo
 func (r *rtArbIndexer) SelfCheck(context.Context, int) error { return nil }
 func (r *rtArbIndexer) NoteLate(b uint64)                    { r.mu.Lock(); r.notes = append(r.notes, b); r.mu.Unlock() }
 
-// The batch index is stepped after every capture tick, towards the capture cursor, under the process memory budget, also on a tick that finds
-// nothing new; a named inconsistency it reports is recorded in the status table and never stops the capture.
-func TestRTArbLoopStepsTheBatchIndexAfterEveryTickUnderTheMemoryBudget(t *testing.T) {
+// The batch index runs in its OWN loop: it is stepped on every tick of that loop towards the capture cursor under the process memory budget, whatever
+// the capture does; a named inconsistency it reports is recorded in the status table and never stops the loop.
+func TestRTArbIndexLoopStepsTheBatchIndexTowardsTheCaptureCursorUnderTheMemoryBudget(t *testing.T) {
 	l1 := &rtArbL1{head: 100}
 	st := &rtStatus{}
-	loop, lg := rtArbLoop(t, l1, st)
+	capLoop, lg := rtArbLoop(t, l1, st)
+	ctx0 := context.Background()
+	if _, err := capLoop.Cap.Tick(ctx0); err != nil { // the capture writes its cursor row
+		t.Fatal(err)
+	}
 	idx := &rtArbIndexer{err: finality.IndexInconsistent(finality.ChainArbitrumSepolia, "arb", finality.IndexSelfCheckMismatch, "item", "idx/g1/arb/e/1/2/3", "l1_block", uint64(7))}
 	budget := finality.NewMemoryBudget(0)
-	loop.Index, loop.Memory = idx, budget
-	ctx, cancel := context.WithCancel(context.Background())
+	loop := &ArbIndexLoop{Index: idx, Store: capLoop.Cap.Store, Memory: budget, Status: st, Every: 12 * time.Second, Logf: lg.logf}
+	ctx, cancel := context.WithCancel(ctx0)
 	defer cancel()
 	sc := &rtScript{stopAfter: 3, cancel: cancel}
 	loop.Clock = loopClock{After: sc.After}
@@ -165,6 +176,9 @@ func TestRTArbLoopStepsTheBatchIndexAfterEveryTickUnderTheMemoryBudget(t *testin
 			t.Fatalf("step %d did not carry the process memory budget", i)
 		}
 	}
+	if len(sc.waits) != 3 || sc.waits[0] != 12*time.Second {
+		t.Fatalf("waits %v: one wait per step", sc.waits)
+	}
 	row, ok := st.row(CaptureStatusProofID(finality.ChainArbitrumSepolia), finality.LevelL1Posted)
 	if !ok || row.State == nil || row.State.Code != finality.CodeIndexInconsistent || row.State.Fields["reason"] != finality.IndexSelfCheckMismatch {
 		t.Fatalf("the named inconsistency is a status row of the capture pseudo proof: %+v", row)
@@ -174,24 +188,30 @@ func TestRTArbLoopStepsTheBatchIndexAfterEveryTickUnderTheMemoryBudget(t *testin
 	}
 	// an unnamed failure is logged and not recorded as a state the registry does not name
 	st2 := &rtStatus{}
-	loop2, lg2 := rtArbLoop(t, &rtArbL1{head: 50}, st2)
-	loop2.Index = &rtArbIndexer{err: errors.New("database is down")}
-	ctx2, cancel2 := context.WithCancel(context.Background())
+	capLoop2, lg2 := rtArbLoop(t, &rtArbL1{head: 50}, st2)
+	if _, err := capLoop2.Cap.Tick(ctx0); err != nil {
+		t.Fatal(err)
+	}
+	loop2 := &ArbIndexLoop{Index: &rtArbIndexer{err: errors.New("database is down")}, Store: capLoop2.Cap.Store, Status: st2, Every: 12 * time.Second, Logf: lg2.logf}
+	ctx2, cancel2 := context.WithCancel(ctx0)
 	defer cancel2()
 	loop2.Clock = loopClock{After: (&rtScript{stopAfter: 1, cancel: cancel2}).After}
 	_ = loop2.Run(ctx2)
 	if st2.n != 0 || !lg2.has("database is down") {
 		t.Fatalf("unnamed failure: %d status writes, logged %v", st2.n, lg2.has("database is down"))
 	}
-	// a cancelled context does not step
-	loop3, _ := rtArbLoop(t, &rtArbL1{head: 50}, nil)
-	idx3 := &rtArbIndexer{}
-	loop3.Index = idx3
-	cctx, ccancel := context.WithCancel(context.Background())
+	// a cancelled context does not step, and a capture that has written no cursor row gives the index nothing to step to
+	loop3 := &ArbIndexLoop{Index: &rtArbIndexer{}, Store: capLoop.Cap.Store, Logf: lg.logf}
+	cctx, ccancel := context.WithCancel(ctx0)
 	ccancel()
 	loop3.runIndex(cctx, statusSink{})
-	if len(idx3.upTo) != 0 {
+	if len(loop3.Index.(*rtArbIndexer).upTo) != 0 {
 		t.Fatal("a cancelled context must not step the index")
+	}
+	empty := &ArbIndexLoop{Index: &rtArbIndexer{}, Store: finality.NewMemCaptureStore(), Logf: lg.logf}
+	empty.runIndex(ctx0, statusSink{})
+	if len(empty.Index.(*rtArbIndexer).upTo) != 0 {
+		t.Fatal("the index stepped without a capture cursor")
 	}
 }
 
@@ -199,7 +219,7 @@ func TestRTArbLoopStepsTheBatchIndexAfterEveryTickUnderTheMemoryBudget(t *testin
 func TestRTArbLoopNotesTheBlocksWhoseBlobsArrived(t *testing.T) {
 	loop, _ := rtArbLoop(t, &rtArbL1{head: 100}, nil)
 	idx := &rtArbIndexer{}
-	loop.Index = idx
+	loop.Notes = idx
 	loop.noteBlobs(capture.Report{BlobBlocks: []uint64{11, 13}})
 	if len(idx.notes) != 2 || idx.notes[0] != 11 || idx.notes[1] != 13 {
 		t.Fatalf("notes %v", idx.notes)

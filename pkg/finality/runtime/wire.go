@@ -366,8 +366,18 @@ func wireArb(reg *finality.Registry, env Env, d Deps, clock loopClock, logf func
 	bc := capture.NewHTTPBeacon(cfg.Beacon...)
 	bc.Client = env.HTTP
 	cp := capture.NewCapturer(env.Store, l1, bc, capture.Config{Logf: logf, StartBack: 32})
-	return reg.RegisterCapturer(&ArbPostedLoop{Cap: cp, Providers: Hosts(providers), Status: d.Status, Pins: env.Pins, Every: cfg.CaptureEvery, Logf: logf, Clock: clock,
-		Index: indexer, Memory: env.Memory})
+	var noter finality.LateBlockNoter
+	if nt, ok := indexer.(finality.LateBlockNoter); ok {
+		noter = nt
+	}
+	if err := reg.RegisterCapturer(&ArbPostedLoop{Cap: cp, Providers: Hosts(providers), Status: d.Status, Pins: env.Pins, Every: cfg.CaptureEvery, Logf: logf, Clock: clock,
+		Notes: noter}); err != nil {
+		return err
+	}
+	if indexer == nil {
+		return nil
+	}
+	return reg.RegisterCapturer(&ArbIndexLoop{Index: indexer, Store: env.Store, Memory: env.Memory, Status: d.Status, Pins: env.Pins, Every: cfg.CaptureEvery, Logf: logf, Clock: clock})
 }
 
 // wireSepolia registers the Ethereum Sepolia finalized prover: the light-client objects come from the ordered CERTEN_FINALITY_LC_URLS
