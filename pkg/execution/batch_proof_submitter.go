@@ -38,6 +38,8 @@ type EVMChainResolver interface {
 type BatchProofSubmitterImpl struct {
 	chains EVMChainResolver
 	logf   func(string, ...interface{})
+	// observer is told of attestation transactions (S8 capture); see AttestationObserver.
+	observer observerSlot
 }
 
 // NewBatchProofSubmitter builds a submitter.
@@ -220,6 +222,9 @@ func (s *BatchProofSubmitterImpl) AnchorProofExecutedConfirmed(
 	if err != nil {
 		return false, fmt.Errorf("could not read proofExecuted for anchor 0x%x: %w", bundleID[:8], err)
 	}
+	if executed {
+		s.notifyAttestation(chainID, bundleID, verifyTxHash, 0)
+	}
 	return executed, nil
 }
 
@@ -388,6 +393,7 @@ func (s *BatchProofSubmitterImpl) SubmitBatchQuorumProof(
 	// as partial coverage and refuses to price.
 	// The sender is the key this manager signed the attestation with: the address its signature recovers to
 	// (RB3-F127), recorded with the anchor's evidence.
+	s.notifyAttestation(chainID, bundleID, txHash, receipt.BlockNumber.Uint64())
 	return txHash, receipt.BlockNumber.Uint64(), strings.ToLower(ecm.SenderAddress().Hex()), nil
 }
 

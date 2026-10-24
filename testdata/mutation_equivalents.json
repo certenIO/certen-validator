@@ -1,0 +1,10 @@
+[
+  {
+    "file": "finality_start.go",
+    "function": "startFinality",
+    "operator": "guard_off",
+    "original": "…, repo, wire.Registry, wire.Pins, wire.Upgrader); err != nil",
+    "mutated": "…, repo, wire.Registry, wire.Pins, wire.Upgrader); false",
+    "reason": "finality.Launch can fail in only two ways: DisabledChainsFromEnv, which it runs only when the UpgraderConfig carries no DisabledChains and which Wire has already run on the same environment (a per-chain switch that is not a switch is refused by Wire as 'finality wiring', tested), and NewUpgrader's refusal of a nil leg source, store or registry, which the non-nil repository and Wire's required registry exclude. After Wire has succeeded Launch cannot return an error from startFinality, so ignoring it is the same behaviour; the guard stays so that an error could never be dropped."
+  }
+]

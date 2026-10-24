@@ -1,0 +1,10 @@
+[
+  {
+    "file": "finality.go",
+    "function": "reportFinalityFile",
+    "operator": "guard_off",
+    "original": "if err != nil",
+    "mutated": "if false",
+    "reason": "The survivor is the check of section.Leg.Ref(), which re-validates the carried leg block hash as 32 bytes of hex. finality.ParseSection has already refused a leg whose blockHash is not exactly that (strictHex32), a few lines earlier, so Ref cannot fail on a parsed section. The other guards of the same text in this function (reading the file, parsing the section) are killed by TestReportFinalityFileRefusesAFileItCannotReadOrParse."
+  }
+]

@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -73,7 +75,32 @@ func reportFinality(ctx context.Context, w io.Writer, db *sql.DB, id uuid.UUID, 
 	}
 	// The stored chain belongs to the leg this proof's bundle proves: its carried block is that block.
 	rep := reg.Verify(ref.Chain, settlement.Included, settlement.Block(), chain, pins)
-	return printReport(w, rep, id.String())
+	return printReport(w, rep, id.String(), builderPinsNotes(ctx, database.NewFinalityStatusRepository(database.NewClientFromDB(db)), id.String(), rep.PinsSHA256)...)
+}
+
+// builderPinsNotes says, per stored level the builder has a status row for, which pins the builder recorded it judged under
+// (pinsSha256 of the certen-finality-status/1 document) next to the pins this verifier judged under. The status rows are builder
+// bookkeeping: they never change a verdict or an exit code, and a consumer verifies under the pins IT trusts - these lines only let
+// it see that the builder's differ. A row written before the hash was recorded says so; a level the builder judged nothing for is
+// not mentioned.
+func builderPinsNotes(ctx context.Context, repo finality.BuilderStatusStore, proofID, here string) []string {
+	var notes []string
+	for _, l := range []finality.Level{finality.LevelL1Posted, finality.LevelFinalized} {
+		v, ok, err := repo.GetStatus(ctx, proofID, l)
+		at := v.JudgedAt.UTC().Format(time.RFC3339)
+		switch {
+		case err != nil:
+			notes = append(notes, fmt.Sprintf("  S7  builder pins  %-9s  the status row was not read: %v", l, err))
+		case !ok:
+		case v.PinsSHA256 == "":
+			notes = append(notes, fmt.Sprintf("  S7  builder pins  %-9s  not recorded (the status row judged at %s was written before the pins hash was recorded)", l, at))
+		case v.PinsSHA256 == here:
+			notes = append(notes, fmt.Sprintf("  S7  builder pins  %-9s  %s  the pins used here (status row judged at %s)", l, v.PinsSHA256, at))
+		default:
+			notes = append(notes, fmt.Sprintf("  S7  builder pins  %-9s  %s  DIFFERENT from the pins used here (%s): the levels above are judged under the pins used here (status row judged at %s)", l, v.PinsSHA256, here, at))
+		}
+	}
+	return notes
 }
 
 // reportFinalityFile reads the `finality` member (certen-finality-addenda/1) of a portable proof v2 document file. With a
@@ -118,6 +145,15 @@ func reportFinalityFile(w io.Writer, path string, reg *finality.Registry, pins *
 		return exitFailed
 	}
 	fmt.Fprintf(w, "  S7  Settlement source: %s\n", leg.source)
+	if leg.outcome != nil {
+		if field, got, want := leg.outcome.unboundField(carried); field != "" {
+			fmt.Fprintf(w, "FAILED (finality)  %s\n  outcome_not_bound{field=%s, outcome=%s, document=%s}: the outcome evidence is not the Settlement of the leg this document carries; no addendum is judged\n", path, field, got, want)
+			return exitFailed
+		}
+		fmt.Fprintf(w, "  S7  outcome transaction %s on chain %d in block %d %s: bound to the document's carried leg by chain, block number and block hash; "+
+			"outcome_tx_unbound{reason=document_names_no_settlement_tx} - the document names no settlement transaction, so the transaction itself is not bound to it\n",
+			leg.outcome.tx.Hex(), leg.outcome.chain, leg.outcome.blockNumber, leg.outcome.blockHash.Hex())
+	}
 	rep := reg.Verify(leg.chain, leg.s, carried, section.Addenda, pins)
 	return printReport(w, rep, path)
 }
@@ -130,6 +166,30 @@ type legSettlement struct {
 	// unrecorded: the stored proof row does not record its settlement (settlement_tx_hash / settlement_block_number NULL), so the
 	// bundle's evidence is bound to the proof by its custody hash only and its tx and block were not cross-checked.
 	unrecorded bool
+	// outcome is set when the Settlement came from an exported outcome evidence file: the chain, transaction and block the file records.
+	outcome *outcomeTx
+}
+
+// outcomeTx is what an exported outcome evidence file records about the transaction that holds the outcome.
+type outcomeTx struct {
+	chain       uint64
+	tx          common.Hash
+	blockNumber uint64
+	blockHash   common.Hash
+}
+
+// unboundField compares the outcome with the leg a document carries and names the first member that differs (chain, block_number,
+// block_hash) with both values, or returns "" when the outcome is in the carried leg's block on the carried leg's chain.
+func (o outcomeTx) unboundField(carried finality.BlockRef) (field, outcome, document string) {
+	switch {
+	case o.chain != carried.Chain:
+		return "chain", fmt.Sprint(o.chain), fmt.Sprint(carried.Chain)
+	case o.blockNumber != carried.Number:
+		return "block_number", fmt.Sprint(o.blockNumber), fmt.Sprint(carried.Number)
+	case o.blockHash != common.Hash(carried.Hash):
+		return "block_hash", o.blockHash.Hex(), common.Hash(carried.Hash).Hex()
+	}
+	return "", "", ""
 }
 
 // settlementFromOutcomeFile reads an exported outcome evidence file (execution.OutcomeEvidence) and returns the Settlement of the
@@ -176,7 +236,8 @@ func settlementFromOutcomeFile(path string) (*legSettlement, error) {
 		Tx:      proof(inc.Transaction, inc.TransactionProof, hdr.TxHash),
 		Receipt: proof(inc.Receipt, inc.ReceiptProof, hdr.ReceiptHash),
 	}
-	return &legSettlement{chain: uint64(ev.ChainID), s: s, source: "outcome evidence " + path}, nil
+	return &legSettlement{chain: uint64(ev.ChainID), s: s, source: "outcome evidence " + path,
+		outcome: &outcomeTx{chain: uint64(ev.ChainID), tx: s.TxHash, blockNumber: hdr.Number.Uint64(), blockHash: s.BlockHash}}, nil
 }
 
 // settlementFromDB loads the stored bundle's L6 execution proof of a proof id (the same leg the database path judges).
@@ -199,7 +260,7 @@ func settlementFromDB(ctx context.Context, dsn, proofID string) (*legSettlement,
 }
 
 // printReport writes one leg's per-statement S7 verdicts and returns the leg's exit code.
-func printReport(w io.Writer, rep finality.Report, subject string) int {
+func printReport(w io.Writer, rep finality.Report, subject string, notes ...string) int {
 	if rep.Unsupported != nil {
 		fmt.Fprintf(w, "SUMMARY-ONLY (finality)  %s\n  %v\n", subject, rep.Unsupported)
 		return exitSummaryOnly
@@ -209,6 +270,9 @@ func printReport(w io.Writer, rep finality.Report, subject string) int {
 		return exitFailed
 	}
 	fmt.Fprintf(w, "  S7  chain %d  block %d  %x…  pins %s (%s)\n", rep.Block.Chain, rep.Block.Number, rep.Block.Hash[:6], rep.PinsSHA256, rep.PinsSource)
+	for _, n := range notes {
+		fmt.Fprintln(w, n)
+	}
 	for _, l := range finality.Levels {
 		st := rep.Levels[l]
 		line := fmt.Sprintf("  S7    %-9s  %s", l, st.Status)
@@ -216,6 +280,18 @@ func printReport(w io.Writer, rep finality.Report, subject string) int {
 			line += "  " + st.State.Error()
 		}
 		fmt.Fprintln(w, line)
+		// V2_SPEC_S7 section 6: a verified level is reported with what it was judged at - the canonical Verdict.Fields of its kind
+		// (the L1 slot, finalized_exec_number, a_number, k_number, confirmation_tx, ...), one line per field in key order
+		if st.Status == finality.StatusVerified && st.Verdict != nil {
+			keys := make([]string, 0, len(st.Verdict.Fields))
+			for k := range st.Verdict.Fields {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			for _, k := range keys {
+				fmt.Fprintf(w, "  S7      %s.%s = %s\n", l, k, finality.CanonicalValue(st.Verdict.Fields[k]))
+			}
+		}
 	}
 	fmt.Fprintf(w, "  S7  level reached: %s\n", rep.Headline)
 	if rep.FinalizedBlock != nil {

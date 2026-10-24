@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum/core/types"
@@ -55,7 +56,24 @@ type Builder struct {
 	// HasArchive is whether an archive provider (OD4) is configured; it is carried by the capture-not-covering state so an operator can
 	// see whether a deeper source exists.
 	HasArchive bool
+
+	// heldMu guards held: the last HELD answer (l1_capture_gap) of each window (RB12-GO-INT D4).
+	heldMu sync.Mutex
+	held   map[heldKey]heldMemo
 }
+
+// heldKey names the question a search answers: the window of the leg and the L2 time the channel is looked for at.
+type heldKey struct{ origin, end, l2Time uint64 }
+
+// heldMemo is a held answer and the state of the store it was given under: the recorded gaps of the window and how many captured blocks
+// (inbox keys) the window holds. Rows are insert-only, so when neither has changed the captured rows of the window are the ones that
+// were read, the search would find no channel again, and the answer is the same.
+type heldMemo struct {
+	fingerprint string
+	state       *finality.StateError
+}
+
+const maxHeldMemos = 512
 
 // Codes of this builder that are not verifier refusals (class U, go_operational scope of testdata/finality/states.json).
 const (
@@ -383,6 +401,21 @@ func (b *Builder) search(ctx context.Context, bp *Pins, l2 finality.HeaderFields
 	if known && end < lower {
 		return sr, notCovering()
 	}
+	// A held ask rebuilds no evidence and used to read the whole window (up to ~300 MB of rows) before the gap lookup. The lookups that decide
+	// whether the answer could have changed are key-only (the gap pieces of the window and the number of captured blocks in it); when
+	// they match the last held answer of this window, that answer is returned without reading a row (RB12-GO-INT D4). The fingerprint is
+	// taken BEFORE the read, so a row that arrives during it is seen by the next ask.
+	hk := heldKey{origin: origin, end: end, l2Time: l2.Timestamp}
+	fp, err := b.windowFingerprint(ctx, origin, end)
+	if err != nil {
+		return sr, err
+	}
+	b.heldMu.Lock()
+	memo, memoOK := b.held[hk]
+	b.heldMu.Unlock()
+	if memoOK && memo.fingerprint == fp {
+		return sr, finality.NewState(memo.state.Code, stateKV(memo.state)...)
+	}
 	var all []capturedTx
 	next := origin
 	for i := 0; ; i++ {
@@ -408,7 +441,51 @@ func (b *Builder) search(ctx context.Context, bp *Pins, l2 finality.HeaderFields
 	if sr.ch == nil && known && origin < lower {
 		return sr, notCovering() // part of the window was never scanned: the channel may have been posted there
 	}
+	if sr.ch == nil {
+		// RB12-CAPTURE-GAP: a recorded gap inside the window may hold the channel; "not posted yet" cannot be said while it is open
+		pieces, err := finality.GapsIn(ctx, b.Store, uint64(Chain), origin, end)
+		if err != nil {
+			return sr, err
+		}
+		if gs := gapState(pieces, origin, end, b.HasArchive); gs != nil {
+			b.heldMu.Lock()
+			if b.held == nil || len(b.held) >= maxHeldMemos {
+				b.held = map[heldKey]heldMemo{}
+			}
+			b.held[hk] = heldMemo{fingerprint: fp, state: gs}
+			b.heldMu.Unlock()
+			return sr, gs
+		}
+	}
 	return sr, nil
+}
+
+// windowFingerprint is the key-only description of the store as a search of [origin, end] sees it: the recorded gap pieces and the number
+// of captured blocks (keys of the inbox item).
+func (b *Builder) windowFingerprint(ctx context.Context, origin, end uint64) (string, error) {
+	pieces, err := finality.GapsIn(ctx, b.Store, uint64(Chain), origin, end)
+	if err != nil {
+		return "", err
+	}
+	inbox, err := b.Store.ListByRange(ctx, uint64(Chain), origin, end, ItemInbox)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%v|%d", pieces, len(inbox)), nil
+}
+
+// stateKV is the key/value list of a state's fields, in key order, for NewState.
+func stateKV(s *finality.StateError) []any {
+	keys := make([]string, 0, len(s.Fields))
+	for k := range s.Fields {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	kv := make([]any, 0, 2*len(keys))
+	for _, k := range keys {
+		kv = append(kv, k, s.Fields[k])
+	}
+	return kv
 }
 
 func slackOf(v uint64) uint64 {

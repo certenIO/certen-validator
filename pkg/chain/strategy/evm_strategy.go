@@ -202,6 +202,7 @@ func NewEVMStrategy(config *EVMStrategyConfig) (*EVMStrategy, error) {
 	agreeing, finalityErr := ethrpc.NewAgreeingReader(context.Background(), chainID.Int64(), dialed, 20*time.Second)
 	if finalityErr == nil {
 		finality = agreeing
+		RegisterAgreedReader(chainID.Int64(), agreeing) // for the S8 capture (capture_hooks.go)
 	}
 
 	// Create observer

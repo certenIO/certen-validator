@@ -80,7 +80,7 @@ func TestRB12TheMemoryBudgetEnvironmentValue(t *testing.T) {
 	for _, bad := range []string{"lots", "1024", "-5", "1.5"} {
 		t.Setenv(EnvMemoryBudget, bad)
 		if _, err := MemoryBudgetFromEnv(); err == nil {
-			t.Errorf("%q must refuse startup by name", bad)
+			t.Errorf("%q must be refused by name (the validator announces switch_invalid or setting_invalid and keeps running)", bad)
 		}
 	}
 }
@@ -160,8 +160,8 @@ func TestRB12ABuildRunsUnderTheProcessBudget(t *testing.T) {
 	if seen.Load() != budget {
 		t.Fatalf("the build did not run under the configured budget")
 	}
-	if rep.Failed != 1 || f.rec.failures[CodeMemoryBudget] < 1 {
-		t.Fatalf("a refused reservation is a named failure of the attempt: %+v %v", rep, f.rec.failures)
+	if rep.Failed != 0 || rep.BuildHeld != 1 || f.rec.failures[CodeMemoryBudget] != 0 {
+		t.Fatalf("a refused reservation is a named hold of the process (BuildHeld), not a failure of the leg: %+v %v", rep, f.rec.failures)
 	}
 	if budget.Used() != 0 {
 		t.Fatalf("used %d after the attempt", budget.Used())

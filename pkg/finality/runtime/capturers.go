@@ -5,6 +5,7 @@ package runtime
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -48,6 +49,7 @@ type statusSink struct {
 	store finality.BuilderStatusStore
 	logf  func(string, ...any)
 	now   func() time.Time
+	pins  *finality.Pins // the pins the builder runs under: every row records their hash (nil = nothing recorded)
 }
 
 func (s statusSink) put(ctx context.Context, chain uint64, target finality.Level, st *finality.StateError) {
@@ -59,7 +61,7 @@ func (s statusSink) put(ctx context.Context, chain uint64, target finality.Level
 	if s.now != nil {
 		at = s.now()
 	}
-	row := finality.BuilderStatusOf(CaptureStatusProofID(chain), chain, target, finality.LevelNone, nil, st, false, at)
+	row := finality.BuilderStatusOf(CaptureStatusProofID(chain), chain, target, finality.LevelNone, nil, st, false, at).WithPins(s.pins)
 	if err := s.store.UpsertStatus(ctx, row); err != nil && ctx.Err() == nil {
 		metrics.IncFinalityStatusWriteFailure(chain)
 		s.logf("[FINALITY] capture status of chain %d (%s) was not written: %v", chain, st.Code, ethrpc.RedactError(err))
@@ -95,12 +97,14 @@ func writeCursor(ctx context.Context, store finality.CaptureStore, chain, block 
 // transaction with its trie proof, its blobs with commitments and proofs, and the SystemConfig proofs at that block (V2_SPEC_S7
 // 2.8, leg-independent, not delayed by any eta). A block whose proofs or blobs cannot be had is a named state in the status table
 // (batcher_state_unavailable, l1_blob_unavailable); it is retried while the block is inside a provider's window (ProofWindow)
-// or for as long as an archive provider is configured, then given up with the state left in the table: the leg keeps the level
-// it has. It implements finality.Capturer.
+// or for as long as an archive provider is configured, then handed to the gap backfill (GapBackfillLoop) as an open, durably recorded
+// capture gap; the leg keeps the level it has and a leg judged inside the gap is told so by name (l1_capture_gap). It implements
+// finality.Capturer.
 type BasePostedLoop struct {
 	Cap          *baseposted.Capturer
 	Store        finality.CaptureStore
 	Status       finality.BuilderStatusStore
+	Pins         *finality.Pins // the pins the loop's status rows record the hash of
 	Every        time.Duration
 	MaxPerTick   int
 	StartBack    uint64
@@ -110,6 +114,7 @@ type BasePostedLoop struct {
 	Logf         func(string, ...any)
 	Clock        loopClock
 	retry        map[uint64]*retryEntry
+	gapRecorded  map[uint64]bool
 	mu           sync.Mutex
 	lastState    map[uint64]*finality.StateError
 	capturedHead uint64
@@ -159,6 +164,9 @@ func (l *BasePostedLoop) init() {
 	if l.retry == nil {
 		l.retry, l.lastState = map[uint64]*retryEntry{}, map[uint64]*finality.StateError{}
 	}
+	if l.gapRecorded == nil {
+		l.gapRecorded = map[uint64]bool{}
+	}
 }
 
 // Run implements finality.Capturer: tick, wait Every, until ctx ends.
@@ -182,11 +190,12 @@ func (l *BasePostedLoop) Run(ctx context.Context) error {
 }
 
 // Tick makes one capture round: it scans the blocks from the cursor to the head (at most MaxPerTick), then retries the blocks
-// whose capture failed. It returns an error only for a failure to follow the head at all (no head, no cursor store).
+// whose capture failed. It returns an error only for a failure to follow the head at all (no head, no cursor store) or to record
+// what it could not capture: the cursor never passes a block that was neither captured nor durably recorded as a gap (RB12-F13).
 func (l *BasePostedLoop) Tick(ctx context.Context, tick int) error {
 	l.init()
 	chain := l.Chain()
-	sink := statusSink{store: l.Status, logf: l.Logf, now: l.Clock.Now}
+	sink := statusSink{store: l.Status, logf: l.Logf, now: l.Clock.Now, pins: l.Pins}
 	head, err := l.Cap.L1.Head(ctx)
 	if err != nil {
 		return fmt.Errorf("the Sepolia head is unavailable: %w", err)
@@ -209,6 +218,20 @@ func (l *BasePostedLoop) Tick(ctx context.Context, tick int) error {
 	default:
 		from = 0
 	}
+	// A cursor further behind the head than the provider window (the validator was down, or stalled) is not crawled block by block
+	// through blocks no near-head provider can prove: the missed range is recorded as ONE capture gap for the gap backfill (which asks
+	// the archive provider, throttled, and keeps retrying), and the scan resumes at the window. Nothing is skipped silently.
+	if have && head > l.window() {
+		if boundary := head - l.window(); from < boundary {
+			if err := finality.RecordGap(ctx, l.Store, chain, from, boundary-1, finality.GapOutageUnscanned); err != nil {
+				return fmt.Errorf("recording the capture gap %d-%d: %w", from, boundary-1, err)
+			}
+			metrics.IncFinalityGapRecorded(chain, string(finality.GapOutageUnscanned))
+			l.Logf("[FINALITY] capturer %s: the cursor %d is %d blocks behind the head %d (provider window %d): L1 blocks %d-%d are recorded as capture gap (outage_unscanned) for the gap backfill; scanning resumes at %d",
+				l.Name(), cur, head-cur, head, l.window(), from, boundary-1, boundary)
+			from = boundary
+		}
+	}
 	if from > head {
 		metrics.SetFinalityCaptureLag(chain, l.Name(), 0)
 		return nil
@@ -223,9 +246,18 @@ func (l *BasePostedLoop) Tick(ctx context.Context, tick int) error {
 	for _, b := range captured {
 		l.Logf("[FINALITY] capturer %s: captured L1 block %d", l.Name(), b)
 	}
+	// the cursor passes a block only when it was tried: a stop (the process is told to end) in the middle of the round leaves it behind
+	// the blocks that were never read, and a failed block is recorded as a durable gap BEFORE the cursor moves
+	safeTo := to
+	var recordErr error
 	l.mu.Lock()
-	for n, e := range errs {
+	for n := from; n <= to; n++ {
+		e, failed := errs[n]
+		if !failed {
+			continue
+		}
 		if ctx.Err() != nil {
+			safeTo = n - 1
 			break
 		}
 		st := states[n]
@@ -233,6 +265,9 @@ func (l *BasePostedLoop) Tick(ctx context.Context, tick int) error {
 			// a failure that is not a registered unavailability (a provider error, an inconsistent answer): its cause is logged
 			// redacted and the block is retried; nothing is recorded as a state the registry does not name
 			l.Logf("[FINALITY] capturer %s: L1 block %d not captured: %v", l.Name(), n, ethrpc.RedactError(e))
+		}
+		if gerr := l.recordGap(ctx, n, st, e); gerr != nil && recordErr == nil {
+			recordErr = gerr
 		}
 		l.retry[n] = &retryEntry{nextTick: tick + 1}
 		if st != nil {
@@ -242,24 +277,52 @@ func (l *BasePostedLoop) Tick(ctx context.Context, tick int) error {
 		}
 	}
 	l.mu.Unlock()
-	// the cursor passes `to` only when every block of the range was tried; a failed block is held in the retry set
-	if err := writeCursor(ctx, l.Store, chain, to); err != nil {
+	if recordErr != nil {
+		return fmt.Errorf("recording a capture gap (the cursor stays at %d and the range is scanned again): %w", cur, recordErr)
+	}
+	if ctx.Err() != nil && safeTo < from {
+		return nil // nothing of this round was tried
+	}
+	if err := writeCursor(ctx, l.Store, chain, safeTo); err != nil {
 		return fmt.Errorf("writing the capture cursor: %w", err)
 	}
 	l.mu.Lock()
-	l.cursor, l.cursorHave, l.cursorKnown = to, true, true
+	l.cursor, l.cursorHave, l.cursorKnown = safeTo, true, true
 	l.mu.Unlock()
 	l.retryFailed(ctx, tick, head, sink)
 	l.mu.Lock()
-	l.capturedHead = to
+	l.capturedHead = safeTo
 	l.mu.Unlock()
-	metrics.SetFinalityLastCapturedBlock(chain, l.Name(), to)
-	metrics.SetFinalityCaptureLag(chain, l.Name(), head-to)
+	metrics.SetFinalityLastCapturedBlock(chain, l.Name(), safeTo)
+	metrics.SetFinalityCaptureLag(chain, l.Name(), head-safeTo)
+	return nil
+}
+
+// recordGap writes the durable gap row (and a note with the redacted provider text) of a block that could not be captured, once per
+// process per block; the row itself is idempotent in the store, so every validator may write it.
+func (l *BasePostedLoop) recordGap(ctx context.Context, n uint64, st *finality.StateError, cause error) error {
+	if l.gapRecorded[n] {
+		return nil
+	}
+	var failure error = cause
+	if st != nil {
+		failure = &baseposted.CaptureFailure{Block: n, State: st, Err: cause}
+	}
+	class := baseposted.ClassOfFailure(failure)
+	if err := finality.RecordGap(ctx, l.Store, l.Chain(), n, n, class); err != nil {
+		return err
+	}
+	l.gapRecorded[n] = true
+	metrics.IncFinalityGapRecorded(l.Chain(), string(class))
+	if err := finality.RecordGapNote(ctx, l.Store, l.Chain(), n, class, cause.Error()); err != nil {
+		l.Logf("[FINALITY] capturer %s: the note of the gap at L1 block %d was not recorded: %v", l.Name(), n, ethrpc.RedactError(err))
+	}
 	return nil
 }
 
 // retryFailed retries the held blocks with a doubling gap between attempts. A block older than the provider window without an
-// archive provider (or older than MaxRetryAge with one) is given up: its named state stays in the status table.
+// archive provider (or older than MaxRetryAge with one) is handed to the gap backfill: it is already a recorded, open capture gap, and
+// the backfill retries it for as long as it is open (with the archive provider when there is one). Nothing is given up here.
 func (l *BasePostedLoop) retryFailed(ctx context.Context, tick int, head uint64, sink statusSink) {
 	l.mu.Lock()
 	var due []uint64
@@ -274,7 +337,7 @@ func (l *BasePostedLoop) retryFailed(ctx context.Context, tick int, head uint64,
 		}
 		if age > limit {
 			delete(l.retry, n)
-			l.Logf("[FINALITY] capturer %s: L1 block %d given up at head %d (%d blocks old, retry limit %d, archive provider configured: %t); the legs it would have served keep their level",
+			l.Logf("[FINALITY] capturer %s: L1 block %d handed to the gap backfill at head %d (%d blocks old, retry limit %d, archive provider configured: %t); it stays an open capture gap and the backfill retries it with backoff",
 				l.Name(), n, head, age, limit, l.HasArchive)
 			continue
 		}
@@ -287,15 +350,21 @@ func (l *BasePostedLoop) retryFailed(ctx context.Context, tick int, head uint64,
 		if ctx.Err() != nil {
 			return
 		}
+		hash, inbox, err := baseposted.CaptureBlockHashOf(ctx, l.Cap, n)
 		var st *finality.StateError
-		l.Cap.Record = func(_ uint64, s *finality.StateError) { st = s }
-		ok, err := l.Cap.CaptureBlock(ctx, n)
+		var cf *baseposted.CaptureFailure
+		if errors.As(err, &cf) {
+			st = cf.State
+		}
 		l.mu.Lock()
 		e := l.retry[n]
 		if err == nil {
 			delete(l.retry, n)
 			delete(l.lastState, n)
-			l.Logf("[FINALITY] capturer %s: L1 block %d captured on retry (inbox transactions: %t)", l.Name(), n, ok)
+			if ferr := finality.RecordGapFill(ctx, l.Store, l.Chain(), n, hash, inbox); ferr != nil {
+				l.Logf("[FINALITY] capturer %s: the fill of L1 block %d was not recorded (the gap backfill closes it): %v", l.Name(), n, ethrpc.RedactError(ferr))
+			}
+			l.Logf("[FINALITY] capturer %s: L1 block %d captured on retry (inbox transactions: %t)", l.Name(), n, inbox)
 		} else if e != nil {
 			e.attempts++
 			gap := 1 << uint(min(e.attempts, 6))
@@ -316,6 +385,7 @@ type ArbPostedLoop struct {
 	Cap       *capture.Capturer
 	Providers []string // host labels of the L1 providers, for the state's providers field
 	Status    finality.BuilderStatusStore
+	Pins      *finality.Pins // the pins the loop's status rows record the hash of
 	Every     time.Duration
 	Logf      func(string, ...any)
 	Clock     loopClock
@@ -335,7 +405,7 @@ func (l *ArbPostedLoop) Run(ctx context.Context) error {
 	if every < finality.MinPoll {
 		every = finality.MinPoll
 	}
-	sink := statusSink{store: l.Status, logf: l.Logf, now: l.Clock.Now}
+	sink := statusSink{store: l.Status, logf: l.Logf, now: l.Clock.Now, pins: l.Pins}
 	for ctx.Err() == nil {
 		rep, err := l.Cap.Tick(ctx)
 		switch {

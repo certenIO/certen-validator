@@ -1,0 +1,146 @@
+[
+  {
+    "file": "finality_capture.go",
+    "function": "FinalityCaptureStore.Put",
+    "operator": "guard_off",
+    "original": "if n, err := res.RowsAffected(); err == nil && n == 1",
+    "mutated": "if n, err := res.RowsAffected(); false",
+    "reason": "The early return only saves a query. When the insert is not reported as one new row, Put reads the row back and returns nil for identical bytes, which is exactly what a freshly inserted row is (it equals itself); the result is the same either way, only the number of round trips differs."
+  },
+  {
+    "file": "finality_capture.go",
+    "function": "FinalityCaptureStore.Put",
+    "operator": "cmp_flip",
+    "original": "err == nil",
+    "mutated": "err != nil",
+    "reason": "Same as the RowsAffected guard: the condition only chooses between returning at once and reading the freshly inserted row back, which gives the same nil."
+  },
+  {
+    "file": "finality_capture.go",
+    "function": "FinalityCaptureStore.Put",
+    "operator": "int_literal",
+    "original": "n == 1",
+    "mutated": "n == 2",
+    "reason": "Same as the RowsAffected guard: a different count only sends the freshly inserted row through the read-back, which returns nil."
+  },
+  {
+    "file": "finality_capture.go",
+    "function": "FinalityCaptureStore.Put",
+    "operator": "guard_off",
+    "original": "if err != nil",
+    "mutated": "if false",
+    "reason": "Reachable only if the SELECT that follows a successful INSERT fails, i.e. the connection fails between two statements (a failure of the INSERT itself is the guard above it and is killed by the cancelled-context test). With this guard off, the check after it (the row is neither inserted nor found) still returns an error, so a failed read is never reported as success."
+  },
+  {
+    "file": "finality_capture.go",
+    "function": "FinalityCaptureStore.Put",
+    "operator": "guard_off",
+    "original": "if !ok",
+    "mutated": "if false",
+    "reason": "Reachable only if an insert that changed no row finds no row to read back. The table is insert-only (UPDATE, DELETE and TRUNCATE are refused by trigger, migration 00028), so the row that made the insert a no-op is there to be read."
+  },
+  {
+    "file": "finality_capture.go",
+    "function": "FinalityCaptureStore.ListByBlock",
+    "operator": "guard_off",
+    "original": "if err := rows.Scan(&h, &r.Item, &r.Bytes); err != nil",
+    "mutated": "if err := rows.Scan(&h, &r.Item, &r.Bytes); false",
+    "reason": "Scan into a []byte, a string and a []byte from the columns l1_hash bytea, item text and bytes bytea, selected by this very query, cannot fail: the destination types match the column types by construction."
+  },
+  {
+    "file": "finality_capture.go",
+    "function": "FinalityCaptureStore.ListByBlock",
+    "operator": "guard_off",
+    "original": "if len(h) != 32",
+    "mutated": "if false",
+    "reason": "The column carries CHECK proof_finality_capture_hash_is_32_bytes (length(l1_hash) = 32, migration 00028), so no stored row has a hash of another length for this guard to see."
+  },
+  {
+    "file": "finality_capture.go",
+    "function": "FinalityCaptureStore.ListByRange",
+    "operator": "cmp_boundary",
+    "original": "to > finality.MaxCaptureBlock",
+    "mutated": "to >= finality.MaxCaptureBlock",
+    "reason": "At to == MaxCaptureBlock the two conditions differ, but the branch assigns to = MaxCaptureBlock, which is the value it already has: the result is the same."
+  },
+  {
+    "file": "finality_capture.go",
+    "function": "FinalityCaptureStore.ListByRange",
+    "operator": "guard_off",
+    "original": "if err := rows.Scan(&blk, &h, &k.Item); err != nil",
+    "mutated": "if err := rows.Scan(&blk, &h, &k.Item); false",
+    "reason": "Scan into an int64, a []byte and a string from the columns l1_block bigint, l1_hash bytea and item text, selected by this very query, cannot fail."
+  },
+  {
+    "file": "finality_capture.go",
+    "function": "FinalityCaptureStore.ListByRange",
+    "operator": "guard_off",
+    "original": "if len(h) != 32",
+    "mutated": "if false",
+    "reason": "The column carries CHECK proof_finality_capture_hash_is_32_bytes (migration 00028): no stored row has a hash of another length."
+  },
+  {
+    "file": "finality_capture.go",
+    "function": "FinalityCaptureStore.PutBlock",
+    "operator": "guard_off",
+    "original": "if n, err := res.RowsAffected(); err == nil && n == 1",
+    "mutated": "if n, err := res.RowsAffected(); false",
+    "reason": "As in Put: the early continue only saves the read-back of a row this very transaction has just inserted, which compares equal to itself."
+  },
+  {
+    "file": "finality_capture.go",
+    "function": "FinalityCaptureStore.PutBlock",
+    "operator": "cmp_flip",
+    "original": "err == nil",
+    "mutated": "err != nil",
+    "reason": "As in Put: the condition only chooses between continuing at once and reading back the row this transaction has just inserted."
+  },
+  {
+    "file": "finality_capture.go",
+    "function": "FinalityCaptureStore.PutBlock",
+    "operator": "int_literal",
+    "original": "n == 1",
+    "mutated": "n == 2",
+    "reason": "As in Put: a different count only sends the freshly inserted row through the read-back."
+  },
+  {
+    "file": "finality_capture.go",
+    "function": "FinalityCaptureStore.PutBlock",
+    "operator": "guard_off",
+    "original": "…nt64(r.L1Block), r.L1Hash[:], r.Item).Scan(&old); err != nil",
+    "mutated": "…nt64(r.L1Block), r.L1Hash[:], r.Item).Scan(&old); false",
+    "reason": "Reached only after an insert changed no row, i.e. the key exists (the table is insert-only); Scan of its bytes column into a []byte cannot fail, and the only other error is a connection failing between two statements of the transaction, which a deterministic test cannot produce."
+  },
+  {
+    "file": "finality_capture.go",
+    "function": "FinalityCaptureStore.BlockSizes",
+    "operator": "guard_off",
+    "original": "if err := rows.Scan(&item, &n); err != nil",
+    "mutated": "if err := rows.Scan(&item, &n); false",
+    "reason": "Scan into a string and an int64 from the columns item text and octet_length(bytes)::bigint, selected by this very query, cannot fail."
+  },
+  {
+    "file": "finality_capture.go",
+    "function": "captureKeyLess",
+    "operator": "cmp_boundary",
+    "original": "a.Chain < b.Chain",
+    "mutated": "a.Chain <= b.Chain",
+    "reason": "The comparison runs only inside `if a.Chain != b.Chain`, where the two chains differ, so < and <= give the same answer."
+  },
+  {
+    "file": "finality_capture.go",
+    "function": "captureKeyLess",
+    "operator": "cmp_boundary",
+    "original": "a.L1Block < b.L1Block",
+    "mutated": "a.L1Block <= b.L1Block",
+    "reason": "The comparison runs only inside `if a.L1Block != b.L1Block`, where the two blocks differ, so < and <= give the same answer."
+  },
+  {
+    "file": "finality_capture.go",
+    "function": "captureKeyLess",
+    "operator": "cmp_boundary",
+    "original": "c < 0",
+    "mutated": "c <= 0",
+    "reason": "The comparison runs only inside `if c != 0`, where c is not zero, so < and <= give the same answer."
+  }
+]

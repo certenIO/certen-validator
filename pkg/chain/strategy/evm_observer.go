@@ -230,6 +230,8 @@ func (o *EVMObserver) observeSettled(ctx context.Context, txHash common.Hash, de
 	if o.replay != nil {
 		o.replay.Begin(txHash)
 	}
+	// The S8 contract-identity capture starts at the same moment (capture_hooks.go); it cannot delay or fail this observation.
+	notifySettlementObserved(o.chainID, txHash)
 	receipt, err := ethrpc.SettledInFinalizedChain(ctx, o.finality, txHash, deadline, o.pollingInterval, log.Printf)
 	if err != nil {
 		return nil, fmt.Errorf("observe %s in the finalized chain %d: %w", txHash.Hex(), o.chainID, ethrpc.RedactError(err))
