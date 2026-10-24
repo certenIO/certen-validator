@@ -205,7 +205,10 @@ func TestDelayedMessagesDeriveWhatNitroBuilds(t *testing.T) {
 	cid := big.NewInt(421614)
 	sender := common.HexToAddress("0x1111111111111111111111111111111111111111")
 	to := common.HexToAddress("0x2222222222222222222222222222222222222222")
-	refund := common.HexToAddress("0x3333333333333333333333333333333333333333")
+	// two DIFFERENT refund addresses: the wire order is feeRefund (the excess-fee refund address) then callvalueRefund (the beneficiary), and the
+	// transaction carries Beneficiary before FeeRefundAddr; one address for both let a swap of the two pass every test (RB12-ARBFINAL-FIX, G3).
+	feeRefund := common.HexToAddress("0x3333333333333333333333333333333333333333")
+	beneficiary := common.HexToAddress("0x4444444444444444444444444444444444444444")
 	k := uint64(77)
 	req := w32(k)
 	base := Delayed{Sender: sender, MsgBlockNumber: 5, MsgTimestamp: 6, K: k}
@@ -213,21 +216,21 @@ func TestDelayedMessagesDeriveWhatNitroBuilds(t *testing.T) {
 
 	// kind 9: submit retryable
 	retryData := []byte{1, 2, 3, 4}
-	rd := bytes.Join([][]byte{wordA(to), wordU(5), wordU(100), wordU(7), wordA(refund), wordA(refund), wordU(21000), wordU(3), wordU(uint64(len(retryData))), retryData}, nil)
+	rd := bytes.Join([][]byte{wordA(to), wordU(5), wordU(100), wordU(7), wordA(feeRefund), wordA(beneficiary), wordU(21000), wordU(3), wordU(uint64(len(retryData))), retryData}, nil)
 	m9 := base
 	m9.MsgKind, m9.Data = msgKindSubmitRetryable, rd
 	want9 := typed(0x69, expRetryable{ChainID: cid, RequestID: req, From: sender, L1BaseFee: big.NewInt(9), DepositValue: big.NewInt(100), GasFeeCap: big.NewInt(3), Gas: 21000,
-		RetryTo: to[:], RetryValue: big.NewInt(5), Beneficiary: refund, MaxSubmissionFee: big.NewInt(7), FeeRefundAddr: refund, RetryData: retryData})
+		RetryTo: to[:], RetryValue: big.NewInt(5), Beneficiary: beneficiary, MaxSubmissionFee: big.NewInt(7), FeeRefundAddr: feeRefund, RetryData: retryData})
 	if got, ok := deriveDelayed(421614, m9); !ok || !sameTxs(got, [][]byte{want9}) {
 		t.Fatalf("submit retryable: ok %v", ok)
 	}
-	m9.Data = bytes.Join([][]byte{wordA(common.Address{}), wordU(5), wordU(100), wordU(7), wordA(refund), wordA(refund), wordU(21000), wordU(3), wordU(0)}, nil)
+	m9.Data = bytes.Join([][]byte{wordA(common.Address{}), wordU(5), wordU(100), wordU(7), wordA(feeRefund), wordA(beneficiary), wordU(21000), wordU(3), wordU(0)}, nil)
 	want9c := typed(0x69, expRetryable{ChainID: cid, RequestID: req, From: sender, L1BaseFee: big.NewInt(9), DepositValue: big.NewInt(100), GasFeeCap: big.NewInt(3), Gas: 21000,
-		RetryTo: []byte{}, RetryValue: big.NewInt(5), Beneficiary: refund, MaxSubmissionFee: big.NewInt(7), FeeRefundAddr: refund, RetryData: []byte{}})
+		RetryTo: []byte{}, RetryValue: big.NewInt(5), Beneficiary: beneficiary, MaxSubmissionFee: big.NewInt(7), FeeRefundAddr: feeRefund, RetryData: []byte{}})
 	if got, ok := deriveDelayed(421614, m9); !ok || !sameTxs(got, [][]byte{want9c}) {
 		t.Fatalf("submit retryable to the zero address: ok %v", ok)
 	}
-	for name, d := range map[string][]byte{"short data": rd[:len(rd)-2], "gas over 2^64": bytes.Join([][]byte{wordA(to), wordU(5), wordU(100), wordU(7), wordA(refund), wordA(refund), word(new(big.Int).Lsh(big.NewInt(1), 70)), wordU(3), wordU(0)}, nil)} {
+	for name, d := range map[string][]byte{"short data": rd[:len(rd)-2], "gas over 2^64": bytes.Join([][]byte{wordA(to), wordU(5), wordU(100), wordU(7), wordA(feeRefund), wordA(beneficiary), word(new(big.Int).Lsh(big.NewInt(1), 70)), wordU(3), wordU(0)}, nil)} {
 		m := base
 		m.MsgKind, m.Data = msgKindSubmitRetryable, d
 		if _, ok := deriveDelayed(421614, m); ok {
@@ -395,5 +398,25 @@ func TestHeaderNonceIsReadFromTheFifteenthItemOnly(t *testing.T) {
 	hdr, _ := rlp.EncodeToBytes(append(append([]any(nil), items...), make([]byte, 8), []byte{9}))
 	if n, ok := headerNonce(hdr); !ok || n != 0 {
 		t.Errorf("a 16-item header: %d %v", n, ok)
+	}
+}
+
+// RB12-ARBFINAL-FIX G3: the ETH deposit (message kind 12) against an independent restatement of the transaction: From is the poster (the
+// Bridge message's sender) and To the address in the first 20 bytes of the message. The two are different addresses and the value is a
+// third thing, so a swap of From and To, or of either with the value, changes the bytes.
+func TestEthDepositKeepsFromToAndValueApart(t *testing.T) {
+	cid := big.NewInt(421614)
+	sender := common.HexToAddress("0x1111111111111111111111111111111111111111")
+	to := common.HexToAddress("0x2222222222222222222222222222222222222222")
+	k := uint64(78)
+	d := Delayed{MsgKind: msgKindEthDeposit, Sender: sender, K: k, MsgBlockNumber: 5, MsgTimestamp: 6, Data: append(append([]byte(nil), to[:]...), wordU(12345)...)}
+	want := typed(txDeposit, expDeposit{ChainID: cid, RequestID: w32(k), From: sender, To: to, Value: big.NewInt(12345)})
+	if got, ok := deriveDelayed(421614, d); !ok || !sameTxs(got, [][]byte{want}) {
+		t.Fatalf("eth deposit: ok %v", ok)
+	}
+	// the request id is the delayed message index, not the block number or the timestamp of the message
+	swapped := typed(txDeposit, expDeposit{ChainID: cid, RequestID: w32(5), From: sender, To: to, Value: big.NewInt(12345)})
+	if got, _ := deriveDelayed(421614, d); sameTxs(got, [][]byte{swapped}) {
+		t.Fatal("the request id is the message block number")
 	}
 }
