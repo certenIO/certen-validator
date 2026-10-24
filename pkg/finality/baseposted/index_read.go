@@ -350,7 +350,7 @@ func (r *IndexReader) unindexableIn(ctx context.Context, origin, end uint64) (*f
 // searchIndexed is search's index path: the same prelude (origin, window, capture cursor) and the same named outcomes, with the window
 // read replaced by a lookup. It fills sr; a nil sr.ch with sr.pending set is a named pending, a nil sr.ch alone is l1_posted_unproven.
 func (b *Builder) searchIndexed(ctx context.Context, bp *Pins, l2 finality.HeaderFields, hold *finality.Hold, sr *searched, origin, end uint64,
-	cov finality.CaptureCoverage, known bool, lower uint64, notCovering func() error) error {
+	cov finality.CaptureCoverage, known bool, lower uint64, belowScanned func() error) error {
 	r := b.Index
 	io := &ioCount{}
 	defer func() { metrics.ObserveFinalityIndexLookupBytes(uint64(Chain), FamilyBaseInbox, io.n) }()
@@ -383,8 +383,12 @@ func (b *Builder) searchIndexed(ctx context.Context, bp *Pins, l2 finality.Heade
 		return firstFailure
 	}
 	if known && origin < lower {
-		metrics.IncFinalityIndexLookup(uint64(Chain), FamilyBaseInbox, "miss")
-		return notCovering() // part of the window was never scanned: the channel may have been posted there
+		// part of the window was never scanned by the loop: the channel may have been posted there, unless that part is a requested prefix
+		// (its blocks are captured and indexed as late blocks); the state is the window reader's own
+		if err := belowScanned(); err != nil {
+			metrics.IncFinalityIndexLookup(uint64(Chain), FamilyBaseInbox, "miss")
+			return err
+		}
 	}
 	through, haveIdx, err := r.Through(ctx)
 	if err != nil {

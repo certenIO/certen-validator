@@ -29,6 +29,8 @@ import (
 	"github.com/certen/independant-validator/pkg/envvar"
 	"github.com/certen/independant-validator/pkg/ethrpc"
 	"github.com/certen/independant-validator/pkg/finality"
+	"github.com/certen/independant-validator/pkg/finality/arbposted/capture"
+	"github.com/certen/independant-validator/pkg/finality/baseposted"
 )
 
 // The CERTEN_FINALITY_* variables this package reads (the switches CERTEN_FINALITY_UPGRADER_ENABLED and
@@ -59,7 +61,18 @@ const (
 	EnvBaseIndex       = "CERTEN_FINALITY_BASE_INDEX"
 	EnvIndexBlocks     = "CERTEN_FINALITY_INDEX_BLOCKS_PER_STEP"
 	EnvIndexStepSecond = "CERTEN_FINALITY_INDEX_STEP_SECONDS"
+	// RB12-ARCHIVE-BACKFILL: extending the capture store below the first block its loop scanned, for the legs that predate it.
+	EnvPrefixMax     = "CERTEN_FINALITY_PREFIX_MAX_BLOCKS"
+	EnvPrefixFloor   = "CERTEN_FINALITY_PREFIX_FLOOR_L1_BLOCK"
+	EnvPrefixLease   = "CERTEN_FINALITY_PREFIX_LEASE_SECONDS"
+	EnvPrefixChunk   = "CERTEN_FINALITY_PREFIX_CHUNK_BLOCKS"
+	EnvPrefixReprobe = "CERTEN_FINALITY_PREFIX_REPROBE_SECONDS"
+	EnvPrefixArbScan = "CERTEN_FINALITY_PREFIX_ARB_SCAN_BLOCKS"
 )
+
+// DefaultPrefixMaxBlocks bounds the union of the requested prefix windows: about 85 KB of rows per Base L1 block (measured 2026-10-23),
+// so 100,000 blocks are about 8.5 GB of a table on a host with hundreds of GB free, and 41,316 blocks serve the 31 legs measured then.
+const DefaultPrefixMaxBlocks uint64 = 100_000
 
 // Defaults of the public providers the kind packages' live sources and recorders were measured against (V2_SPEC_S7 8.1; the
 // proof providers hold eth_getProof only near the head: Tenderly about 8 blocks, the others at most 100).
@@ -103,9 +116,15 @@ type Config struct {
 
 	CaptureEvery    time.Duration
 	CaptureBytes    int64
-	CaptureBlocks   int // L1 blocks one Base capture tick scans at most
-	GapBlocks       int // L1 blocks one gap-backfill tick captures at most (concurrency is one block at a time)
-	GapAuditSpacing int // a run of more than this many blocks between two captured inbox blocks is recorded as an unproven gap
+	CaptureBlocks   int           // L1 blocks one Base capture tick scans at most
+	GapBlocks       int           // L1 blocks one gap-backfill tick captures at most (concurrency is one block at a time)
+	GapAuditSpacing int           // a run of more than this many blocks between two captured inbox blocks is recorded as an unproven gap
+	PrefixMax       uint64        // most blocks the requested prefix windows may hold (0: the extension is off)
+	PrefixFloor     uint64        // lowest L1 block a prefix window may start at
+	PrefixLease     time.Duration // how long a claim on a chunk of prefix blocks lasts
+	PrefixChunk     int           // blocks per claim
+	PrefixReprobe   time.Duration // how often blocks proven unavailable are asked again
+	PrefixArbScan   int           // L1 blocks one Arbitrum prefix scan reads (one eth_getLogs answer) and the size of its claim chunk
 	Concurrency     int
 	Interval        time.Duration
 	BuildTimeout    time.Duration
@@ -376,6 +395,8 @@ func ConfigFromEnv() (Config, error) {
 	if err = readSettings(&c); err != nil {
 		return Config{}, err
 	}
+	// the capture index settings are NOT checked with the rest: a bad one never stops a consensus node (RB12-INDEX-FIX D2)
+	c.readIndexSettings()
 	return c, nil
 }
 
@@ -399,6 +420,21 @@ func readSettings(c *Config) error {
 			c.GapAuditSpacing, e = envvar.Int(EnvGapAuditSpacing, DefaultGapAuditSpacing, 2)
 			return
 		},
+		func() (e error) { c.PrefixMax, e = envvar.Uint64(EnvPrefixMax, DefaultPrefixMaxBlocks, 0); return },
+		func() (e error) { c.PrefixFloor, e = envvar.Uint64(EnvPrefixFloor, 0, 0); return },
+		func() (e error) {
+			c.PrefixLease, e = envvar.Seconds(EnvPrefixLease, baseposted.DefaultLeaseSpan, 60)
+			return
+		},
+		func() (e error) {
+			c.PrefixChunk, e = envvar.Int(EnvPrefixChunk, int(baseposted.DefaultLeaseChunk), 1)
+			return
+		},
+		func() (e error) { c.PrefixReprobe, e = envvar.Seconds(EnvPrefixReprobe, 24*time.Hour, 3600); return },
+		func() (e error) {
+			c.PrefixArbScan, e = envvar.Int(EnvPrefixArbScan, int(capture.DefaultPrefixScanBlocks), 1)
+			return
+		},
 		func() (e error) { c.Concurrency, e = envvar.Int(EnvConcurrency, 4, 1); return },
 		func() (e error) { c.Interval, e = envvar.Seconds(EnvInterval, 60*time.Second, 1); return },
 		func() (e error) { c.BuildTimeout, e = envvar.Seconds(EnvBuildTimeout, 5*time.Minute, 1); return },
@@ -408,8 +444,12 @@ func readSettings(c *Config) error {
 	if err := envvar.Check(rd...); err != nil {
 		errs = append(errs, err)
 	}
-	// the capture index settings are NOT checked with the rest: a bad one never stops a consensus node (RB12-INDEX-FIX D2)
-	c.readIndexSettings()
+	if c.PrefixArbScan > 2000 {
+		errs = append(errs, envvar.Refuse(EnvPrefixArbScan, strconv.Itoa(c.PrefixArbScan), "an integer from 1 to 2000 (one eth_getLogs answer)"))
+	}
+	if c.PrefixChunk > 1024 {
+		errs = append(errs, envvar.Refuse(EnvPrefixChunk, strconv.Itoa(c.PrefixChunk), "an integer from 1 to 1024"))
+	}
 	if c.MaxBatch > 100 {
 		errs = append(errs, envvar.Refuse(EnvMaxBatch, strconv.Itoa(c.MaxBatch), "an integer from 1 to 100 (public providers answer 429 to 100-request batches)"))
 	}
@@ -447,6 +487,8 @@ func (c Config) Describe() map[string]any {
 		"memory_budget_bytes": c.MemoryBudget, "memory_gate_bytes": finality.HeapGate(c.MemoryBudget),
 		"gap_blocks_per_tick": c.GapBlocks, "gap_audit_spacing": c.GapAuditSpacing,
 		"base_index": c.BaseIndex, "index_generation": c.IndexGeneration, "index_blocks_per_step": c.IndexBlocks,
+		"prefix_max_blocks": c.PrefixMax, "prefix_floor_l1_block": c.PrefixFloor, "prefix_lease": c.PrefixLease.String(), "prefix_chunk_blocks": c.PrefixChunk,
+		"prefix_reprobe": c.PrefixReprobe.String(), "prefix_arb_scan_blocks": c.PrefixArbScan,
 	}
 	if c.IndexDisabled != nil {
 		out["index_disabled"] = c.IndexDisabled.Error()

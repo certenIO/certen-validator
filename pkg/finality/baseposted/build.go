@@ -60,6 +60,10 @@ type Builder struct {
 	// Index, when set, answers 'which channel carries this timestamp' from the capture index (index.go) instead of reading and
 	// decompressing the leg's window; the evidence is still assembled from the captured rows and judged by Kind.Verify.
 	Index *IndexReader
+	// Prefix is the policy for extending the capture store BELOW the first block its loop scanned (RB12-ARCHIVE-BACKFILL): a leg whose
+	// window lies there asks for its window to be captured (finality.RequestPrefix) and is judged l1_capture_gap until it is. The zero
+	// value is off: such a leg is l1_capture_not_covering, as before.
+	Prefix finality.PrefixPolicy
 
 	// heldMu guards held: the last HELD answer (l1_capture_gap) of each window (RB12-GO-INT D4).
 	heldMu sync.Mutex
@@ -83,6 +87,15 @@ const maxHeldMemos = 512
 const (
 	// CodeCaptureNotCovering: the L1 blocks that can hold the leg's batch were not scanned by this validator's capture loop.
 	CodeCaptureNotCovering = "l1_capture_not_covering"
+	// CodeL2BlockContentMismatch: the L2 provider's answer for the leg's block does not hash to the transactions root of the leg's own header, so
+	// nothing in it (the L1 origin of its first deposit least of all) is used: a window is never derived from an unauthenticated word.
+	CodeL2BlockContentMismatch = "l2_block_content_mismatch"
+	// CodeWindowNoChannel: every L1 block of the leg's sequencer window was captured (or is a recorded, filled prefix) and the cursor is past it,
+	// and no channel in it carries the leg's batch: the statement is determinate, not "not posted yet".
+	CodeWindowNoChannel = "l1_posted_not_found"
+	// windowCompleteMargin is how far behind the capture cursor the end of a window must lie before it is called complete: the capture loop
+	// retries a failed block for its 96-block window, and a block that near the head can still be re-orged.
+	windowCompleteMargin = 96
 )
 
 // The window of L1 blocks that can hold a leg's frames is [E, E+SeqWindowSize] with E the L1 origin of its L2 block (the verifier
@@ -409,19 +422,44 @@ func (b *Builder) search(ctx context.Context, bp *Pins, l2 finality.HeaderFields
 		}
 		sr.lastScanned = cov.Last
 	}
-	notCovering := func() error {
+	notCovering := func(extra ...any) error {
 		archive := "unset"
 		if b.HasArchive {
 			archive = "set"
 		}
-		return st(CodeCaptureNotCovering, "chain", uint64(Chain), "kind", KindName, "epoch_l1_block", origin, "window_end_l1_block", end,
-			"capture_first_l1_block", cov.First, "capture_slack", slackOf(b.CursorSlack), "archive_provider", archive)
+		return st(CodeCaptureNotCovering, append([]any{"chain", uint64(Chain), "kind", KindName, "epoch_l1_block", origin, "window_end_l1_block", end,
+			"capture_first_l1_block", cov.First, "capture_slack", slackOf(b.CursorSlack), "archive_provider", archive}, extra...)...)
+	}
+	// The L2 provider is untrusted: where its answer decides coverage BELOW the scanned region (a durable request, or the verdict that the
+	// leg predates the capture) it is the leg's block only if its transactions hash to the transactions root of the leg's own header. Elsewhere
+	// the origin only selects rows and the verifier re-proves the batch against the header.
+	authentic := func() error {
+		if [32]byte(ethproof.TrieRoot(blk.Txs)) != l2.TransactionRoot {
+			return st(CodeL2BlockContentMismatch, "block", l2.Number)
+		}
+		return nil
+	}
+	// belowScanned judges the part of the window that lies below the region the loop scanned: nil when it is a requested prefix (its blocks are
+	// captured, and the index digests them as late blocks), l1_capture_not_covering (with the prefix state) when it is not. The window reader
+	// and the index path ask the same question here.
+	belowScanned := func() error {
+		if err := authentic(); err != nil {
+			return err
+		}
+		if ok, extra, err := b.prefixCovers(ctx, origin, end, lower); err != nil {
+			return err
+		} else if !ok {
+			return notCovering(extra...)
+		}
+		return nil
 	}
 	if known && end < lower {
-		return sr, notCovering()
+		if err := belowScanned(); err != nil {
+			return sr, err
+		}
 	}
 	if b.Index != nil {
-		err := b.searchIndexed(ctx, bp, l2, hold, &sr, origin, end, cov, known, lower, notCovering)
+		err := b.searchIndexed(ctx, bp, l2, hold, &sr, origin, end, cov, known, lower, belowScanned)
 		return sr, err
 	}
 	// A held ask rebuilds no evidence and used to read the whole window (up to ~300 MB of rows) before the gap lookup. The lookups that decide
@@ -462,7 +500,10 @@ func (b *Builder) search(ctx context.Context, bp *Pins, l2 finality.HeaderFields
 		next = hi + 1
 	}
 	if sr.ch == nil && known && origin < lower {
-		return sr, notCovering() // part of the window was never scanned: the channel may have been posted there
+		// part of the window was never scanned by the loop: the channel may have been posted there, unless that part is a requested prefix
+		if err := belowScanned(); err != nil {
+			return sr, err
+		}
 	}
 	if sr.ch == nil {
 		// RB12-CAPTURE-GAP: a recorded gap inside the window may hold the channel; "not posted yet" cannot be said while it is open
@@ -471,6 +512,13 @@ func (b *Builder) search(ctx context.Context, bp *Pins, l2 finality.HeaderFields
 			return sr, err
 		}
 		if gs := gapState(pieces, origin, end, b.HasArchive); gs != nil {
+			extra, err := b.goneEvidence(ctx, gs, pieces, end)
+			if err != nil {
+				return sr, err
+			}
+			if len(extra) > 0 {
+				gs = finality.NewState(gs.Code, append(stateKV(gs), extra...)...)
+			}
 			b.heldMu.Lock()
 			if b.held == nil || len(b.held) >= maxHeldMemos {
 				b.held = map[heldKey]heldMemo{}
@@ -478,6 +526,12 @@ func (b *Builder) search(ctx context.Context, bp *Pins, l2 finality.HeaderFields
 			b.held[hk] = heldMemo{fingerprint: fp, state: gs}
 			b.heldMu.Unlock()
 			return sr, gs
+		}
+		if known && cov.Last >= windowCompleteMargin && end <= cov.Last-windowCompleteMargin {
+			if err := authentic(); err != nil { // the verdict is as determinate as the origin it was derived from
+				return sr, err
+			}
+			return sr, st(CodeWindowNoChannel, "chain", uint64(Chain), "kind", KindName, "from", origin, "to", end, "covered_to", cov.Last)
 		}
 	}
 	return sr, nil
@@ -741,3 +795,32 @@ var (
 
 // RegisterProver adds a configured Builder to the registry (explicit; there is no init()).
 func RegisterProver(reg *finality.Registry, b *Builder) error { return reg.RegisterProver(b) }
+
+// prefixCovers decides whether the part of the window [origin, end] that lies below the scanned region (lower) is a requested prefix,
+// asking for it when the policy allows. It returns the extra fields of l1_capture_not_covering when it is not: prefix_state (off,
+// below_floor, over_budget), the lowest block any recorded window reaches and the blocks they hold. Only keys are read.
+func (b *Builder) prefixCovers(ctx context.Context, origin, end, lower uint64) (bool, []any, error) {
+	below := end
+	if below >= lower {
+		below = lower - 1
+	}
+	ws, err := finality.PrefixWindowsOf(ctx, b.Store, uint64(Chain))
+	if err != nil {
+		return false, nil, err
+	}
+	merged := finality.MergePrefixWindows(ws)
+	if ok, _ := finality.PrefixCovers(merged, origin, below); ok {
+		return true, nil, nil
+	}
+	verdict := finality.PrefixOff
+	if b.Prefix.Enabled() {
+		if verdict, err = finality.RequestPrefix(ctx, b.Store, uint64(Chain), origin, below, b.Prefix); err != nil {
+			return false, nil, err
+		}
+		if verdict == finality.PrefixRecorded || verdict == finality.PrefixKnown {
+			return true, nil, nil
+		}
+	}
+	lowest, _ := finality.PrefixLowest(merged)
+	return false, []any{"prefix_state", string(verdict), "prefix_lowest_l1_block", lowest, "prefix_blocks", finality.PrefixBlocks(merged)}, nil
+}

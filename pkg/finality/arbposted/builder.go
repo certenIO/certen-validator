@@ -51,6 +51,10 @@ type Builder struct {
 	L2    L2Source
 	L1    L1Chain
 	Pins  *finality.Pins
+	// Prefix is the policy for asking that the batches posted BEFORE the capture started be captured for a leg that needs them (zero: off); see
+	// coverage.go. CursorSlack is how many blocks before its first cursor row the capture may have started scanning (default 64).
+	Prefix      finality.PrefixPolicy
+	CursorSlack uint64
 	// Now is the clock for ETAs only (never used by a verifier). Nil means time.Now.
 	Now func() time.Time
 }
@@ -120,6 +124,13 @@ func (b *Builder) BuildFor(ctx context.Context, ref finality.BlockRef) (*finalit
 		return nil, nil, err
 	}
 	if found == nil {
+		// the batch may lie before the capture started, in a window that is still being scanned, or be absent from a window scanned completely:
+		// each is a named state; only a batch not posted yet is the pending below
+		if cs, err := b.coverage(ctx, ref, hdr, txs); err != nil {
+			return nil, nil, err
+		} else if cs != nil {
+			return nil, nil, cs
+		}
 		newest := uint64(0)
 		for _, r := range batches {
 			if r.N > newest {

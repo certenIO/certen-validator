@@ -268,7 +268,8 @@ func wireBase(reg *finality.Registry, env Env, d Deps, clock loopClock, logf fun
 	cache := env.LC.(*lcCache)
 	builder := &baseposted.Builder{Pins: env.Pins, Store: env.Store, L1: l1, Headers: l1,
 		L2: &baseposted.L2JSONRPC{URLs: cfg.BaseL2}, LC: lcPlain{cache}, Now: d.Now,
-		CursorSlack: captureSlack(cfg), HasArchive: len(cfg.Archive) > 0}
+		CursorSlack: captureSlack(cfg), HasArchive: len(cfg.Archive) > 0,
+		Prefix: finality.PrefixPolicy{MaxBlocks: cfg.PrefixMax, Floor: cfg.PrefixFloor}}
 	// the capture index (RB12-INDEX-A): built as captures arrive, read by the builder; off by CERTEN_FINALITY_BASE_INDEX=off
 	var indexer finality.CaptureIndexer
 	if cfg.BaseIndex {
@@ -295,8 +296,17 @@ func wireBase(reg *finality.Registry, env Env, d Deps, clock loopClock, logf fun
 	}
 	// RB12-CAPTURE-GAP: the loop that closes the recorded capture gaps with the same capture call (the providers are the same, plus the archive
 	// provider when one is configured), one block at a time, inside the process memory budget
+	// the prefix of the capture store (legs posted before the capture started): claims keep seven validators on different chunks, and a block
+	// proven unavailable is asked again once a day
+	lease, err := baseposted.NewLease(env.Store, finality.ChainBaseSepolia)
+	if err != nil {
+		return err
+	}
+	lease.Span, lease.Chunk = cfg.PrefixLease, uint64(cfg.PrefixChunk)
+	pol := baseposted.DefaultBackfillPolicy()
+	pol.ReprobeEvery = cfg.PrefixReprobe
 	bf := &baseposted.Backfiller{Chain: finality.ChainBaseSepolia, Store: env.Store, Capturer: baseposted.CapturerOf(capt), Providers: Hosts(cfg.Beacon),
-		Policy: baseposted.DefaultBackfillPolicy(), Now: d.Now, Logf: logf}
+		Policy: pol, Lease: lease, Now: d.Now, Logf: logf}
 	return reg.RegisterCapturer(&GapBackfillLoop{ChainID: finality.ChainBaseSepolia, Store: env.Store, Backfill: bf, Every: cfg.CaptureEvery, PerTick: cfg.GapBlocks,
 		AuditSpacing: uint64(cfg.GapAuditSpacing), Memory: env.Memory, Logf: logf, Clock: clock, OnFilled: lateNoter(indexer)})
 }
@@ -328,7 +338,8 @@ func wireArb(reg *finality.Registry, env Env, d Deps, clock loopClock, logf func
 	cfg := env.Config
 	hdr := &baseposted.JSONRPCSource{BlockURLs: env.L1Block, ProofURLs: env.L1Proof, Client: env.HTTP}
 	if err := reg.RegisterProver(&arbposted.Builder{Store: env.Store, L2: &ArbL2{URLs: cfg.ArbL2, HTTP: env.HTTP},
-		L1: &ArbL1{LC: lcPlain{cache}, Headers: hdr}, Pins: env.Pins, Now: d.Now}); err != nil {
+		L1: &ArbL1{LC: lcPlain{cache}, Headers: hdr}, Pins: env.Pins, Now: d.Now,
+		Prefix: finality.PrefixPolicy{MaxBlocks: cfg.PrefixMax, Floor: cfg.PrefixFloor}}); err != nil {
 		return err
 	}
 	if err := reg.RegisterProver(&arbbuild.Prover{Pins: env.Pins, Store: env.Store,
@@ -343,6 +354,13 @@ func wireArb(reg *finality.Registry, env Env, d Deps, clock loopClock, logf func
 	bc := capture.NewHTTPBeacon(cfg.Beacon...)
 	bc.Client = env.HTTP
 	cp := capture.NewCapturer(env.Store, l1, bc, capture.Config{Logf: logf, StartBack: 32})
+	// the batches posted before the capture started: scanned for the legs that asked for them, one range per tick, claimed per range
+	arbLease, err := finality.NewLease(env.Store, finality.ChainArbitrumSepolia)
+	if err != nil {
+		return err
+	}
+	arbLease.Span, arbLease.Chunk = cfg.PrefixLease, uint64(cfg.PrefixArbScan)
+	cp.Prefix = &capture.PrefixScan{Lease: arbLease, Blocks: uint64(cfg.PrefixArbScan), Now: d.Now}
 	return reg.RegisterCapturer(&ArbPostedLoop{Cap: cp, Providers: Hosts(providers), Status: d.Status, Pins: env.Pins, Every: cfg.CaptureEvery, Logf: logf, Clock: clock})
 }
 

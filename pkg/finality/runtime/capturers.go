@@ -450,6 +450,7 @@ func (l *ArbPostedLoop) Run(ctx context.Context) error {
 			for _, e := range rep.Errors {
 				l.Logf("[FINALITY] capturer %s: %s", l.Name(), e)
 			}
+			l.reportPrefix(ctx, rep)
 			if len(rep.Unavailable) > 0 {
 				st := finality.NewState("l1_proof_window_unavailable", "l1_block", rep.Head, "providers", l.Providers)
 				sink.put(ctx, l.Chain(), finality.LevelL1Posted, st)
@@ -461,4 +462,29 @@ func (l *ArbPostedLoop) Run(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// reportPrefix sets the prefix gauges of the Arbitrum store (every tick, from the first), counts the scan and names it once when it did something.
+func (l *ArbPostedLoop) reportPrefix(ctx context.Context, rep capture.Report) {
+	chain := l.Chain()
+	metrics.AddFinalityPrefixBackfilled(chain, int(rep.PrefixScanned))
+	metrics.AddFinalityPrefixLease(chain, "lost", rep.PrefixLeaseLost)
+	metrics.AddFinalityPrefixLease(chain, "error", rep.PrefixLeaseErrors)
+	wins, err := finality.PrefixWindowsOf(ctx, l.Cap.Store, chain)
+	if err != nil {
+		l.Logf("[FINALITY] capturer %s: the prefix windows could not be read: %v", l.Name(), ethrpc.RedactError(err))
+		return
+	}
+	pieces, err := finality.GapsIn(ctx, l.Cap.Store, chain, 0, finality.MaxCaptureBlock)
+	if err != nil {
+		l.Logf("[FINALITY] capturer %s: the capture gaps could not be read: %v", l.Name(), ethrpc.RedactError(err))
+		return
+	}
+	st := baseposted.PrefixWindowStates(wins, pieces)
+	metrics.SetFinalityPrefixWindows(chain, st[baseposted.PrefixWindowComplete], st[baseposted.PrefixWindowOpen],
+		st[baseposted.PrefixWindowUnavailableProven], st[baseposted.PrefixWindowRetentionExpired], finality.PrefixBlocks(finality.MergePrefixWindows(wins)))
+	if rep.PrefixScanned > 0 {
+		l.Logf("[FINALITY] capturer %s: prefix scan: %d L1 blocks scanned, %d batches captured (%d prefix windows: %d complete, %d being scanned)",
+			l.Name(), rep.PrefixScanned, rep.PrefixBatches, len(wins), st[baseposted.PrefixWindowComplete], st[baseposted.PrefixWindowOpen])
+	}
 }
