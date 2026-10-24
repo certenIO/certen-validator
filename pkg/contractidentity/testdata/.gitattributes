@@ -1,0 +1,2 @@
+# Every file under this directory is specification or a hashed golden: its bytes are never normalised (core.autocrlf=true on the Windows developer machines).
+* -text
