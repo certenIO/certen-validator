@@ -37,6 +37,10 @@ const (
 	pendingCodeAwaitL1Final = "awaiting_l1_finality_of_confirmation"
 )
 
+// CodeBlockHeaderUnreadable: the L1 block K is on the covered spine and below the finalized head, and its header cannot be read by the
+// framework header reader (RB12-ARBFINAL-FIX). finality_block_not_covered is NOT this state: it names a block that is not on the spine.
+const CodeBlockHeaderUnreadable = "finality_block_header_unreadable"
+
 // L1FinalityReason is the reason of l1_finality_unproven (a closed set in states.json).
 type L1FinalityReason string
 
@@ -116,6 +120,22 @@ func StateProofInvalid(which string, kv ...any) *finality.StateError {
 // TxProofInvalid is l1_tx_proof_invalid{which}.
 func TxProofInvalid(which string) *finality.StateError {
 	return finality.NewState(CodeTxProofInvalid, "which", which)
+}
+
+// BlockHeaderUnreadable is finality_block_header_unreadable{block_number, finalized_exec_number, reason[, index]}: block_number is the L1
+// block K whose header is on the covered spine, finalized_exec_number the number of the finalized head, and reason (and index, the position
+// of the item) are the framework header reader's own refusal of that header (cause: finality_evidence_malformed{part header, reason, index}).
+// A cause that is not that refusal is returned as it is: it is already a named state and must not be relabelled.
+func BlockHeaderUnreadable(number, top uint64, cause error) error {
+	st, ok := finality.AsNamed(cause)
+	if !ok || st.Code != finality.CodeEvidenceMalformed {
+		return cause
+	}
+	out := finality.NewState(CodeBlockHeaderUnreadable, "block_number", number, "finalized_exec_number", top, "reason", st.Fields["reason"])
+	if idx, has := st.Fields["index"]; has {
+		out.Fields["index"] = idx
+	}
+	return out
 }
 
 // ContractIdentity is contract_identity_unproven{role, address, code_hash, judged_at}: judged_at is the L1 block number whose

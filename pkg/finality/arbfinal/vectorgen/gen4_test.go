@@ -57,7 +57,7 @@ func TestGenerate4(t *testing.T) {
 		}
 		return nil
 	})
-	if regenerated != n || n != 13 {
+	if regenerated != n || n != 17 {
 		t.Errorf("%d published files, %d regenerated", n, regenerated)
 	}
 }

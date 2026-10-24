@@ -44,9 +44,9 @@ func TestSet4ManifestHashesEveryVectorFile(t *testing.T) {
 	if _, ok := m.Files["README.md"]; ok {
 		t.Fatal("README.md must stay outside the manifest")
 	}
-	// 8 evidence files, 1 pins file, vectors.json: nothing else is in the directory either
-	if len(m.Files) != 10 {
-		t.Fatalf("manifest lists %d files, want 10", len(m.Files))
+	// 12 evidence files, 1 pins file, vectors.json: nothing else is in the directory either
+	if len(m.Files) != 14 {
+		t.Fatalf("manifest lists %d files, want 14", len(m.Files))
 	}
 	onDisk := 0
 	_ = filepath.Walk(vectorDir4, func(p string, info os.FileInfo, err error) error {
@@ -55,8 +55,8 @@ func TestSet4ManifestHashesEveryVectorFile(t *testing.T) {
 		}
 		return nil
 	})
-	if onDisk != 10+3 { // + README.md, MANIFEST.json, MANIFEST.json.sha256
-		t.Fatalf("%d files on disk, want 13", onDisk)
+	if onDisk != 14+3 { // + README.md, MANIFEST.json, MANIFEST.json.sha256
+		t.Fatalf("%d files on disk, want 17", onDisk)
 	}
 	for p, h := range m.Files {
 		b, err := os.ReadFile(filepath.Join(vectorDir4, filepath.FromSlash(p)))
@@ -81,23 +81,33 @@ func TestSet4ManifestHashesEveryVectorFile(t *testing.T) {
 }
 
 // The documented verdict of each world, written here independently of the literals of vectors.json: an odd header at K cannot be read
-// by the framework reader, so K is not found (finality_block_not_covered); an odd header anywhere else is not judged and the leg is finalized.
-// K is block 11999995 and the finalized head 12000000 in every world.
+// by the framework reader, so the proof is refused with finality_block_header_unreadable{block_number K, finalized_exec_number F, reason,
+// index} (the block IS on the covered spine; it is its header that cannot be read; finality_block_not_covered is the state of a block above
+// the head or below the spine); an odd header anywhere else is not judged and the leg is finalized. A wallet confirmation reads
+// anyTrustFastConfirmer under K's state root, never S's. K is block 11999995 and the finalized head 12000000 in every world unless the
+// vector name says otherwise.
 func TestSet4EveryVectorGivesTheDocumentedVerdict(t *testing.T) {
 	f := loadSet(t, vectorDir4)
-	if len(f.Vectors) != 8 {
-		t.Fatalf("%d vectors, want 8", len(f.Vectors))
+	if len(f.Vectors) != 12 {
+		t.Fatalf("%d vectors, want 12", len(f.Vectors))
 	}
-	notCovered := `{"code":"finality_block_not_covered","fields":{"block_number":"11999995","finalized_exec_number":"12000000"}}`
-	documented := map[string]string{ // vector -> "finalized" or the literal refusal
+	unreadable := func(k, idx, reason string) string {
+		return `{"code":"finality_block_header_unreadable","fields":{"block_number":"` + k + `","finalized_exec_number":"12000000","index":"` + idx + `","reason":"` + reason + `"}}`
+	}
+	documented := map[string]string{ // vector -> "finalized", the literal refusal, or "prefix:" and the start of a refusal that carries a transaction hash
 		"l1_headers_other_than_k_have_a_31_byte_transactions_root":    "finalized",
 		"l1_headers_other_than_k_have_a_33_byte_receipts_root":        "finalized",
 		"l1_headers_other_than_k_have_a_list_in_the_withdrawals_slot": "finalized",
 		"l1_header_at_s_has_a_31_byte_transactions_root":              "finalized",
 		"l1_head_has_a_31_byte_transactions_root":                     "finalized",
-		"l1_header_at_k_has_a_31_byte_transactions_root":              notCovered,
-		"l1_header_at_k_has_a_33_byte_receipts_root":                  notCovered,
-		"l1_header_at_k_has_a_list_in_the_withdrawals_slot":           notCovered,
+		"l1_header_at_k_has_a_31_byte_transactions_root":              unreadable("11999995", "4", "header_item_not_32_bytes"),
+		"l1_header_at_k_has_a_33_byte_receipts_root":                  unreadable("11999995", "5", "header_item_not_32_bytes"),
+		"l1_header_at_k_has_a_list_in_the_withdrawals_slot":           unreadable("11999995", "16", "header_item_is_list"),
+		// K is the finalized head itself (S = K = F), and K is the block just below the head (S = K = F - 1)
+		"l1_header_at_k_equal_to_the_head_has_a_31_byte_transactions_root":  unreadable("12000000", "4", "header_item_not_32_bytes"),
+		"l1_header_at_k_one_below_the_head_has_a_31_byte_transactions_root": unreadable("11999999", "4", "header_item_not_32_bytes"),
+		"wallet_fast_confirmer_set_at_s_only_is_finalized":                  "finalized",
+		"wallet_fast_confirmer_set_at_k_only_is_refused":                    "prefix:{\"code\":\"confirmation_path_unproven\",\"fields\":{\"l1_block\":\"11999995\",\"reason\":\"fast_confirmer_set\",\"tx\":\"0x",
 	}
 	finalized, refused := 0, 0
 	for _, v := range f.Vectors {
@@ -117,7 +127,11 @@ func TestSet4EveryVectorGivesTheDocumentedVerdict(t *testing.T) {
 			}
 		} else {
 			refused++
-			if got != want {
+			if p, isPrefix := strings.CutPrefix(want, "prefix:"); isPrefix {
+				if !strings.HasPrefix(got, p) {
+					t.Errorf("%s: documented as starting %s, got %s", v.Name, p, got)
+				}
+			} else if got != want {
 				t.Errorf("%s: documented as %s, got %s", v.Name, want, got)
 			}
 		}
@@ -125,8 +139,8 @@ func TestSet4EveryVectorGivesTheDocumentedVerdict(t *testing.T) {
 			t.Errorf("%s: group %q", v.Name, v.Group)
 		}
 	}
-	if finalized != 5 || refused != 3 {
-		t.Fatalf("%d finalized and %d refused, want 5 and 3", finalized, refused)
+	if finalized != 6 || refused != 6 {
+		t.Fatalf("%d finalized and %d refused, want 6 and 6", finalized, refused)
 	}
 }
 
