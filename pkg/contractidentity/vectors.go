@@ -38,7 +38,7 @@ const (
 var MutationOps = []string{"set_byte", "replace_hex", "truncate", "append_hex", "drop_node", "add_node", "reorder", "set_field", "unset_field", "set_pin"}
 
 // MutationTargets are the artifacts a mutation can address.
-var MutationTargets = []string{"container", "context", "manifest", "extension", "world"}
+var MutationTargets = []string{"container", "context", "manifest", "extension", "world", "s7"}
 
 // reorderLists are the lists `reorder` can reverse in the decoded container.
 var reorderLists = []string{"codes", "nodes", "hopHeaders", "spine", "blockTxs"}
@@ -119,6 +119,49 @@ func LoadVectorIndex(raw []byte, reg *Registry) (*VectorIndex, error) {
 		}
 	}
 	return idx, nil
+}
+
+// S7 mutation paths [FORMAT-R2]: what a vector may change of the S7 report in the leg context (the members step 24 reads).
+var (
+	s7SetPaths   = []string{"finalized.status", "finalized.state", "finalized_block.hash", "unsupported"}
+	s7UnsetPaths = []string{"finalized.state", "finalized_block", "unsupported"}
+	s7Statuses   = []string{"verified", "level_not_applicable", "pending", "refused"}
+	s7HashRe     = regexp.MustCompile("^0x[0-9a-f]{64}" + "$")
+)
+
+func validateS7Mutation(m Mutation) error {
+	paths := s7SetPaths
+	if m.Op == "unset_field" {
+		paths = s7UnsetPaths
+	}
+	ok := false
+	for _, p := range paths {
+		ok = ok || m.Path == p
+	}
+	if !ok {
+		return fmt.Errorf("mutation %s s7: path %q is not one of %v", m.Op, m.Path, paths)
+	}
+	if m.Op == "unset_field" {
+		return nil
+	}
+	var v string
+	if err := json.Unmarshal(m.Value, &v); err != nil || v == "" {
+		return fmt.Errorf("mutation set_field s7 %s needs a non-empty string value", m.Path)
+	}
+	switch m.Path {
+	case "finalized.status":
+		for _, st := range s7Statuses {
+			if v == st {
+				return nil
+			}
+		}
+		return fmt.Errorf("mutation set_field s7 finalized.status: %q is not one of %v", v, s7Statuses)
+	case "finalized_block.hash":
+		if !s7HashRe.MatchString(v) {
+			return fmt.Errorf("mutation set_field s7 finalized_block.hash needs 0x and 64 lowercase hex digits")
+		}
+	}
+	return nil
 }
 
 // pinRe is the value of a set_pin mutation.
@@ -250,11 +293,14 @@ func (m Mutation) Validate() error {
 			return fmt.Errorf("mutation set_pin needs a value: the pin as 64 lowercase hex digits (the sha256 the manifest bytes are loaded against)")
 		}
 	case "set_field", "unset_field":
-		if err := targetOK("container", "context", "manifest", "extension", "world"); err != nil {
+		if err := targetOK("container", "context", "manifest", "extension", "world", "s7"); err != nil {
 			return err
 		}
 		if m.Path == "" || (m.Op == "set_field") != (len(m.Value) > 0) {
 			return fmt.Errorf("mutation %s needs a path (and a value for set_field only)", m.Op)
+		}
+		if m.Target == "s7" {
+			return validateS7Mutation(m)
 		}
 	}
 	return nil
@@ -282,6 +328,19 @@ type Expected struct {
 	Parts    map[string]string `json:"parts,omitempty"`
 	States   []ExpectedState   `json:"states,omitempty"`
 	Open     []ExpectedOpen    `json:"open,omitempty"`
+	// Registry [FORMAT-R2]: members of the report's `registry` object (step 21a) in its canonical form (integers as decimal strings, bytes as 0x hex,
+	// the keys of RegistryObject.Map); every member present must equal the same member of the report, members absent are unconstrained.
+	Registry json.RawMessage `json:"registry,omitempty"`
+	// RulesNotJudged [FORMAT-R2]: the report's rules_not_judged, exactly (order included).
+	RulesNotJudged []ExpectedRuleNotJudged `json:"rules_not_judged,omitempty"`
+	// S7FinalizedStatus [FORMAT-R2]: the report's s7_finalized_status (step 24), exactly.
+	S7FinalizedStatus string `json:"s7_finalized_status,omitempty"`
+}
+
+// ExpectedRuleNotJudged is one row of rules_not_judged a vector requires.
+type ExpectedRuleNotJudged struct {
+	Row    string `json:"row"`
+	Reason string `json:"reason"`
 }
 
 // Vector is one file `<id>.json` of a set.
@@ -658,6 +717,24 @@ func MatchExpected(e Expected, r Report) error {
 			return fmt.Errorf("part %s state %s, expected %s%s", s.Part, got.Canonical(), s.Code, s.Fields)
 		}
 	}
+	if len(e.Registry) > 0 {
+		if err := matchRegistry(e.Registry, r.Registry); err != nil {
+			return err
+		}
+	}
+	if e.RulesNotJudged != nil {
+		if len(r.RulesNotJudged) != len(e.RulesNotJudged) {
+			return fmt.Errorf("%d rules_not_judged rows, expected %d", len(r.RulesNotJudged), len(e.RulesNotJudged))
+		}
+		for i, w := range e.RulesNotJudged {
+			if r.RulesNotJudged[i].Row != w.Row || r.RulesNotJudged[i].Reason != w.Reason {
+				return fmt.Errorf("rules_not_judged row %d is %q (%q), expected %q (%q)", i, r.RulesNotJudged[i].Row, r.RulesNotJudged[i].Reason, w.Row, w.Reason)
+			}
+		}
+	}
+	if e.S7FinalizedStatus != "" && r.S7FinalizedStatus != e.S7FinalizedStatus {
+		return fmt.Errorf("s7_finalized_status %q, expected %q", r.S7FinalizedStatus, e.S7FinalizedStatus)
+	}
 	if e.Open != nil {
 		open := r.OpenEntries()
 		if len(open) != len(e.Open) {
@@ -673,6 +750,64 @@ func MatchExpected(e Expected, r Report) error {
 				return fmt.Errorf("Open entry %d is %s:%s %s, expected %s:%s %s", i, o.Part, o.Kind, o.State.Canonical(), w.Part, w.Kind, w.Code)
 			}
 		}
+	}
+	return nil
+}
+
+// matchRegistry compares the report's registry object with the expectation as a SUBSET: every member the expectation names (objects are
+// matched member by member, recursively; lists and scalars exactly) must equal the same member of the report in the canonical form; members
+// not named are unconstrained.
+func matchRegistry(want json.RawMessage, got *RegistryObject) error {
+	if got == nil {
+		return fmt.Errorf("the report has no registry object")
+	}
+	m, err := got.Map()
+	if err != nil {
+		return fmt.Errorf("registry object: %w", err)
+	}
+	canon, err := Canonical(m)
+	if err != nil {
+		return fmt.Errorf("registry object: %w", err)
+	}
+	var have, w any
+	if err := json.Unmarshal(canon, &have); err != nil {
+		return err
+	}
+	if err := json.Unmarshal(want, &w); err != nil {
+		return fmt.Errorf("expected registry: %w", err)
+	}
+	if wm, ok := w.(map[string]any); !ok || len(wm) == 0 {
+		return fmt.Errorf("expected registry must be an object naming at least one member")
+	}
+	return registrySubset("registry", have, w)
+}
+
+func registrySubset(path string, have, want any) error {
+	if wm, ok := want.(map[string]any); ok {
+		hm, ok := have.(map[string]any)
+		if !ok {
+			return fmt.Errorf("%s is not an object", path)
+		}
+		keys := make([]string, 0, len(wm))
+		for k := range wm {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			hv, ok := hm[k]
+			if !ok {
+				return fmt.Errorf("%s has no member %q", path, k)
+			}
+			if err := registrySubset(path+"."+k, hv, wm[k]); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	a, _ := json.Marshal(have)
+	b, _ := json.Marshal(want)
+	if !bytes.Equal(a, b) {
+		return fmt.Errorf("%s is %s, expected %s", path, a, b)
 	}
 	return nil
 }

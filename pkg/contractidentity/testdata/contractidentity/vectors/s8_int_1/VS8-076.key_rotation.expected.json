@@ -1,0 +1,20 @@
+{
+ "headline": "verified_core",
+ "parts": {
+  "authorization_attest": "verified",
+  "registry_link": "verified",
+  "state_at_settlement": "open"
+ },
+ "open": [
+  {
+   "part": "state_at_settlement",
+   "kind": "drift",
+   "code": "contract_identity_drift",
+   "fields": {
+    "attest": "0x1f1a38cab5c0f16597d7379956237471bbec2889e88472bf477a829b90bfb2fe",
+    "field": "A09:0x2dc2aad70bef3393822a6c27d1b9cd47f53e5d20:key",
+    "settle": "0xeb4af1debbd85ba44be7853fa85f1761be0daa0130c22d7d869e9a4143d003ba"
+   }
+  }
+ ]
+}

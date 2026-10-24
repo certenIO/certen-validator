@@ -8,9 +8,11 @@ import (
 	"fmt"
 	"math/big"
 	"sort"
+	"strings"
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/crypto"
 )
 
 // Package 2a, steps 10-14: the anchor chain at stateRoot_N, the state at settlement (Open entries) and the authority level.
@@ -283,11 +285,15 @@ func a2Step13(env *Env) (StepOutput, error) {
 		}
 		val := a(fmt.Sprintf("A10:%d", i), el)
 		base := MappingSlotAt(KeyAddress(a2Low20(val)), 12)
-		r.slot(A, acctA, base)
+		k := a2ValidatorKey(a2Low20(val))
+		words[k+":0"] = r.slot(A, acctA, base)
 		power := r.slot(A, acctA, MemberSlot(base, 1))
+		words[k+":1"] = power
 		vals = append(vals, valRow{a2Low20(val), power})
-		r.bytes(A, acctA, MemberSlot(base, 2), 256)
-		r.slot(A, acctA, MemberSlot(base, 3))
+		if kb := r.bytes(A, acctA, MemberSlot(base, 2), 256); kb != nil {
+			words[k+":key"] = crypto.Keccak256Hash(kb)
+		}
+		words[k+":3"] = r.slot(A, acctA, MemberSlot(base, 3))
 	}
 	a("A11", SlotIndex(14))
 	num, den, root := a("A12", SlotIndex(15)), a("A13", SlotIndex(16)), a("A14", SlotIndex(17))
@@ -387,7 +393,7 @@ func a2Step13(env *Env) (StepOutput, error) {
 		}
 	}
 	// drift: a value that was equal at both attestation stations and differs at N (a legitimate rotation after the attestation)
-	for _, id := range a2DriftRows {
+	for _, id := range a2DriftIDs(env.Facts.B2.Post.Words) {
 		att, ok := env.Facts.B2.Post.Words[id]
 		if !ok {
 			continue
@@ -605,6 +611,33 @@ func a2PackRoot(addrs []common.Address, powers []*big.Int, num, den *big.Int) ([
 // a2DriftRows are the AUTH rows step 13 compares with the attestation stations (bare AUTH row id; A18 is the address right-aligned in a word).
 var a2DriftRows = []string{"A05", "A07", "A10", "A11", "A14", "A18"}
 
+// a2ValidatorKey is the spelling of the validator record words of one listed validator: "A09:<lowercase 0x address>" + ":0" (registered),
+// ":1" (votingPower), ":3" (registeredAt, informational) or ":key" (keccak256 of the BLS key bytes).
+func a2ValidatorKey(a common.Address) string { return "A09:" + b2Lower(a) }
+
+// a2ValidatorDriftSuffixes are the record words whose difference between the attestation and the settlement is a drift (a rotation of the
+// key or the power of a listed validator after the attestation, VS8-076). registeredAt is informational (rules_not_judged A09:3).
+var a2ValidatorDriftSuffixes = []string{":0", ":1", ":key"}
+
+// a2DriftIDs are the words step 13 compares between the attestation (post station) and the settlement: the six rows of a2DriftRows and, in
+// ascending order of the key, the record words of every listed validator the attestation station recorded.
+func a2DriftIDs(post map[string]common.Hash) []string {
+	ids := append([]string(nil), a2DriftRows...)
+	var rec []string
+	for k := range post {
+		if !strings.HasPrefix(k, "A09:") {
+			continue
+		}
+		for _, sfx := range a2ValidatorDriftSuffixes {
+			if strings.HasSuffix(k, sfx) {
+				rec = append(rec, k)
+			}
+		}
+	}
+	sort.Strings(rec)
+	return append(ids, rec...)
+}
+
 // FactsMissingError is a defect of the package that fills Facts.B2: the words of an attestation station that step 13 compares are
 // incomplete, which would silently drop drift entries. It is an error, never a verdict.
 type FactsMissingError struct {
@@ -634,6 +667,22 @@ func a2AttestWordsComplete(f *Facts) error {
 		for _, id := range a2DriftRows {
 			if _, ok := st.s.Words[id]; !ok {
 				missing = append(missing, id)
+			}
+		}
+		// every listed validator (rows A10:<i>) must carry its record words: a rotation of a key or a power must not pass unseen
+		var listed []string
+		for k := range st.s.Words {
+			if strings.HasPrefix(k, "A10:") {
+				listed = append(listed, k)
+			}
+		}
+		sort.Strings(listed)
+		for _, k := range listed {
+			rk := a2ValidatorKey(a2Low20(st.s.Words[k]))
+			for _, sfx := range a2ValidatorDriftSuffixes {
+				if _, ok := st.s.Words[rk+sfx]; !ok {
+					missing = append(missing, rk+sfx)
+				}
 			}
 		}
 		if len(missing) > 0 {

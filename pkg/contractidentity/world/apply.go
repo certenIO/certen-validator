@@ -18,6 +18,7 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 
 	ci "github.com/certen/independant-validator/pkg/contractidentity"
+	"github.com/certen/independant-validator/pkg/finality"
 )
 
 // The mutation engine. The vocabulary is the CLOSED one of the published vector format (FORMAT.md, contractidentity.MutationOps); the
@@ -300,6 +301,10 @@ func Apply(m *ci.Manifest, spec *Spec, muts []ci.Mutation, container []byte) (*B
 		case "context":
 			if err = applyContext(&ctx, mu); err != nil {
 				return nil, fmt.Errorf("mutation %d (%s context %s): %w", i, mu.Op, mu.Path, err)
+			}
+		case "s7":
+			if err = applyS7(&ctx, mu); err != nil {
+				return nil, fmt.Errorf("mutation %d (%s s7 %s): %w", i, mu.Op, mu.Path, err)
 			}
 		case "manifest":
 			if mu.Op == "set_pin" {
@@ -949,4 +954,63 @@ func WriteSet(dir string, spec *Spec, vectors []ci.Vector) error {
 		fmt.Fprintf(&man, "%x  %s\n", sha256.Sum256(files[n]), n)
 	}
 	return os.WriteFile(filepath.Join(dir, "MANIFEST"), []byte(man.String()), 0o644)
+}
+
+// applyS7 edits the S7 report of the leg context [FORMAT-R2]: the finalized level (status, state code), the leg block as S7 finalized it, and
+// the unsupported-chain state. The report is copied first (the context shares its pointers with the caller). Only the members step 24 reads
+// can be edited; the paths are the closed lists of ci.Mutation.Validate.
+func applyS7(c *ci.LegContext, m ci.Mutation) error {
+	if err := m.Validate(); err != nil {
+		return err
+	}
+	if c.S7 == nil {
+		return fmt.Errorf("the context has no S7 report (it was removed by an earlier mutation)")
+	}
+	rep := *c.S7
+	rep.Levels = make(map[finality.Level]finality.LevelStatus, len(c.S7.Levels))
+	for l, st := range c.S7.Levels {
+		rep.Levels[l] = st
+	}
+	var str string
+	if m.Op == "set_field" {
+		if err := json.Unmarshal(m.Value, &str); err != nil {
+			return err
+		}
+	}
+	fin := rep.Levels[finality.LevelFinalized]
+	switch {
+	case m.Op == "set_field" && m.Path == "finalized.status":
+		fin.Status = finality.Status(str)
+		if fin.Status == finality.StatusVerified {
+			fin.State = nil
+		}
+		rep.Levels[finality.LevelFinalized] = fin
+	case m.Op == "set_field" && m.Path == "finalized.state":
+		fin.State = &finality.StateError{Code: str}
+		rep.Levels[finality.LevelFinalized] = fin
+	case m.Op == "unset_field" && m.Path == "finalized.state":
+		fin.State = nil
+		rep.Levels[finality.LevelFinalized] = fin
+	case m.Op == "set_field" && m.Path == "finalized_block.hash":
+		if rep.FinalizedBlock == nil {
+			return fmt.Errorf("the S7 report has no finalized_block to change")
+		}
+		h, err := parseHash(str)
+		if err != nil {
+			return err
+		}
+		fb := *rep.FinalizedBlock
+		fb.Hash = [32]byte(h)
+		rep.FinalizedBlock = &fb
+	case m.Op == "unset_field" && m.Path == "finalized_block":
+		rep.FinalizedBlock = nil
+	case m.Op == "set_field" && m.Path == "unsupported":
+		rep.Unsupported = &finality.StateError{Code: str}
+	case m.Op == "unset_field" && m.Path == "unsupported":
+		rep.Unsupported = nil
+	default:
+		return fmt.Errorf("s7 path %s", m.Path)
+	}
+	c.S7 = &rep
+	return nil
 }

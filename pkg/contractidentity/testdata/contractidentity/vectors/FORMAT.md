@@ -52,6 +52,9 @@ directory inside the set. A correction is a NEW set (new directory name, new `MA
 | `parts` | optional; `{<judged part>: <status>}`, each compared with the part status of the report |
 | `states` | optional; `[{part, code, fields}]`; `part` is a judged part (its `state` must be this state) or `first` (the first refusal of a `refused` headline); `code` has the `contract_identity_` prefix |
 | `open` | optional; the EXACT list of the report's Open entries in canonical order `[{part, kind, code, fields}]` |
+| `registry` | optional [r3.3:FORMAT-R2]; an object whose members are compared with the same members of the report's `registry` object (step 21a; the keys `owner`, `root`, `threshold`, `totalVotingPower`, `count`, `members`, `authorizedCommitments` (with `expected_subset_count`), `binding`, `verifier`, `governance`), objects are matched member by member (recursively, a subset), lists and scalars exactly, all in the canonical form (a JSON number never matches); members not named are unconstrained; a report without a registry object does not match |
+| `rules_not_judged` | optional [r3.3:FORMAT-R2]; the EXACT list `[{row, reason}]` of the report's `rules_not_judged` (step 23), in report order |
+| `s7_finalized_status` | optional [r3.3:FORMAT-R2]; the report's `s7_finalized_status` (step 24: `verified`, `verified_other_block`, `pending`, `refused:<S7 code>`, ...), exactly |
 
 `fields` are written in the **canonical form** of the state (the form Go and TypeScript compare): integers as decimal STRINGS, byte strings as `0x` + lowercase
 hex, strings as strings, booleans as booleans, lists as lists; a JSON number never matches. States are compared by `code` and the canonical JSON of `fields`;
@@ -71,9 +74,11 @@ member makes the vector invalid (the loader refuses the set).
 | `drop_node` | `container` | `index` | decode, remove `nodes[index]`, re-encode canonically |
 | `add_node` | `container` | `value` (hex) | decode, insert the node at its keccak256 position, re-encode canonically (a unique, sorted, unreferenced node) |
 | `reorder` | `container` | `list` (`codes`, `nodes`, `hopHeaders`, `spine`, `blockTxs`) | decode, reverse that list, re-encode WITHOUT validation (`EncodeUnvalidated`) |
-| `set_field` | `container`, `context`, `manifest`, `extension`, `world` | `path` (dot path in the JSON form of the target), `value` (JSON) | set a member of the structured form; for `container` the result is re-encoded WITHOUT validation; for `manifest` the manifest hash pin is recomputed unless the vector is about the pin (`world` decides) |
-| `unset_field` | `container`, `context`, `manifest`, `extension`, `world` | `path` | remove a member (a context member becomes zero / nil) |
+| `set_field` | `container`, `context`, `manifest`, `extension`, `world`, `s7` | `path` (dot path in the JSON form of the target), `value` (JSON) | set a member of the structured form; for `container` the result is re-encoded WITHOUT validation; for `manifest` the manifest hash pin is recomputed unless the vector is about the pin (`world` decides) |
+| `unset_field` | `container`, `context`, `manifest`, `extension`, `world`, `s7` | `path` | remove a member (a context member becomes zero / nil) |
 | `set_pin` | `manifest` | `value` (the pin: 64 lowercase hex digits) | make the pin the manifest bytes are loaded against that value instead of the sha256 of the (possibly edited) bytes: with unmodified or edited bytes and a pin that is not their hash the vector is about a corrupt manifest (VS8-001: stale pin) [F12] |
+
+The target `s7` [r3.3:FORMAT-R2] edits the S7 report of the leg context, only the members step 24 reads, by a closed list of paths: `set_field` `finalized.status` (`verified`, `level_not_applicable`, `pending`, `refused`; `verified` clears the level's state), `finalized.state` (the code of the state of the `finalized` level), `finalized_block.hash` (`0x` + 64 hex digits; the report must carry a finalized block) and `unsupported` (the code of the unsupported-chain state); `unset_field` `finalized.state`, `finalized_block` and `unsupported`. Any other path makes the vector invalid.
 
 The structured JSON form of `container` is `{chain, leg:{number,hash}, codes:[{address,runtime}], settle:{tag,stated?}, attest:{tag,stated?|attest?}, nodes:[hex]}`
 with hex for every byte string and decimal strings for integers; `context` is the `LegContext` members by the lower-case tokens of Freeze item 2a
