@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"strings"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -123,6 +124,16 @@ func (f *fixture) words2c(env *ci.Env, root common.Hash) (map[string]common.Hash
 			return nil, nil, err
 		}
 	}
+	// rows A06 on the manifest_history route: the flag of every commitment of the row's pkcList (read when the list has the shape step 21c requires)
+	if row, ok := env.Manifest.SetRootRowFor(env.Ctx.Chain, env.Facts.B1.HeaderV.Number, lower0x(words["A14"])); ok && row.PKCList != nil && row.PKCCount != nil {
+		if list, ok := shapedList(*row.PKCList, *row.PKCCount); ok {
+			for _, c := range list {
+				if _, err := rd("A06:"+lower0x(c), A, ci.MappingSlotAt(ci.KeyBytes32(c), 4)); err != nil {
+					return nil, nil, err
+				}
+			}
+		}
+	}
 	w30, err := rd("", A, ci.SlotIndex(30))
 	if err != nil {
 		return nil, nil, err
@@ -142,6 +153,27 @@ func (f *fixture) words2c(env *ci.Env, root common.Hash) (map[string]common.Hash
 		}
 	}
 	return words, vals, nil
+}
+
+func lower0x(h common.Hash) string { return strings.ToLower(h.Hex()) }
+
+// shapedList is the pkcList of a row if it has the shape step 21c(iii) requires: as many entries as pkcCount, at most 256, 32-byte 0x hex,
+// strictly ascending.
+func shapedList(raw []string, count uint64) ([]common.Hash, bool) {
+	if uint64(len(raw)) != count || len(raw) > 256 {
+		return nil, false
+	}
+	out := make([]common.Hash, len(raw))
+	for i, s := range raw {
+		if len(s) != 66 || !strings.HasPrefix(s, "0x") {
+			return nil, false
+		}
+		out[i] = common.HexToHash(s)
+		if i > 0 && strings.Compare(string(out[i-1][:]), string(out[i][:])) >= 0 {
+			return nil, false
+		}
+	}
+	return out, true
 }
 
 func lower(a common.Address) string {
@@ -200,6 +232,15 @@ func (f *fixture) build2c(hook c2Hook) *ci.StepVerifier {
 				}
 			case ci.Step22:
 				env.Facts.B2.IB = ci.IBResult{Evaluated: captured, Verified: captured}
+				if captured {
+					O := f.addr(f.spec.Roles.Owner)
+					a, e1 := ci.ReadAccount(common.Hash(env.Facts.B1.StateRootPre), env.Nodes, O)
+					b, e2 := ci.ReadAccount(common.Hash(env.Facts.B1.StateRootPost), env.Nodes, O)
+					if e1 == nil && e2 == nil && a.Nonce != b.Nonce {
+						env.Facts.B2.IB = ci.IBResult{Evaluated: true, State: ci.Must(ci.CodeUnproven, ci.RowUnprovenOwnerActiveInBlock, map[string]any{
+							"part": ci.JudgedIntraBlockWindow, "address": O, "pre": common.BigToHash(new(big.Int).SetUint64(a.Nonce)), "post": common.BigToHash(new(big.Int).SetUint64(b.Nonce))})}
+					}
+				}
 			}
 			if hook != nil {
 				hook(env, id, &out)
@@ -404,7 +445,6 @@ func TestC2Registry9Mismatch(t *testing.T) {
 		{"the threshold differs", nil, func(c *ci.LegContext) { cp(c).Num = 1 }, "threshold"},
 		{"the root of the chain differs from the one recomputed", anchorA14("A", world.StationPre, world.StationPost), nil, "set_root"},
 		{"certenSetRoot differs", nil, func(c *ci.LegContext) { cp(c).CertenSetRoot[0] ^= 1 }, "certen_set_root"},
-		{"the root changed inside B_v (the message root is the pre root)", anchorA14("A", world.StationPre), nil, "message_root"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -414,7 +454,7 @@ func TestC2Registry9Mismatch(t *testing.T) {
 			if r.Headline.Kind != ci.HeadlineRefused {
 				t.Fatalf("headline %s", r.Headline.Kind)
 			}
-			if r.Registry == nil && c.name != "the root of the chain differs from the one recomputed" && c.name != "the root changed inside B_v (the message root is the pre root)" {
+			if r.Registry == nil && c.name != "the root of the chain differs from the one recomputed" {
 				t.Fatalf("the registry object is part of every report with a captured attestation")
 			}
 		})
@@ -608,4 +648,136 @@ func TestC2FactsContract(t *testing.T) {
 	if r.Registry != nil || r.Headline.Kind != ci.HeadlineUnproven {
 		t.Fatalf("Stated attestation: registry %v, headline %s", r.Registry, r.Headline.Kind)
 	}
+}
+
+// F17: registry_mismatch and pkc_mismatch obey the verdict precedence of the "Policy rules" table. R only when the compared words are equal at
+// attest_pre and attest_post AND rule IB is verified; a changed word is U state_changed_in_block; an equal word with rule IB unproven carries the
+// U of rule IB on registry_link; a rule IB without a verdict is attest_absent.
+func TestC2RegistryAndPkcObeyTheVerdictPrecedence(t *testing.T) {
+	ownerActive := func(env *ci.Env, id ci.StepID, out *ci.StepOutput) {
+		if id == ci.Step22 {
+			env.Facts.B2.IB = ci.IBResult{Evaluated: true, State: ci.Must(ci.CodeUnproven, ci.RowUnprovenOwnerActiveInBlock, map[string]any{"part": ci.JudgedIntraBlockWindow, "address": hexAddr("0x91c7"), "pre": common.Hash{}, "post": common.Hash{}})}
+		}
+	}
+	noVerdict := func(env *ci.Env, id ci.StepID, out *ci.StepOutput) {
+		if id == ci.Step22 {
+			env.Facts.B2.IB = ci.IBResult{}
+		}
+	}
+	badPower := func(c *ci.LegContext) {
+		r := *c.Registry9
+		r.Members = append([]ci.RegistryMember(nil), r.Members...)
+		r.Members[1].Power++
+		c.Registry9 = &r
+	}
+	badPkc := func(c *ci.LegContext) { r := *c.Registry9; r.SignerCommitment[31] ^= 1; c.Registry9 = &r }
+	powerSlot := func(sp *world.Spec) common.Hash {
+		a := hexAddr(sp.Context.Registry9.Members[1].Address)
+		return ci.MemberSlot(ci.MappingSlotAt(ci.KeyAddress(a), 12), 1)
+	}
+	hv := func(f *fixture) uint64 {
+		h, err := finality.ReadHeader(f.built.World.Container.Attest.Attest.HeaderV)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return h.Number
+	}
+	cases := []struct {
+		name          string
+		muts          func(sp *world.Spec) []ci.Mutation
+		tweak         func(*ci.LegContext)
+		hook          c2Hook
+		reason, field string
+		status        string
+	}{
+		{"pre-only root change: message_root can only be a changed word", func(sp *world.Spec) []ci.Mutation {
+			return []ci.Mutation{setWord(world.StationPre, hexAddr(sp.Roles.Anchor), 17, common.HexToHash("0xabc"))}
+		}, nil, nil, "state_changed_in_block", "A14", "unproven"},
+		{"roster record changed inside B_v", func(sp *world.Spec) []ci.Mutation {
+			return []ci.Mutation{world.SetStorage(world.StationPost, hexAddr(sp.Roles.Anchor), powerSlot(sp), common.BigToHash(big.NewInt(11)))}
+		}, badPower, nil, "state_changed_in_block", "A09:", "unproven"},
+		{"equal words, mismatch, the owner was active in B_v", nil, badPower, ownerActive, "owner_active_in_block", "", "unproven"},
+		{"equal words, mismatch, rule IB has no verdict", nil, badPower, noVerdict, "attest_absent", "", "unproven"},
+		{"equal words, mismatch, rule IB verified", nil, badPower, nil, "", "", "refused"},
+		{"pkc: A05 changed inside B_v", func(sp *world.Spec) []ci.Mutation {
+			return []ci.Mutation{world.SetStorage(world.StationPost, hexAddr(sp.Roles.Anchor), ci.MappingSlotAt(ci.KeyBytes32(common.HexToHash(sp.Attestation.Blob[13])), 4), common.Hash{})}
+		}, badPkc, nil, "state_changed_in_block", "A05", "unproven"},
+		{"pkc: equal words, the owner was active in B_v", nil, badPkc, ownerActive, "owner_active_in_block", "", "unproven"},
+		{"pkc: equal words, rule IB verified", nil, badPkc, nil, "", "", "refused"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFixtureFn(t, 11155111, world.VariantH0, c.muts)
+			r, _ := f.must2c(c.tweak, c.hook)
+			p := part(t, r, ci.JudgedRegistryLink)
+			if string(p.Status) != c.status {
+				t.Fatalf("registry_link %s (%v), want %s", p.Status, p.State, c.status)
+			}
+			switch {
+			case c.status == "refused":
+				if r.Headline.Kind != ci.HeadlineRefused || (p.State.Code != ci.Prefix+"registry_mismatch" && p.State.Code != ci.Prefix+"pkc_mismatch") {
+					t.Fatalf("headline %s state %v", r.Headline.Kind, p.State)
+				}
+				return
+			case p.State.Fields["reason"] != c.reason || r.Headline.Kind != ci.HeadlineUnproven:
+				t.Fatalf("state %v headline %s, want reason %s", p.State, r.Headline.Kind, c.reason)
+			}
+			if p.State.Fields["part"] != nil && p.State.Fields["part"] != ci.JudgedRegistryLink {
+				t.Fatalf("the carried state names part %v", p.State.Fields["part"])
+			}
+			if c.reason == "state_changed_in_block" {
+				fld, _ := p.State.Fields["field"].(string)
+				if !strings.HasPrefix(fld, c.field) || p.State.Fields["block"] != hv(f) || p.State.Fields["pre"] == p.State.Fields["post"] {
+					t.Fatalf("state %v", p.State.Fields)
+				}
+			}
+		})
+	}
+}
+
+// Step 23: every outcome prints rules_not_judged and the residuals, also the outcomes in which step 23 does not run (SKELETON-FIX of runner.go:
+// buildReport and earlyReport): a prelude refusal, the no-container outcome and a framework halt in steps 0-2.
+func TestC2RulesNotJudgedInEveryOutcome(t *testing.T) {
+	f := newFixtureFn(t, 11155111, world.VariantH0, nil)
+	check := func(name string, r ci.Report, kind string) {
+		t.Helper()
+		if r.Headline.Kind != kind {
+			t.Fatalf("%s: headline %s, want %s", name, r.Headline.Kind, kind)
+		}
+		if fmt.Sprint(r.RulesNotJudged) != fmt.Sprint(ci.FixedRulesNotJudged()) || fmt.Sprint(r.Residuals) != fmt.Sprint(ci.FixedResiduals()) {
+			t.Fatalf("%s: rules_not_judged %v residuals %v", name, r.RulesNotJudged, r.Residuals)
+		}
+		m, err := r.Map()
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if rn, _ := m["rules_not_judged"].([]any); len(rn) != 4 {
+			t.Fatalf("%s: the printed rules_not_judged has %d rows", name, len(rn))
+		}
+	}
+	ver := f.build2c(nil)
+	ctx := f.built.Inputs.Ctx
+	// prelude refusal (step 1b): a mandatory member is missing
+	bad := ctx
+	bad.S7 = nil
+	r, err := ver.Verify(bad, f.built.Inputs.Container, f.m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check("context_incomplete", r, ci.HeadlineRefused)
+	// no container (step 1c(a))
+	r, err = ver.Verify(ctx, nil, f.m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check("no container", r, ci.HeadlineUnproven)
+	// a framework refusal of step 2 halts the run before steps 24 and 23
+	ff := newFixtureFn(t, 11155111, world.VariantH0, func(sp *world.Spec) []ci.Mutation {
+		return []ci.Mutation{{Op: "set_field", Target: "container", Path: "leg.number", Value: []byte(fmt.Sprintf("%q", fmt.Sprint(f.built.World.Container.Leg.Number+1)))}}
+	})
+	r, tr := ff.must2c(nil, nil)
+	if tr.Halt == nil || !tr.Halt.Framework {
+		t.Fatalf("no framework halt: %+v", tr.Halt)
+	}
+	check("framework halt", r, ci.HeadlineRefused)
 }

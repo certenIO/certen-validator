@@ -327,6 +327,86 @@ func c2Owners(env *Env, role string, block uint64) []OwnerRow {
 	return rows
 }
 
+// c2CarryIB re-creates the U state of rule IB on another part (the part field is replaced): "the part carries the same U code".
+func c2CarryIB(ib IBResult, part string) (*StateError, error) {
+	f := map[string]any{}
+	for k, v := range ib.State.Fields {
+		f[k] = v
+	}
+	if _, has := f["part"]; has {
+		f["part"] = part
+	}
+	reason, _ := f["reason"].(string)
+	st, err := New(ib.State.Code, reason, f)
+	if err != nil {
+		return nil, fmt.Errorf("contractidentity: step 21: rule IB state %s %q does not carry over to %s: %w", ib.State.Code, reason, part, err)
+	}
+	return st, nil
+}
+
+// c2FieldKeys are the on-chain words a registry_mismatch field compares (F17): the verdict is R only when they are equal at pre and post.
+// The roster fields compare the validator records (the list length and elements and each record's registered, power and key words; the
+// informational registeredAt word is not judged).
+func c2FieldKeys(field string, pre, post *c2Station) []string {
+	switch field {
+	case "threshold":
+		return []string{"A12", "A13"}
+	case "set_root", "certen_set_root", "message_root":
+		return []string{"A14"}
+	case "pkc":
+		return []string{"A05"}
+	}
+	set := map[string]bool{"A10": true}
+	for _, st := range []*c2Station{pre, post} {
+		for k := range st.W {
+			if (strings.HasPrefix(k, "A10:") || strings.HasPrefix(k, "A09:")) && !strings.HasSuffix(k, ":3") {
+				set[k] = true
+			}
+		}
+	}
+	keys := make([]string, 0, len(set))
+	for k := range set {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// c2Precedence applies the verdict precedence of the "Policy rules" table to a refusal of registry_link (F17): R only when every compared word is
+// equal at attest_pre and attest_post AND rule IB is verified; a changed word is U state_changed_in_block, an equal word with rule IB not verified
+// carries the U of rule IB, and a rule IB that has no verdict (the attestation block is not established) is attest_absent.
+func c2Precedence(env *Env, pre, post *c2Station, block uint64, keys []string, refuse func() (*StateError, error)) (PartResult, error) {
+	for _, k := range keys {
+		if pre.W[k] != post.W[k] {
+			st, err := New(CodeUnproven, RowUnprovenStateChangedInBlock, map[string]any{"field": k, "pre": pre.W[k], "post": post.W[k], "block": block})
+			if err != nil {
+				return PartResult{}, err
+			}
+			return c2U(JudgedRegistryLink, st), nil
+		}
+	}
+	ib := env.Facts.B2.IB
+	switch {
+	case ib.Evaluated && ib.Verified:
+		st, err := refuse()
+		if err != nil {
+			return PartResult{}, err
+		}
+		return c2R(JudgedRegistryLink, st), nil
+	case ib.State != nil:
+		st, err := c2CarryIB(ib, JudgedRegistryLink)
+		if err != nil {
+			return PartResult{}, err
+		}
+		return c2U(JudgedRegistryLink, st), nil
+	}
+	st, err := c2AttestAbsentRegistry()
+	if err != nil {
+		return PartResult{}, err
+	}
+	return c2U(JudgedRegistryLink, st), nil
+}
+
 // c2OwnerPin is step 21b. It returns the contribution on authorization_attest: nil when the pin holds at both stations (the caller emits
 // verified), a state otherwise. Verdict precedence (spec "Policy rules"): R only when the word is equal at pre and post, fails at both and rule IB
 // is verified; a changed word is U state_changed_in_block; an equal failing word with IB not verified carries the U of rule IB.
@@ -368,15 +448,9 @@ func c2OwnerPin(env *Env, pre, post *c2Station, block uint64) (*PartResult, erro
 			return &p, nil
 		case ib.State != nil:
 			// the part carries the U code of rule IB (owner_active_in_block, owner_not_eoa, tx_type_unsupported, ...), on this part
-			f := map[string]any{}
-			for k, v := range ib.State.Fields {
-				f[k] = v
-			}
-			f["part"] = JudgedAuthorizationAttest
-			reason, _ := f["reason"].(string)
-			st, err := New(ib.State.Code, reason, f)
+			st, err := c2CarryIB(ib, JudgedAuthorizationAttest)
 			if err != nil {
-				return nil, fmt.Errorf("contractidentity: step 21b: rule IB state %s %q does not carry over to authorization_attest: %w", ib.State.Code, reason, err)
+				return nil, err
 			}
 			p := c2U(JudgedAuthorizationAttest, st)
 			return &p, nil
@@ -678,11 +752,12 @@ func c2Step21(env *Env) (StepOutput, error) {
 			return StepOutput{}, err
 		}
 		if field != "" {
-			st, err := New(CodeRegistryMismatch, "", map[string]any{"field": field})
+			link, err = c2Precedence(env, pre, post, block, c2FieldKeys(field, pre, post), func() (*StateError, error) {
+				return New(CodeRegistryMismatch, "", map[string]any{"field": field})
+			})
 			if err != nil {
 				return StepOutput{}, err
 			}
-			link = c2R(JudgedRegistryLink, st)
 		}
 		switch {
 		case r9.SignerCommitment == ([32]byte{}):
@@ -692,11 +767,12 @@ func c2Step21(env *Env) (StepOutput, error) {
 			}
 			out.Open = append(out.Open, o)
 		case link.Status == StatusVerified && r9.SignerCommitment != f.B1.PKC:
-			st, err := New(CodePkcMismatch, "", map[string]any{"s9": r9.SignerCommitment, "onchain": f.B1.PKC})
+			link, err = c2Precedence(env, pre, post, block, c2FieldKeys("pkc", pre, post), func() (*StateError, error) {
+				return New(CodePkcMismatch, "", map[string]any{"s9": r9.SignerCommitment, "onchain": f.B1.PKC})
+			})
 			if err != nil {
 				return StepOutput{}, err
 			}
-			link = c2R(JudgedRegistryLink, st)
 		}
 		if link.Status == StatusVerified {
 			f.C.RegistryLink = "via S9"
