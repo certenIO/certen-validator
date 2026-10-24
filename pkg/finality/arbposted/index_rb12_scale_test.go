@@ -154,6 +154,16 @@ func (l *lazyArb) indexOfBlock(block uint64) (uint64, bool) {
 
 func (l *lazyArb) cursorBlocks() (uint64, uint64) { return scaleBase + 26, l.top() }
 
+// BlockBounds is the aggregate query of the database store (one query, no key listing): the capture cursor rows are the two the world has, every
+// other item is asked of the stored rows.
+func (l *lazyArb) BlockBounds(ctx context.Context, chain uint64, item string) (uint64, uint64, bool, error) {
+	if item == capture.ItemCursor {
+		lo, hi := l.cursorBlocks()
+		return lo, hi, true, nil
+	}
+	return finality.BlockBoundsOf(ctx, l.inner, chain, item)
+}
+
 func (l *lazyArb) Put(ctx context.Context, k finality.CaptureKey, data []byte) error {
 	return l.inner.Put(ctx, k, data)
 }
@@ -327,6 +337,11 @@ func (m *scaleMeter) ListByRange(ctx context.Context, chain, from, to uint64, pr
 	ks, err := m.CaptureStore.ListByRange(ctx, chain, from, to, prefix)
 	m.keys.Add(int64(len(ks)))
 	return ks, err
+}
+
+// BlockBounds forwards the aggregate query of a store that has it.
+func (m *scaleMeter) BlockBounds(ctx context.Context, chain uint64, item string) (uint64, uint64, bool, error) {
+	return finality.BlockBoundsOf(ctx, m.CaptureStore, chain, item)
 }
 
 func (m *scaleMeter) reset() { m.bytes.Store(0); m.gets.Store(0); m.keys.Store(0) }

@@ -126,4 +126,20 @@ The archive backfill's Arbitrum prefix scan stores batches **below** the capture
 
 ## 8. Measured (lazy production-shaped store; real encodings; 3 blob rows per batch; CERTEN_RB12_ARB_SCALES)
 
-SCALE_NUMBERS_PLACEHOLDER
+Command: `CERTEN_RB12_ARB_SCALES=0.5,1.5,5,10 go test ./pkg/finality/arbposted -run TestRB12ArbIndexCostIsIndependentOfTheTableAndEqualsTheReference -v` (default scales 0.05 and 0.15 so that the package suite stays fast).
+The store is lazy: a batch row, a header row and three real 131,168-byte blob rows (a brotli payload of 400 messages of 900 incompressible bytes, real blob encoding) exist when read and are never kept;
+the index rows are real. Per scale: the first backfill of the whole table through the real `Indexer` (256 blocks per step), 40 found legs spread over the history, one leg no batch holds, and the
+reference reader (`LoadBatches` + `locate`) asked the same questions on the same store (first, middle and last batch and the unmatched leg: same batch, same block, same pending).
+
+| scale | batches / capture rows | backfill (steps, longest step) | peak reservation | found leg: median bytes read / rows / key names (max) / median wall / heap above start (max) | unmatched leg: bytes / key names / wall |
+|---|---|---|---|---|---|
+| 0.5x | 1,638 / 614 MB | 2m25s (7, 30 s) | 32 MB | 410 KB / 20 / 1,390 / 163 ms / +12.2 MB | 2.71 MB / 1,774 / 230 ms |
+| 1.5x | 4,914 / 1.84 GB | 4m55s (20, 36 s) | 32 MB | 410 KB / 20 / 1,387 / 47 ms / +19.2 MB | 2.98 MB / 2,229 / 68 ms |
+| 5x | 16,380 / 6.1 GB | 32m13s (64, 2m53s) | 32 MB | 410 KB / 20 / 1,447 / 192 ms / +57.6 MB (*) | 2.98 MB / 2,297 / 183 ms |
+| 10x | not run (see below) | | | | |
+
+The machine ran at 85-100% CPU for the whole session (other sessions), so the walls are inflated about 10x against an unloaded host (7 ms per batch measured in an earlier unloaded run); bytes, rows and key
+names do not depend on the load. (*) The 5x run was made before the test store implemented the aggregate bounds query: `BlockBoundsOf` fell back to a whole-table key listing of the lazy store (the database store answers it with one aggregate query), which is
+the whole of that heap figure; the 0.5x and 1.5x rows were re-measured with the fix (heap +12 MB and +19 MB, which include the test generator re-making the located batch's three blobs). **Not claimed:** the 5x heap with the fix and the 10x row;
+`CERTEN_RB12_ARB_SCALES=5,10` on a quiet machine takes about 8 minutes (7 ms per batch). What is claimed: the bytes a found leg reads (410 KB = the located batch's three blobs and its row) and its rows (20) are identical at 0.5x, 1.5x and 5x;
+the thresholds of 50 MB and 30 s are met at every measured scale (a found leg: 0.4 MB; the unmatched leg: 3.0 MB against the reference's ~390 MB); the backfill reserved 32 MB at most (one block) and the budget was empty afterwards.
