@@ -1,0 +1,27 @@
+{
+ "id": "VS8-151.member_key",
+ "base": "H0",
+ "mutations": [
+  {
+   "op": "set_field",
+   "target": "context",
+   "path": "registry9.members.2.bls_key",
+   "value": "c514309b49c8fb078eae2716b9c57cfe6e2fb1bc0c23ad00aaf5f4ea15bd152ef01503777a2660dc953976288df97bf443efc7baa891ef926e43f3ec9986b08793a44fb207ca769686d3c73f88269a863a7be008eb76ba213f95dc2fd0078e23"
+  }
+ ],
+ "expected": {
+  "headline": "refused",
+  "parts": {
+   "registry_link": "refused"
+  },
+  "states": [
+   {
+    "part": "registry_link",
+    "code": "contract_identity_registry_mismatch",
+    "fields": {
+     "field": "member_key"
+    }
+   }
+  ]
+ }
+}

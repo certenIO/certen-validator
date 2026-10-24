@@ -1,0 +1,29 @@
+{
+ "id": "VS8-161",
+ "base": "H0",
+ "mutations": [
+  {
+   "op": "set_field",
+   "target": "context",
+   "path": "registry9.signer_commitment",
+   "value": "0x0000000000000000000000000000000000000000000000000000000000000000"
+  }
+ ],
+ "expected": {
+  "headline": "verified_core",
+  "parts": {
+   "registry_link": "verified"
+  },
+  "open": [
+   {
+    "part": "registry_link",
+    "kind": "not_checked",
+    "code": "contract_identity_not_checked",
+    "fields": {
+     "part": "pkc_signer_check",
+     "reason": "no_s9_commitment"
+    }
+   }
+  ]
+ }
+}

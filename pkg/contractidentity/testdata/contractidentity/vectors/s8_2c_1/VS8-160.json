@@ -1,0 +1,28 @@
+{
+ "id": "VS8-160",
+ "base": "H0",
+ "mutations": [
+  {
+   "op": "set_field",
+   "target": "context",
+   "path": "registry9.signer_commitment",
+   "value": "0xc0908bd3536f019607e0dcd3d3553263ca3fd9b8882dd5dc4a43024d82389ead"
+  }
+ ],
+ "expected": {
+  "headline": "refused",
+  "parts": {
+   "registry_link": "refused"
+  },
+  "states": [
+   {
+    "part": "registry_link",
+    "code": "contract_identity_pkc_mismatch",
+    "fields": {
+     "onchain": "0xc0908bd3536f019607e0dcd3d3553263ca3fd9b8882dd5dc4a43024d82389eac",
+     "s9": "0xc0908bd3536f019607e0dcd3d3553263ca3fd9b8882dd5dc4a43024d82389ead"
+    }
+   }
+  ]
+ }
+}

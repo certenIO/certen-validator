@@ -155,7 +155,8 @@ func lower(a common.Address) string {
 }
 
 // run2c runs the real 2a and 2c steps and the stand-ins of the other packages; hook may adjust a stand-in's facts and output after it ran.
-func (f *fixture) run2c(tweak func(*ci.LegContext), hook c2Hook) (ci.Report, ci.Trace, error) {
+// build2c composes the real steps of 2a and 2c with the stand-ins of the other packages.
+func (f *fixture) build2c(hook c2Hook) *ci.StepVerifier {
 	f.t.Helper()
 	reg := ci.NewStepRegistry()
 	for _, r := range []ci.Registrar{ci.RegisterSteps2a, ci.RegisterSteps2c} {
@@ -213,6 +214,12 @@ func (f *fixture) run2c(tweak func(*ci.LegContext), hook c2Hook) (ci.Report, ci.
 	if err != nil {
 		f.t.Fatal(err)
 	}
+	return v
+}
+
+func (f *fixture) run2c(tweak func(*ci.LegContext), hook c2Hook) (ci.Report, ci.Trace, error) {
+	f.t.Helper()
+	v := f.build2c(hook)
 	ctx := f.built.Inputs.Ctx
 	if tweak != nil {
 		tweak(&ctx)
