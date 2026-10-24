@@ -95,6 +95,7 @@ var stateClasses = map[string]StateClass{
 	"finality_prover_panicked":             ClassFailure,
 	"finality_signature_invalid":           ClassFailure,
 	"finality_source_unavailable":          ClassFailure,
+	"finality_spine_row_invalid":           ClassFailure,
 	"finality_upgrader_disabled":           ClassFailure,
 	"finality_verifier_failed":             ClassFailure,
 	"game_blacklisted":                     ClassFailure,

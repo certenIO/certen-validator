@@ -506,4 +506,5 @@ func registerFinalityMetrics() {
 	prometheus.MustRegister(finalityMemoryReserved)
 	prometheus.MustRegister(finalityMemoryRefused)
 	registerFinalityGapMetrics()
+	registerFinalitySpineMetrics()
 }
