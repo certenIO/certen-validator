@@ -11,6 +11,7 @@ package envvar
 import (
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -151,6 +152,9 @@ func Seconds(key string, def time.Duration, minSeconds int) (time.Duration, erro
 	n, err := strconv.Atoi(v)
 	if err != nil || n < minSeconds {
 		return def, refuse(key, v, fmt.Sprintf("a whole number of seconds, at least %d", minSeconds))
+	}
+	if n > int(math.MaxInt64/int64(time.Second)) { // n*time.Second would wrap: 18446744074 s would read as 0.29 s
+		return def, refuse(key, v, fmt.Sprintf("a whole number of seconds, at most %d", int64(math.MaxInt64/int64(time.Second))))
 	}
 	return time.Duration(n) * time.Second, nil
 }
