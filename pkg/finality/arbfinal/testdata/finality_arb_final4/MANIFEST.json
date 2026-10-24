@@ -1,0 +1,15 @@
+{
+ "files": {
+  "evidence/l1_head_has_a_31_byte_transactions_root.bin": "f1777595abde175bd1593dddd4728d002d739d3c7e38ccc6b1a0dd4a2fd64420",
+  "evidence/l1_header_at_k_has_a_31_byte_transactions_root.bin": "2f5a92bf2149a0d9b693ad6c55271edccf1b7fcd677480697baf39e778efc396",
+  "evidence/l1_header_at_k_has_a_33_byte_receipts_root.bin": "fb308dce6fbd807760cfb54bd182400c8979ad51f2e74c6d13889a8ddfc44c7d",
+  "evidence/l1_header_at_k_has_a_list_in_the_withdrawals_slot.bin": "ac32363023aa158cc7bb57f901a66cf902c6752b00cbadcf09b5206eaebc0660",
+  "evidence/l1_header_at_s_has_a_31_byte_transactions_root.bin": "cbe1595cb8af6887336783346de9a9788e4b688d2048dfafb799a56601328747",
+  "evidence/l1_headers_other_than_k_have_a_31_byte_transactions_root.bin": "6e5f799cfc49e60e90cdb0fc471a5314da634ef1a6fe6784fa572dcb5c91b646",
+  "evidence/l1_headers_other_than_k_have_a_33_byte_receipts_root.bin": "a6874db1166452e541b5c6b5dea4900307505c39822dce3a30358f3f776daafe",
+  "evidence/l1_headers_other_than_k_have_a_list_in_the_withdrawals_slot.bin": "55cbd31e00f358d74d6711b84fadd86bd4d36c7648bbdc2e53228769f81c2e51",
+  "pins/synth.json": "86d097e1355512a782a392bbc5e02ccfe146e736016af7d33593f89f198a0b51",
+  "vectors.json": "077248d45e7183bf71b1ad4c2c6cfd7eab74c000dbbc13a153b8333474be7d7f"
+ },
+ "format": "finality_arb_final4/manifest/1"
+}
