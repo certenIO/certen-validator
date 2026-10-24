@@ -34,10 +34,16 @@ The index therefore replaces the candidate decode, not only the batch listing: e
   derives the bounds from it: `minTs = T - delay`, `maxTs = T + future`): in the NORMAL window T is in `[ts - 4,000 s, ts + 100,000 s]` (production: delay 86,400 s, future 768 s; the
   constants are in the pins digest). The first and last block of that range come from a **bisect over the digest names** (T grows with the block number), starting a first-scan slack (512 blocks)
   below the capture's first cursor row. `setMaxTimeVariation` is `onlyRollupOwner` and has no upper bound, so no cap derived from the contract can be proven safe; instead **a batch whose bounds are
-  wider than the normal window is indexed all the same and also pointed at by a `w/<minTs>/<maxTs>/<N>` row at the fixed key (block 0, zero hash)**, which every lookup lists (a point range: empty in production) and
-  adds to its candidates by the same predicate. So the index serves every batch the reference serves, whatever the configuration; the cost is one small listing, and one candidate per wide batch whose bounds hold the
-  timestamp. Only a window wider than 400 days (no real configuration) is recorded as `index_block_unindexable{window_beyond_cap}`, named; the reference would serve it, so that state is the one stated limit.
-  Boundaries are pinned (delay and future at the normal edge and one second beyond, the hard limit and one beyond), each compared with the reference.
+  wider than the normal window is indexed all the same and also pointed at by a `w/<minTs>/<maxTs>/<N>` row at block 0 under the batch's own block hash**, which every lookup lists (one point range over all hashes: empty in production) and
+  adds to its candidates by the same predicate. The hash in the key is what lets two records of one slot with the same N and bounds (an equivocated block, a forged twin) each keep their own pointer: a key shared by
+  two bodies would be a permanent `ErrIndexConflict` and the cursor would never pass the block (V-B2-1; the hash commits to the block number, so key and body never disagree on a block).
+  So the index serves every batch the reference serves, whatever the configuration, **and there is no cap and no limit on a window**: the window fields are uint64, are only compared (`distancesWithin`
+  subtracts the smaller from the larger), and a `w` name with the largest values is 84 bytes, inside the 120-byte bound the names test and the production-table test pin; `minTs = 1`, `maxTs = 2^64-1` is tested like any other
+  wide batch (V-B2-3). The reason `window_beyond_cap` of the earlier revisions no longer exists.
+  What is bounded is the **work of a lookup**: it lists the pointers (keys only) and reads those whose bounds hold its timestamp; **more than 4,096 pointers** (`maxWidePointers`; production has none, they appear only if the rollup owner
+  raises the time variation or a lying provider's forged wide records get captured) is the named `index_inconsistent{coverage_overflow}` for a leg only a wide batch can serve, before any pointer is read, while a leg a normal batch serves
+  is still served. At most 4,096 pointers means at most 4,096 pointer reads and 4,096 entry reads per lookup (a candidate whose fingerprint matches then costs what a normal candidate costs). The listing is `certen_finality_index_wide_pointers{family="arb"}` (a gauge, set by each lookup), and the self-check samples pointer rows (below).
+  Boundaries are pinned (delay and future at the normal edge and one second beyond, 400 days and a second, the whole range of a timestamp), each compared with the reference.
 * **Trust model identical to Base.** The index is a locator. A wrong or missing row yields a named state or a pending, never an addendum the reference would
   not also produce; a missing entry is pending; there is no fallback answer path. `CERTEN_FINALITY_ARB_INDEX=off` (or a bad setting) leaves the reference reader
   (LoadBatches + the window decode) as the *named, announced* operator mode, and an AST test proves `LoadBatches` and `locate` are reachable from a build **only**
@@ -56,7 +62,7 @@ The index therefore replaces the candidate decode, not only the batch listing: e
   a leg that is simply not posted yet look like a capture gap.
 * **Holes and parts.** A blob batch whose blob rows are not all stored is not digested and has no entry; a leg whose window holds it is told
   `l1_blob_unavailable` exactly as the reference tells it. A batch number missing between two Bridge-proven neighbours is `l1_capture_gap{gap_state=unrecorded}`.
-  An unreadable block (`batch_row_malformed`, `header_row_malformed`, `blob_row_malformed`, `window_beyond_cap`) is recorded once, the cursor passes it, and a leg that is not found
+  An unreadable block (`batch_row_malformed`, `header_row_malformed`, `blob_row_malformed`) is recorded once, the cursor passes it, and a leg that is not found
   is told by name (`index_block_unindexable`): the reference simply fails on such a row (`LoadBatches` returns an error for every leg).
 * **Determinism (class 11).** Bytes depend only on captured rows + pins + generation; tests: different step sizes, a shuffled arrival order of rows (units atomic, blobs later),
   a late arrival below the cursor, and an orphan twin indexed before versus after its Bridge proof arrived (identical rows, a clean self-check) write identical rows (cursor rows compared by their highest block only).
@@ -91,10 +97,10 @@ The index therefore replaces the candidate decode, not only the batch listing: e
   Late notes are never lost: past 4,096 single-block notes a note is **folded into a range note** (counted by `certen_finality_index_notes_dropped_total`, the pressure signal), range notes (`NoteLateRange`, `finality.LateRangeNoter`) are
   worked off in chunks of `ReconcileSpan` under the step limits, at most 256 are kept (the nearest pair merges: a note only ever widens), and the rotating walk starts at `min(first capture cursor row, Floor)`, so a block below the capture start
   is reached within ceil((cursor - floor + 1) / ReconcileSpan) x ReconcileEvery steps (default 4,096 and 8: 51 minutes for 129,600 blocks of floor).
-* `validator finality-arb-index-selfcheck [--sample N]`: exit 0 ok, 1 mismatch (the entry is quarantined by an insert-only record every reader checks), 2 index off, 3 incomplete (budget refused rows; nothing judged for them), 4 could not run, 5 usage.
-* Registry (`states.json`): three new `index_block_unindexable` reasons (`batch_row_malformed`, `header_row_malformed`, `window_beyond_cap`). **The certen-sdk byte-identical mirror owes the same edit (BETA re-syncs at Train 3).**
+* `validator finality-arb-index-selfcheck [--sample N]` (it samples entries, digests and pointer rows; the result line ends `pointers=N`): exit 0 ok, 1 mismatch (the entry is quarantined by an insert-only record every reader checks), 2 index off, 3 incomplete (budget refused rows; nothing judged for them), 4 could not run, 5 usage.
+* Registry (`states.json`): two new `index_block_unindexable` reasons (`batch_row_malformed`, `header_row_malformed`). **The certen-sdk byte-identical mirror owes the same edit (BETA re-syncs at Train 3).**
   `index_inconsistent` reasons are the existing ones and the F17 reason-aware table needs no new row.
-* Metrics (family `arb`): through, lag, open, digests, entries, late, rebuilds, mismatches, conflicts, lookups{result}, lookup_bytes, step_seconds, selfcheck_skipped, unindexable{reason}, notes_dropped, disabled; all non-zero at the moment they move (scrape test).
+* Metrics (family `arb`): through, lag, open, digests, entries, late, rebuilds, mismatches, conflicts, lookups{result}, lookup_bytes, step_seconds, selfcheck_skipped, unindexable{reason}, notes_dropped, wide_pointers, disabled; all non-zero at the moment they move (scrape test).
 
 ## 4. Post-deploy checklist
 
@@ -114,7 +120,7 @@ calldata batch has no blob completion to note it, so without this signal only th
 ## 6. Assumptions and limits (named, not hidden)
 
 * L1 block timestamps grow with the block number (a consensus fact) and every captured batch lies within 512 blocks below the capture's first cursor row (shape check J12; the `Floor` hook is the extension point).
-* The normal lookup window (delay 100,000 s, future 4,000 s) holds for the live SequencerInbox (86,400 / 768). A raised time variation does not make a batch unservable: the batch is a wide batch (a `w` row) and every lookup then lists the wide rows (cost proportional to their number, and each wide batch is a candidate for every timestamp inside its own bounds, exactly as in the reference, which decodes it for them). Only a window over 400 days is named `window_beyond_cap` and is not served by the index (the reference would serve it; no such configuration exists, and the state is kept until the limit (a constant of the index, in the pins digest) is changed and a new generation is started).
+* The normal lookup window (delay 100,000 s, future 4,000 s) holds for the live SequencerInbox (86,400 / 768). A raised time variation does not make a batch unservable: the batch is a wide batch (a `w` row, keyed by its block hash) and every lookup then lists the wide rows. **Consequence of the one limit that exists**: with more than 4,096 wide pointers a lookup names `index_inconsistent{coverage_overflow}` for a leg that only a wide batch can serve (a leg a normal batch serves is still served); it is a named, counted state (the gauge shows the number), never a guess, and the reference reader (`CERTEN_FINALITY_ARB_INDEX=off`) serves such legs. Each wide batch is a candidate for every timestamp inside its own bounds, exactly as in the reference, which decodes it for them.
 * A batch stored below the capture's first block is reached by the rotating walk only from `Floor`; with no floor (this branch) only by a note or a range note, which are never dropped.
 * A hole is claimed only between two Bridge-proven records, so a hole next to a batch without a captured proof stays a plain pending.
 * The index does not capture `isBatchPoster` storage proofs (see section 1; it would need new capture rows and provider calls).
@@ -139,7 +145,9 @@ calldata batch has no blob completion to note it, so without this signal only th
 | B1: bytes do not depend on when a proof arrived | `TestRB12ArbIndexBytesDoNotDependOnWhenTheBridgeProofArrived` (fail-before @d313b708: "6 rows against 5") |
 | B2: the proof job and the restart (capture) | `TestRB12AProofTakenBelowTheBatchBlockIsNotAProofAndTheJobStays`, `TestRB12ARestartDoesNotCountAProofRowBelowTheBatchBlock` |
 | B3: notes never lost, ranges, rotation to the floor, floor wiring | `TestRB12ArbIndexNoteIsNeverLostWhenTheNoteSetIsFull`, `...RangeNoteIsWorkedOffInBoundedChunksAndTheNotesAreBounded`, `...RotationReachesBelowTheCaptureStartDownToTheFloor`; runtime `TestRTArbFloorIsWiredToTheReaderAndTheIndexerAndAnExplicitOffIsAnnounced` |
-| B4: window edges and wide batches | `TestRB12ArbIndexWindowEdgesAndBatchesBeyondTheNormalWindow` (fail-before @d313b708: window_beyond_cap where the reference serves) |
+| B4 / V-B2-3: window edges, wide batches, no limit on a window | `TestRB12ArbIndexWindowEdgesAndBatchesBeyondTheNormalWindow` (fail-before @d313b708: window_beyond_cap where the reference serves; @00582def: 400 days and a second, and the whole range of a timestamp, made the block unindexable) |
+| V-B2-1: two wide twins of one slot | `TestRB12ArbIndexTwoWideTwinsOfOneSlotKeepTheirOwnPointers` (fail-before @00582def: "index row exists with different bytes ... item idx/g1/arb/w/.../400", the cursor never passes the block); database `TestFinalityCaptureIndexArbRowsFitTheProductionTable` (two hashes under one name) |
+| V-B2-2: pointer work bounded; the self-check samples pointers | `TestRB12ArbIndexWidePointerWorkIsBoundedAtTheLimit` (4,096 served, 4,097 named, gauge), `TestRB12ArbIndexSelfCheckSamplesThePointerRows` (wrong block, wrong hash, missing pointer, pointer of a non-wide batch; fail-before @00582def: nothing found) |
 | runtime: settings, wiring, loop, self-check | runtime `TestRTBadArbIndexSettingsAreANamedDisabledStateNotAFatalStartup`, `...IsAnnouncedAndWiresNoIndexWhileTheArbChainStillRuns`, `TestRTArbIndexOffLeavesNoIndexerAndNoReaderAndOnWiresBoth`, `TestRTArbIndexLoopStepsTheBatchIndexTowardsTheCaptureCursorUnderTheMemoryBudget`, `TestRTArbLoopNotesTheBlocksWhoseBlobsArrived`, `TestRTArbIndexSelfCheckOnDemandNamesItsResult`; root `TestFinalityArbIndexSelfCheckUsageIsExitCode5` |
 | cost flat in the table, equivalence at scale | `TestRB12ArbIndexCostIsIndependentOfTheTableAndEqualsTheReference` (numbers below) |
 
