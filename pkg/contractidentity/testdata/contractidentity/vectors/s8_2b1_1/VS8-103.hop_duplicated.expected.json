@@ -1,0 +1,17 @@
+{
+ "headline": "refused",
+ "parts": {
+  "authorization_attest": "refused"
+ },
+ "states": [
+  {
+   "part": "authorization_attest",
+   "code": "contract_identity_header_unlinked",
+   "fields": {
+    "index": "1",
+    "link": "hops",
+    "reason": "numbers_not_consecutive"
+   }
+  }
+ ]
+}

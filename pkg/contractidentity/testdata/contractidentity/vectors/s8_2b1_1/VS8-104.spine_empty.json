@@ -1,0 +1,29 @@
+{
+ "id": "VS8-104.spine_empty",
+ "base": "H0",
+ "mutations": [
+  {
+   "op": "set_field",
+   "target": "container",
+   "path": "attest.attest.spine",
+   "value": []
+  }
+ ],
+ "expected": {
+  "headline": "refused",
+  "parts": {
+   "authorization_attest": "refused"
+  },
+  "states": [
+   {
+    "part": "authorization_attest",
+    "code": "contract_identity_header_unlinked",
+    "fields": {
+     "index": "0",
+     "link": "spine",
+     "reason": "hash_chain_broken"
+    }
+   }
+  ]
+ }
+}

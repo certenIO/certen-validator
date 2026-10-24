@@ -25,6 +25,8 @@ type b1fx struct {
 	facts ci.Facts
 	// visited are the nodes the run visited, captured by the stand-in of step 23 (after every real step ran)
 	visited [][]byte
+	// authErr is the error of the stand-in of step 18 when its AUTH reads did not verify (a world with a refused link or leaf)
+	authErr error
 }
 
 func b1New(t *testing.T, chain uint64, variant string, muts ...ci.Mutation) *b1fx {
@@ -55,8 +57,8 @@ func b1NewSpec(t *testing.T, chain uint64, variant string, edit func(*world.Spec
 
 func (f *b1fx) addr(s string) common.Address { return common.HexToAddress(s) }
 
-// run executes the real steps 1c-14 and the real steps `real` of package 2b-1. container (when not nil) replaces the world's container.
-func (f *b1fx) run(real []ci.StepID, container []byte, tweak func(*ci.LegContext)) (ci.Report, ci.Trace) {
+// verifier builds the Verifier: the real steps 1c-14, the real steps `real` of package 2b-1 and stand-ins for the rest.
+func (f *b1fx) verifier(real []ci.StepID) *ci.StepVerifier {
 	f.t.Helper()
 	reg := ci.NewStepRegistry()
 	if err := ci.RegisterSteps2a(reg); err != nil {
@@ -88,9 +90,22 @@ func (f *b1fx) run(real []ci.StepID, container []byte, tweak func(*ci.LegContext
 				switch id {
 				case ci.Step15:
 					env.Facts.B1.AttestCaptured = env.AttestStated() == nil
+				case ci.Step16:
+					if a := env.Container.Attest.Attest; a != nil {
+						if hv, err := env.Header(a.HeaderV); err == nil {
+							env.Facts.B1.StateRootPost = hv.StateRoot
+						}
+						if hp, err := env.Header(a.HeaderVParent); err == nil {
+							env.Facts.B1.StateRootPre = hp.StateRoot
+						}
+					}
 				case ci.Step17:
 					// the pkc is read by step 13 of package 2a at N (row A05): the stand-in hands over the same value
 					env.Facts.B1.PKC = common.HexToHash(f.spec.Attestation.Blob[13])
+				case ci.Step18:
+					if env.Facts.B1.AttestCaptured && env.Facts.B1.StateRootPre != ([32]byte{}) {
+						f.authErr = f.readAuth(env)
+					}
 				case ci.Step23:
 					f.facts = *env.Facts
 					f.visited = env.Nodes.VisitedNodes()
@@ -110,6 +125,12 @@ func (f *b1fx) run(real []ci.StepID, container []byte, tweak func(*ci.LegContext
 	if err != nil {
 		f.t.Fatal(err)
 	}
+	return v
+}
+
+func (f *b1fx) run(real []ci.StepID, container []byte, tweak func(*ci.LegContext)) (ci.Report, ci.Trace) {
+	f.t.Helper()
+	v := f.verifier(real)
 	ctx := f.built.Inputs.Ctx
 	if tweak != nil {
 		tweak(&ctx)
@@ -325,4 +346,72 @@ func TestB1Step16SameBlock(t *testing.T) {
 	// headerV is not the settlement block
 	r, _ = f.run(step16, same(0, func(c *ci.Container) []byte { return c.Attest.Attest.HeaderVParent }), nil)
 	b1Want(t, r, ci.JudgedAuthorizationAttest, "refused", "header_unlinked", "link", "spine", "index", "0", "reason", "hash_chain_broken")
+}
+
+// readAuth is the stand-in of step 18: it makes exactly the reads of the world's plan for the AUTH slot set at both attestation stations
+// (rows A01-A21, V01-V03, C01), so that step 22b judges the container against the reads of the whole algorithm. It records no word.
+func (f *b1fx) readAuth(env *ci.Env) error {
+	sp := f.spec
+	A, V, G, O := f.addr(sp.Roles.Anchor), f.addr(sp.Roles.Verifier), f.addr(sp.Roles.Groth16), f.addr(sp.Roles.Owner)
+	anchorID := common.HexToHash(sp.Settlement.AnchorID)
+	opID := common.Hash(env.Ctx.Batch.OperationID)
+	pkc := common.Hash(env.Facts.B1.PKC)
+	for _, root := range []common.Hash{common.Hash(env.Facts.B1.StateRootPre), common.Hash(env.Facts.B1.StateRootPost)} {
+		acct := map[common.Address]ci.AccountState{}
+		for _, a := range []common.Address{A, V, G, O} {
+			s, err := ci.ReadAccount(root, env.Nodes, a)
+			if err != nil {
+				return err
+			}
+			acct[a] = s
+		}
+		rd := func(a common.Address, s common.Hash) (common.Hash, error) {
+			return ci.ReadSlot(acct[a].StorageRoot, env.Nodes, s)
+		}
+		rec := ci.MappingSlotAt(ci.KeyBytes32(anchorID), 1)
+		slots := []common.Hash{ci.SlotIndex(0), ci.MappingSlotAt(ci.KeyBytes32(anchorID), 2), ci.MappingSlotAt(ci.KeyBytes32(anchorID), 3),
+			ci.MappingSlotAt(ci.KeyBytes32(pkc), 4), ci.SlotIndex(5), ci.SlotIndex(6)}
+		for k := uint64(0); k < 13; k++ {
+			slots = append(slots, ci.MemberSlot(rec, k))
+		}
+		for _, s := range slots {
+			if _, err := rd(A, s); err != nil {
+				return err
+			}
+		}
+		n, err := rd(A, ci.SlotIndex(13))
+		if err != nil {
+			return err
+		}
+		for i := uint64(0); i < n.Big().Uint64(); i++ {
+			el, _, _ := ci.ArrayElementSlot(13, i, 20)
+			v, err := rd(A, el)
+			if err != nil {
+				return err
+			}
+			base := ci.MappingSlotAt(ci.KeyAddress(common.BytesToAddress(v[12:])), 12)
+			for _, s := range []common.Hash{base, ci.MemberSlot(base, 1), ci.MemberSlot(base, 3)} {
+				if _, err := rd(A, s); err != nil {
+					return err
+				}
+			}
+			if _, err := ci.ReadBytes(acct[A].StorageRoot, env.Nodes, ci.MemberSlot(base, 2), 256); err != nil {
+				return err
+			}
+		}
+		for _, s := range []uint64{14, 15, 16, 17, 27, 29, 30} {
+			if _, err := rd(A, ci.SlotIndex(s)); err != nil {
+				return err
+			}
+		}
+		if _, err := rd(A, ci.MappingSlotAt(ci.KeyBytes32(opID), 18)); err != nil {
+			return err
+		}
+		for s := uint64(0); s < 3; s++ {
+			if _, err := rd(V, ci.SlotIndex(s)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }

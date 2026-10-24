@@ -1,0 +1,27 @@
+{
+ "id": "VS8-113.operation_commitment",
+ "base": "H0",
+ "mutations": [
+  {
+   "op": "set_field",
+   "target": "world",
+   "path": "attestation.operation_commitment",
+   "value": "0x0000000000000000000000000000000000000000000000000000000000007777"
+  }
+ ],
+ "expected": {
+  "headline": "refused",
+  "parts": {
+   "authorization_attest": "refused"
+  },
+  "states": [
+   {
+    "part": "authorization_attest",
+    "code": "contract_identity_attest_mismatch",
+    "fields": {
+     "field": "flip"
+    }
+   }
+  ]
+ }
+}

@@ -1,0 +1,38 @@
+{
+ "headline": "unproven",
+ "parts": {
+  "authorization_attest": "unproven",
+  "intra_block_window": "unproven",
+  "registry_link": "unproven"
+ },
+ "states": [
+  {
+   "part": "authorization_attest",
+   "code": "contract_identity_unproven",
+   "fields": {
+    "bytes": "1048577",
+    "limit": "1048576",
+    "part": "authorization_attest",
+    "reason": "block_too_large"
+   }
+  },
+  {
+   "part": "intra_block_window",
+   "code": "contract_identity_unproven",
+   "fields": {
+    "bytes": "1048577",
+    "limit": "1048576",
+    "part": "intra_block_window",
+    "reason": "block_too_large"
+   }
+  },
+  {
+   "part": "registry_link",
+   "code": "contract_identity_unproven",
+   "fields": {
+    "part": "registry_link",
+    "reason": "attest_absent"
+   }
+  }
+ ]
+}

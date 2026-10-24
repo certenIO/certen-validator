@@ -1,0 +1,18 @@
+{
+ "id": "VS8-102.hops_gap_W_passes",
+ "base": "H0",
+ "mutations": [
+  {
+   "op": "set_field",
+   "target": "world",
+   "path": "variant",
+   "value": "hops"
+  }
+ ],
+ "expected": {
+  "headline": "verified",
+  "parts": {
+   "authorization_attest": "verified"
+  }
+ }
+}
