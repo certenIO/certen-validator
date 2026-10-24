@@ -105,15 +105,16 @@ func TestVS8_020_ContextIncomplete(t *testing.T) {
 	if m := missingOf(t, c1024); m != nil {
 		t.Fatalf("a 1024-byte adi_url is refused: %v", m)
 	}
-	// every member absent: all ten tokens, in the order of item 2a
-	if got := missingOf(t, LegContext{}); strings.Join(got, ",") != strings.Join(ContextTokens, ",") {
+	// every mandatory member absent: all tokens but registry9 (an absent Registry9 is legal), in the order of item 2a
+	mandatory := strings.Replace(strings.Join(ContextTokens, ","), "registry9,", "", 1)
+	if got := missingOf(t, LegContext{}); strings.Join(got, ",") != mandatory {
 		t.Fatalf("empty context: %v", got)
 	}
 	var nilCtx *LegContext
 	if err := nilCtx.ValidateContext(); err == nil {
 		t.Fatal("nil context accepted")
 	}
-	if strings.Join(ContextTokens, ",") != "settlement,tx,receipt,adi_url,s6,batch.batchRoot,batch.batchOperationID,batch.accSetRoot,batch.incarnation,s7" {
+	if strings.Join(ContextTokens, ",") != "settlement,tx,receipt,adi_url,s6,batch.batchRoot,batch.batchOperationID,batch.accSetRoot,batch.incarnation,registry9,s7" {
 		t.Fatal("context tokens drifted from the registry text")
 	}
 	// two defects at once: both listed, in table order
@@ -157,7 +158,8 @@ func TestVS8_021_UnusedS6IsIgnored(t *testing.T) {
 }
 
 func TestRegistry9Validate(t *testing.T) {
-	ok := &Registry9{Members: []RegistryMember{{Address: common.Address{1}, Power: 1, BLSKey: "ab01"}}}
+	goodKey := strings.Repeat("ab", 96)
+	ok := &Registry9{Members: []RegistryMember{{Address: common.Address{1}, Power: 1, BLSKey: goodKey}}}
 	if err := ok.Validate(); err != nil {
 		t.Fatal(err)
 	}
@@ -165,10 +167,12 @@ func TestRegistry9Validate(t *testing.T) {
 		"nil":        nil,
 		"no members": {},
 		"empty key":  {Members: []RegistryMember{{BLSKey: ""}}},
-		"0x prefix":  {Members: []RegistryMember{{BLSKey: "0xab"}}},
-		"upper case": {Members: []RegistryMember{{BLSKey: "AB"}}},
-		"not hex":    {Members: []RegistryMember{{BLSKey: "zz"}}},
-		"second bad": {Members: []RegistryMember{{BLSKey: "ab"}, {BLSKey: "AB"}}},
+		"0x prefix":  {Members: []RegistryMember{{BLSKey: "0x" + goodKey}}},
+		"short key":  {Members: []RegistryMember{{BLSKey: goodKey[:190]}}},
+		"long key":   {Members: []RegistryMember{{BLSKey: goodKey + "ab"}}},
+		"upper case": {Members: []RegistryMember{{BLSKey: strings.ToUpper(goodKey)}}},
+		"not hex":    {Members: []RegistryMember{{BLSKey: strings.Repeat("zz", 96)}}},
+		"second bad": {Members: []RegistryMember{{BLSKey: goodKey}, {BLSKey: strings.ToUpper(goodKey)}}},
 	} {
 		if bad.Validate() == nil {
 			t.Errorf("%s accepted", name)

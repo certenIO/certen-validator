@@ -224,7 +224,7 @@ func TestVS8_003_ExtensionMayNotShadow(t *testing.T) {
 		{"deployments (chainId,role)", extensionDoc(nil, nil, nil, []any{doc["deployments"].([]any)[0]}, nil, nil), "deployments", "11155111,anchor"},
 		{"accounts (chainId,address)", extensionDoc(nil, nil, nil, nil, []any{doc["accounts"].([]any)[0]}, nil), "accounts", "11155111,0x2ec2d261a4770e42dbe43826489d299d596bc5f7"},
 		{"a table an extension may not carry: authSlots", extensionDoc(nil, nil, nil, nil, nil, map[string]any{"authSlots": []any{}}), "authSlots", "*"},
-		{"a table an extension may not carry: chains", extensionDoc(nil, nil, nil, nil, nil, map[string]any{"chains": []any{map[string]any{"chainId": 5}}}), "chains", "*"},
+		{"a chains row of an existing chain", extensionDoc(nil, nil, nil, nil, nil, map[string]any{"chains": []any{map[string]any{"chainId": 11155111}}}), "chains", "11155111"},
 		{"a table an extension may not carry: slotChecks", extensionDoc(nil, nil, nil, nil, nil, map[string]any{"slotChecks": []any{}}), "slotChecks", "*"},
 		{"unknown policy key", extensionDoc(map[string]any{"somethingNew": 1}, nil, nil, nil, nil, nil), "policy", "somethingNew"},
 		{"owner row not after the last", extensionDoc(map[string]any{"owner": map[string]any{"11155111": []any{map[string]any{"role": "anchor", "address": "0x0000000000000000000000000000000000000001", "validFromBlock": 11832572, "validToBlock": nil}}}}, nil, nil, nil, nil, nil), "policy.owner", "11155111,anchor"},
@@ -274,7 +274,7 @@ func TestVS8_004_ExtensionAppendsRows(t *testing.T) {
 			"setRootHistory": []any{map[string]any{"chainId": 84532, "root": "0x" + strings.Repeat("ab", 32), "validFromBlock": 50000000, "validToBlock": nil, "thresholdNumerator": 2, "thresholdDenominator": 3}},
 		}, nil,
 		map[string]any{"CertenAnchorV8_3/r5": doc["builds"].(map[string]any)["CertenAnchorV8_2/r5"]},
-		[]any{map[string]any{"chainId": 31337, "chain": "local", "role": "anchor", "contract": "CertenAnchorV8_3", "address": "0x01", "build": "CertenAnchorV8_3/r5"}},
+		nil,
 		[]any{map[string]any{"chainId": 84532, "address": "0xAbC0000000000000000000000000000000000001", "adiURL": "acc://x.acme"}}, nil)
 	merged, err := m.WithExtension(ext)
 	if err != nil {
@@ -293,7 +293,7 @@ func TestVS8_004_ExtensionAppendsRows(t *testing.T) {
 	if _, ok := merged.Build("CertenAnchorV8_2/r5"); !ok {
 		t.Error("existing build lost")
 	}
-	if len(merged.Deployments(31337)) != 1 || len(merged.Deployments(84532)) != len(m.Deployments(84532)) {
+	if len(merged.Deployments(84532)) != len(m.Deployments(84532)) {
 		t.Error("appended deployment missing")
 	}
 	if _, ok := merged.Account(84532, "0xabc0000000000000000000000000000000000001"); !ok {

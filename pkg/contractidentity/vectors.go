@@ -321,6 +321,8 @@ type VectorSet struct {
 	World      json.RawMessage
 	Vectors    []Vector
 	Containers map[string][]byte // id -> container bytes where the file exists
+	// Inputs are the materialised inputs of the vectors that have an <id>.inputs.json (inputs.go); a runner needs no world builder for them.
+	Inputs     map[string]Inputs
 	Superseded bool
 }
 
@@ -348,7 +350,9 @@ func LoadVectorSet(dir string) (*VectorSet, error) {
 	if err != nil {
 		return nil, err
 	}
-	set := &VectorSet{Name: filepath.Base(dir), Dir: dir, Containers: map[string][]byte{}}
+	set := &VectorSet{Name: filepath.Base(dir), Dir: dir, Containers: map[string][]byte{}, Inputs: map[string]Inputs{}}
+	materialised := map[string]bool{}
+	expectedFiles := map[string]bool{}
 	files := map[string][]byte{}
 	for _, e := range entries {
 		if e.IsDir() {
@@ -390,6 +394,15 @@ func LoadVectorSet(dir string) (*VectorSet, error) {
 	for _, n := range names {
 		switch {
 		case n == "world.json" || n == "SUPERSEDED.md":
+		case docFileRe.MatchString(n):
+			// a content-addressed raw manifest / extension document: the name carries the sha256 of the bytes
+			if m := docFileRe.FindStringSubmatch(n); sha256Hex(files[n]) != m[2] {
+				return nil, fmt.Errorf("contractidentity: vector set %s: %s does not hash to the sha256 in its name", dir, n)
+			}
+		case strings.HasSuffix(n, ".inputs.json"):
+			materialised[strings.TrimSuffix(n, ".inputs.json")] = true
+		case strings.HasSuffix(n, ".expected.json"):
+			expectedFiles[strings.TrimSuffix(n, ".expected.json")] = true
 		case strings.HasSuffix(n, ".container.hex"):
 			id := strings.TrimSuffix(n, ".container.hex")
 			b, err := hex.DecodeString(strings.TrimSpace(string(files[n])))
@@ -418,18 +431,104 @@ func LoadVectorSet(dir string) (*VectorSet, error) {
 			return nil, fmt.Errorf("contractidentity: vector set %s: unexpected file %s", dir, n)
 		}
 	}
+	for id := range expectedFiles {
+		if !materialised[id] {
+			return nil, fmt.Errorf("contractidentity: vector set %s: %s.expected.json has no %s.inputs.json", dir, id, id)
+		}
+	}
+	for _, v := range set.Vectors {
+		if !materialised[v.ID] {
+			continue
+		}
+		in, err := LoadMaterialised(files[v.ID+".inputs.json"], files)
+		if err != nil {
+			return nil, fmt.Errorf("contractidentity: vector set %s: %w", dir, err)
+		}
+		var exp Expected
+		dec := json.NewDecoder(bytes.NewReader(files[v.ID+".expected.json"]))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&exp); err != nil {
+			return nil, fmt.Errorf("contractidentity: vector set %s: %s.expected.json: %w", dir, v.ID, err)
+		}
+		ga, _ := json.Marshal(exp)
+		gb, _ := json.Marshal(v.Expected)
+		if !bytes.Equal(ga, gb) {
+			return nil, fmt.Errorf("contractidentity: vector set %s: %s.expected.json differs from the expected of %s.json", dir, v.ID, v.ID)
+		}
+		set.Inputs[v.ID] = in
+	}
+	for id := range materialised {
+		if _, ok := set.Inputs[id]; !ok {
+			return nil, fmt.Errorf("contractidentity: vector set %s: %s.inputs.json has no vector file", dir, id)
+		}
+	}
 	return set, nil
 }
 
-// Inputs are what a Verifier is run on.
+var docFileRe = regexp.MustCompile(`^(manifest|extension)\.([0-9a-f]{64})\.json$`)
+
+// Inputs are what a Verifier is run on. A materialised vector (inputs.go) carries ManifestRaw / ManifestPin / ExtensionRaw instead of a loaded
+// Manifest: the runner loads them (ResolveManifest), so that a corrupt manifest (VS8-001) or a shadowing extension (VS8-003, VS8-004) is the
+// RESULT of the vector - the refusal of step 0 - and not a failure to set it up [r3.2:E-h].
 type Inputs struct {
 	Ctx       LegContext
 	Container []byte
-	Manifest  *Manifest
+	// Manifest is a ready manifest; it is used only when ManifestRaw is nil.
+	Manifest *Manifest
+	// ManifestRaw is the manifest document; ManifestPin is the hash it must have (nil: the embedded pin ManifestSHA256). A document whose
+	// hash is not the embedded pin but is its own pin is a valid OVERRIDE (manifest_source override:<sha256>).
+	ManifestRaw []byte
+	ManifestPin *[32]byte
+	// ExtensionRaw is an extension document merged into the manifest under the no-shadow rule.
+	ExtensionRaw []byte
+}
+
+// ResolveManifest is step 0 on the raw documents of the inputs: the hash check (manifest_corrupt), the override source and the no-shadow
+// merge (manifest_shadow, manifest_unknown for a malformed new chain). A refusal comes back as the state (second result); the third result
+// is for defects of the inputs themselves (no manifest at all).
+func (in Inputs) ResolveManifest() (*Manifest, *StateError, error) {
+	m := in.Manifest
+	if in.ManifestRaw != nil {
+		pin := embeddedPin()
+		if in.ManifestPin != nil {
+			pin = *in.ManifestPin
+		}
+		lm, err := LoadManifest(in.ManifestRaw, pin)
+		if err != nil {
+			if st, ok := AsState(err); ok {
+				return nil, st, nil
+			}
+			return nil, nil, err
+		}
+		if lm.SHA256 != embeddedPin() {
+			if lm, err = LoadOverride(in.ManifestRaw); err != nil {
+				if st, ok := AsState(err); ok {
+					return nil, st, nil
+				}
+				return nil, nil, err
+			}
+		}
+		m = lm
+	}
+	if m == nil {
+		return nil, nil, fmt.Errorf("vector inputs carry no manifest")
+	}
+	if in.ExtensionRaw != nil {
+		em, err := m.WithExtension(in.ExtensionRaw)
+		if err != nil {
+			if st, ok := AsState(err); ok {
+				return nil, st, nil
+			}
+			return nil, nil, err
+		}
+		m = em
+	}
+	return m, nil, nil
 }
 
 // WorldBuilder turns a set's world.json and a vector (its base H0 and its mutations; the container file where there is one) into the
-// inputs of a Verifier. It is supplied by the world package of the verify work packages; this package never builds a world.
+// inputs of a Verifier. It is supplied by the world package of the verify work packages; this package never builds a world. A set that
+// carries materialised inputs (inputs.go) needs none.
 type WorldBuilder interface {
 	Build(world json.RawMessage, v Vector, container []byte) (Inputs, error)
 }
@@ -441,29 +540,54 @@ type VectorResult struct {
 	Detail  string
 }
 
-// RunSet runs every vector of a set. With no WorldBuilder or no Verifier a vector is `not_run`; it is `pass` only when a Verifier judged
-// the inputs and its Report satisfies the expectation exactly. A Verifier error, a world that cannot be built and a Report that does not
-// match are `fail`.
+// refusalReport is the Report of a step 0 refusal: the framework state is the first refusal of a refused headline.
+func refusalReport(st *StateError, ctx LegContext) (Report, error) {
+	h, err := ComputeHeadline(HeadlineInput{Framework: st})
+	if err != nil {
+		return Report{}, err
+	}
+	return Report{Headline: h, Chain: ctx.Chain}, nil
+}
+
+// RunSet runs every vector of a set. A vector is `not_run` without a Verifier, and without both a materialised input and a WorldBuilder;
+// it is `pass` only when a Verifier judged the inputs and its Report satisfies the expectation exactly. A refusal of step 0 on the raw
+// manifest / extension documents is the vector's result (the Verifier is never reached: the verifier refuses to start). A Verifier error,
+// a world that cannot be built and a Report that does not match are `fail`.
 func RunSet(set *VectorSet, wb WorldBuilder, ver Verifier) []VectorResult {
 	out := make([]VectorResult, 0, len(set.Vectors))
 	for _, v := range set.Vectors {
+		in, materialised := set.Inputs[v.ID]
 		switch {
-		case wb == nil:
-			out = append(out, VectorResult{v.ID, OutcomeNotRun, "no world builder"})
-			continue
 		case ver == nil:
 			out = append(out, VectorResult{v.ID, OutcomeNotRun, "no verifier"})
 			continue
-		}
-		in, err := wb.Build(set.World, v, set.Containers[v.ID])
-		if err != nil {
-			out = append(out, VectorResult{v.ID, OutcomeFail, "world: " + err.Error()})
+		case !materialised && wb == nil:
+			out = append(out, VectorResult{v.ID, OutcomeNotRun, "no world builder and no materialised inputs"})
 			continue
 		}
-		rep, err := ver.Verify(in.Ctx, in.Container, in.Manifest)
-		if err != nil {
-			out = append(out, VectorResult{v.ID, OutcomeFail, "verifier error: " + err.Error()})
+		if !materialised {
+			var err error
+			if in, err = wb.Build(set.World, v, set.Containers[v.ID]); err != nil {
+				out = append(out, VectorResult{v.ID, OutcomeFail, "world: " + err.Error()})
+				continue
+			}
+		}
+		m, st, err := in.ResolveManifest()
+		var rep Report
+		switch {
+		case err != nil:
+			out = append(out, VectorResult{v.ID, OutcomeFail, "inputs: " + err.Error()})
 			continue
+		case st != nil:
+			if rep, err = refusalReport(st, in.Ctx); err != nil {
+				out = append(out, VectorResult{v.ID, OutcomeFail, "report: " + err.Error()})
+				continue
+			}
+		default:
+			if rep, err = ver.Verify(in.Ctx, in.Container, m); err != nil {
+				out = append(out, VectorResult{v.ID, OutcomeFail, "verifier error: " + err.Error()})
+				continue
+			}
 		}
 		if err := MatchExpected(v.Expected, rep); err != nil {
 			out = append(out, VectorResult{v.ID, OutcomeFail, err.Error()})

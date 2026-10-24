@@ -2,8 +2,8 @@
  "format": "certen-contract-identity-vectors/1",
  "spec": {
   "file": "V2_SPEC_S8.md",
-  "revision": "r3.1",
-  "sha256": "a08baa07eafc96d2b2dcff15635f11cb5f6a2b37e748fc7e77af1476f0a3766c"
+  "revision": "r3.2",
+  "sha256": "ae4dfd1c1624b67ce3cbda22384aec1724746a3d54864799aadc7fb846069a25"
  },
  "note": "one entry per row of Freeze inventory item 5; set is null and status spec_only until a published set (see FORMAT.md) contains the vector; expected entries with code null are tokens that are not registry rows (a headline word, a generator verdict)",
  "vectors": [
@@ -58,9 +58,24 @@
   {
    "id": "VS8-004",
    "step": "0",
-   "mutation": "extension appends a `setRootHistory` row after the last one / a `policy.owner` row with `validFromBlock` before the last row's",
-   "expectedText": "accepted, `manifest_source extension:<sha>` / `manifest_shadow`",
+   "mutation": "extension appends a `setRootHistory` row after the last one; a `policy.owner` row with `validFromBlock` after the last row's (the earlier owner is retired at the new row's block - 1); a `policy.owner` row with `validFromBlock` not after the last row's; a NEW chain with all its dependent rows; a new chain missing `eip2935` / `policy.txScan` / an owner role / a deployment role; a `chains[]` row whose id is present; a `generations` row of an existing key",
+   "expectedText": "accepted, `manifest_source extension:<sha>`; accepted; `manifest_shadow`; accepted; `manifest_unknown{chain}` (one each); `manifest_shadow`; `manifest_shadow`",
    "expected": [
+    {
+     "code": "contract_identity_manifest_shadow",
+     "reason": null,
+     "fields": null
+    },
+    {
+     "code": "contract_identity_manifest_unknown",
+     "reason": null,
+     "fields": "chain"
+    },
+    {
+     "code": "contract_identity_manifest_shadow",
+     "reason": null,
+     "fields": null
+    },
     {
      "code": "contract_identity_manifest_shadow",
      "reason": null,
@@ -90,13 +105,18 @@
   {
    "id": "VS8-011",
    "step": "1",
-   "mutation": "kind `contract-identity/v9`",
-   "expectedText": "`evidence_unrecognised{kind,version}`",
+   "mutation": "kind `contract-identity/v9`; a kind `STR` of 65 bytes",
+   "expectedText": "`evidence_unrecognised{kind,version}`; `evidence_too_large{part:kind,count,limit}`",
    "expected": [
     {
      "code": "contract_identity_evidence_unrecognised",
      "reason": null,
      "fields": "kind,version"
+    },
+    {
+     "code": "contract_identity_evidence_too_large",
+     "reason": null,
+     "fields": "part:kind,count,limit"
     }
    ],
    "other_tokens": [],
@@ -238,7 +258,7 @@
   {
    "id": "VS8-020",
    "step": "1b",
-   "mutation": "each of settlement, tx, receipt, adi_url, batch.batchRoot, batch.batchOperationID, batch.accSetRoot, batch.incarnation, s7 absent / zero; `s6_proven` with `S6` nil",
+   "mutation": "each of settlement, tx, receipt, adi_url, batch.batchRoot, batch.batchOperationID, batch.accSetRoot, batch.incarnation, s7 absent / zero; `s6_proven` with `S6` nil; `LegContext.Chain` zero (token `settlement`); a present `Registry9` with no members, an uppercase or `0x`-prefixed key, or a key of another length (token `registry9`)",
    "expectedText": "`context_incomplete{missing:[<name>]}` (one each)",
    "expected": [
     {
@@ -297,6 +317,27 @@
    "other_tokens": [
     "s6_link"
    ],
+   "set": null,
+   "status": "spec_only"
+  },
+  {
+   "id": "VS8-024",
+   "step": "1c",
+   "mutation": "a `Stated` part (settle, attest) whose reason matches `[a-z0-9_]{1,64}` but is not one of the six builder reasons",
+   "expectedText": "`evidence_malformed{part,reason:unknown_stated_reason}` (framework class; headline `refused`)",
+   "expected": [
+    {
+     "code": "contract_identity_evidence_malformed",
+     "reason": null,
+     "fields": "part,reason:unknown_stated_reason"
+    },
+    {
+     "code": "contract_identity_refused",
+     "reason": null,
+     "fields": null
+    }
+   ],
+   "other_tokens": [],
    "set": null,
    "status": "spec_only"
   },

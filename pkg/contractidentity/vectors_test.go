@@ -75,8 +75,8 @@ func TestVectorIndexEqualsSpecItem5(t *testing.T) {
 			rows = append(rows, [4]string{m[1], c(m[2]), c(m[3]), c(m[4])})
 		}
 	}
-	if len(rows) != 122 || len(idx.Vectors) != 122 {
-		t.Fatalf("spec item 5 has %d rows, the index %d, the frozen count is 122", len(rows), len(idx.Vectors))
+	if len(rows) != 123 || len(idx.Vectors) != 123 {
+		t.Fatalf("spec item 5 has %d rows, the index %d, the frozen count is 123", len(rows), len(idx.Vectors))
 	}
 	steps := specSteps(t)
 	letters := map[string]bool{"M": true, "G": true, "N": true, "P": true}
@@ -103,7 +103,7 @@ func TestVectorIndexEqualsSpecItem5(t *testing.T) {
 		}
 	}
 	// the vectors the freeze package implements as Go tests now exist in the index
-	for _, id := range []string{"VS8-001", "VS8-002", "VS8-003", "VS8-004", "VS8-010", "VS8-011", "VS8-012", "VS8-013", "VS8-014", "VS8-015", "VS8-016", "VS8-017", "VS8-020", "VS8-021"} {
+	for _, id := range []string{"VS8-001", "VS8-002", "VS8-003", "VS8-004", "VS8-010", "VS8-011", "VS8-012", "VS8-013", "VS8-014", "VS8-015", "VS8-016", "VS8-017", "VS8-020", "VS8-021", "VS8-024"} {
 		found := false
 		for _, v := range idx.Vectors {
 			found = found || v.ID == id
@@ -356,7 +356,8 @@ func TestLoadVectorSetRefusesEditedOrMalformedSets(t *testing.T) {
 type stubWorld struct{ err error }
 
 func (w stubWorld) Build(world json.RawMessage, v Vector, container []byte) (Inputs, error) {
-	return Inputs{Container: container}, w.err
+	m, _ := Embedded()
+	return Inputs{Container: container, Manifest: m}, w.err
 }
 
 // refusedReport is the report a correct verifier gives for vecRefused.

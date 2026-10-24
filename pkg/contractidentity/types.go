@@ -59,8 +59,11 @@ type Registry9 struct {
 	SignerCommitment [32]byte
 }
 
-// Validate checks the shape the S8 steps rely on: at least one member and lowercase-hex keys (no 0x prefix). It is not a context
-// refusal (the context table names none for registry9); step 21c turns a violation into registry_mismatch.
+// RegistryKeyHexLen is the length of a registry BLS key in hex characters: 96 bytes (M17).
+const RegistryKeyHexLen = 192
+
+// Validate checks the shape the S8 steps rely on: at least one member and keys of exactly RegistryKeyHexLen lowercase hex characters without a
+// 0x prefix. A PRESENT Registry9 that fails it is context_incomplete{missing:[registry9]} [r3.2:E-g]; an absent one is legal.
 func (r *Registry9) Validate() error {
 	if r == nil {
 		return fmt.Errorf("contractidentity: nil registry9")
@@ -69,7 +72,7 @@ func (r *Registry9) Validate() error {
 		return fmt.Errorf("contractidentity: registry9 has no members")
 	}
 	for i, m := range r.Members {
-		if m.BLSKey == "" || m.BLSKey != strings.ToLower(m.BLSKey) || strings.HasPrefix(m.BLSKey, "0x") {
+		if len(m.BLSKey) != RegistryKeyHexLen || m.BLSKey != strings.ToLower(m.BLSKey) || strings.HasPrefix(m.BLSKey, "0x") {
 			return fmt.Errorf("contractidentity: registry9 member %d: key is not lowercase hex without 0x", i)
 		}
 		for _, c := range m.BLSKey {
@@ -110,11 +113,12 @@ const (
 	CtxBatchOperationID = "batch.batchOperationID"
 	CtxBatchAccSetRoot  = "batch.accSetRoot"
 	CtxBatchIncarnation = "batch.incarnation"
+	CtxRegistry9        = "registry9"
 	CtxS7               = "s7"
 )
 
 // ContextTokens are the `missing` tokens of context_incomplete in the order of item 2a.
-var ContextTokens = []string{CtxSettlement, CtxTx, CtxReceipt, CtxADIURL, CtxS6, CtxBatchRoot, CtxBatchOperationID, CtxBatchAccSetRoot, CtxBatchIncarnation, CtxS7}
+var ContextTokens = []string{CtxSettlement, CtxTx, CtxReceipt, CtxADIURL, CtxS6, CtxBatchRoot, CtxBatchOperationID, CtxBatchAccSetRoot, CtxBatchIncarnation, CtxRegistry9, CtxS7}
 
 func zero32(b [32]byte) bool { return b == [32]byte{} }
 
@@ -149,6 +153,9 @@ func (c *LegContext) ValidateContext() error {
 		if zero32(b.v) {
 			missing = append(missing, b.name)
 		}
+	}
+	if c.Registry9 != nil && c.Registry9.Validate() != nil {
+		missing = append(missing, CtxRegistry9)
 	}
 	if c.S7 == nil {
 		missing = append(missing, CtxS7)

@@ -476,6 +476,22 @@ func (d *decoder) headers(part string, limit, maxBytes int) ([][]byte, error) {
 	return out, nil
 }
 
+// CheckStatedReasons is the verifier rule of step 1c(b) / 15 [r3.2:E-f]: a Stated part whose reason is not one of the six builder reasons
+// (Item 4, 'Stated reason (builders)') is evidence_malformed{part,reason:unknown_stated_reason}. Decode checks the syntax only, so that
+// encode(decode(x)) == x holds for every accepted container; the closed list is applied here, like nodes_unreferenced. The first such
+// part (settle, then attest) is reported; nil when every Stated reason is a builder reason.
+func (c *Container) CheckStatedReasons() *StateError {
+	for _, p := range []struct {
+		part string
+		p    Part
+	}{{PartSettle, c.Settle}, {PartAttest, c.Attest}} {
+		if p.p.Tag == TagStated && p.p.Stated != nil && !Check("stated_reason_builders", p.p.Stated.Reason) {
+			return Malformed(p.part, MalformedUnknownStatedReason, 0, 0, 0)
+		}
+	}
+	return nil
+}
+
 // ---- encoding ----
 
 // Encode is the canonical encoding of c. It refuses, with the same named states Decode raises, a container that Decode would refuse: an

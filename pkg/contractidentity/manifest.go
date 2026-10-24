@@ -5,14 +5,18 @@ package contractidentity
 import (
 	"bytes"
 	"crypto/sha256"
-	_ "embed"
+	"embed"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/ethereum/go-ethereum/crypto"
 )
 
 // The identity manifest (V2_SPEC_S8.md "Proposed evidence structure", manifest v1.1 section list) is an embedded, hash-pinned file: the
@@ -68,6 +72,11 @@ type Ref struct {
 type ImmutableRule struct {
 	Kind string `json:"kind"`
 	Expr string `json:"expr"`
+	// Value is the constant of a `constant` rule (the EntryPoint address); empty when the row carries none, in which case the spec literal
+	// applies (step 7) [r3.2:E-j].
+	Value string `json:"value"`
+	// Contract is the contract a `deployment` rule points at.
+	Contract string `json:"contract"`
 }
 
 // Immutable is an immutable of a build: its name, type, the byte ranges of its references and its rule.
@@ -874,6 +883,50 @@ func (m *Manifest) AuthWritersStatus(buildKey string) string {
 	return ""
 }
 
+// embeddedCreation holds the creation-code files the manifest's creationArtifacts rows name (identity-bytecode/<Contract>.creation.bin);
+// the directory holds only its README until the manifest follow-up embeds the files [r3.2:E-j].
+//
+//go:embed all:testdata/contractidentity/manifest/identity-bytecode
+var embeddedCreation embed.FS
+
+// The two named errors of the creation-artifact accessors.
+var (
+	ErrCreationArtifactAbsent   = errors.New("contractidentity: creation artifact is not available")
+	ErrCreationArtifactMismatch = errors.New("contractidentity: creation artifact differs from its manifest row")
+)
+
+// CreationArtifactBytes returns the creation code of a build from fsys (rooted at the manifest directory, so that row.File resolves), after
+// checking its length, keccak256 and sha256 against the creationArtifacts row. A missing row or file is ErrCreationArtifactAbsent, a file that
+// does not match its row ErrCreationArtifactMismatch; the bytes are never returned unchecked.
+func (m *Manifest) CreationArtifactBytes(buildKey string, fsys fs.FS) ([]byte, error) {
+	row, ok := m.creation[buildKey]
+	if !ok {
+		return nil, fmt.Errorf("%w: %s has no creationArtifacts row", ErrCreationArtifactAbsent, buildKey)
+	}
+	if !fs.ValidPath(row.File) {
+		return nil, fmt.Errorf("%w: %s names the path %q", ErrCreationArtifactMismatch, buildKey, row.File)
+	}
+	b, err := fs.ReadFile(fsys, row.File)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s (%s)", ErrCreationArtifactAbsent, buildKey, row.File)
+	}
+	k := crypto.Keccak256Hash(b)
+	s := sha256.Sum256(b)
+	if len(b) != row.Bytes || !strings.EqualFold(k.Hex(), row.Keccak256) || !strings.EqualFold(hex.EncodeToString(s[:]), row.SHA256) {
+		return nil, fmt.Errorf("%w: %s (%s)", ErrCreationArtifactMismatch, buildKey, row.File)
+	}
+	return b, nil
+}
+
+// EmbeddedCreationArtifactBytes is CreationArtifactBytes over the files embedded in this package.
+func (m *Manifest) EmbeddedCreationArtifactBytes(buildKey string) ([]byte, error) {
+	sub, err := fs.Sub(embeddedCreation, "testdata/contractidentity/manifest")
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrCreationArtifactAbsent, err)
+	}
+	return m.CreationArtifactBytes(buildKey, sub)
+}
+
 // CreationArtifact is the creationArtifacts row of a build key.
 func (m *Manifest) CreationArtifact(buildKey string) (CreationArtifact, bool) {
 	c, ok := m.creation[buildKey]
@@ -890,24 +943,79 @@ func (m *Manifest) Section(name string) json.RawMessage {
 
 // ---- the extension (no shadowing) ----
 
-// extensionTables are the top-level tables an extension may carry: the metadata keys, and the tables it may add rows to.
+// extensionMeta are the metadata keys an extension may carry; extensionRowTables are the tables it may add rows to.
 var extensionMeta = map[string]bool{"schema": true, "description": true}
-var extensionRowTables = map[string]bool{"builds": true, "deployments": true, "accounts": true, "eip2935": true, "policy": true}
+var extensionRowTables = map[string]bool{"builds": true, "deployments": true, "accounts": true, "eip2935": true, "policy": true, "chains": true, "generations": true}
+
+// newChainRoles are the deployment roles a NEW chain must define; newChainOwnerRoles are its owner-history roles.
+var newChainRoles = []string{RoleAnchor, RoleBlsZkVerifier, RoleGroth16Verifier, RoleAccountFactory, RoleOutcomeRegistry}
+var newChainOwnerRoles = []string{"anchor", "verifier"}
+
+// mergeMapRows adds the entries of add to base; an existing key is manifest_shadow{table,key}.
+func mergeMapRows(base, add json.RawMessage, table string) (json.RawMessage, error) {
+	var a, b map[string]json.RawMessage
+	if err := json.Unmarshal(add, &a); err != nil {
+		return nil, ManifestCorrupt().WithCause(err)
+	}
+	if len(base) > 0 {
+		if err := json.Unmarshal(base, &b); err != nil {
+			return nil, ManifestCorrupt().WithCause(err)
+		}
+	}
+	if b == nil {
+		b = map[string]json.RawMessage{}
+	}
+	for _, k := range sortedKeys(a) {
+		if _, exists := b[k]; exists {
+			return nil, ManifestShadow(table, k)
+		}
+		b[k] = a[k]
+	}
+	return mustMarshal(b), nil
+}
+
+// mergeArrayRows appends the rows of add to base; a row whose key (key(row)) is already present is manifest_shadow{table,key}.
+func mergeArrayRows(base, add json.RawMessage, table string, key func(json.RawMessage) string) (json.RawMessage, error) {
+	var a, b []json.RawMessage
+	if err := json.Unmarshal(add, &a); err != nil {
+		return nil, ManifestCorrupt().WithCause(err)
+	}
+	if len(base) > 0 {
+		if err := json.Unmarshal(base, &b); err != nil {
+			return nil, ManifestCorrupt().WithCause(err)
+		}
+	}
+	seen := map[string]bool{}
+	for _, r := range b {
+		seen[key(r)] = true
+	}
+	for _, r := range a {
+		k := key(r)
+		if seen[k] {
+			return nil, ManifestShadow(table, k)
+		}
+		seen[k] = true
+		b = append(b, r)
+	}
+	return mustMarshal(b), nil
+}
 
 // WithExtension merges an extension into the manifest under the no-shadow rule (manifest item 7). An extension may add rows to builds,
-// deployments, accounts, eip2935, policy.owner and policy.setRootHistory (new rows only, validFromBlock after the last row of that key)
-// and nothing else; it may never redefine a primary key already present. A collision is manifest_shadow{table,key}; the merged
-// manifest's Source is extension:<sha256 of the extension>.
+// deployments, accounts, eip2935, chains, policy.txScan (rows of NEW keys), generations, policy.owner and policy.setRootHistory (new
+// rows only, validFromBlock after the last row of that key) and nothing else; it may never redefine a primary key already present. A
+// collision is manifest_shadow{table,key}. A NEW chain id needs all its dependent rows in the same extension (eip2935, txScan, both
+// owner roles, the five deployment roles with an existing build), and a dependent row of a chain known neither to the base nor to the
+// extension is refused: both are manifest_unknown{chain}. The merged manifest's Source is extension:<sha256 of the extension>.
 func (m *Manifest) WithExtension(ext []byte) (*Manifest, error) {
 	norm := bytes.ReplaceAll(ext, []byte("\r\n"), []byte("\n"))
 	if p, k, dup, err := findDuplicateKey(norm); err != nil {
-		return nil, ManifestCorrupt()
+		return nil, ManifestCorrupt().WithCause(err)
 	} else if dup {
 		return nil, ManifestShadow("extension"+p, k)
 	}
 	var edoc map[string]json.RawMessage
 	if err := json.Unmarshal(norm, &edoc); err != nil {
-		return nil, ManifestCorrupt()
+		return nil, ManifestCorrupt().WithCause(err)
 	}
 	for _, name := range sortedKeys(edoc) {
 		if extensionMeta[name] || extensionRowTables[name] {
@@ -931,90 +1039,47 @@ func (m *Manifest) WithExtension(ext []byte) (*Manifest, error) {
 	for k, v := range m.doc {
 		merged[k] = v
 	}
-	// builds: a map keyed "<contract>/<variant>"
+	var err error
 	if raw, ok := edoc["builds"]; ok {
-		var add map[string]json.RawMessage
-		if err := json.Unmarshal(raw, &add); err != nil {
-			return nil, ManifestCorrupt()
+		if merged["builds"], err = mergeMapRows(merged["builds"], raw, "builds"); err != nil {
+			return nil, err
 		}
-		var base map[string]json.RawMessage
-		_ = json.Unmarshal(merged["builds"], &base)
-		keys := sortedKeys(add)
-		for _, k := range keys {
-			if _, exists := base[k]; exists {
-				return nil, ManifestShadow("builds", k)
-			}
-			base[k] = add[k]
-		}
-		merged["builds"] = mustMarshal(base)
 	}
-	// deployments: an array keyed (chainId, role)
-	if raw, ok := edoc["deployments"]; ok {
-		var add, base []json.RawMessage
-		if err := json.Unmarshal(raw, &add); err != nil {
-			return nil, ManifestCorrupt()
-		}
-		_ = json.Unmarshal(merged["deployments"], &base)
-		seen := map[string]bool{}
-		for _, r := range base {
-			seen[rowKey(r, "chainId", "role")] = true
-		}
-		for _, r := range add {
-			k := rowKey(r, "chainId", "role")
-			if seen[k] {
-				return nil, ManifestShadow("deployments", k)
-			}
-			seen[k] = true
-			base = append(base, r)
-		}
-		merged["deployments"] = mustMarshal(base)
-	}
-	// accounts: an array keyed (chainId, address)
-	if raw, ok := edoc["accounts"]; ok {
-		var add, base []json.RawMessage
-		if err := json.Unmarshal(raw, &add); err != nil {
-			return nil, ManifestCorrupt()
-		}
-		_ = json.Unmarshal(merged["accounts"], &base)
-		seen := map[string]bool{}
-		for _, r := range base {
-			seen[strings.ToLower(rowKey(r, "chainId", "address"))] = true
-		}
-		for _, r := range add {
-			k := strings.ToLower(rowKey(r, "chainId", "address"))
-			if seen[k] {
-				return nil, ManifestShadow("accounts", k)
-			}
-			seen[k] = true
-			base = append(base, r)
-		}
-		merged["accounts"] = mustMarshal(base)
-	}
-	// eip2935: a map keyed by chain id
 	if raw, ok := edoc["eip2935"]; ok {
-		var add, base map[string]json.RawMessage
-		if err := json.Unmarshal(raw, &add); err != nil {
-			return nil, ManifestCorrupt()
+		if merged["eip2935"], err = mergeMapRows(merged["eip2935"], raw, "eip2935"); err != nil {
+			return nil, err
 		}
-		_ = json.Unmarshal(merged["eip2935"], &base)
-		for _, k := range sortedKeys(add) {
-			if _, exists := base[k]; exists {
-				return nil, ManifestShadow("eip2935", k)
-			}
-			base[k] = add[k]
-		}
-		merged["eip2935"] = mustMarshal(base)
 	}
-	// policy: only owner and setRootHistory rows may be added
+	if raw, ok := edoc["deployments"]; ok {
+		if merged["deployments"], err = mergeArrayRows(merged["deployments"], raw, "deployments", func(r json.RawMessage) string { return rowKey(r, "chainId", "role") }); err != nil {
+			return nil, err
+		}
+	}
+	if raw, ok := edoc["accounts"]; ok {
+		if merged["accounts"], err = mergeArrayRows(merged["accounts"], raw, "accounts", func(r json.RawMessage) string { return strings.ToLower(rowKey(r, "chainId", "address")) }); err != nil {
+			return nil, err
+		}
+	}
+	if raw, ok := edoc["chains"]; ok {
+		if merged["chains"], err = mergeArrayRows(merged["chains"], raw, "chains", func(r json.RawMessage) string { return strings.TrimSuffix(rowKey(r, "chainId", "_"), ",") }); err != nil {
+			return nil, err
+		}
+	}
+	if raw, ok := edoc["generations"]; ok {
+		if merged["generations"], err = mergeArrayRows(merged["generations"], raw, "generations", func(r json.RawMessage) string { return rowKey(r, "role", "generation") }); err != nil {
+			return nil, err
+		}
+	}
+	// policy: only owner, setRootHistory and the txScan rows of new chains may be added
 	if raw, ok := edoc["policy"]; ok {
 		var add, base map[string]json.RawMessage
 		if err := json.Unmarshal(raw, &add); err != nil {
-			return nil, ManifestCorrupt()
+			return nil, ManifestCorrupt().WithCause(err)
 		}
 		_ = json.Unmarshal(merged["policy"], &base)
 		for _, k := range sortedKeys(add) {
 			switch k {
-			case "owner", "setRootHistory", "description":
+			case "owner", "setRootHistory", "txScan", "description":
 			case "rules":
 				var rules []Rule
 				_ = json.Unmarshal(add[k], &rules)
@@ -1022,21 +1087,19 @@ func (m *Manifest) WithExtension(ext []byte) (*Manifest, error) {
 					return nil, ManifestShadow("policy.rules", rules[0].ID)
 				}
 				return nil, ManifestShadow("policy.rules", "*")
-			case "txScan":
-				var rows map[string]json.RawMessage
-				_ = json.Unmarshal(add[k], &rows)
-				for _, c := range sortedKeys(rows) {
-					return nil, ManifestShadow("policy.txScan", c)
-				}
-				return nil, ManifestShadow("policy.txScan", "*")
 			default:
 				return nil, ManifestShadow("policy", k)
+			}
+		}
+		if rawTx, ok := add["txScan"]; ok {
+			if base["txScan"], err = mergeMapRows(base["txScan"], rawTx, "policy.txScan"); err != nil {
+				return nil, err
 			}
 		}
 		if rawOwner, ok := add["owner"]; ok {
 			var addO, baseO map[string][]json.RawMessage
 			if err := json.Unmarshal(rawOwner, &addO); err != nil {
-				return nil, ManifestCorrupt()
+				return nil, ManifestCorrupt().WithCause(err)
 			}
 			_ = json.Unmarshal(base["owner"], &baseO)
 			if baseO == nil {
@@ -1051,7 +1114,7 @@ func (m *Manifest) WithExtension(ext []byte) (*Manifest, error) {
 				for _, rawRow := range addO[chainKey] {
 					var row OwnerRow
 					if err := json.Unmarshal(rawRow, &row); err != nil {
-						return nil, ManifestCorrupt()
+						return nil, ManifestCorrupt().WithCause(err)
 					}
 					last, have := uint64(0), false
 					for _, e := range baseO[chainKey] {
@@ -1071,13 +1134,13 @@ func (m *Manifest) WithExtension(ext []byte) (*Manifest, error) {
 		if rawSR, ok := add["setRootHistory"]; ok {
 			var addS, baseS []json.RawMessage
 			if err := json.Unmarshal(rawSR, &addS); err != nil {
-				return nil, ManifestCorrupt()
+				return nil, ManifestCorrupt().WithCause(err)
 			}
 			_ = json.Unmarshal(base["setRootHistory"], &baseS)
 			for _, rawRow := range addS {
 				var row SetRootRow
 				if err := json.Unmarshal(rawRow, &row); err != nil {
-					return nil, ManifestCorrupt()
+					return nil, ManifestCorrupt().WithCause(err)
 				}
 				last, have := uint64(0), false
 				for _, e := range baseS {
@@ -1097,11 +1160,90 @@ func (m *Manifest) WithExtension(ext []byte) (*Manifest, error) {
 	}
 	out := &Manifest{doc: merged, SHA256: m.SHA256}
 	if err := out.decode(); err != nil {
-		return nil, ManifestCorrupt()
+		return nil, ManifestCorrupt().WithCause(err)
+	}
+	if err := out.checkChains(m); err != nil {
+		return nil, err
 	}
 	out.ExtensionSHA256 = manifestHash(ext)
 	out.Source = "extension:" + hex.EncodeToString(out.ExtensionSHA256[:])
 	return out, nil
+}
+
+// checkChains enforces the chain rules of an extension: every dependent row belongs to a chain of the merged chains[], and every chain that
+// the extension added has all its dependent rows. Both are manifest_unknown{chain}.
+func (m *Manifest) checkChains(base *Manifest) error {
+	known := map[uint64]bool{}
+	for _, c := range m.chains {
+		known[c.ChainID] = true
+	}
+	var foreign []uint64
+	note := func(chain uint64) {
+		if !known[chain] {
+			foreign = append(foreign, chain)
+		}
+	}
+	for _, d := range m.deploys {
+		note(d.ChainID)
+	}
+	for _, a := range m.accounts {
+		note(a.ChainID)
+	}
+	for c := range m.eip2935 {
+		note(c)
+	}
+	for c := range m.txScan {
+		note(c)
+	}
+	for c := range m.owners {
+		note(c)
+	}
+	for _, r := range m.setRoots {
+		note(r.ChainID)
+	}
+	if len(foreign) > 0 {
+		sort.Slice(foreign, func(i, j int) bool { return foreign[i] < foreign[j] })
+		return ManifestUnknown(foreign[0])
+	}
+	baseKnown := map[uint64]bool{}
+	for _, c := range base.chains {
+		baseKnown[c.ChainID] = true
+	}
+	var added []uint64
+	for _, c := range m.chains {
+		if !baseKnown[c.ChainID] {
+			added = append(added, c.ChainID)
+		}
+	}
+	sort.Slice(added, func(i, j int) bool { return added[i] < added[j] })
+	for _, c := range added {
+		complete := true
+		if _, ok := m.eip2935[c]; !ok {
+			complete = false
+		}
+		if _, ok := m.txScan[c]; !ok {
+			complete = false
+		}
+		for _, role := range newChainOwnerRoles {
+			if len(m.OwnerRows(c, role)) == 0 {
+				complete = false
+			}
+		}
+		for _, role := range newChainRoles {
+			d, ok := m.Deployment(c, role)
+			if !ok {
+				complete = false
+				continue
+			}
+			if _, ok := m.builds[d.Build]; !ok {
+				complete = false
+			}
+		}
+		if !complete {
+			return ManifestUnknown(c)
+		}
+	}
+	return nil
 }
 
 func rowKey(raw json.RawMessage, a, b string) string {

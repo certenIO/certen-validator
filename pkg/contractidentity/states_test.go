@@ -67,7 +67,7 @@ func contains(l []string, s string) bool {
 }
 
 var (
-	tagRe     = regexp.MustCompile(`\s*\[r3(?:\.1)?:[A-Za-z0-9-]+\]`)
+	tagRe     = regexp.MustCompile(`\s*\[r3(?:\.[12])?:[A-Za-z0-9-]+\]`)
 	item3RowR = regexp.MustCompile(`^\| ([a-z0-9_]+) \| ([^|]+) \| (FR|JR|U|OPEN|PEND|VER|NA|WRAP) \| ([^|]*) \| ([^|]+) \| ([^|]+) \|$`)
 )
 
