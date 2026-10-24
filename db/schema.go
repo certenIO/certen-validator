@@ -150,12 +150,13 @@ func isDestructive(statement string) bool {
 	return false
 }
 
-// sqlToken is one lexical unit of a migration: a word (upper-cased), a semicolon, or the text between a pair of dollar quotes (a function
-// body), which is judged as SQL of its own. Comments, string literals and quoted identifiers are dropped.
+// sqlToken is one lexical unit of a migration: a word (upper-cased), a semicolon, or the text between a pair of dollar quotes or single quotes
+// (which hasSessionSetting judges as SQL of its own where it is the body of a routine). Comments and quoted identifiers are dropped.
 type sqlToken struct {
-	word   string // upper-cased word, ";" or ""
-	body   string // the text inside $tag$ ... $tag$
-	isBody bool
+	word     string // upper-cased word, ";" or ""
+	body     string // the text inside $tag$ ... $tag$, or inside '...'
+	isBody   bool
+	isString bool // the body is a single-quoted string
 }
 
 func lexSQL(sql string) []sqlToken {
@@ -165,7 +166,7 @@ func lexSQL(sql string) []sqlToken {
 		c := sql[i]
 		switch {
 		case c == '-' && strings.HasPrefix(sql[i:], "--"):
-			for i < len(sql) && sql[i] != '\n' {
+			for i < len(sql) && sql[i] != '\n' && sql[i] != '\r' { // PostgreSQL ends a -- comment at a bare carriage return too
 				i++
 			}
 		case c == '/' && strings.HasPrefix(sql[i:], "/*"):
@@ -187,21 +188,26 @@ func lexSQL(sql string) []sqlToken {
 		case c == '\'':
 			escapes := i > 0 && (sql[i-1] == 'e' || sql[i-1] == 'E') && (i == 1 || !isWordByte(sql[i-2]))
 			i++
+			var text strings.Builder // the content, a doubled quote read as one: a function body may be written as a string
 			for i < len(sql) {
-				if escapes && sql[i] == '\\' {
+				if escapes && sql[i] == '\\' && i+1 < len(sql) {
+					text.WriteString(sql[i : i+2])
 					i += 2
 					continue
 				}
 				if sql[i] == '\'' {
 					if i+1 < len(sql) && sql[i+1] == '\'' {
+						text.WriteByte('\'')
 						i += 2
 						continue
 					}
 					i++
 					break
 				}
+				text.WriteByte(sql[i])
 				i++
 			}
+			out = append(out, sqlToken{isBody: true, isString: true, body: text.String()})
 		case c == '"':
 			i++
 			for i < len(sql) {
@@ -216,6 +222,10 @@ func lexSQL(sql string) []sqlToken {
 				i++
 			}
 		case c == '$':
+			if i > 0 && isWordByte(sql[i-1]) { // PostgreSQL reads a $ after an identifier character as part of the identifier (foo$bar$)
+				i++
+				continue
+			}
 			if end := dollarTagEnd(sql, i); end > 0 {
 				tag := sql[i:end]
 				close := strings.Index(sql[end:], tag)
@@ -265,20 +275,21 @@ func dollarTagEnd(sql string, i int) int {
 // RESET (SET LOCAL and SET SESSION included), or an ALTER ROLE / USER / DATABASE / SYSTEM that carries one. A statement begins at the start
 // of the text, after a semicolon, and, inside a function body, after BEGIN, THEN, ELSE or LOOP. The SET that follows other words of a
 // statement is a clause of it (UPDATE ... SET, ON CONFLICT DO UPDATE SET, ALTER TABLE ... SET, the SET attribute of CREATE FUNCTION) and
-// is not judged. The dollar-quoted body of CREATE FUNCTION, CREATE PROCEDURE and DO is judged as SQL of its own; any other dollar-quoted
-// text is a string.
+// is not judged. The body of CREATE FUNCTION and CREATE PROCEDURE (the dollar-quoted text, or the single-quoted string after AS) and of DO
+// is judged as SQL of its own; any other quoted text is a string.
 func hasSessionSetting(sql string) bool {
 	atStart := true
-	var first, second, head string
+	var first, second, head, prev string
 	alter, routine := false, false
 	for _, tok := range lexSQL(sql) {
 		if tok.isBody {
-			if routine && hasSessionSetting(tok.body) {
+			if routine && (!tok.isString || head == "DO" || prev == "AS") && hasSessionSetting(tok.body) {
 				return true
 			}
-			atStart = false
+			atStart, prev = false, ""
 			continue
 		}
+		prev = tok.word
 		switch tok.word {
 		case ";":
 			atStart, first, second, head, alter, routine = true, "", "", "", false, false

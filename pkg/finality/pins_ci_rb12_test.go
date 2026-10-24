@@ -35,13 +35,31 @@ func TestTheFinalityPinsSyncJobPinsGoNamesExists(t *testing.T) {
 		`(?m)^      - 'pkg/finality/pins-links/\*\*'$`,
 		`repository: certenIO/certen-contracts`,
 		`repository: certenIO/certen-sdk`,
-		`node contracts/scripts/finality-pins-sync\.mjs --validator \. --sdk sdk --contracts contracts`,
+		`(?m)^        run: node pr/finality-pins-sync\.mjs --validator \. --sdk sdk --contracts contracts$`,
+		`(?m)^        run: cmp contracts/scripts/finality-pins-sync\.mjs pr/finality-pins-sync\.mjs$`,
+		`(?m)^      - 'pr/finality-pins-sync\.mjs'$`,
 		`FINALITY_PINS_SYNC_TOKEN`,
 		`(?m)^            exit 1$`,
 	} {
 		if !regexp.MustCompile(re).MatchString(wf) {
 			t.Errorf("the workflow does not contain %s", re)
 		}
+	}
+	// V-OPS-A1 O1: the token of the cross-repository read never stays in a checkout another repository's code could read it from, and nothing
+	// from another repository is executed: every checkout drops its credential, no step runs a file under contracts/ or sdk/ (they are compared
+	// as data), and the script that runs is the copy in THIS repository, which the job proves equal to the published one with cmp first.
+	checkouts := regexp.MustCompile(`(?m)^      - uses: actions/checkout@v4$`).FindAllString(wf, -1)
+	if len(checkouts) != 3 || strings.Count(wf, "persist-credentials: false") != len(checkouts) {
+		t.Errorf("%d checkouts and %d persist-credentials: false", len(checkouts), strings.Count(wf, "persist-credentials: false"))
+	}
+	if regexp.MustCompile(`(?m)^\s*run:.*\b(node|bash|sh|npm|npx|python|go)\b.*\b(contracts|sdk)/`).MatchString(wf) {
+		t.Error("a step executes a file of another repository")
+	}
+	if strings.Contains(wf, "pull_request_target") {
+		t.Error("pull_request_target")
+	}
+	if _, err := os.Stat(filepath.Join("..", "..", "pr", "finality-pins-sync.mjs")); err != nil {
+		t.Errorf("the script the workflow runs is not in this repository: %v", err)
 	}
 	// the files the workflow guards are the files this package embeds
 	for _, p := range []string{"pins/finality-pins.json", "pins-links/1378.ssz"} {

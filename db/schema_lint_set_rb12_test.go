@@ -69,6 +69,15 @@ func TestSetClausesOfDataStatementsAreAccepted(t *testing.T) {
 		"CREATE FUNCTION f() RETURNS void LANGUAGE plpgsql AS $$\nBEGIN\n  UPDATE t\n    SET a = 1;\nEND\n$$;",
 		"-- SET statement_timeout = 0 is only said here\nSELECT 'SET statement_timeout = 0' /* SET lock_timeout = 0 */;",
 		"SELECT $q$\nSET statement_timeout = 0\n$q$ AS text;",
+		// a $ inside an identifier is part of the identifier, and a dollar quote still opens after a space, a parenthesis or a keyword
+		"SELECT 1 AS foo$bar$, 2 AS x$bar$;",
+		"CREATE FUNCTION f() RETURNS int LANGUAGE sql AS $b$ SELECT 1 $b$;",
+		"CREATE FUNCTION f() RETURNS int LANGUAGE sql AS($$ SELECT 1 $$);",
+		// a single-quoted body that holds no statement-level SET, and single-quoted text that is not a body
+		"CREATE FUNCTION f() RETURNS int LANGUAGE sql AS 'SELECT 1';",
+		"CREATE FUNCTION f() RETURNS int LANGUAGE sql\n  SET application_name = 'set x'\n  AS 'UPDATE t SET a = 1 RETURNING 1';",
+		"SELECT 'SET statement_timeout = 0';",
+		"-- c\r\nSELECT 1;",
 	} {
 		if err := lintOf(m, sql); err != nil {
 			t.Errorf("%q: %v", sql, err)
@@ -103,6 +112,14 @@ func TestStatementLevelSetStaysRejected(t *testing.T) {
 		"ALTER DATABASE":              "ALTER DATABASE certen_proofs\n  SET lock_timeout = 0;",
 		"ALTER SYSTEM":                "ALTER SYSTEM SET statement_timeout = 0;",
 		"ALTER ROLE RESET":            "ALTER ROLE certen RESET ALL;",
+		// RB12-OPS-A1 review O2: parity with the PostgreSQL lexer
+		"dollar inside an identifier":           "SELECT 1 AS foo$bar$;\nSET statement_timeout = 0;\nSELECT 2 AS x$bar$;",
+		"dollar inside an identifier, digits":   "SELECT 1 AS a1$t$;\nSET lock_timeout = 0;\nSELECT 2 AS b$t$;",
+		"carriage return ends a comment":        "-- c\rSET statement_timeout = 0;",
+		"single-quoted function body":           "CREATE FUNCTION f() RETURNS void LANGUAGE plpgsql AS 'BEGIN SET LOCAL statement_timeout = 0; END';",
+		"single-quoted SQL function body":       "CREATE FUNCTION f() RETURNS int LANGUAGE sql AS 'SET statement_timeout = 0;\nSELECT 1';",
+		"single-quoted body with doubled quote": "CREATE FUNCTION f() RETURNS text LANGUAGE plpgsql AS 'BEGIN PERFORM ''x''; RESET ALL; RETURN ''y''; END';",
+		"DO with a single-quoted body":          "DO 'BEGIN SET LOCAL lock_timeout = 0; END';",
 	}
 	for name, sql := range cases {
 		if err := lintOf(m, sql); err == nil || !strings.Contains(err.Error(), "changes session settings") {

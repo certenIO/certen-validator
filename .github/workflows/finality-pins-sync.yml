@@ -9,7 +9,12 @@ name: finality-pins-sync
 # published there is red here on purpose.
 #
 # It reads certenIO/certen-contracts and certenIO/certen-sdk (private) with the read-only token in the repository secret
-# FINALITY_PINS_SYNC_TOKEN. Without the secret the job FAILS with a message; it never skips the comparison.
+# FINALITY_PINS_SYNC_TOKEN. Without the secret the job FAILS with a message; it never skips the comparison. Every checkout drops its
+# credential (the token is not left in any .git/config), no code of the other repositories is executed (the script is the vendored
+# pr/finality-pins-sync.mjs, proved equal to the published one by cmp), and the workflow never runs on the privileged pull-request event.
+#
+# Do NOT make this check a required status until the TS stack is merged into certen-sdk: it compares against certen-sdk main, which has no
+# finality directory yet, so it is red by design until then.
 
 on:
   pull_request:
@@ -17,6 +22,7 @@ on:
       - 'pkg/finality/pins.go'
       - 'pkg/finality/pins/**'
       - 'pkg/finality/pins-links/**'
+      - 'pr/finality-pins-sync.mjs'
       - '.github/workflows/finality-pins-sync.yml'
   push:
     branches: [main]
@@ -24,6 +30,7 @@ on:
       - 'pkg/finality/pins.go'
       - 'pkg/finality/pins/**'
       - 'pkg/finality/pins-links/**'
+      - 'pr/finality-pins-sync.mjs'
   workflow_dispatch:
 
 permissions:
@@ -34,6 +41,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: The token that reads the other repositories is present
         env:
@@ -50,6 +59,7 @@ jobs:
           ref: main
           path: contracts
           token: ${{ secrets.FINALITY_PINS_SYNC_TOKEN }}
+          persist-credentials: false
           sparse-checkout: |
             /scripts/finality-pins-sync.mjs
             /evm/deployments/finality-pins.json
@@ -63,6 +73,7 @@ jobs:
           ref: main
           path: sdk
           token: ${{ secrets.FINALITY_PINS_SYNC_TOKEN }}
+          persist-credentials: false
           sparse-checkout: |
             /packages/verify/src/proof-v2/finality/finality-pins.json
             /packages/verify/src/proof-v2/finality/pins.ts
@@ -74,5 +85,11 @@ jobs:
         with:
           node-version: '20'
 
+      # The script that runs is pr/finality-pins-sync.mjs of THIS repository. Nothing from certen-contracts or certen-sdk is executed: both
+      # are read as data (and carry no credential after their checkout). The vendored script must be byte for byte the one certen-contracts
+      # publishes; a difference is a failure that says so, fixed by copying the published script here.
+      - name: The vendored script is the published one
+        run: cmp contracts/scripts/finality-pins-sync.mjs pr/finality-pins-sync.mjs
+
       - name: The three copies and both constants agree
-        run: node contracts/scripts/finality-pins-sync.mjs --validator . --sdk sdk --contracts contracts
+        run: node pr/finality-pins-sync.mjs --validator . --sdk sdk --contracts contracts
