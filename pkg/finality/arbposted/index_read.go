@@ -21,6 +21,10 @@ import (
 type IndexReader struct {
 	Store finality.CaptureStore
 	Gen   uint32
+	// Floor, when set, is the lowest L1 block that holds a batch the capture did not scan itself (the archive backfill's prefix scan of the batches
+	// posted before the capture started): the time search starts there instead of a first-scan slack below the capture's first cursor row. Nil:
+	// every batch lies within that slack, as in the live table.
+	Floor func(ctx context.Context) (block uint64, ok bool, err error)
 	arb   *arbPins
 	pins  [8]byte
 }
@@ -217,6 +221,15 @@ func (r *IndexReader) Locate(ctx context.Context, b *Builder, hdr finality.Heade
 	if !have {
 		metrics.IncFinalityIndexLookup(chain, FamilyArb, "behind")
 		return nil, pend(map[string]any{"index_behind": true, "index_through_l1": uint64(0), "last_scanned_l1": capHi}, 0), nil
+	}
+	if r.Floor != nil {
+		f, ok, err := r.Floor(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		if ok && f < capLo {
+			capLo = f
+		}
 	}
 	from, to, err := r.window(ctx, hdr.Timestamp, capLo, through, io)
 	if err != nil {

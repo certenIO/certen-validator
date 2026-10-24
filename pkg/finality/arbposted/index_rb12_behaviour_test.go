@@ -460,3 +460,37 @@ func TestRB12ArbIndexForgedBatchNumberCannotMakeAFalseCaptureGap(t *testing.T) {
 		}
 	}
 }
+
+// A batch stored far below the capture's first cursor row (the archive backfill's prefix scan fills the batches posted before the capture started)
+// is outside the time search unless the integrator gives the reader the floor of what it filled; the indexer finds it either way (its first step
+// scans from block 0), and a note (finality.LateBlockNoter) is how a filler tells it later.
+func TestRB12ArbIndexFloorHookCoversBatchesBelowTheCaptureStart(t *testing.T) {
+	w := newIxWorld(t)
+	w.add(ixBatch{N: 90, Block: 1000, T: ixT0, Msgs: [][][]byte{ixMsg(ixTx(91000))}})
+	w.add(ixBatch{N: 600, Block: 6000, T: ixT0 + 5000, Msgs: [][][]byte{ixMsg(ixTx(91001))}})
+	w.cursor(5900)
+	w.cursor(6100)
+	ix := w.indexer(IndexConfig{})
+	stepAll(t, ix, 6100)
+	leg := [][]byte{ixTx(91000)}
+	r := w.reader()
+	if o := w.idx(r, ixT0+10, leg); o.N != 0 {
+		t.Fatalf("without the floor the batch below the capture start is outside the search window: %s", o)
+	}
+	r.Floor = func(context.Context) (uint64, bool, error) { return 1000, true, nil }
+	if o := w.idx(r, ixT0+10, leg); o.N != 90 {
+		t.Fatalf("with the floor of the prefix scan the batch is found: %s", o)
+	}
+	// a filler that stores a batch below the cursor tells the indexer, which indexes it at the next step
+	late := w.add(ixBatch{N: 89, Block: 900, T: ixT0 - 96, Msgs: [][][]byte{ixMsg(ixTx(91002))}})
+	_ = late
+	var _ finality.LateBlockNoter = ix
+	ix.NoteLate(900)
+	if _, err := ix.Step(context.Background(), 6100); err != nil {
+		t.Fatal(err)
+	}
+	r.Floor = func(context.Context) (uint64, bool, error) { return 900, true, nil }
+	if o := w.idx(r, ixT0-86, [][]byte{ixTx(91002)}); o.N != 89 {
+		t.Fatalf("a batch stored below the cursor and noted is found: %s", o)
+	}
+}
