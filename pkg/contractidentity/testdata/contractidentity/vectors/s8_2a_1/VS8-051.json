@@ -1,0 +1,44 @@
+{
+ "id": "VS8-051",
+ "base": "H0",
+ "mutations": [
+  {
+   "op": "set_field",
+   "target": "world",
+   "path": "variant",
+   "value": "s6silent"
+  },
+  {
+   "op": "set_field",
+   "target": "world",
+   "path": "settlement.logs",
+   "value": []
+  },
+  {
+   "op": "set_field",
+   "target": "world",
+   "path": "blocks.settle.txs.2",
+   "value": {
+    "role": "settlement",
+    "type": 2,
+    "wire": "0x02e983aa36a7010101825208941111111111111111111111111111111111111111808401020304c0808080"
+   }
+  }
+ ],
+ "expected": {
+  "headline": "unproven",
+  "parts": {
+   "settlement_path": "unproven"
+  },
+  "states": [
+   {
+    "part": "settlement_path",
+    "code": "contract_identity_unproven",
+    "fields": {
+     "count": "0",
+     "reason": "settlement_event_missing"
+    }
+   }
+  ]
+ }
+}

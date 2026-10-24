@@ -1,0 +1,26 @@
+{
+ "id": "VS8-030.chain",
+ "base": "H0",
+ "mutations": [
+  {
+   "op": "set_field",
+   "target": "container",
+   "path": "chain",
+   "value": "11155112"
+  }
+ ],
+ "expected": {
+  "headline": "refused",
+  "states": [
+   {
+    "part": "first",
+    "code": "contract_identity_block_mismatch",
+    "fields": {
+     "field": "chain",
+     "got": "11155112",
+     "want": "11155111"
+    }
+   }
+  ]
+ }
+}

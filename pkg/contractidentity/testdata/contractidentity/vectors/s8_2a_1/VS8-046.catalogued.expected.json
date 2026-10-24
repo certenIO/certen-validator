@@ -1,0 +1,29 @@
+{
+ "headline": "unproven",
+ "parts": {
+  "code_identity": "unproven",
+  "settlement_path": "unproven"
+ },
+ "states": [
+  {
+   "part": "settlement_path",
+   "code": "contract_identity_unproven",
+   "fields": {
+    "code_hash": "0x1f9b62b74c1bd8f4ca58f3a07b116242b1f6a1a86dd556cfd731c21a382ebda8",
+    "generation": "CertenAccountV7",
+    "kind": "catalogued",
+    "reason": "account_generation_unpinned"
+   }
+  },
+  {
+   "part": "code_identity",
+   "code": "contract_identity_unproven",
+   "fields": {
+    "code_hash": "0x1f9b62b74c1bd8f4ca58f3a07b116242b1f6a1a86dd556cfd731c21a382ebda8",
+    "generation": "CertenAccountV7",
+    "kind": "catalogued",
+    "reason": "account_generation_unpinned"
+   }
+  }
+ ]
+}

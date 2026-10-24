@@ -1,0 +1,26 @@
+{
+ "id": "VS8-030.hash",
+ "base": "H0",
+ "mutations": [
+  {
+   "op": "set_field",
+   "target": "container",
+   "path": "leg.hash",
+   "value": "bc1475f5251e46fca0ff916a8600bc3894ef1759d47b76911cbd5953a9410a91"
+  }
+ ],
+ "expected": {
+  "headline": "refused",
+  "states": [
+   {
+    "part": "first",
+    "code": "contract_identity_block_mismatch",
+    "fields": {
+     "field": "hash",
+     "got": "0xbc1475f5251e46fca0ff916a8600bc3894ef1759d47b76911cbd5953a9410a91",
+     "want": "0xbd1475f5251e46fca0ff916a8600bc3894ef1759d47b76911cbd5953a9410a91"
+    }
+   }
+  ]
+ }
+}

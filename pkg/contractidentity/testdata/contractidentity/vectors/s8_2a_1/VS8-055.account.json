@@ -1,0 +1,27 @@
+{
+ "id": "VS8-055.account",
+ "base": "H0",
+ "mutations": [
+  {
+   "op": "set_field",
+   "target": "context",
+   "path": "s6.contract",
+   "value": "0x1111111111111111111111111111111111111111"
+  }
+ ],
+ "expected": {
+  "headline": "refused",
+  "parts": {
+   "s6_link": "refused"
+  },
+  "states": [
+   {
+    "part": "s6_link",
+    "code": "contract_identity_s6_link_mismatch",
+    "fields": {
+     "field": "account"
+    }
+   }
+  ]
+ }
+}

@@ -1,0 +1,48 @@
+{
+ "id": "VS8-049.not_proven",
+ "base": "H0",
+ "mutations": [
+  {
+   "op": "set_field",
+   "target": "world",
+   "path": "variant",
+   "value": "s6silent"
+  },
+  {
+   "op": "set_field",
+   "target": "context",
+   "path": "s6_status",
+   "value": "s6_not_proven"
+  },
+  {
+   "op": "set_field",
+   "target": "context",
+   "path": "s6_state",
+   "value": "replay_slot_unproven"
+  }
+ ],
+ "expected": {
+  "headline": "verified_core",
+  "parts": {
+   "account_provenance": "verified",
+   "authority_level": "verified",
+   "code_identity": "verified",
+   "pointer": "verified",
+   "record": "verified",
+   "s6_link": "not_applicable",
+   "settlement_path": "verified"
+  },
+  "open": [
+   {
+    "part": "s6_link",
+    "kind": "not_checked",
+    "code": "contract_identity_not_checked",
+    "fields": {
+     "part": "s6_link",
+     "reason": "s6_not_proven",
+     "state": "replay_slot_unproven"
+    }
+   }
+  ]
+ }
+}

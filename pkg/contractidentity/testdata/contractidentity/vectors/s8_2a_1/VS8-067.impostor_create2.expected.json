@@ -1,0 +1,15 @@
+{
+ "headline": "refused",
+ "parts": {
+  "account_provenance": "refused"
+ },
+ "states": [
+  {
+   "part": "account_provenance",
+   "code": "contract_identity_account_not_canonical",
+   "fields": {
+    "reason": "create2"
+   }
+  }
+ ]
+}

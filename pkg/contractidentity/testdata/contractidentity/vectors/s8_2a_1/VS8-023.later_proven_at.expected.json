@@ -1,0 +1,24 @@
+{
+ "headline": "unproven",
+ "parts": {
+  "s6_link": "unproven"
+ },
+ "states": [
+  {
+   "part": "s6_link",
+   "code": "contract_identity_unproven",
+   "fields": {
+    "failures": [
+     {
+      "error": "pruned",
+      "host": "rpc.example"
+     }
+    ],
+    "judgedBlock": "11980020",
+    "judgedHash": "0xbd1475f5251e46fca0ff916a8600bc3894ef1759d47b76911cbd5953a9410a91",
+    "part": "s6_link",
+    "reason": "state_unavailable"
+   }
+  }
+ ]
+}

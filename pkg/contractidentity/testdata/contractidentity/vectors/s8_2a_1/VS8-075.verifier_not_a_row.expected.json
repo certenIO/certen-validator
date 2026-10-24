@@ -1,0 +1,16 @@
+{
+ "headline": "refused",
+ "parts": {
+  "code_identity": "refused"
+ },
+ "states": [
+  {
+   "part": "code_identity",
+   "code": "contract_identity_address_not_published",
+   "fields": {
+    "address": "0x1111111111111111111111111111111111111111",
+    "role": "blsZkVerifier"
+   }
+  }
+ ]
+}

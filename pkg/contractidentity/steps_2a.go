@@ -23,16 +23,19 @@ const (
 	entryPointLiteral = "0x0000000071727De22E5E9d8BAf0edAc6f37da032"
 )
 
+// Steps2a returns the 14 step functions of package 2a by step id (a copy). The mutation gate of the vector set disables each one in turn.
+func Steps2a() map[StepID]StepFunc {
+	return map[StepID]StepFunc{
+		Step1c: a2Step1c, Step2: a2Step2, Step3: a2Step3, Step4: a2Step4, Step5: a2Step5, Step6: a2Step6, Step7: a2Step7,
+		Step8: a2Step8, Step9: a2Step9, Step10: a2Step10, Step11: a2Step11, Step12: a2Step12, Step13: a2Step13, Step14: a2Step14,
+	}
+}
+
 // RegisterSteps2a registers the 14 steps of package 2a.
 func RegisterSteps2a(reg *StepRegistry) error {
-	for _, s := range []struct {
-		id StepID
-		fn StepFunc
-	}{
-		{Step1c, a2Step1c}, {Step2, a2Step2}, {Step3, a2Step3}, {Step4, a2Step4}, {Step5, a2Step5}, {Step6, a2Step6}, {Step7, a2Step7},
-		{Step8, a2Step8}, {Step9, a2Step9}, {Step10, a2Step10}, {Step11, a2Step11}, {Step12, a2Step12}, {Step13, a2Step13}, {Step14, a2Step14},
-	} {
-		if err := reg.Register(s.id, s.fn); err != nil {
+	fns := Steps2a()
+	for _, id := range OwnedBy(Owner2a) {
+		if err := reg.Register(id, fns[id]); err != nil {
 			return err
 		}
 	}

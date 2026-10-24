@@ -1,0 +1,24 @@
+{
+ "headline": "verified_core",
+ "parts": {
+  "account_provenance": "verified",
+  "authority_level": "verified",
+  "code_identity": "verified",
+  "pointer": "verified",
+  "record": "verified",
+  "settlement_path": "verified"
+ },
+ "open": [
+  {
+   "part": "state_at_settlement",
+   "kind": "alert",
+   "code": "contract_identity_alert",
+   "fields": {
+    "at": "settle",
+    "field": "set_root",
+    "onchain": "0x26a209425127d950b1fdf7b4c97a634c6a0987f8c7458942812e02cb3ddef1c0",
+    "want": "0x3af3104e0f276161c0f69eb4f35b8475614a34f79012dab238b263580a6c9061"
+   }
+  }
+ ]
+}

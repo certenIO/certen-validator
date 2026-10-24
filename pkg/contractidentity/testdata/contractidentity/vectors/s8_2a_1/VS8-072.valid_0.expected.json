@@ -1,0 +1,17 @@
+{
+ "headline": "refused",
+ "parts": {
+  "record": "refused"
+ },
+ "states": [
+  {
+   "part": "record",
+   "code": "contract_identity_record_not_executed",
+   "fields": {
+    "anchorId": "0x6d4878da97954b76a17224b629f5eafded4fb047d0d62e98278732261334f7b5",
+    "proofExecuted": true,
+    "valid": false
+   }
+  }
+ ]
+}
