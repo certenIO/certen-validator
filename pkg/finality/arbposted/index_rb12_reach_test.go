@@ -183,3 +183,28 @@ func TestRB12ArbIndexedLookupReadsOnlyTheBlobsOfTheBatchItLocates(t *testing.T) 
 		t.Errorf("the reference read %d blob rows and listed the table %d times: the comparison is vacuous", rc.blobGets.Load(), rc.wholeBatchLists.Load())
 	}
 }
+
+// While the index is still catching up (the first backfill), an ask for a leg that no indexed batch holds reads no blob row at all - not those of
+// the many batches that have no entry yet - and says so: the pending carries the positions the index is at.
+func TestRB12ArbIndexMissDuringBackfillReadsNoBlobRowsAndSaysTheIndexIsBehind(t *testing.T) {
+	w, legs := ixPopulation(t)
+	w.cursor(w.low - 1)
+	w.cursor(w.top + 1)
+	ix := w.indexer(IndexConfig{BlocksPerStep: 3})
+	if rep, err := ix.Step(context.Background(), w.top+1); err != nil || rep.StoppedByCap != "blocks" {
+		t.Fatalf("the first step did not stop at its block bound: %+v %v", rep, err)
+	}
+	rc := &readCounter{CaptureStore: w.store}
+	r, err := NewIndexReader(rc, w.pins, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := &Builder{Store: rc, Pins: w.pins, Index: r}
+	loc, pend, err := r.Locate(context.Background(), b, finality.HeaderFields{Number: 5, Timestamp: ixT0 + 300}, standardTxs(legs["absent"]), w.arb)
+	if err != nil || loc != nil || pend == nil || pend.Judged["index_behind"] != true {
+		t.Fatalf("loc=%v pend=%v err=%v", loc, pend, err)
+	}
+	if n := rc.blobGets.Load(); n != 0 {
+		t.Fatalf("a miss during the backfill read %d blob rows of batches that have no entry yet", n)
+	}
+}

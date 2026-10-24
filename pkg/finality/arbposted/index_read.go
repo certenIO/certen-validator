@@ -5,6 +5,7 @@ package arbposted
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"sort"
 	"time"
 
@@ -342,8 +343,8 @@ func (r *IndexReader) Locate(ctx context.Context, b *Builder, hdr finality.Heade
 	}
 	for _, k := range batchKeys {
 		n, ok := batchNumber(k.Item)
-		if !ok || have2[blockID(k)][n] || unreadable[blockID(k)] {
-			continue
+		if !ok || have2[blockID(k)][n] || unreadable[blockID(k)] || k.L1Block > through {
+			continue // (above the index cursor a batch has no entry yet: that is the lag, named below)
 		}
 		raw, found, err := r.Store.Get(ctx, k)
 		if err != nil {
@@ -361,11 +362,11 @@ func (r *IndexReader) Locate(ctx context.Context, b *Builder, hdr finality.Heade
 			return nil, nil, finality.IndexBlockUnindexable(chain, k.L1Block, finality.UnindexableBatchRowMalformed)
 		}
 		if rec.DataLocation == capture.LocBlob && rec.Header40[0] <= hdr.Timestamp && hdr.Timestamp <= rec.Header40[1] {
-			bl, err := capture.LoadBlobs(ctx, b.Store, chain, rec)
+			whole, err := r.blobRowsWhole(ctx, k, rec)
 			if err != nil {
 				return nil, nil, err
 			}
-			if len(bl) != len(rec.VersionedHashes) {
+			if !whole {
 				open = append(open, rec)
 			}
 		}
@@ -537,6 +538,27 @@ func (r *IndexReader) digestTime(ctx context.Context, block uint64) (uint64, err
 		}
 	}
 	return 0, nil
+}
+
+// blobRowsWhole reports whether the blob rows 0..n-1 of the record are stored at its key, by a key listing of the block (no row is read): the reference's
+// test (LoadBlobs returns rows until the first missing index, and the batch is incomplete when they are fewer than its versioned hashes).
+func (r *IndexReader) blobRowsWhole(ctx context.Context, k finality.CaptureKey, rec capture.BatchRecord) (bool, error) {
+	keys, err := r.Store.ListByRange(ctx, r.chain(), k.L1Block, k.L1Block, fmt.Sprintf("blob/%d/", rec.N))
+	if err != nil {
+		return false, err
+	}
+	have := map[string]bool{}
+	for _, bk := range keys {
+		if bk.L1Hash == k.L1Hash {
+			have[bk.Item] = true
+		}
+	}
+	for j := range rec.VersionedHashes {
+		if !have[capture.ItemBlob(rec.N, j)] {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // nameLess orders entries as the reference orders its batches: by N, then by L1 block, then (a reorg at one height) by hash.
