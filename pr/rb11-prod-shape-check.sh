@@ -815,7 +815,7 @@ else rec FAIL C8 "capture cursor query" "query answers" "failed: $(errline)"; fi
 # live Base store (consecutive captured inbox blocks are at most 19 blocks apart outside outage holes; the audit suspects a run above 40).
 if out=$(sqlro <<SQL
 SELECT count(*) FILTER (WHERE item LIKE 'gap/%'),
-  count(*) FILTER (WHERE item LIKE 'gap/%' AND item !~ '^gap/[0-9]+/(block_unavailable|state_proof_unavailable|blob_unavailable|capture_failed|outage_unscanned|spacing_unproven|operator_declared)\$'),
+  count(*) FILTER (WHERE item LIKE 'gap/%' AND item !~ '^gap/[0-9]+/(block_unavailable|state_proof_unavailable|blob_unavailable|capture_failed|outage_unscanned|spacing_unproven|operator_declared|capture_prefix)\$'),
   count(*) FILTER (WHERE item LIKE 'gapfill/%' AND item <> 'gapfill/' || l1_block),
   count(*) FILTER (WHERE item LIKE 'gapend/%' AND item !~ '^gapend/[0-9]+/(unavailable_proven|retention_expired)\$'),
   count(*) FILTER (WHERE item LIKE 'gapnote/%')
