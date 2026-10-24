@@ -33,6 +33,17 @@
    },
    {
     "part": "state_at_settlement",
+    "kind": "alert",
+    "code": "contract_identity_alert",
+    "fields": {
+     "at": "settle",
+     "field": "total_power",
+     "onchain": "0x0000000000000000000000000000000000000000000000000000000000000046",
+     "want": "0x000000000000000000000000000000000000000000000000000000000001e27c"
+    }
+   },
+   {
+    "part": "state_at_settlement",
     "kind": "drift",
     "code": "contract_identity_drift",
     "fields": {

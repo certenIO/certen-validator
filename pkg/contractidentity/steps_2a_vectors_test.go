@@ -542,7 +542,52 @@ func (a *author) vectors() []ci.Vector {
 	}
 	rootEx.Open = append(rootEx.Open, ci.ExpectedOpen{Part: ci.JudgedStateAtSettlement, Kind: ci.OpenDrift, Code: ci.Prefix + "drift", Fields: cf(map[string]any{
 		"field": "A09:" + strings.ToLower(a.addr(val.Address).Hex()) + ":1", "attest": common.BigToHash(new(big.Int).SetUint64(oldPower)), "settle": common.BigToHash(big.NewInt(123456))})})
+	var sumAll uint64
+	for _, v := range vals {
+		sumAll += v.Power
+	}
+	totRoot := alert("total_power", common.BigToHash(new(big.Int).SetUint64(sumAll)), common.BigToHash(new(big.Int).SetUint64(sumAll-oldPower+123456)))
+	rootEx.Open = append([]ci.ExpectedOpen{rootEx.Open[0], totRoot.Open[0]}, rootEx.Open[1:]...)
 	add("VS8-076.set_root_inconsistent", rootEx, world.SetStorage(world.StationSettle, anchor, ci.MemberSlot(vbase, 1), common.BigToHash(big.NewInt(123456))))
+	// [r3.4:H3/H4] step 13 evaluates the step-19(d) registry rules at N and emits every simultaneous violation
+	var sumPow, oldP uint64
+	for _, x := range vals {
+		sumPow += x.Power
+		if x.Address == a.addr(val.Address) {
+			oldP = x.Power
+		}
+	}
+	rootFor := func(p uint64) common.Hash {
+		ad, po := []common.Address{}, []*big.Int{}
+		for _, x := range vals {
+			pw := x.Power
+			if x.Address == a.addr(val.Address) {
+				pw = p
+			}
+			ad, po = append(ad, x.Address), append(po, new(big.Int).SetUint64(pw))
+		}
+		enc, _ := abi.Arguments{{Type: addrsT}, {Type: powT}, {Type: u256}, {Type: u256}}.Pack(ad, po, new(big.Int).SetUint64(pol.BLSThreshold.Numerator), new(big.Int).SetUint64(pol.BLSThreshold.Denominator))
+		return crypto.Keccak256Hash(enc)
+	}
+	hw := func(n uint64) common.Hash { return common.BigToHash(new(big.Int).SetUint64(n)) }
+	drift := func(field string, att, set common.Hash) ci.ExpectedOpen {
+		return ci.ExpectedOpen{Part: ci.JudgedStateAtSettlement, Kind: ci.OpenDrift, Code: ci.Prefix + "drift", Fields: cf(map[string]any{"field": field, "attest": att, "settle": set})}
+	}
+	vAddr := strings.ToLower(a.addr(val.Address).Hex())
+	totEx := alert("total_power", hw(sumPow+1), hw(sumPow))
+	totEx.Open = append(totEx.Open, drift("A11", hw(sumPow), hw(sumPow+1)))
+	add("VS8-076.total_power_inconsistent", totEx, world.SetStorage(world.StationSettle, anchor, ci.SlotIndex(14), hw(sumPow+1)))
+	regEx := alert("registered", uint64(len(vals)-1), uint64(len(vals)))
+	regEx.Open = append(regEx.Open, drift("A09:"+vAddr+":0", hw(1), hw(0)))
+	add("VS8-076.registered_zero", regEx, world.SetStorage(world.StationSettle, anchor, ci.MemberSlot(vbase, 0), hw(0)))
+	pwEx := alert("power", hw(0), uint64(1))
+	pwEx.Open = append(pwEx.Open, alert("set_root", storedRoot, rootFor(0)).Open...)
+	pwEx.Open = append(pwEx.Open, alert("total_power", hw(sumPow), hw(sumPow-oldP)).Open...)
+	pwEx.Open = append(pwEx.Open, drift("A09:"+vAddr+":1", hw(oldP), hw(0)))
+	add("VS8-076.power_zero", pwEx, world.SetStorage(world.StationSettle, anchor, ci.MemberSlot(vbase, 1), hw(0)))
+	twoEx := alert("binding", uint64(0), uint64(1))
+	twoEx.Open = append(twoEx.Open, alert("paused", uint64(1), uint64(0)).Open...)
+	add("VS8-076.paused_and_binding_off", twoEx, world.SetStorage(world.StationSettle, anchor, ci.SlotIndex(0), common.BigToHash(big.NewInt(1))), world.SetStorage(world.StationSettle, anchor, ci.SlotIndex(6), common.Hash{}))
 	// ---- unpinned generations (real live code, world/testdata/code) ----
 	unpinned := func(row, gen, kind string, code []byte) map[string]any {
 		return map[string]any{"reason": row, "generation": gen, "code_hash": crypto.Keccak256Hash(code), "kind": kind}

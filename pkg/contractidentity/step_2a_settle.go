@@ -377,6 +377,29 @@ func a2Step13(env *Env) (StepOutput, error) {
 	if s30[10] < pol.MinimumGovernanceLevel {
 		keep(alert("minimum_governance_level", uint64(s30[10]), uint64(pol.MinimumGovernanceLevel)))
 	}
+	// registry consistency at N [r3.4:H3]: the step-19(d) rules on the listed validators (registered == 1, votingPower > 0, sum(power) == totalVotingPower)
+	if incomplete == "" {
+		registered, sum, zero := uint64(0), new(big.Int), -1
+		for i, v := range vals {
+			if words[a2ValidatorKey(v.addr)+":0"] == common.BigToHash(big.NewInt(1)) {
+				registered++
+			}
+			p := new(big.Int).SetBytes(v.power[:])
+			sum.Add(sum, p)
+			if p.Sign() == 0 && zero < 0 {
+				zero = i
+			}
+		}
+		if registered != uint64(len(vals)) {
+			keep(alert("registered", registered, uint64(len(vals))))
+		}
+		if zero >= 0 {
+			keep(alert("power", vals[zero].power, uint64(1)))
+		}
+		if tot := words["A11"]; new(big.Int).SetBytes(tot[:]).Cmp(sum) != 0 {
+			keep(alert("total_power", tot, common.BigToHash(sum)))
+		}
+	}
 	// SETROOT [r3.2:F15]: the root recomputed from the validator records at N equals the stored root (a defence in depth: no contract path breaks it)
 	if incomplete == "" {
 		sort.Slice(vals, func(i, j int) bool { return bytes.Compare(vals[i].addr[:], vals[j].addr[:]) < 0 })

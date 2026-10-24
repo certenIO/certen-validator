@@ -1,0 +1,34 @@
+{
+ "headline": "verified_core",
+ "parts": {
+  "account_provenance": "verified",
+  "authority_level": "verified",
+  "code_identity": "verified",
+  "pointer": "verified",
+  "record": "verified",
+  "settlement_path": "verified"
+ },
+ "open": [
+  {
+   "part": "state_at_settlement",
+   "kind": "alert",
+   "code": "contract_identity_alert",
+   "fields": {
+    "at": "settle",
+    "field": "total_power",
+    "onchain": "0x0000000000000000000000000000000000000000000000000000000000000047",
+    "want": "0x0000000000000000000000000000000000000000000000000000000000000046"
+   }
+  },
+  {
+   "part": "state_at_settlement",
+   "kind": "drift",
+   "code": "contract_identity_drift",
+   "fields": {
+    "attest": "0x0000000000000000000000000000000000000000000000000000000000000046",
+    "field": "A11",
+    "settle": "0x0000000000000000000000000000000000000000000000000000000000000047"
+   }
+  }
+ ]
+}

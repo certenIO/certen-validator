@@ -20,7 +20,7 @@ import (
 
 // The 29 ids of the algorithm are exactly the numbered steps of the specification text (so a re-numbered spec revision fails here).
 func TestStepTableEqualsTheSpecificationText(t *testing.T) {
-	raw, err := os.ReadFile("testdata/contractidentity/spec/V2_SPEC_S8.r3.3.md")
+	raw, err := os.ReadFile("testdata/contractidentity/spec/V2_SPEC_S8.r3.4.md")
 	if err != nil {
 		t.Fatal(err)
 	}

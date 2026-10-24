@@ -70,7 +70,11 @@ func (a *authorInt) vectors() []ci.Vector {
 	} {
 		was := a.stationWord(world.StationPost, anchor, c.slot)
 		now := c.to(was)
-		add("VS8-076.drift_"+c.id, vc(drift(c.id, was, now)), world.SetStorage(world.StationSettle, anchor, c.slot, now))
+		opens := []ci.ExpectedOpen{drift(c.id, was, now)}
+		if c.id == "A11" { // [r3.4:H3] the total word no longer equals the sum of the listed powers at N
+			opens = append([]ci.ExpectedOpen{{Part: ci.JudgedStateAtSettlement, Kind: ci.OpenAlert, Code: ci.Prefix + "alert", Fields: cf(map[string]any{"field": "total_power", "at": "settle", "onchain": now, "want": was})}}, opens...)
+		}
+		add("VS8-076.drift_"+c.id, vc(opens...), world.SetStorage(world.StationSettle, anchor, c.slot, now))
 	}
 	// VS8-152: a key rotated between B_v and N is a drift: the BLS key bytes of one listed validator change at N (the set root does not commit to keys)
 	m0 := sp.Context.Registry9.Members[0]

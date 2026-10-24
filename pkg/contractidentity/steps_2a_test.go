@@ -381,7 +381,7 @@ func TestSettleMutations(t *testing.T) {
 		{name: "validator record changed at N: recomputed set root differs from the stored root", muts: func(f *fixture) []ci.Mutation {
 			base := ci.MappingSlotAt(ci.KeyAddress(f.addr(f.spec.Context.Registry9.Members[0].Address)), 12)
 			return []ci.Mutation{world.SetStorage(world.StationSettle, anchorOf(f), ci.MemberSlot(base, 1), common.BigToHash(big.NewInt(123456)))}
-		}, want: []want{{"state_at_settlement", "open", "", "", ""}}, open: "alert:set_root,drift:A09:0x2dc2aad70bef3393822a6c27d1b9cd47f53e5d20:1"},
+		}, want: []want{{"state_at_settlement", "open", "", "", ""}}, open: "alert:set_root,alert:total_power,drift:A09:0x2dc2aad70bef3393822a6c27d1b9cd47f53e5d20:1"},
 		{name: "factory does not know the account", muts: func(f *fixture) []ci.Mutation {
 			return []ci.Mutation{world.SetStorage(world.StationSettle, f.addr(f.spec.Roles.Factory), ci.MappingSlotAt(ci.KeyAddress(acctOf(f)), 2), common.Hash{})}
 		}, want: []want{{"account_provenance", "refused", "account_not_canonical", "reason", "deployed_flag"}}},
