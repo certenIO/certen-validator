@@ -23,11 +23,31 @@ func b2New(t *testing.T, chain uint64, variant string, muts ...ci.Mutation) *b2f
 	return &b2fx{b1New(t, chain, variant, muts...)}
 }
 
-func (f *b2fx) verifier() *ci.StepVerifier {
+func (f *b2fx) verifier() *ci.StepVerifier { return f.verifierWith("") }
+
+// verifierWith is the verifier with one step of package 2b-2 replaced by a stand-in that reports its parts verified (the mutation gate).
+func (f *b2fx) verifierWith(disabled ci.StepID) *ci.StepVerifier {
 	f.t.Helper()
 	reg := ci.NewStepRegistry()
-	for _, r := range []ci.Registrar{ci.RegisterSteps2a, ci.RegisterSteps2b1, ci.RegisterSteps2b2} {
+	for _, r := range []ci.Registrar{ci.RegisterSteps2a, ci.RegisterSteps2b1} {
 		if err := r(reg); err != nil {
+			f.t.Fatal(err)
+		}
+	}
+	real := ci.Steps2b2()
+	for _, id := range ci.OwnedBy(ci.Owner2b2) {
+		fn := real[id]
+		if id == disabled {
+			sp, _ := ci.Spec(id)
+			fn = func(env *ci.Env) (ci.StepOutput, error) {
+				var out ci.StepOutput
+				for _, p := range sp.Parts {
+					out.Parts = append(out.Parts, env.Verified(p))
+				}
+				return out, nil
+			}
+		}
+		if err := reg.Register(id, fn); err != nil {
 			f.t.Fatal(err)
 		}
 	}

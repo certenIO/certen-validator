@@ -1,0 +1,17 @@
+{
+ "headline": "unproven",
+ "parts": {
+  "authorization_attest": "unproven"
+ },
+ "states": [
+  {
+   "part": "authorization_attest",
+   "code": "contract_identity_unproven",
+   "fields": {
+    "address": "0x1111111111111111111111111111111111111111",
+    "at": "attest_pre",
+    "reason": "governance_verifier_unpinned"
+   }
+  }
+ ]
+}

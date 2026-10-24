@@ -1,0 +1,34 @@
+{
+ "id": "VS8-177.anchor_allowlist_wider",
+ "base": "H0",
+ "mutations": [
+  {
+   "op": "set_field",
+   "target": "manifest",
+   "path": "builds.CertenAnchorV8_2/r5.authWriterAllowList.rows.4.allowedWrites",
+   "value": [
+    "anchors[].governanceExecuted",
+    "anchors[].valid"
+   ]
+  }
+ ],
+ "expected": {
+  "headline": "unproven",
+  "parts": {
+   "authorization_attest": "verified",
+   "intra_block_window": "unproven"
+  },
+  "states": [
+   {
+    "part": "intra_block_window",
+    "code": "contract_identity_unproven",
+    "fields": {
+     "build": "CertenAnchorV8_2/r5",
+     "condition": "allowlist_not_frozen",
+     "part": "intra_block_window",
+     "reason": "build_without_writer_proof"
+    }
+   }
+  ]
+ }
+}

@@ -1,0 +1,18 @@
+{
+ "id": "VS8-122.governance_executed_0_to_1_passes",
+ "base": "H0",
+ "mutations": [
+  {
+   "op": "set_field",
+   "target": "world",
+   "path": "stations.attest_post.accounts.0x830cfb484b6e5606687e00f64c40aeb9c7c84e3c.storage.0xaea479ecb7881f6fcb2d619d1c57f77b744f1e1288745b54092d6dcb90d7b374",
+   "value": "0x000000000000000003010101eb8fc0a419e45a1b4ef5e6669b6727c1f5879147"
+  }
+ ],
+ "expected": {
+  "headline": "verified",
+  "parts": {
+   "authorization_attest": "verified"
+  }
+ }
+}

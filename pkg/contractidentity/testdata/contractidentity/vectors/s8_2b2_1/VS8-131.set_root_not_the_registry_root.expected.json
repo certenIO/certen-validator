@@ -1,0 +1,19 @@
+{
+ "headline": "refused",
+ "parts": {
+  "authorization_attest": "refused",
+  "intra_block_window": "verified"
+ },
+ "states": [
+  {
+   "part": "authorization_attest",
+   "code": "contract_identity_authorization_mismatch",
+   "fields": {
+    "at": "attest_pre",
+    "field": "set_root",
+    "onchain": "0x00000000000000000000000000000000000000000000000000000000000000a7",
+    "want": "0x26a209425127d950b1fdf7b4c97a634c6a0987f8c7458942812e02cb3ddef1c0"
+   }
+  }
+ ]
+}

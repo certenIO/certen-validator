@@ -25,13 +25,16 @@ import (
 // authenticate; step 18 then says code_identity is unproven and step 22 says intra_block_window is unproven (attest_absent), while the
 // authorization_attest part stays with the state of step 16.
 
+// Steps2b2 returns the four step functions of package 2b-2 by step id (a copy). The mutation gate of the vector set disables each one in turn.
+func Steps2b2() map[StepID]StepFunc {
+	return map[StepID]StepFunc{Step18: b2Step18, Step18b: b2Step18b, Step19: b2Step19, Step22: b2Step22}
+}
+
 // RegisterSteps2b2 registers the four steps of package 2b-2.
 func RegisterSteps2b2(reg *StepRegistry) error {
-	for _, s := range []struct {
-		id StepID
-		fn StepFunc
-	}{{Step18, b2Step18}, {Step18b, b2Step18b}, {Step19, b2Step19}, {Step22, b2Step22}} {
-		if err := reg.Register(s.id, s.fn); err != nil {
+	fns := Steps2b2()
+	for _, id := range OwnedBy(Owner2b2) {
+		if err := reg.Register(id, fns[id]); err != nil {
 			return err
 		}
 	}
@@ -91,6 +94,9 @@ func b2KeyLess(a, b string) bool {
 	ib, sb, _ := strings.Cut(b, ":")
 	if ia != ib {
 		return ia < ib
+	}
+	if sa == "" || sb == "" {
+		return sa == "" && sb != ""
 	}
 	na, ea := strconv.ParseUint(sa, 10, 64)
 	nb, eb := strconv.ParseUint(sb, 10, 64)
@@ -409,6 +415,15 @@ func b2Step18(env *Env) (StepOutput, error) {
 		}
 		b.GovernanceExecutedFlip = p[9] == 0 && q[9] == 1
 	}
+	// C01: the codeHash of A, V, G differs between the stations (code cannot change by any pinned path; the difference is unattributable)
+	codeChanged := false
+	for _, id := range []string{"A", "V", "G"} {
+		if p, q := pre.acc[id], post.acc[id]; p.CodeHash != q.CodeHash {
+			changed = append(changed, AuthDiff{Row: "C01:" + id, Pre: p.CodeHash, Post: q.CodeHash})
+			codeChanged = true
+		}
+	}
+	sort.SliceStable(changed, func(i, j int) bool { return b2KeyLess(changed[i].Row, changed[j].Row) })
 	b.Changed = changed
 
 	// code identity of A, V, G at both stations
@@ -440,9 +455,9 @@ func b2Step18(env *Env) (StepOutput, error) {
 	}
 	block := f.B1.HeaderV.Number
 	switch {
-	case codeFail != nil && codeFail.Code == CodeUnproven:
+	case codeFail != nil && !codeChanged && codeFail.Code == CodeUnproven:
 		out.Parts = append(out.Parts, b2U(JudgedAuthorizationAttest, b2WithPart(codeFail, JudgedAuthorizationAttest)))
-	case codeFail != nil:
+	case codeFail != nil && !codeChanged:
 		out.Parts = append(out.Parts, b2R(JudgedAuthorizationAttest, codeFail))
 	case flipBad:
 		out.Parts = append(out.Parts, b2R(JudgedAuthorizationAttest, b2Flip()))
@@ -467,7 +482,7 @@ func b2Step18(env *Env) (StepOutput, error) {
 func b2Step18b(env *Env) (StepOutput, error) {
 	f := env.Facts
 	post := f.B2.Post
-	if !f.B1.AttestCaptured || !f.B1.HeaderLinked || post.Words == nil || f.B2.CodeFailure != nil {
+	if !f.B1.AttestCaptured || !f.B1.HeaderLinked || post.Words == nil || f.B2.CodeFailure != nil || len(f.B2.Changed) > 0 {
 		return StepOutput{}, nil // decided by steps 15-18
 	}
 	part := JudgedAuthorizationAttest

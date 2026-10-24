@@ -1,0 +1,27 @@
+{
+ "id": "VS8-174.block_txs_root_mismatch",
+ "base": "H0",
+ "mutations": [
+  {
+   "op": "set_field",
+   "target": "container",
+   "path": "attest.attest.block_txs.0",
+   "value": "f86764847735940082520894e3b1bb8c4bf9997227253ae3d8fddb2350ab3c0165808401546d72a0e18d5a608005c5e824a6a5265041119bbd4d82a422038027692ce17096a195fba0184299345750a81d07a961d678438e6eae0d4fb2db58a98aa1595bfa8c64eb93"
+  }
+ ],
+ "expected": {
+  "headline": "refused",
+  "parts": {
+   "intra_block_window": "refused"
+  },
+  "states": [
+   {
+    "part": "intra_block_window",
+    "code": "contract_identity_attest_mismatch",
+    "fields": {
+     "field": "block_txs"
+    }
+   }
+  ]
+ }
+}

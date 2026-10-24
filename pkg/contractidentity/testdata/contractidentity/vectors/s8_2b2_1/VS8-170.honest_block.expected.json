@@ -1,0 +1,8 @@
+{
+ "headline": "verified",
+ "parts": {
+  "authorization_attest": "verified",
+  "code_identity": "verified",
+  "intra_block_window": "verified"
+ }
+}

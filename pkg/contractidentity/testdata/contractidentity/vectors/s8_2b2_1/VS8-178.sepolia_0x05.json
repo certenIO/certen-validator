@@ -1,0 +1,31 @@
+{
+ "id": "VS8-178.sepolia_0x05",
+ "base": "H0",
+ "mutations": [
+  {
+   "op": "set_field",
+   "target": "world",
+   "path": "blocks.attest.txs.2.wire",
+   "value": "0x05c0"
+  }
+ ],
+ "expected": {
+  "headline": "unproven",
+  "parts": {
+   "authorization_attest": "verified",
+   "intra_block_window": "unproven"
+  },
+  "states": [
+   {
+    "part": "intra_block_window",
+    "code": "contract_identity_unproven",
+    "fields": {
+     "index": "2",
+     "part": "intra_block_window",
+     "reason": "tx_type_unsupported",
+     "type": "0x05"
+    }
+   }
+  ]
+ }
+}

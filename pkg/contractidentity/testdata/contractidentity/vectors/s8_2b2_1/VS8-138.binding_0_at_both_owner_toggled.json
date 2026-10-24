@@ -1,0 +1,55 @@
+{
+ "id": "VS8-138.binding_0_at_both_owner_toggled",
+ "base": "H0",
+ "mutations": [
+  {
+   "op": "set_field",
+   "target": "world",
+   "path": "stations.attest_pre.accounts.0x830cfb484b6e5606687e00f64c40aeb9c7c84e3c.storage.0x0000000000000000000000000000000000000000000000000000000000000006",
+   "value": "0x0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+   "op": "set_field",
+   "target": "world",
+   "path": "stations.attest_post.accounts.0x830cfb484b6e5606687e00f64c40aeb9c7c84e3c.storage.0x0000000000000000000000000000000000000000000000000000000000000006",
+   "value": "0x0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+   "op": "set_field",
+   "target": "world",
+   "path": "stations.attest_post.accounts.0x91c798aa0ad11d2670029b3b0572d154bd42c059.nonce",
+   "value": 46
+  }
+ ],
+ "expected": {
+  "headline": "unproven",
+  "parts": {
+   "authorization_attest": "unproven",
+   "intra_block_window": "unproven"
+  },
+  "states": [
+   {
+    "part": "authorization_attest",
+    "code": "contract_identity_unproven",
+    "fields": {
+     "address": "0x91c798aa0ad11d2670029b3b0572d154bd42c059",
+     "part": "authorization_attest",
+     "post": "46",
+     "pre": "45",
+     "reason": "owner_active_in_block"
+    }
+   },
+   {
+    "part": "intra_block_window",
+    "code": "contract_identity_unproven",
+    "fields": {
+     "address": "0x91c798aa0ad11d2670029b3b0572d154bd42c059",
+     "part": "intra_block_window",
+     "post": "46",
+     "pre": "45",
+     "reason": "owner_active_in_block"
+    }
+   }
+  ]
+ }
+}

@@ -1,0 +1,19 @@
+{
+ "headline": "unproven",
+ "parts": {
+  "authorization_attest": "verified",
+  "intra_block_window": "unproven"
+ },
+ "states": [
+  {
+   "part": "intra_block_window",
+   "code": "contract_identity_unproven",
+   "fields": {
+    "build": "BLSZKVerifierV2_1/r5",
+    "condition": "a",
+    "part": "intra_block_window",
+    "reason": "build_without_writer_proof"
+   }
+  }
+ ]
+}
