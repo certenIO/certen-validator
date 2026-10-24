@@ -89,6 +89,10 @@ var (
 		Name: "certen_finality_index_disabled",
 		Help: "1 while a bad index setting has switched the capture index off (finality_index_disabled); the window reader serves.",
 	}, []string{"chain", "family", "key", "reason"})
+	finalityPrefixDisabled = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "certen_finality_prefix_disabled",
+		Help: "1 while a bad prefix setting has switched the archive backfill of a chain off (finality_prefix_disabled); the rest of finality runs.",
+	}, []string{"chain", "key", "reason"})
 	finalityForeignTxs = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "certen_finality_capture_foreign_txs_total",
 		Help: "Batch-inbox transactions skipped because the SystemConfig batcher of their block did not send them.",
@@ -132,6 +136,7 @@ func registerFinalityIndexMetrics() {
 	prometheus.MustRegister(finalityIndexWidePointers)
 	prometheus.MustRegister(finalityIndexUnindexable)
 	prometheus.MustRegister(finalityIndexDisabled)
+	prometheus.MustRegister(finalityPrefixDisabled)
 	prometheus.MustRegister(finalityForeignTxs)
 	prometheus.MustRegister(finalityBatcherUnestablished)
 }
@@ -201,6 +206,11 @@ func IncFinalityIndexSelfCheckSkipped(chain uint64, family string) {
 // not_an_integer, out_of_range).
 func SetFinalityIndexDisabled(chain uint64, family, key, reason string) {
 	finalityIndexDisabled.WithLabelValues(chainLabel(chain), family, key, reason).Set(1)
+}
+
+// SetFinalityPrefixDisabled marks the archive backfill of a chain as switched off by the bad setting key (reason: setting_invalid).
+func SetFinalityPrefixDisabled(chain uint64, key, reason string) {
+	finalityPrefixDisabled.WithLabelValues(chainLabel(chain), key, reason).Set(1)
 }
 
 // AddFinalityCaptureForeignTxs counts batch-inbox transactions skipped because the batcher of their block did not send them.

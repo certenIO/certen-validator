@@ -295,6 +295,7 @@ func wireBase(reg *finality.Registry, env Env, d Deps, clock loopClock, logf fun
 	if cfg.IndexDisabled != nil {
 		finality.AnnounceIndexDisabled(logf, cfg.IndexDisabled)
 	}
+	finality.AnnouncePrefixDisabled(logf, cfg.prefixStates(finality.ChainBaseSepolia))
 	fp, err := basefinal.ParsePins(env.Pins)
 	if err != nil {
 		return err
@@ -304,7 +305,7 @@ func wireBase(reg *finality.Registry, env Env, d Deps, clock loopClock, logf fun
 	builder := &baseposted.Builder{Pins: env.Pins, Store: env.Store, L1: l1, Headers: l1,
 		L2: &baseposted.L2JSONRPC{URLs: cfg.BaseL2}, LC: lcPlain{cache}, Now: d.Now,
 		CursorSlack: captureSlack(cfg), HasArchive: len(cfg.Archive) > 0,
-		Prefix: finality.PrefixPolicy{MaxBlocks: cfg.PrefixMax, Floor: cfg.PrefixFloor}}
+		Prefix: cfg.prefixPolicy(finality.ChainBaseSepolia)}
 	// the capture index (RB12-INDEX-A): built as captures arrive, read by the builder; off by CERTEN_FINALITY_BASE_INDEX=off
 	var indexer finality.CaptureIndexer
 	if cfg.BaseIndex {
@@ -341,7 +342,7 @@ func wireBase(reg *finality.Registry, env Env, d Deps, clock loopClock, logf fun
 	pol := baseposted.DefaultBackfillPolicy()
 	pol.ReprobeEvery = cfg.PrefixReprobe
 	bf := &baseposted.Backfiller{Chain: finality.ChainBaseSepolia, Store: env.Store, Capturer: baseposted.CapturerOf(capt), Providers: Hosts(cfg.Beacon),
-		Policy: pol, Lease: lease, Now: d.Now, Logf: logf}
+		Policy: pol, Lease: lease, Now: d.Now, Logf: logf, NoPrefix: cfg.prefixOff(finality.ChainBaseSepolia)}
 	// every block the backfill closes (a gap block or a PREFIX block, which arrive out of order and far below the index cursor) is told to the capture
 	// index right after its fill row: the indexer digests it and completes its channels at its next step (duty a of the Train 3 integration)
 	if nt, ok := indexer.(finality.LateBlockNoter); ok {
@@ -383,7 +384,8 @@ func wireArb(reg *finality.Registry, env Env, d Deps, clock loopClock, logf func
 	hdr := &baseposted.JSONRPCSource{BlockURLs: env.L1Block, ProofURLs: env.L1Proof, Client: env.HTTP}
 	builder := &arbposted.Builder{Store: env.Store, L2: &ArbL2{URLs: cfg.ArbL2, HTTP: env.HTTP},
 		L1: &ArbL1{LC: lcPlain{cache}, Headers: hdr}, Pins: env.Pins, Now: d.Now,
-		Prefix: finality.PrefixPolicy{MaxBlocks: cfg.PrefixMax, Floor: cfg.PrefixFloor}}
+		Prefix: cfg.prefixPolicy(finality.ChainArbitrumSepolia)}
+	finality.AnnouncePrefixDisabled(logf, cfg.prefixStates(finality.ChainArbitrumSepolia))
 	// the batch index (RB12-INDEX-B): built as batches are captured, read by the builder; off by CERTEN_FINALITY_ARB_INDEX=off, and named off by a
 	// bad setting (finality_index_disabled), in which case the builder reads every captured batch as before
 	var indexer finality.CaptureIndexer
@@ -430,7 +432,9 @@ func wireArb(reg *finality.Registry, env Env, d Deps, clock loopClock, logf func
 		return err
 	}
 	arbLease.Span, arbLease.Chunk = cfg.PrefixLease, uint64(cfg.PrefixArbScan)
-	cp.Prefix = &capture.PrefixScan{Lease: arbLease, Blocks: uint64(cfg.PrefixArbScan), Now: d.Now}
+	if !cfg.prefixOff(finality.ChainArbitrumSepolia) { // a refused prefix setting (finality_prefix_disabled): the capturer scans no window
+		cp.Prefix = &capture.PrefixScan{Lease: arbLease, Blocks: uint64(cfg.PrefixArbScan), Now: d.Now}
+	}
 	// THE authorization of a captured batch (capture/authorize.go): the live capture and the batches the prefix scan stores both judge a batch by it
 	// once its accumulator proof is stored, and the reference reader, the indexed reader and the index writer apply the same function
 	cp.Authorize = capture.AuthorizeBatch

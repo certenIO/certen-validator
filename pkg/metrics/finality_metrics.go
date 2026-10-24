@@ -184,6 +184,7 @@ type finalityChainHealth struct {
 	enabledKnown   bool
 	enabled        bool
 	disabledReason string
+	prefixReason   string            // the named states of an archive backfill switched off by a bad setting (RB12-TRAIN3-INT)
 	indexReason    string            // the named state of a capture index switched off by a bad setting (RB12-INDEX-FIX D2)
 	captured       map[string]uint64 // capturer -> last captured parent-chain block
 	lag            map[string]uint64 // capturer -> lag in parent-chain blocks
@@ -256,6 +257,9 @@ func FinalityHealth() map[string]any {
 		}
 		if c.indexReason != "" {
 			m["index_disabled_reason"] = c.indexReason
+		}
+		if c.prefixReason != "" {
+			m["prefix_disabled_reason"] = c.prefixReason
 		}
 		if c.enabledKnown {
 			m["enabled"] = c.enabled
@@ -451,6 +455,14 @@ func SetFinalityChainDisabledReason(chain uint64, reason string) {
 func SetFinalityChainIndexDisabledReason(chain uint64, reason string) {
 	finalityHealth.mu.Lock()
 	finalityChain(chain).indexReason = reason
+	finalityHealth.mu.Unlock()
+}
+
+// SetFinalityChainPrefixDisabledReason records, for the health block, the named states of an archive backfill that a bad setting switched off
+// on the chain (the chain itself keeps running).
+func SetFinalityChainPrefixDisabledReason(chain uint64, reason string) {
+	finalityHealth.mu.Lock()
+	finalityChain(chain).prefixReason = reason
 	finalityHealth.mu.Unlock()
 }
 

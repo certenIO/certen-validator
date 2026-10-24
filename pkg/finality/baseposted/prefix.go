@@ -28,6 +28,17 @@ func isPrefixOnly(p finality.GapRange) bool {
 	return len(p.Classes) == 1 && p.Classes[0] == finality.GapCapturePrefix
 }
 
+// withoutPrefixOnly returns the pieces that are not only a prefix request's (the pieces of the live range, and those a prefix window shares with a hole).
+func withoutPrefixOnly(pieces []finality.GapRange) []finality.GapRange {
+	out := make([]finality.GapRange, 0, len(pieces))
+	for _, p := range pieces {
+		if !isPrefixOnly(p) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 // deadWindows marks each window that holds a block in a terminal state (an end row and no fill).
 func deadWindows(pieces []finality.GapRange, wins []finality.PrefixWindow) []bool {
 	dead := make([]bool, len(wins))

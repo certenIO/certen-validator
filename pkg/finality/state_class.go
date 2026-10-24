@@ -33,7 +33,9 @@ var stateClasses = map[string]StateClass{
 	"index_inconsistent": ClassEnvironment,
 	// finality_index_disabled is a fact about this process (a bad setting switched the capture index off). It is announced at wiring and never
 	// reaches a leg; classified so that, if it ever did, it would hold the leg and not back it off.
-	"finality_index_disabled":              ClassEnvironment,
+	"finality_index_disabled": ClassEnvironment,
+	// finality_prefix_disabled is the same kind of fact about the process (a bad setting switched the prefix backfill of a chain off), announced at wiring.
+	"finality_prefix_disabled":             ClassEnvironment,
 	"adiri_incarnation_mismatch":           ClassFailure,
 	"assertion_history_unavailable":        ClassFailure,
 	"assertion_machine_not_finished":       ClassFailure,

@@ -115,6 +115,10 @@ type Backfiller struct {
 	Logf func(string, ...any)
 	// Lease, when set, is the cross-validator claim on chunks of prefix blocks (nil: no claims, one validator or tests).
 	Lease *Lease
+	// NoPrefix switches the prefix extension off for this validator (a refused prefix setting, finality_prefix_disabled): no window of the
+	// capture-store prefix is taken, none is claimed, and no block that only a prefix window holds is reopened or asked again. The windows stay as
+	// recorded (the rows are insert-only) for a validator whose prefix feature is on; the holes of the live range are closed as before.
+	NoPrefix bool
 	// OnFill is told of every block the backfill closes (after its fill row is stored), so an index of the capture store can digest a block
 	// that arrived out of order (RB12-ARCHIVE-BACKFILL; nil: nobody is told).
 	OnFill func(block uint64, hasInbox bool)
@@ -206,13 +210,20 @@ func (b *Backfiller) Step(ctx context.Context, max int) (BackfillReport, error) 
 	if err != nil {
 		return rep, err
 	}
-	if err := b.reopenTerminal(ctx, pieces); err != nil {
+	live := pieces // the pieces the reopen and the re-probe look at
+	if b.NoPrefix {
+		live = withoutPrefixOnly(pieces)
+	}
+	if err := b.reopenTerminal(ctx, live); err != nil {
 		return rep, err
 	}
-	b.reprobe(b.now(), pieces, pol)
+	b.reprobe(b.now(), live, pol)
 	wins, err := finality.PrefixWindowsOf(ctx, b.Store, b.Chain)
 	if err != nil {
 		return rep, err
+	}
+	if b.NoPrefix {
+		wins = nil
 	}
 	now := b.now()
 	// the blocks that must not be taken now: attempted and not yet due again
