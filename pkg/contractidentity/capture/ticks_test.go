@@ -52,6 +52,13 @@ type headSource struct {
 	*fakeSource
 	head      uint64
 	headPanic bool
+	hmu       sync.Mutex // setHead / HeaderByNumber: the runtime test moves the head while the tick goroutine reads it
+}
+
+func (s *headSource) setHead(h uint64) {
+	s.hmu.Lock()
+	s.head = h
+	s.hmu.Unlock()
 }
 
 func (s *headSource) HeaderByNumber(ctx context.Context, n *big.Int) (*types.Header, error) {
@@ -59,7 +66,10 @@ func (s *headSource) HeaderByNumber(ctx context.Context, n *big.Int) (*types.Hea
 		if s.headPanic {
 			panic("hostile head reader")
 		}
-		if h, ok := s.fc.headers[s.head]; ok {
+		s.hmu.Lock()
+		cur := s.head
+		s.hmu.Unlock()
+		if h, ok := s.fc.headers[cur]; ok {
 			return h, nil
 		}
 		return nil, errors.New("no head")

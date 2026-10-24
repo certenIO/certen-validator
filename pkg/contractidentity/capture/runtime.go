@@ -159,6 +159,8 @@ type Deps struct {
 	Logf      func(string, ...interface{})
 	// Deadline is the memberChainDeadline of an anchor of a chain (pkg/execution): past it its hop ticks stop. Optional.
 	Deadline func(chain uint64, anchorID [32]byte) (time.Time, bool)
+	// TickPoll is how often the hop tick loop looks at the head (default DefaultTickPoll); tests lower it.
+	TickPoll time.Duration
 }
 
 type jobKey struct {
@@ -476,7 +478,7 @@ func (r *Runtime) track(cfg Config, res *AttestResult) {
 	r.mu.Lock()
 	t := r.tickers[cfg.Chain]
 	if t == nil && r.ctx.Err() == nil {
-		tc := TickConfig{Config: cfg, Store: r.d.Store, Reserve: func() (func(), bool) { return r.mem.reserve(TickWorkingSetBytes) }}
+		tc := TickConfig{Config: cfg, Store: r.d.Store, Poll: r.d.TickPoll, Reserve: func() (func(), bool) { return r.mem.reserve(TickWorkingSetBytes) }}
 		if r.d.Deadline != nil {
 			chain := cfg.Chain
 			tc.Deadline = func(a [32]byte) (time.Time, bool) { return r.d.Deadline(chain, a) }
