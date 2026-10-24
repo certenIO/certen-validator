@@ -135,6 +135,11 @@ func enabled() capture.Settings {
 
 func TestRuntimeCapturesBothStationsAndTheStoredRowsAssembleTheWorldContainer(t *testing.T) {
 	fc := newFakeChain(t, 11155111, "h0")
+	// the counter is process-global (other tests of this package capture on the same chain): the test reads the rise, not the absolute value
+	capturedBefore := map[string]float64{}
+	for _, station := range []string{"attest", "settle"} {
+		capturedBefore[station] = scrape(t, "certen_contract_identity_capture_total", map[string]string{"chain": "11155111", "station": station, "outcome": "captured"})
+	}
 	st := capture.NewMemStore()
 	rt, dis := capture.Start(context.Background(), enabled(), baseDeps(fc, st))
 	if rt == nil || dis != nil {
@@ -181,8 +186,8 @@ func TestRuntimeCapturesBothStationsAndTheStoredRowsAssembleTheWorldContainer(t 
 	}
 	for _, station := range []string{"attest", "settle"} {
 		lbl := map[string]string{"chain": "11155111", "station": station, "outcome": "captured"}
-		if scrape(t, "certen_contract_identity_capture_total", lbl) != 1 {
-			t.Fatalf("%s: captured counter = %v, want exactly 1 (a duplicate trigger is one capture)", station, scrape(t, "certen_contract_identity_capture_total", lbl))
+		if got := scrape(t, "certen_contract_identity_capture_total", lbl) - capturedBefore[station]; got != 1 {
+			t.Fatalf("%s: captured counter rose by %v, want exactly 1 (a duplicate trigger is one capture)", station, got)
 		}
 		if scrape(t, "certen_contract_identity_capture_seconds", map[string]string{"chain": "11155111", "station": station}) < 1 {
 			t.Fatalf("%s: no duration observed", station)

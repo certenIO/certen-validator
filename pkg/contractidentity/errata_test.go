@@ -327,14 +327,15 @@ func TestExtensionGenerations(t *testing.T) {
 	if _, ok := merged.GenerationFor("anchor", h("a1")); ok {
 		t.Error("a generation was found under another role")
 	}
-	// the same masked hash in the same role is a shadow whatever the generation name or the hex case; the key is (role, lowercase masked)
+	// the same masked hash in the same role is a shadow whatever the generation name; the key is (role, canonical masked) [r3.6:H14]
 	shadow := func(base *Manifest, e []byte, key string) {
 		t.Helper()
 		_, err := base.WithExtension(e)
 		wantState(t, err, ManifestShadow("generations", key))
 	}
 	shadow(merged, ext(mk("account", "OtherName", "observed", h("a1"))), "account,"+h("a1"))
-	shadow(merged, ext(mk("account", "CertenAccountV7", "catalogued", "0x"+strings.Repeat("A3", 32))), "account,"+h("a3"))
+	_, err = merged.WithExtension(ext(mk("account", "CertenAccountV7", "catalogued", "0x"+strings.Repeat("A3", 32)))) // another spelling is refused as not canonical, not lower-cased into a shadow
+	wantManifestCorrupt(t, err, "upper-case spelling of a stored key")
 	shadow(m, ext(mk("account", "x", "observed", h("b1")), mk("account", "y", "observed", h("b1"))), "account,"+h("b1")) // inside one extension
 	// a row of the BASE manifest cannot be redefined either (rows of the pinned table, every one of them)
 	for _, g := range m.Generations() {

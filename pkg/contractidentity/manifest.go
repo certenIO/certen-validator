@@ -608,9 +608,15 @@ func (m *Manifest) decode() error {
 			return err
 		}
 	}
+	if err := m.checkRowSpans(); err != nil {
+		return err
+	}
 	// the tables are keyed and must not repeat a primary key inside one document
 	seen := map[string]bool{}
 	for _, g := range m.gens {
+		if err := checkGenerationKey(g.Role, g.MaskedKeccak); err != nil {
+			return err
+		}
 		k := "generations:" + generationKey(g.Role, g.MaskedKeccak)
 		if seen[k] {
 			return fmt.Errorf("manifest: generations repeat (role,maskedKeccak) %s", k)
@@ -915,9 +921,55 @@ func (m *Manifest) GenerationFor(role, maskedKeccak string) (Generation, bool) {
 	return Generation{}, false
 }
 
-// generationKey is the primary key of a generations row (role, lowercase maskedKeccak) as the no-shadow rule and the duplicate check use it.
+// generationKey is the primary key of a generations row (role, maskedKeccak) as the no-shadow rule and the duplicate check use it. The hash
+// is the canonical spelling itself [r3.6:H14]: it is never lower-cased here; a row that is not canonical is refused before it is keyed
+// (checkGenerationKey).
 func generationKey(role, maskedKeccak string) string {
-	return role + "," + strings.ToLower(maskedKeccak)
+	return role + "," + maskedKeccak
+}
+
+// canonicalHex32 is the one spelling of a 32-byte hex key: 0x followed by exactly 64 lower-case hexadecimal digits [r3.6:H14].
+func canonicalHex32(s string) bool {
+	if len(s) != 66 || s[0] != '0' || s[1] != 'x' {
+		return false
+	}
+	for i := 2; i < len(s); i++ {
+		c := s[i]
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// checkGenerationKey refuses a generations row whose maskedKeccak is not canonical: a malformed manifest (manifest_corrupt), never repaired.
+func checkGenerationKey(role, maskedKeccak string) error {
+	if !canonicalHex32(maskedKeccak) {
+		return fmt.Errorf("manifest: generations row %q has maskedKeccak %q, want 0x followed by exactly 64 lower-case hex digits", role, maskedKeccak)
+	}
+	return nil
+}
+
+// checkRowSpans refuses a policy.owner or policy.setRootHistory row that ends before it starts (validToBlock < validFromBlock) [r3.6:H13].
+func (m *Manifest) checkRowSpans() error {
+	chains := make([]uint64, 0, len(m.owners))
+	for c := range m.owners {
+		chains = append(chains, c)
+	}
+	sort.Slice(chains, func(i, j int) bool { return chains[i] < chains[j] })
+	for _, c := range chains {
+		for _, r := range m.owners[c] {
+			if r.ValidToBlock != nil && *r.ValidToBlock < r.ValidFromBlock {
+				return fmt.Errorf("manifest: policy.owner %d,%s row has validToBlock %d before validFromBlock %d", c, r.Role, *r.ValidToBlock, r.ValidFromBlock)
+			}
+		}
+	}
+	for _, r := range m.setRoots {
+		if r.ValidToBlock != nil && *r.ValidToBlock < r.ValidFromBlock {
+			return fmt.Errorf("manifest: policy.setRootHistory %d row has validToBlock %d before validFromBlock %d", r.ChainID, *r.ValidToBlock, r.ValidFromBlock)
+		}
+	}
+	return nil
 }
 
 // AuthSlots are the rows of the AUTH slot set (authSlots[]), in table order.
@@ -1140,6 +1192,15 @@ func (m *Manifest) WithExtension(ext []byte) (*Manifest, error) {
 		}
 	}
 	if raw, ok := edoc["generations"]; ok {
+		var added []Generation
+		if err := json.Unmarshal(raw, &added); err != nil {
+			return nil, ManifestCorrupt().WithCause(err)
+		}
+		for _, g := range added {
+			if err := checkGenerationKey(g.Role, g.MaskedKeccak); err != nil {
+				return nil, ManifestCorrupt().WithCause(err)
+			}
+		}
 		if merged["generations"], err = mergeArrayRows(merged["generations"], raw, "generations", func(r json.RawMessage) string {
 			var g struct {
 				Role         string `json:"role"`

@@ -513,8 +513,8 @@ func TestManifestAccessorsOnTheEmbeddedManifest(t *testing.T) {
 func TestSpecShapeTablesOnAFixture(t *testing.T) {
 	doc := primaryDoc(t)
 	doc["generations"] = []any{
-		map[string]any{"role": "account", "generation": "V7_2", "pinned": false, "kind": "catalogued", "maskedKeccak": "0xAA", "runtimeBytes": 14000, "references": []any{map[string]any{"start": 1, "length": 32}}, "source": "evm/src/account/CertenAccountV7_2.sol"},
-		map[string]any{"role": "account", "generation": "V6", "pinned": false, "kind": "observed", "maskedKeccak": "0xbb", "runtimeBytes": 9000, "references": []any{}, "source": "on-chain"},
+		map[string]any{"role": "account", "generation": "V7_2", "pinned": false, "kind": "catalogued", "maskedKeccak": "0x" + strings.Repeat("aa", 32), "runtimeBytes": 14000, "references": []any{map[string]any{"start": 1, "length": 32}}, "source": "evm/src/account/CertenAccountV7_2.sol"},
+		map[string]any{"role": "account", "generation": "V6", "pinned": false, "kind": "observed", "maskedKeccak": "0x" + strings.Repeat("bb", 32), "runtimeBytes": 9000, "references": []any{}, "source": "on-chain"},
 	}
 	pol := doc["policy"].(map[string]any)
 	scan := pol["txScan"].(map[string]any)["11155111"].(map[string]any)
@@ -523,11 +523,11 @@ func TestSpecShapeTablesOnAFixture(t *testing.T) {
 	if !m.HasGenerations() || len(m.Generations()) != 2 {
 		t.Fatalf("generations %v", m.Generations())
 	}
-	g, ok := m.GenerationFor("account", "0xaa")
+	g, ok := m.GenerationFor("account", "0x"+strings.Repeat("aa", 32))
 	if !ok || g.Generation != "V7_2" || g.Pinned || g.Kind != GenCatalogued || g.RuntimeBytes != 14000 || len(g.References) != 1 {
 		t.Fatalf("generation %+v", g)
 	}
-	if g, _ := m.GenerationFor("account", "0xBB"); g.Kind != GenObserved || !Check("generation_kind", g.Kind) {
+	if g, _ := m.GenerationFor("account", "0x"+strings.Repeat("BB", 32)); g.Kind != GenObserved || !Check("generation_kind", g.Kind) {
 		t.Fatalf("observed generation %+v", g)
 	}
 	ts, _ := m.TxScan(11155111)
