@@ -599,6 +599,9 @@ func indexInt(key string, def, lo, hi int64) (int64, string) {
 	}
 	v, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil {
+		if errors.Is(err, strconv.ErrRange) { // an integer too large to read (either sign) is out of range, as for the prefix settings
+			return def, finality.IndexRefusedOutOfRange
+		}
 		return def, finality.IndexRefusedNotInteger
 	}
 	if v < lo || v > hi {

@@ -260,3 +260,54 @@ func TestRTValidPrefixSettingsWirePrefixWorkOnBothChainsAndAnnounceNothing(t *te
 		t.Fatalf("prefix work on: base %v arb %v", base, arb)
 	}
 }
+
+// The index settings classify a refusal the way the prefix settings do (one closed vocabulary): a number too large to read is out of range,
+// not "not an integer"; a negative number is out of range; empty and blank are the default.
+func TestRTIndexSettingsRefuseHugeAndNegativeNumbersAsOutOfRangeAndEmptyIsTheDefault(t *testing.T) {
+	numeric := []struct {
+		env    string
+		chains []uint64
+	}{
+		{finality.EnvIndexGeneration, []uint64{finality.ChainBaseSepolia}},
+		{EnvArbIndexGeneration, []uint64{finality.ChainArbitrumSepolia}},
+		{EnvIndexBlocks, []uint64{finality.ChainBaseSepolia, finality.ChainArbitrumSepolia}},
+		{EnvIndexStepSecond, []uint64{finality.ChainBaseSepolia, finality.ChainArbitrumSepolia}},
+	}
+	for _, s := range numeric {
+		for _, b := range [][2]string{{"99999999999999999999999", "out_of_range"}, {"-99999999999999999999999", "out_of_range"}, {"-1", "out_of_range"}, {"abc", "not_an_integer"}, {"1.5", "not_an_integer"}} {
+			t.Run(s.env+"="+b[0], func(t *testing.T) {
+				clearPrefixEnv(t)
+				t.Setenv(s.env, b[0])
+				cfg, err := ConfigFromEnv()
+				if err != nil {
+					t.Fatalf("a bad index setting must not stop the validator: %v", err)
+				}
+				var got []*finality.StateError
+				if cfg.IndexDisabled != nil {
+					got = append(got, cfg.IndexDisabled)
+				}
+				if cfg.ArbIndexDisabled != nil {
+					got = append(got, cfg.ArbIndexDisabled)
+				}
+				if len(got) != len(s.chains) {
+					t.Fatalf("one state per index the setting governs (%v), got %v", s.chains, got)
+				}
+				for _, st := range got {
+					if st.Code != finality.CodeIndexDisabled || st.Fields["variable"] != s.env || st.Fields["reason"] != finality.IndexSettingInvalid || st.Fields["refused"] != b[1] {
+						t.Fatalf("want finality_index_disabled{%s, setting_invalid, %s}, got %v", s.env, b[1], st)
+					}
+					if strings.Contains(st.Error(), b[0]) && len(b[0]) > 3 {
+						t.Fatalf("the state must not echo the value: %v", st)
+					}
+				}
+			})
+		}
+		for _, v := range []string{"", "   "} {
+			clearPrefixEnv(t)
+			t.Setenv(s.env, v)
+			if cfg, err := ConfigFromEnv(); err != nil || cfg.IndexDisabled != nil || cfg.ArbIndexDisabled != nil || !cfg.BaseIndex || !cfg.ArbIndex {
+				t.Fatalf("%s=%q is the default: %v %v %v", s.env, v, err, cfg.IndexDisabled, cfg.ArbIndexDisabled)
+			}
+		}
+	}
+}
