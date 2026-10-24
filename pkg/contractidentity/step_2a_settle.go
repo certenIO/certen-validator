@@ -86,10 +86,10 @@ func a2Step11(env *Env) (StepOutput, error) {
 		return a2One(p), err
 	}
 	if f.AnchorID == ([32]byte{}) {
-		return a2One(a2U(JudgedRecord, f.PathFailure)), nil
+		return StepOutput{Parts: []PartResult{a2U(JudgedRecord, f.PathFailure)}, ReadPlanIncomplete: "anchor_id_unavailable"}, nil
 	}
 	if f.AnchorRefusal != nil {
-		return a2One(a2R(JudgedRecord, f.AnchorRefusal)), nil
+		return StepOutput{Parts: []PartResult{a2R(JudgedRecord, f.AnchorRefusal)}, ReadPlanIncomplete: "anchor_not_established"}, nil
 	}
 	r := a2Reader(env)
 	rec := MappingSlotAt(KeyBytes32(f.AnchorID), 1)
@@ -146,7 +146,7 @@ func a2Step12(env *Env) (StepOutput, error) {
 		return a2One(p), err
 	}
 	if f.AnchorRefusal != nil {
-		return a2One(a2R(JudgedCodeIdentity, f.AnchorRefusal)), nil
+		return StepOutput{Parts: []PartResult{a2R(JudgedCodeIdentity, f.AnchorRefusal)}, ReadPlanIncomplete: "anchor_not_established"}, nil
 	}
 	judged := []string{RuleVERIFIERID}
 	r := a2Reader(env)
@@ -160,7 +160,7 @@ func a2Step12(env *Env) (StepOutput, error) {
 	v := a2Low20(w30)
 	f.VerifierFlags = [2]byte{w30[10], w30[9]}
 	notPublished := func(role string, a common.Address) StepOutput {
-		return StepOutput{Parts: []PartResult{a2R(JudgedCodeIdentity, Must(CodeAddressNotPublished, "", map[string]any{"role": role, "address": a}))}, RulesJudged: judged}
+		return StepOutput{Parts: []PartResult{a2R(JudgedCodeIdentity, Must(CodeAddressNotPublished, "", map[string]any{"role": role, "address": a}))}, RulesJudged: judged, ReadPlanIncomplete: "verifier_chain_not_established"}
 	}
 	vrow, ok := m.Deployment(ctx.Chain, RoleBlsZkVerifier)
 	if !ok || v == (common.Address{}) || common.HexToAddress(vrow.Address) != v {
@@ -177,7 +177,7 @@ func a2Step12(env *Env) (StepOutput, error) {
 	}
 	f.VerifierState = jv.acct
 	if jv.refusal != nil {
-		return StepOutput{Parts: []PartResult{a2R(JudgedCodeIdentity, jv.refusal)}, RulesJudged: judged}, nil
+		return StepOutput{Parts: []PartResult{a2R(JudgedCodeIdentity, jv.refusal)}, RulesJudged: judged, ReadPlanIncomplete: "verifier_chain_not_established"}, nil
 	}
 	f.VerifierCode = jv.code
 	var first common.Hash
@@ -196,7 +196,7 @@ func a2Step12(env *Env) (StepOutput, error) {
 		return StepOutput{}, err
 	}
 	if st != nil {
-		return StepOutput{Parts: []PartResult{a2R(JudgedCodeIdentity, st)}, RulesJudged: judged}, nil
+		return StepOutput{Parts: []PartResult{a2R(JudgedCodeIdentity, st)}, RulesJudged: judged, ReadPlanIncomplete: "verifier_chain_not_established"}, nil
 	}
 	g := a2Low20(first)
 	grow, ok := m.Deployment(ctx.Chain, RoleGroth16Verifier)
@@ -214,7 +214,7 @@ func a2Step12(env *Env) (StepOutput, error) {
 	}
 	f.Groth16State = jg.acct
 	if jg.refusal != nil {
-		return StepOutput{Parts: []PartResult{a2R(JudgedCodeIdentity, jg.refusal)}, RulesJudged: judged}, nil
+		return StepOutput{Parts: []PartResult{a2R(JudgedCodeIdentity, jg.refusal)}, RulesJudged: judged, ReadPlanIncomplete: "verifier_chain_not_established"}, nil
 	}
 	f.Groth16Code = jg.code
 	return StepOutput{Parts: []PartResult{env.Verified(JudgedCodeIdentity)}, RulesJudged: judged}, nil
@@ -445,17 +445,22 @@ func a2RequiredFor(stored int, value *big.Int) int {
 func a2Step14(env *Env) (StepOutput, error) {
 	f, m, ctx := &env.Facts.A, env.Manifest, env.Ctx
 	const part = JudgedAuthorityLevel
-	if p, blocked, err := a2Blocked(env, part); blocked {
-		return a2One(p), err
+	if out, blocked, err := a2Blocked(env, part); blocked {
+		return out, err
 	}
 	if f.PathFailure != nil {
-		return a2One(a2U(part, f.PathFailure)), nil
+		return StepOutput{Parts: []PartResult{a2U(part, f.PathFailure)}, ReadPlanIncomplete: "settlement_call_not_pinned"}, nil
 	}
 	if f.GoverningBookHash == (common.Hash{}) { // step 6 or 7 refused account_provenance: the governing default cannot be computed
-		return a2One(a2U(part, Must(CodeUnproven, RowUnprovenAuthorityLevelUnproven, map[string]any{"reason": LevelReasonCalldataUndecodable, "field": "governing_book_hash"}))), nil
+		return StepOutput{Parts: []PartResult{a2U(part, Must(CodeUnproven, RowUnprovenAuthorityLevelUnproven, map[string]any{"reason": LevelReasonCalldataUndecodable, "field": "governing_book_hash"}))}, ReadPlanIncomplete: "governing_book_hash_unavailable"}, nil
 	}
 	unproven := func(fields map[string]any) StepOutput {
 		return a2One(a2U(part, Must(CodeUnproven, RowUnprovenAuthorityLevelUnproven, fields)))
+	}
+	undecoded := func(fields map[string]any) StepOutput {
+		o := unproven(fields)
+		o.ReadPlanIncomplete = "settlement_calldata"
+		return o
 	}
 	call, err := DecodeSettlementCall(ctx.Tx.Data(), DefaultABILimits())
 	if err != nil {
@@ -464,9 +469,9 @@ func a2Step14(env *Env) (StepOutput, error) {
 			return StepOutput{}, err
 		}
 		if ae.Kind == ABICap {
-			return unproven(map[string]any{"reason": LevelReasonTooManyLegs, "count": ae.Got, "limit": ae.Limit}), nil
+			return undecoded(map[string]any{"reason": LevelReasonTooManyLegs, "count": ae.Got, "limit": ae.Limit}), nil
 		}
-		return unproven(map[string]any{"reason": LevelReasonCalldataUndecodable, "field": ae.Field}), nil
+		return undecoded(map[string]any{"reason": LevelReasonCalldataUndecodable, "field": ae.Field}), nil
 	}
 	book, page := common.Hash(call.Proof.AuthorityBook), call.Proof.AuthorityPage
 	r := a2Reader(env)

@@ -253,29 +253,32 @@ func a2Immutables(role string, code []byte, build Build, want func(im Immutable,
 
 // a2Blocked is what a step that depends on the established account (6-9, 14) decides while it is not: the carried Stated reason, the
 // settlement-path failure, the unpinned generation or the refusal of step 5. ok is false when the account is established.
-func a2Blocked(env *Env, part string) (PartResult, bool, error) {
+func a2Blocked(env *Env, part string) (StepOutput, bool, error) {
 	f := &env.Facts.A
+	inc := func(p PartResult) (StepOutput, bool, error) {
+		return StepOutput{Parts: []PartResult{p}, ReadPlanIncomplete: "account_not_established"}, true, nil
+	}
 	if st := env.SettleStated(); st != nil {
 		u, err := a2StatedU(st, part)
 		if err != nil {
-			return PartResult{}, true, err
+			return StepOutput{}, true, err
 		}
-		return a2U(part, u), true, nil
+		return a2One(a2U(part, u)), true, nil // the builder pruned the settle nodes: nothing is left unread
 	}
 	switch {
 	case f.Account == (common.Address{}):
 		if f.PathFailure == nil {
-			return PartResult{}, true, fmt.Errorf("contractidentity: no account was selected and step 3 recorded no failure")
+			return StepOutput{}, true, fmt.Errorf("contractidentity: no account was selected and step 3 recorded no failure")
 		}
-		return a2U(part, f.PathFailure), true, nil
+		return inc(a2U(part, f.PathFailure))
 	case f.GenerationState != nil:
-		return a2U(part, f.GenerationState), true, nil
+		return inc(a2U(part, f.GenerationState))
 	case f.AccountRefusal != nil:
-		return a2R(part, f.AccountRefusal), true, nil
+		return inc(a2R(part, f.AccountRefusal))
 	case !f.AccountState.Exists:
-		return PartResult{}, true, fmt.Errorf("contractidentity: the account state is not established and no step refused it")
+		return StepOutput{}, true, fmt.Errorf("contractidentity: the account state is not established and no step refused it")
 	}
-	return PartResult{}, false, nil
+	return StepOutput{}, false, nil
 }
 
 // ---- step 1c ----
@@ -520,7 +523,7 @@ func a2Step5(env *Env) (StepOutput, error) {
 		return a2One(a2U(JudgedCodeIdentity, u)), err
 	}
 	if f.Account == (common.Address{}) {
-		return a2One(a2U(JudgedCodeIdentity, f.PathFailure)), nil
+		return StepOutput{Parts: []PartResult{a2U(JudgedCodeIdentity, f.PathFailure)}, ReadPlanIncomplete: "account_not_established"}, nil
 	}
 	bld, ok := env.Manifest.Build(buildAccount)
 	if !ok {
@@ -532,10 +535,10 @@ func a2Step5(env *Env) (StepOutput, error) {
 	}
 	switch {
 	case j.gen != nil:
-		return a2One(a2U(JudgedCodeIdentity, a2GenUnpinned(RowUnprovenAccountGenerationUnpinned, *j.gen, j.code))), nil
+		return StepOutput{Parts: []PartResult{a2U(JudgedCodeIdentity, a2GenUnpinned(RowUnprovenAccountGenerationUnpinned, *j.gen, j.code))}, ReadPlanIncomplete: "account_generation_unpinned"}, nil
 	case j.refusal != nil:
 		f.AccountRefusal = j.refusal
-		return a2One(a2R(JudgedCodeIdentity, j.refusal)), nil
+		return StepOutput{Parts: []PartResult{a2R(JudgedCodeIdentity, j.refusal)}, ReadPlanIncomplete: "account_not_established"}, nil
 	}
 	f.AccountState, f.AccountCode = j.acct, j.code
 	return a2One(env.Verified(JudgedCodeIdentity)), nil
@@ -566,8 +569,8 @@ func a2IsGoverningBookOf(adiURL, book string) bool {
 
 func a2Step6(env *Env) (StepOutput, error) {
 	f := &env.Facts.A
-	if p, blocked, err := a2Blocked(env, JudgedAccountProvenance); blocked {
-		return a2One(p), err
+	if out, blocked, err := a2Blocked(env, JudgedAccountProvenance); blocked {
+		return out, err
 	}
 	r := a2Reader(env)
 	max := uint64(DefaultLimits().MaxString)
@@ -605,8 +608,8 @@ func a2ConstantWord(rule ImmutableRule) common.Hash {
 
 func a2Step7(env *Env) (StepOutput, error) {
 	f := &env.Facts.A
-	if p, blocked, err := a2Blocked(env, JudgedAccountProvenance); blocked {
-		return a2One(p), err
+	if out, blocked, err := a2Blocked(env, JudgedAccountProvenance); blocked {
+		return out, err
 	}
 	if f.ADIURL == "" { // step 6 refused the part
 		return StepOutput{}, nil
@@ -663,11 +666,11 @@ func a2PackStrings(parts ...any) ([]byte, error) {
 
 func a2Step8(env *Env) (StepOutput, error) {
 	f, m, ctx := &env.Facts.A, env.Manifest, env.Ctx
-	if p, blocked, err := a2Blocked(env, JudgedAccountProvenance); blocked {
-		return a2One(p), err
+	if out, blocked, err := a2Blocked(env, JudgedAccountProvenance); blocked {
+		return out, err
 	}
-	if f.ADIURL == "" || f.GoverningBookHash == (common.Hash{}) { // step 6 or 7 refused the part
-		return StepOutput{}, nil
+	if f.ADIURL == "" || f.GoverningBookHash == (common.Hash{}) { // step 6 or 7 refused the part: the factory reads cannot be derived
+		return StepOutput{ReadPlanIncomplete: "account_strings_unavailable"}, nil
 	}
 	row, ok := m.Deployment(ctx.Chain, RoleAccountFactory)
 	if !ok {
@@ -762,8 +765,8 @@ func a2Step9(env *Env) (StepOutput, error) {
 	if ok {
 		f.Anchor = common.HexToAddress(row.Address)
 	}
-	if p, blocked, err := a2Blocked(env, JudgedPointer); blocked {
-		return a2One(p), err
+	if out, blocked, err := a2Blocked(env, JudgedPointer); blocked {
+		return out, err
 	}
 	if !ok {
 		return a2One(a2R(JudgedPointer, Must(CodeAddressNotPublished, "", map[string]any{"role": RoleAnchor, "address": common.Address{}}))), nil
