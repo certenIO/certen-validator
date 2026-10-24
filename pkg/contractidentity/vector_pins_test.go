@@ -15,8 +15,8 @@ import (
 	"testing"
 )
 
-// PINS.json pins every file of every published vector set (the directories of testdata/contractidentity/vectors) by sha256 under the domain
-// tag certen:contract-identity:v1. A published set is never edited: any changed, missing or extra file, and any set directory without a pin,
+// PINS.json pins every file of every published vector set (the directories of testdata/contractidentity/vectors) by the plain sha256 of the file bytes
+// (no domain-tag prefix; the file's domain field only labels the pin file with the contract-identity namespace). A published set is never edited: any changed, missing or extra file, and any set directory without a pin,
 // fails the test. The per-set MANIFEST file is a pin inside the set and moves with it; PINS.json is the second, independent copy.
 
 const pinsDomain = "certen:contract-identity:v1"
