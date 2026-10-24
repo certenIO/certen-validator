@@ -619,6 +619,10 @@ func TestImplementationDefectsAreErrorsNotVerdicts(t *testing.T) {
 	}{
 		{"declared contributor is silent", map[StepID]override{Step7: silent}, "step 7 ran and did not account for part account_provenance"},
 		{"part nobody reports", map[StepID]override{Step13: silent}, "step 13 ran and did not account for part state_at_settlement"},
+		{"a halt that leaves parts undecided", map[StepID]override{Step3: func(_ *Env, out *StepOutput) error {
+			out.Halt, out.HaltReason = true, "early"
+			return nil
+		}}, "was not decided by any step"},
 		{"step returns an error", map[StepID]override{Step7: func(*Env, *StepOutput) error { return errors.New("boom") }}, "step 7: boom"},
 		{"halt without a reason", map[StepID]override{Step7: func(_ *Env, out *StepOutput) error { out.Halt = true; return nil }}, "Halt without HaltReason"},
 		{"supersede from a step other than 24", map[StepID]override{Step7: func(_ *Env, out *StepOutput) error { out.Supersede = true; return nil }}, "only step 24 may supersede"},
