@@ -1,0 +1,78 @@
+name: finality-pins-sync
+
+# The job that pkg/finality/pins.go names (V2_SPEC_S7 4.1): the pins file of this repository (pkg/finality/pins/finality-pins.json, its links in
+# pkg/finality/pins-links/) and the PinsSHA256 constant of pkg/finality/pins.go must equal the file published in certenIO/certen-contracts
+# (evm/deployments/finality-pins.json) and the copy and constant in certenIO/certen-sdk. The comparison is scripts/finality-pins-sync.mjs of
+# certen-contracts (offline, no dependency but node); it fails, naming each check, on any difference or any missing file.
+#
+# A change of the pins is merged in certen-contracts FIRST: this job compares against its main branch, so a pins change that is not
+# published there is red here on purpose.
+#
+# It reads certenIO/certen-contracts and certenIO/certen-sdk (private) with the read-only token in the repository secret
+# FINALITY_PINS_SYNC_TOKEN. Without the secret the job FAILS with a message; it never skips the comparison.
+
+on:
+  pull_request:
+    paths:
+      - 'pkg/finality/pins.go'
+      - 'pkg/finality/pins/**'
+      - 'pkg/finality/pins-links/**'
+      - '.github/workflows/finality-pins-sync.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'pkg/finality/pins.go'
+      - 'pkg/finality/pins/**'
+      - 'pkg/finality/pins-links/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  finality-pins-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: The token that reads the other repositories is present
+        env:
+          TOKEN: ${{ secrets.FINALITY_PINS_SYNC_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::error::finality-pins-sync needs the repository secret FINALITY_PINS_SYNC_TOKEN (read-only contents access to certenIO/certen-contracts and certenIO/certen-sdk); the three copies were NOT compared"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          repository: certenIO/certen-contracts
+          ref: main
+          path: contracts
+          token: ${{ secrets.FINALITY_PINS_SYNC_TOKEN }}
+          sparse-checkout: |
+            /scripts/finality-pins-sync.mjs
+            /evm/deployments/finality-pins.json
+            /evm/deployments/finality-pins.sha256
+            /evm/deployments/finality-pins-links/
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/checkout@v4
+        with:
+          repository: certenIO/certen-sdk
+          ref: main
+          path: sdk
+          token: ${{ secrets.FINALITY_PINS_SYNC_TOKEN }}
+          sparse-checkout: |
+            /packages/verify/src/proof-v2/finality/finality-pins.json
+            /packages/verify/src/proof-v2/finality/pins.ts
+            /packages/verify/src/proof-v2/finality/pins-embedded.ts
+            /packages/verify/src/proof-v2/finality/pins-links-embedded.ts
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: The three copies and both constants agree
+        run: node contracts/scripts/finality-pins-sync.mjs --validator . --sdk sdk --contracts contracts
