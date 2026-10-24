@@ -33,7 +33,12 @@ func (a bundleDeadlineAdapter) ChainDeadline(chain uint64, anchorID [32]byte) (t
 	if s == nil {
 		return time.Time{}, false
 	}
-	r := s.BundleChainDeadline(int64(chain), anchorID)
+	return handedToTheCapture(s.BundleChainDeadline(int64(chain), anchorID))
+}
+
+// handedToTheCapture is the deadline the tick loop follows: the LATEST chain deadline of the pending members (spec E1b, r3.6 H16), not the
+// earliest - after the earliest deadline the other members can still settle and must keep their hop ticks.
+func handedToTheCapture(r execution.BundleDeadline) (time.Time, bool) {
 	if !r.Known() {
 		return time.Time{}, false
 	}

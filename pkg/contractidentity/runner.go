@@ -249,8 +249,8 @@ func validateOutput(env *Env, spec StepSpec, out StepOutput) error {
 		}
 	}
 	for _, r := range out.RulesJudged {
-		if !Check("rule_id", r) && !Check("settlement_rule_id", r) {
-			return bad("rule id %q is outside the vocabulary", r)
+		if !Check("rule_id", r) && !(spec.ID == Step13 && Check("settlement_rule_id", r)) {
+			return bad("rule id %q is outside the vocabulary of this step", r)
 		}
 	}
 	if out.Framework != nil {
