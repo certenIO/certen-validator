@@ -80,13 +80,16 @@ const maxFps = 1 << 17
 // getTimeBounds; setMaxTimeVariation is onlyRollupOwner and has no upper bound, so no cap derived from the contract can be proven safe). A lookup
 // finds the batches that can hold a timestamp ts by the time T of their L1 block, which needs a bound on both distances: the NORMAL window,
 // delay 100,000 s and future 4,000 s against 86,400 and 768 on the live inbox (the pins digest carries them). A batch beyond either distance
-// is indexed all the same and also pointed at by a "w" row (see above), so the lookup serves it exactly as the reference does; there is no cap
-// beyond which a batch the verifier can accept becomes unservable. Only a window wider than windowHardLimit (400 days: no real configuration)
-// is recorded as index_block_unindexable{window_beyond_cap}, named and never silently dropped.
+// is indexed all the same and also pointed at by a "w" row (see above), so the lookup serves it exactly as the reference does: there is no cap and
+// no limit on a window, and no block is made unindexable by one. The window fields are uint64 and are only compared (distancesWithin subtracts the
+// smaller from the larger, never the other way), and a "w" name with the largest values (3 x 20 digits) is 84 bytes, inside the 120-byte item bound
+// the names test pins; so minTs = 0 with maxTs = 2^64-1 is a wide batch like any other. What is bounded is the WORK of a lookup: it lists the
+// pointers and reads those whose bounds hold its timestamp, and more than maxWidePointers pointers is the named index_inconsistent{coverage_overflow}
+// for a leg only a wide batch can serve (a gauge says how many there are; production has none).
 const (
 	windowDelayCap  uint64 = 100_000
 	windowFutureCap uint64 = 4_000
-	windowHardLimit uint64 = 400 * 86_400
+	maxWidePointers        = 4_096
 )
 
 // ---- digest ----
@@ -397,8 +400,8 @@ func hasFp(fps [][8]byte, f [8]byte) bool {
 // batch the Bridge holds (the Bridge and its accumulator slot), the chain, the window caps that decide where a lookup looks, and the
 // fingerprint version.
 func pinsDigest(a *arbPins) [8]byte {
-	s := sha256.Sum256([]byte(fmt.Sprintf("certen/arbposted-index/1|chain=%d|parent=%d|bridge=%x|accslot=%d|maxblobs=%d|maxseg=%d|maxuncomp=%d|dcap=%d|fcap=%d|hard=%d|fp=1",
-		a.ChainID, a.ParentChainID, a.bridge[:], a.Layout.AccArraySlot, a.MaxBlobs, a.MaxSegments, a.MaxUncompressedBatch, windowDelayCap, windowFutureCap, windowHardLimit)))
+	s := sha256.Sum256([]byte(fmt.Sprintf("certen/arbposted-index/1|chain=%d|parent=%d|bridge=%x|accslot=%d|maxblobs=%d|maxseg=%d|maxuncomp=%d|dcap=%d|fcap=%d|fp=1",
+		a.ChainID, a.ParentChainID, a.bridge[:], a.Layout.AccArraySlot, a.MaxBlobs, a.MaxSegments, a.MaxUncompressedBatch, windowDelayCap, windowFutureCap)))
 	var out [8]byte
 	copy(out[:], s[:8])
 	return out
@@ -426,9 +429,11 @@ func wideItem(gen uint32, minTs, maxTs, n uint64) string {
 	return ixItem(gen, ixWide, strconv.FormatUint(minTs, 10), strconv.FormatUint(maxTs, 10), strconv.FormatUint(n, 10))
 }
 
-// wideKey is where the pointer of a wide batch lives: a fixed key per generation, so that a lookup lists it without a block range.
-func wideKey(gen uint32, minTs, maxTs, n uint64) finality.CaptureKey {
-	return finality.CaptureKey{Chain: finality.ChainArbitrumSepolia, L1Block: 0, Item: wideItem(gen, minTs, maxTs, n)}
+// wideKey is where the pointer of a wide batch lives: at block 0, so that a lookup lists every pointer of the generation with one point range, and
+// under the batch's own block hash, so that two records of one slot with the same N and the same bounds (an equivocated block, a forged twin) each
+// have their own pointer instead of two bodies under one key. The hash commits to the block number, so (key, body) never disagree on a block.
+func wideKey(gen uint32, minTs, maxTs, n uint64, hash [32]byte) finality.CaptureKey {
+	return finality.CaptureKey{Chain: finality.ChainArbitrumSepolia, L1Block: 0, L1Hash: hash, Item: wideItem(gen, minTs, maxTs, n)}
 }
 
 // wideBody is the content of a "w" row: the key of the batch's entry (its block and hash), checksummed.

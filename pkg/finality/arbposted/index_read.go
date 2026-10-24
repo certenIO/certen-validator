@@ -636,6 +636,13 @@ func (r *IndexReader) wideCandidates(ctx context.Context, ts uint64, io *ioCount
 	if err != nil {
 		return nil, err
 	}
+	io.add(len(keys) * 100)
+	metrics.SetFinalityIndexWidePointers(r.chain(), FamilyArb, len(keys))
+	if len(keys) > maxWidePointers {
+		// the work of a lookup is bounded: nothing of the pointers is read above the bound. The leg is named, not guessed; a normal batch that serves it
+		// still does (the caller keeps this as the lookup's first failure).
+		return nil, r.inconsistent(finality.IndexCoverageOverflow, "item", ixItem(r.Gen, ixWide), "l1_block", uint64(0))
+	}
 	var out []entryName
 	var first error
 	for _, k := range keys {
@@ -661,7 +668,7 @@ func (r *IndexReader) wideCandidates(ctx context.Context, ts uint64, io *ioCount
 		}
 		io.add(len(b))
 		block, hash, derr := decodeWideBody(b)
-		if derr != nil {
+		if derr != nil || hash != k.L1Hash { // the pointer lives under the hash of the block it names
 			if first == nil {
 				first = r.inconsistent(finality.IndexEntryCorrupt, "item", k.Item, "l1_block", k.L1Block)
 			}

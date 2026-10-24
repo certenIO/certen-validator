@@ -1202,7 +1202,7 @@ EOF
     [ "$j_nohdr" -eq 0 ] && st=PASS || st=FAIL
     rec $st J2 "the block of every batch has its header row (the indexer takes the L1 timestamp of the batch from it; a block without one is index_block_unindexable{header_row_malformed})" "0 batches without a header row" "$j_nohdr of $j_n"
     [ "$j_wide" -eq 0 ] && st=PASS || st=WARN
-    rec $st J3 "the time bounds of every batch are no wider than the lookup's normal window assumes (delay 100000 s + future 4000 s; a wider batch is still indexed and served, through a w pointer row: the SequencerInbox time variation would have been raised; only a window over 400 days is index_block_unindexable{window_beyond_cap})" "max width <= 104000 s" "widest $j_wmax s; wider than the caps allow: $j_wide of $j_n"
+    rec $st J3 "the time bounds of every batch are no wider than the lookup's normal window assumes (delay 100000 s + future 4000 s; a wider batch is still indexed and served, through a w pointer row keyed by its block hash: the SequencerInbox time variation would have been raised; there is no limit on a window, and more than 4096 pointers is index_inconsistent{coverage_overflow} for a leg only a wide batch can serve)" "max width <= 104000 s" "widest $j_wmax s; wider than the caps allow: $j_wide of $j_n"
   fi
 else rec FAIL J1 "batch record query" "query answers" "failed: $(errline)"; fi
 

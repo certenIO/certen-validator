@@ -4,7 +4,7 @@ package arbposted
 
 import (
 	"context"
-	"strings"
+	"math"
 	"testing"
 
 	"github.com/certen/independant-validator/pkg/finality"
@@ -165,12 +165,14 @@ func TestRB12ArbIndexRangeNoteIsWorkedOffInBoundedChunksAndTheNotesAreBounded(t 
 	}
 }
 
-// V-INDEX-B B4 (class 7): the edges of the normal lookup window, and the batches beyond it. A batch whose posting is up to 100,000 s after its minTs
-// and up to 4,000 s before its maxTs is found by the lookup's normal window; one more second on either side is pointed at by a "w" row and served
-// exactly as the reference serves it - no batch the verifier can accept is unservable by the index. Only a window wider than 400 days is named
-// index_block_unindexable{window_beyond_cap}. Fail-before @d313b708: delay 100,001 / future 4,001 gave window_beyond_cap where the reference serves the batch.
+// V-INDEX-B B4 (class 7) and V-B2-3: the edges of the normal lookup window, and the batches beyond it. A batch whose posting is up to 100,000 s after
+// its minTs and up to 4,000 s before its maxTs is found by the lookup's normal window; one more second on either side is pointed at by a "w" row and
+// served exactly as the reference serves it - and so is any window at all, up to minTs = 0 and maxTs = 2^64-1: there is no cap and no hard limit, no
+// batch the verifier can accept is unservable by the index and no block is made unindexable by its window. Fail-before @d313b708: delay 100,001 /
+// future 4,001 gave window_beyond_cap; @00582def: a window over 400 days did.
 func TestRB12ArbIndexWindowEdgesAndBatchesBeyondTheNormalWindow(t *testing.T) {
 	const T = ixT0 + 600_000
+	const day = 86_400
 	for _, c := range []struct {
 		name       string
 		delay, fut uint64
@@ -182,10 +184,12 @@ func TestRB12ArbIndexWindowEdgesAndBatchesBeyondTheNormalWindow(t *testing.T) {
 		{"future at the cap", 86_400, 4_000, false, []uint64{T - 86_400, T + 4_000, T + 4_001}},
 		{"future one beyond the cap", 86_400, 4_001, true, []uint64{T - 86_400, T + 4_001, T + 4_002}},
 		{"both far beyond", 3_000_000, 90_000, true, []uint64{T - 3_000_000, T - 1_000_000, T + 90_000, T + 90_001}},
+		{"400 days and a second", 400*day + 1, 768, true, []uint64{T - (400*day + 1), T - 399*day, T + 768, T + 769}},
+		{"the whole range of a timestamp", T - 1, math.MaxUint64 - T, true, []uint64{2, T - 1_000_000, T + 10_000_000_000, math.MaxUint64 - 1}},
 	} {
 		w := newIxWorld(t)
 		tx := ixTx(73000)
-		w.add(ixBatch{N: 800, Block: 1000, T: T, MinTs: T - c.delay, MaxTs: T + c.fut, Msgs: [][][]byte{ixMsg(tx)}})
+		kw := w.add(ixBatch{N: 800, Block: 1000, T: T, MinTs: T - c.delay, MaxTs: T + c.fut, Msgs: [][][]byte{ixMsg(tx)}})
 		// neighbours on either side, inside the normal window, so the history is not one batch
 		w.add(ixBatch{N: 799, Block: 992, T: T - 96, Msgs: [][][]byte{ixMsg(ixTx(73001))}})
 		w.add(ixBatch{N: 801, Block: 1008, T: T + 96, Msgs: [][][]byte{ixMsg(ixTx(73002))}})
@@ -204,29 +208,14 @@ func TestRB12ArbIndexWindowEdgesAndBatchesBeyondTheNormalWindow(t *testing.T) {
 		if found < 2 {
 			t.Errorf("%s: the reference serves the batch for only %d of the legs: the case does not exercise the edges", c.name, found)
 		}
-		_, wide := w.indexRows()[wideKey(1, T-c.delay, T+c.fut, 800)]
+		_, wide := w.indexRows()[ixWideKeyOf(1, T-c.delay, T+c.fut, 800, kw.L1Hash)]
 		if wide != c.wide {
 			t.Errorf("%s: a pointer row exists: %v, want %v", c.name, wide, c.wide)
 		}
-	}
-	// the hard limit: a window wider than 400 days is no real configuration; it is named, the reference serves it
-	w := newIxWorld(t)
-	tx := ixTx(73100)
-	w.add(ixBatch{N: 810, Block: 1000, T: T, MinTs: T - (windowHardLimit + 1), Msgs: [][][]byte{ixMsg(tx)}})
-	w.index(IndexConfig{})
-	r := w.reader()
-	if ref := w.ref(T-10, [][]byte{tx}); ref.N != 810 {
-		t.Fatalf("the reference does not serve the batch: %s", ref)
-	}
-	got := w.idx(r, T-10, [][]byte{tx})
-	if got.N != 0 || !strings.Contains(got.State, `"code":"index_block_unindexable"`) || !strings.Contains(got.State, `"reason":"window_beyond_cap"`) || !strings.Contains(got.State, `"block":"1000"`) {
-		t.Fatalf("a window wider than the hard limit is not named: %s", got)
-	}
-	// exactly at the hard limit the batch is a wide batch and is served
-	w2 := newIxWorld(t)
-	w2.add(ixBatch{N: 811, Block: 1000, T: T, MinTs: T - windowHardLimit, Msgs: [][][]byte{ixMsg(tx)}})
-	w2.index(IndexConfig{})
-	if ref, idx := w2.ref(T-10, [][]byte{tx}), w2.idx(w2.reader(), T-10, [][]byte{tx}); ref.N != 811 || ref != idx {
-		t.Fatalf("at the hard limit: reference %s, index %s", ref, idx)
+		for k := range w.indexRows() { // no block is recorded as unreadable because of its window
+			if k.Item == ixItem(1, ixUnindexed) {
+				t.Errorf("%s: block %d is recorded as unindexable", c.name, k.L1Block)
+			}
+		}
 	}
 }

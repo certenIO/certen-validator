@@ -334,7 +334,11 @@ func TestAHungKindOrDatabaseDoesNotStallASettlementWorkerOrShutdown(t *testing.T
 	if settled.Load() != 1000 || time.Since(start) > 2*time.Second {
 		t.Fatalf("the settlement worker was delayed: %d jobs in %s", settled.Load(), time.Since(start))
 	}
-	time.Sleep(300 * time.Millisecond) // the upgrader is inside its hung Append, abandoned at BuildTimeout
+	// the upgrader is inside its hung Append and abandons it at BuildTimeout (200 ms): wait for that to be logged, up to 5 s, instead of a fixed
+	// sleep that a loaded machine can overrun (the 300 ms sleep against the 200 ms timeout was a timing flake since RB11)
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline) && !strings.Contains(f.logs.Joined(), CodeBuildTimeout); {
+		time.Sleep(20 * time.Millisecond)
+	}
 	cancel()
 	select {
 	case <-runDone:

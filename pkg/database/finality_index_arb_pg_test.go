@@ -64,16 +64,30 @@ func TestFinalityCaptureIndexArbRowsFitTheProductionTable(t *testing.T) {
 	if err != nil || len(es) != 2 || es[0].L1Block != 605 || es[1].L1Block != 606 {
 		t.Fatalf("a range listing: %v %v", es, err)
 	}
-	// the pointers of wide batches live at a fixed key (block 0, zero hash): a point range lists them and nothing else
-	for i, it := range []string{"idx/g1/arb/w/5/10/7", "idx/g1/arb/w/5/12/8"} {
-		wk := finality.CaptureKey{Chain: chain, L1Block: 0, Item: it}
+	// the pointers of wide batches live at block 0 under the hash of the batch's block: two records of one slot with the same name keep their own
+	// rows, and a point range lists them all and nothing else
+	pointers := []finality.CaptureKey{
+		{Chain: chain, L1Block: 0, L1Hash: h(1), Item: "idx/g1/arb/w/5/10/7"},
+		{Chain: chain, L1Block: 0, L1Hash: h(2), Item: "idx/g1/arb/w/5/10/7"},
+		{Chain: chain, L1Block: 0, L1Hash: h(3), Item: "idx/g1/arb/w/5/12/8"},
+	}
+	for i, wk := range pointers {
 		if err := finality.IndexPut(ctx, st, fam, wk, []byte{byte(i)}); err != nil {
-			t.Fatalf("%s: %v", it, err)
+			t.Fatalf("%s: %v", wk.Item, err)
 		}
 	}
-	ws, err := st.ListByRange(ctx, chain, 0, 0, "idx/g1/arb/w/")
-	if err != nil || len(ws) != 2 {
-		t.Fatalf("the point listing of the wide pointers: %v %v", ws, err)
+	ws, err := st.ListByRange(ctx, chain, 0, 0, "idx/g1/arb/w/") // (rows are insert-only: a database that ran this test before may hold more)
+	if err != nil {
+		t.Fatalf("the point listing of the wide pointers: %v", err)
+	}
+	listed := map[finality.CaptureKey]bool{}
+	for _, k := range ws {
+		listed[k] = true
+	}
+	for _, wk := range pointers {
+		if !listed[wk] {
+			t.Fatalf("the point listing of the wide pointers misses %v: %v", wk, ws)
+		}
 	}
 	// different bytes under an index key are the named conflict
 	k := finality.CaptureKey{Chain: chain, L1Block: 501, L1Hash: h(2), Item: longest[1]}

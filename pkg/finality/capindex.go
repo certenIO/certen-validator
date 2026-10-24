@@ -174,13 +174,12 @@ const (
 	// the Arbitrum batch index (RB12-INDEX-B)
 	UnindexableBatchRowMalformed  = "batch_row_malformed"  // a batch/N row does not decode or is not the batch its key names
 	UnindexableHeaderRowMalformed = "header_row_malformed" // the header row of a batch's block is absent, is not that block's header, or does not hash to its key
-	UnindexableWindowBeyondCap    = "window_beyond_cap"    // a batch's time bounds are wider than the lookup window assumes (the SequencerInbox time variation was raised)
 )
 
 // UnindexableReasons is the closed set of reasons, in registry order.
 func UnindexableReasons() []string {
 	return []string{UnindexableBatchRowMalformed, UnindexableBlobRowMalformed, UnindexableBlobRowsInconsistent, UnindexableHeaderRowMalformed, UnindexableInboxMalformed,
-		UnindexableInboxOverLimit, UnindexableTxUnparseable, UnindexableWindowBeyondCap}
+		UnindexableInboxOverLimit, UnindexableTxUnparseable}
 }
 
 // IndexBlockUnindexable builds index_block_unindexable for the captured block at L1 height block.
