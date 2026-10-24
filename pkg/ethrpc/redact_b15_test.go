@@ -11,7 +11,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -80,14 +82,34 @@ var b15Shapes = []struct{ name, text string }{
 	{"alt-quotes-long", b15Rep(b17AltUnits[4].unit, 4<<20)},
 }
 
+// RB12-OPS-A1 (ledger F15): these tests used to assert wall-clock bounds (250 ms, 500 ms, 1 s, 50 ms), which a loaded machine breaks without any
+// defect in the redactor. The claim they stand for is that the cost of redacting a text does not depend on its length or its shape beyond the
+// read bound, and that redaction never runs under a mutex. Both are now asserted on quantities a load cannot change: the bytes a call
+// allocates (the cost model, measured as the smallest of three runs so that a goroutine of another test cannot add to it) and a gate that
+// holds the redaction at a chosen point while the mutex is probed. No test below reads a clock.
+
+// b15Cost is the bytes f allocates, the smallest of three runs.
+func b15Cost(f func()) uint64 {
+	best := ^uint64(0)
+	for i := 0; i < 3; i++ {
+		var a, b runtime.MemStats
+		runtime.ReadMemStats(&a)
+		f()
+		runtime.ReadMemStats(&b)
+		if d := b.TotalAlloc - a.TotalAlloc; d < best {
+			best = d
+		}
+	}
+	return best
+}
+
+// b15CostBound is the most bytes any shape may allocate in one RedactText (twice that for a RedactError and its first read, three times for a
+// TransientError text, which redacts two parts): a fixed multiple of the read bound (the worst shape measured at 9.5 MB), so a pass that grew with the text breaks it.
+const b15CostBound = 256 * b15Cut
+
 func TestB15_D1_FourMiBOfEveryShapeIsRedactedInABoundedTime(t *testing.T) {
 	for _, sh := range b15Shapes {
-		t0 := time.Now()
 		out := RedactText(sh.text)
-		d := time.Since(t0)
-		if d > 250*time.Millisecond {
-			t.Errorf("%s: RedactText of %d bytes took %s", sh.name, len(sh.text), d)
-		}
 		if len(out) > b15Cut {
 			t.Errorf("%s: RedactText returned %d bytes, more than the %d bound", sh.name, len(out), b15Cut)
 		}
@@ -97,19 +119,30 @@ func TestB15_D1_FourMiBOfEveryShapeIsRedactedInABoundedTime(t *testing.T) {
 		if !utf8.ValidString(out) {
 			t.Errorf("%s: the cut text is not UTF-8", sh.name)
 		}
-		t0 = time.Now()
+		// the cost does not depend on the length of the text past the read bound: a quarter of the shape costs what all of it costs
+		big := b15Cost(func() { _ = RedactText(sh.text) })
+		quarter := sh.text[:len(sh.text)/4]
+		small := b15Cost(func() { _ = RedactText(quarter) })
+		t.Logf("%s: %d bytes allocated for %d, %d for %d", sh.name, big, len(sh.text), small, len(quarter))
+		if big > small+4096 || small > big+4096 {
+			t.Errorf("%s: RedactText of %d bytes allocated %d, of %d bytes %d: the cost depends on the length of the text", sh.name, len(sh.text), big, len(quarter), small)
+		}
+		if big > b15CostBound {
+			t.Errorf("%s: RedactText of %d bytes allocated %d bytes, more than %d", sh.name, len(sh.text), big, b15CostBound)
+		}
+		// a redacted error redacts once: its first read costs a redaction, every later read costs nothing
 		e := RedactError(errors.New(sh.text))
-		for i := 0; i < 30; i++ {
-			_ = e.Error()
+		first := b15Cost(func() { _ = RedactError(errors.New(sh.text)).Error() })
+		if first > 2*b15CostBound {
+			t.Errorf("%s: RedactError and its first read allocated %d bytes, more than %d", sh.name, first, 2*b15CostBound)
 		}
-		if d := time.Since(t0); d > 250*time.Millisecond {
-			t.Errorf("%s: RedactError of %d bytes and 30 reads of its text took %s", sh.name, len(sh.text), d)
+		_ = e.Error()
+		if n := testing.AllocsPerRun(30, func() { _ = e.Error() }); n != 0 {
+			t.Errorf("%s: a later read of a redacted error allocated %v times", sh.name, n)
 		}
-		t0 = time.Now()
-		_ = (&TransientError{Host: "h", Attempts: 1, Err: errors.New(sh.text)}).Error()
-		_ = summarize(errors.New(sh.text))
-		if d := time.Since(t0); d > 500*time.Millisecond {
-			t.Errorf("%s: TransientError.Error and summarize took %s", sh.name, d)
+		te := &TransientError{Host: "h", Attempts: 1, Err: errors.New(sh.text)}
+		if c := b15Cost(func() { _ = te.Error(); _ = summarize(errors.New(sh.text)) }); c > 3*b15CostBound {
+			t.Errorf("%s: TransientError.Error and summarize allocated %d bytes, more than %d", sh.name, c, 3*b15CostBound)
 		}
 		var logged string
 		RedactingLogf(func(f string, a ...interface{}) { logged = fmt.Sprintf(f, a...) })("%s", sh.text)
@@ -119,6 +152,34 @@ func TestB15_D1_FourMiBOfEveryShapeIsRedactedInABoundedTime(t *testing.T) {
 		if args := RedactArgs([]interface{}{sh.text}); len(args[0].(string)) > b15Cut {
 			t.Errorf("%s: RedactArgs returned %d bytes", sh.name, len(args[0].(string)))
 		}
+	}
+}
+
+// b15Gated is an error whose text is held back until released: the redaction that asked for it is stopped at a point the test chooses.
+type b15Gated struct {
+	text    string
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func newB15Gated(text string) *b15Gated {
+	return &b15Gated{text: text, entered: make(chan struct{}), release: make(chan struct{})}
+}
+
+func (g *b15Gated) Error() string {
+	g.once.Do(func() { close(g.entered) })
+	<-g.release
+	return g.text
+}
+
+// b15Within waits for ch; a failure to see it is a hang, which the generous bound only reports, it never decides a passing run.
+func b15Within(t *testing.T, ch <-chan struct{}, what string) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(2 * time.Minute):
+		t.Fatalf("hung: %s", what)
 	}
 }
 
@@ -155,8 +216,9 @@ func TestB15_D1_ARedactedErrorRedactsOnce(t *testing.T) {
 	}
 }
 
-// One failing provider answering with megabytes must not hold the pool, or the health of its provider, for the length
-// of the redaction.
+// One failing provider answering with megabytes must not hold the pool, or the health of its provider, for the length of the redaction.
+// The failure is recorded while the redaction of its text is stopped at the gate; the mutex of the pool is then probed and must be free.
+// (A redaction under the mutex would hold the probe until the gate opened: the test would hang, which is reported.)
 func TestB15_D1_AHostileErrorBodyDoesNotStallThePool(t *testing.T) {
 	body := b15Rep("h.io/a h.io/b ", 3_900_000)
 	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -180,81 +242,50 @@ func TestB15_D1_AHostileErrorBodyDoesNotStallThePool(t *testing.T) {
 	}
 	defer p.Close()
 
-	done := make(chan struct{})
-	finished := make(chan int64)
-	go func() {
-		var worst int64
-		for {
-			select {
-			case <-done:
-				finished <- worst
-				return
-			default:
-			}
-			t0 := time.Now()
-			_ = p.Primary()
-			if d := int64(time.Since(t0)); d > worst {
-				worst = d
-			}
-			time.Sleep(time.Millisecond)
-		}
-	}()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	// the real failure path: the megabyte body is bounded, the healthy endpoint answers, and nothing the pool reports holds the key
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	t0 := time.Now()
-	derr := p.Do(ctx, func(c *ethclient.Client) error { _, e := c.BlockNumber(ctx); return e })
-	total := time.Since(t0)
-	close(done)
-	worst := time.Duration(<-finished)
-	if derr != nil {
+	if derr := p.Do(ctx, func(c *ethclient.Client) error { _, e := c.BlockNumber(ctx); return e }); derr != nil {
 		t.Fatalf("the healthy endpoint did not answer: %v", derr)
-	}
-	if total > time.Second {
-		t.Errorf("Pool.Do took %s with a %d byte error body", total, len(body))
-	}
-	if worst > 50*time.Millisecond {
-		t.Errorf("a concurrent Pool.Primary waited %s while the failure was recorded", worst)
 	}
 	for _, s := range p.Status() {
 		if strings.Contains(s, b15Key) {
 			t.Fatalf("the status holds the key: %s", s)
 		}
+		if len(s) > 1024 {
+			t.Fatalf("a status line of %d bytes", len(s))
+		}
+	}
+
+	// the lock: markFailure is stopped inside the redaction of the provider's text, and the pool must still be usable
+	g := newB15Gated(body)
+	ep := &endpoint{url: bad.URL + "/v2/" + b15Key}
+	probe := &Pool{endpoints: []*endpoint{ep}, cooldown: time.Minute}
+	recorded := make(chan struct{})
+	go func() { probe.markFailure(ep, g); close(recorded) }()
+	b15Within(t, g.entered, "markFailure never reached the redaction of the error text")
+	statusDone := make(chan struct{})
+	go func() { _ = probe.Status(); _ = probe.candidates(); close(statusDone) }()
+	b15Within(t, statusDone, "Pool.Status and candidates waited on the mutex while a failure was being redacted")
+	close(g.release)
+	b15Within(t, recorded, "markFailure did not finish after the gate opened")
+	if ep.failures != 1 || strings.Contains(ep.lastReason, b15Key) || len(ep.lastReason) > b15Cut {
+		t.Fatalf("failures %d, reason of %d bytes", ep.failures, len(ep.lastReason))
 	}
 }
 
 func TestB15_D1_TheHealthLockIsNotHeldWhileTheReasonIsRedacted(t *testing.T) {
 	h := &providerHealth{}
-	big := &TransientError{Host: "h", Attempts: 1, Err: errors.New(b15Rep("h.io/a h.io/b ", 3_900_000))}
-	done := make(chan struct{})
-	finished := make(chan int64)
-	go func() {
-		var worst int64
-		for {
-			select {
-			case <-done:
-				finished <- worst
-				return
-			default:
-			}
-			t0 := time.Now()
-			h.admit(time.Now())
-			if d := int64(time.Since(t0)); d > worst {
-				worst = d
-			}
-			time.Sleep(time.Millisecond)
-		}
-	}()
-	t0 := time.Now()
-	h.record(context.Background(), context.Background(), big)
-	total := time.Since(t0)
-	close(done)
-	worst := time.Duration(<-finished)
-	if total > time.Second {
-		t.Errorf("record took %s", total)
-	}
-	if worst > 50*time.Millisecond {
-		t.Errorf("a concurrent admit waited %s while the failure was recorded", worst)
-	}
+	g := newB15Gated(b15Rep("h.io/a h.io/b ", 3_900_000))
+	big := &TransientError{Host: "h", Attempts: 1, Err: g}
+	recorded := make(chan struct{})
+	go func() { h.record(context.Background(), context.Background(), big); close(recorded) }()
+	b15Within(t, g.entered, "record never reached the redaction of the error text")
+	admitted := make(chan struct{})
+	go func() { _, _, _ = h.admit(time.Now()); close(admitted) }()
+	b15Within(t, admitted, "admit waited on the health mutex while the reason was being redacted")
+	close(g.release)
+	b15Within(t, recorded, "record did not finish after the gate opened")
 	if ask, _, resting := h.admit(time.Now()); ask || resting == nil || len(resting.Error()) > 400 {
 		t.Fatalf("the provider should rest with a short reason: ask=%v err=%v", ask, resting)
 	}
