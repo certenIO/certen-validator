@@ -107,6 +107,7 @@ func (f *b1fx) verifier(real []ci.StepID) *ci.StepVerifier {
 						f.authErr = f.readAuth(env)
 					}
 				case ci.Step23:
+					env.Facts.C.RulesNotJudged = ci.FixedRulesNotJudged()
 					f.facts = *env.Facts
 					f.visited = env.Nodes.VisitedNodes()
 				case ci.Step21:

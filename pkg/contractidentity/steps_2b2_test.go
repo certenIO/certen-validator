@@ -63,6 +63,7 @@ func (f *b2fx) verifierWith(disabled ci.StepID) *ci.StepVerifier {
 			case ci.Step21:
 				env.Facts.C.RegistryLink = "via S9"
 			case ci.Step23:
+				env.Facts.C.RulesNotJudged = ci.FixedRulesNotJudged()
 				f.facts = *env.Facts
 				f.visited = env.Nodes.VisitedNodes()
 			case ci.Step24:

@@ -24,8 +24,8 @@ func mustRegistry(t *testing.T) *Registry {
 
 func TestRegistryEmbedLoads(t *testing.T) {
 	g := mustRegistry(t)
-	if len(g.Rows) != 72 || len(g.Codes()) != 35 {
-		t.Fatalf("registry has %d rows / %d codes, the frozen spec has 72 / 35", len(g.Rows), len(g.Codes()))
+	if len(g.Rows) != 73 || len(g.Codes()) != 35 {
+		t.Fatalf("registry has %d rows / %d codes, the frozen spec (r3.3) has 73 / 35", len(g.Rows), len(g.Codes()))
 	}
 	for _, r := range g.Rows {
 		if !strings.HasPrefix(r.Code, Prefix) {

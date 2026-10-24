@@ -22,8 +22,8 @@ func mustVocab(t *testing.T) *Vocabulary {
 
 func TestVocabularyEmbedLoads(t *testing.T) {
 	v := mustVocab(t)
-	if len(v.Sets) != 36 {
-		t.Fatalf("vocab has %d sets, the frozen Item 4 yields 36", len(v.Sets))
+	if len(v.Sets) != 37 {
+		t.Fatalf("vocab has %d sets, the frozen Item 4 (r3.3) yields 37", len(v.Sets))
 	}
 	if Check("part_malformed", PartNodes) != true || Check("no_such_set", "x") {
 		t.Fatal("package Check misbehaves")
@@ -103,6 +103,7 @@ func TestVocabularyEqualsSpecItem4(t *testing.T) {
 		"generation kind":                      "generation_kind",
 		"settlement_path_unsupported reason":   "settlement_path_unsupported_reason",
 		"authority_level_unproven reason":      "authority_level_unproven_reason",
+		"attest_calldata_undecodable reason":   "attest_calldata_undecodable_reason",
 		"authority source":                     "authority_source",
 		"open kind":                            "open_kind",
 		"alert field":                          "alert_field",
@@ -140,7 +141,7 @@ func TestVocabularyEqualsSpecItem4(t *testing.T) {
 			}
 		},
 		"proof_invalid root": func(cell string) {
-			if !Check("proof_invalid_root", "hop:12") || Check("proof_invalid_root", "hop:") || strings.Join(v.Values("proof_invalid_root"), ",") != "settle,attest_pre,attest_post" || !strings.HasSuffix(cell, "hop:`<i>`") {
+			if !Check("proof_invalid_root", "hop:12") || Check("proof_invalid_root", "hop:") || strings.Join(v.Values("proof_invalid_root"), ",") != "settle,attest_pre,attest_post,attest_tx,attest_receipt" || !strings.HasSuffix(cell, "hop:`<i>`") {
 				t.Errorf("proof_invalid_root vs %s", cell)
 			}
 		},
@@ -231,8 +232,8 @@ func TestVocabularyEqualsSpecItem4(t *testing.T) {
 	if len(unseen) > 0 {
 		t.Fatalf("Item 4 rows with no test: %v", unseen)
 	}
-	if len(cells) != 33 {
-		t.Fatalf("Item 4 has %d rows, the frozen spec has 33", len(cells))
+	if len(cells) != 34 {
+		t.Fatalf("Item 4 has %d rows, the frozen spec (r3.3) has 34", len(cells))
 	}
 }
 

@@ -201,6 +201,8 @@ func (f *fixture) fake(id ci.StepID, skip bool) ci.StepFunc {
 			}
 		case ci.Step21:
 			env.Facts.C.RegistryLink = "via S9"
+		case ci.Step23:
+			env.Facts.C.RulesNotJudged = ci.FixedRulesNotJudged()
 		case ci.Step24:
 			env.Facts.C.Level = ci.LevelBinding{Authenticated: true, JudgedAtLevel: "finalized"}
 		}

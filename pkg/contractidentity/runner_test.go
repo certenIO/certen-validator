@@ -225,6 +225,8 @@ func skFake(rec *[]StepID, id StepID, over override) StepFunc {
 			env.Facts.A.StateRootN = bytes32(0x44)
 		case Step21:
 			env.Facts.C.RegistryLink = "via S9"
+		case Step23:
+			env.Facts.C.RulesNotJudged = FixedRulesNotJudged() // step 23 writes the list: a run in which it ran and wrote none is an error
 		case Step24:
 			env.Facts.C.Level = LevelBinding{Authenticated: true, JudgedAtLevel: "finalized"}
 		}

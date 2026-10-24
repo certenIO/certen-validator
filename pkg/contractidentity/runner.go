@@ -396,19 +396,27 @@ func buildReport(env *Env, res *RunResult) (Report, error) {
 	if err != nil {
 		return Report{}, fmt.Errorf("contractidentity: report: %w", err)
 	}
+	rnj := rulesNotJudgedOf(f, res)
+	if len(rnj) == 0 {
+		return Report{}, fmt.Errorf("contractidentity: report: step 23 ran and wrote no rules_not_judged (every outcome prints them)")
+	}
 	return Report{
-		Headline: h, Parts: res.Parts, RulesJudged: res.RulesJudged, RulesNotJudged: rulesNotJudgedOf(f), Residuals: FixedResiduals(),
+		Headline: h, Parts: res.Parts, RulesJudged: res.RulesJudged, RulesNotJudged: rnj, Residuals: FixedResiduals(),
 		Registry: f.C.Registry, Authority: f.A.Authority, S6: s6Report(env.Ctx),
 		JudgedAtLevel: f.C.Level.JudgedAtLevel, StateRootAuthenticated: f.C.Level.Authenticated, S7FinalizedStatus: f.C.Level.S7FinalizedStatus,
 		Chain: env.Ctx.Chain, Block: leg.Number, BlockHash: leg.Hash, ManifestSHA256: env.Manifest.SHA256, ManifestSource: env.Manifest.Source,
 	}, nil
 }
 
-// rulesNotJudgedOf is step 23's rules_not_judged: every outcome prints it, also the outcomes in which step 23 did not run (a framework halt in
-// steps 0-2, the no-container outcome). The list is a constant of the verifier (FixedRulesNotJudged); step 23 writes the same list into Facts.C.
-func rulesNotJudgedOf(f *Facts) []RuleNotJudged {
-	if len(f.C.RulesNotJudged) > 0 {
-		return f.C.RulesNotJudged
+// rulesNotJudgedOf is step 23's rules_not_judged. When step 23 ran it is what step 23 wrote into Facts.C (a step 23 that wrote nothing prints
+// nothing, which no outcome may do: buildReport turns it into an error, never a quietly filled constant). The outcomes in which step 23
+// did not run (a framework halt in steps 0-2, the no-container and prelude refusals, see earlyReport) print the same constant list
+// (FixedRulesNotJudged): "every outcome prints rules_not_judged" (step 23).
+func rulesNotJudgedOf(f *Facts, res *RunResult) []RuleNotJudged {
+	for _, id := range res.Trace.Executed {
+		if id == Step23 {
+			return f.C.RulesNotJudged
+		}
 	}
 	return FixedRulesNotJudged()
 }

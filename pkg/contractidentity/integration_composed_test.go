@@ -86,6 +86,7 @@ func disabled(id ci.StepID) ci.StepFunc {
 // inertEquivalents are the steps whose own verdicts are observably redundant in the composition, with the reason: a later step carries the
 // same state, so a vector cannot tell a step that decides from one that does not. They are killed by the "disabled" gate.
 var inertEquivalents = map[ci.StepID]string{
+	ci.Step23: "step 23 contributes no part: its only output is Facts.C.RulesNotJudged, which an inert step leaves untouched; the disabled gate kills it (the report of a run in which step 23 wrote nothing is an error, runner.go buildReport)",
 	ci.Step10: "a refusal of step 10 is kept in Facts.A.AnchorRefusal and step 12 (and 11) carry it onto code_identity (step_2a_settle.go: a2Step12, AnchorRefusal): the report is identical",
 }
 
@@ -203,21 +204,25 @@ func TestComposedVerifierVisitsExactlyTheNodesItCarriesOnEveryChainAndWorld(t *t
 
 // ---- the header link (HeaderLinked): steps 21 and 22 never read an unlinked block and never end in UndecidedPartError ----
 
-func reportOf(t *testing.T, set *ci.VectorSet, v ci.Vector, ver ci.Verifier) ci.Report {
+// reportOf runs one materialised vector; ok is false for a vector refused at step 0 (the manifest documents, before any verifier step).
+func reportOf(t *testing.T, set *ci.VectorSet, v ci.Vector, ver ci.Verifier) (rep ci.Report, ok bool) {
 	t.Helper()
-	in, ok := set.Inputs[v.ID]
-	if !ok {
+	in, has := set.Inputs[v.ID]
+	if !has {
 		t.Fatalf("%s: no materialised inputs", v.ID)
 	}
 	m, st, err := in.ResolveManifest()
-	if err != nil || st != nil {
-		t.Fatalf("%s: manifest: %v %v", v.ID, err, st)
+	if err != nil {
+		t.Fatalf("%s: manifest: %v", v.ID, err)
 	}
-	rep, err := ver.Verify(in.Ctx, in.Container, m)
+	if st != nil {
+		return ci.Report{}, false
+	}
+	rep, err = ver.Verify(in.Ctx, in.Container, m)
 	if err != nil {
 		t.Fatalf("%s: the verifier returned an error instead of a report: %v", v.ID, err)
 	}
-	return rep
+	return rep, true
 }
 
 func partOf(rep ci.Report, name string) (ci.PartResult, bool) {
@@ -239,7 +244,10 @@ func TestAnUnprovenHeaderLinkDecidesRegistryLinkAndIntraBlockWindowWithTheCause(
 	for _, name := range sortedNames(sets) {
 		set := sets[name]
 		for _, v := range set.Vectors {
-			rep := reportOf(t, set, v, ver)
+			rep, ran := reportOf(t, set, v, ver)
+			if !ran {
+				continue
+			}
 			auth, ok := partOf(rep, ci.JudgedAuthorizationAttest)
 			if !ok || auth.State == nil {
 				continue
