@@ -1,0 +1,24 @@
+{
+ "id": "VS8-049.silent",
+ "base": "H0",
+ "mutations": [
+  {
+   "op": "set_field",
+   "target": "world",
+   "path": "variant",
+   "value": "s6silent"
+  }
+ ],
+ "expected": {
+  "headline": "verified",
+  "parts": {
+   "account_provenance": "verified",
+   "authority_level": "verified",
+   "code_identity": "verified",
+   "pointer": "verified",
+   "record": "verified",
+   "s6_link": "not_applicable",
+   "settlement_path": "verified"
+  }
+ }
+}

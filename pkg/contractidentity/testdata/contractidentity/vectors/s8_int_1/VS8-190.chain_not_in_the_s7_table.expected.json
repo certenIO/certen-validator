@@ -1,0 +1,28 @@
+{
+ "headline": "unproven",
+ "parts": {
+  "account_provenance": "unproven",
+  "authority_level": "unproven",
+  "authorization_attest": "unproven",
+  "code_identity": "unproven",
+  "intra_block_window": "unproven",
+  "pointer": "unproven",
+  "record": "unproven",
+  "registry_link": "unproven",
+  "s6_link": "unproven",
+  "settlement_path": "unproven",
+  "state_at_settlement": "unproven"
+ },
+ "states": [
+  {
+   "part": "authorization_attest",
+   "code": "contract_identity_unproven",
+   "fields": {
+    "chain": "11155111",
+    "part": "all",
+    "reason": "s7_chain_unsupported"
+   }
+  }
+ ],
+ "s7_finalized_status": "refused:finality_chain_unsupported"
+}

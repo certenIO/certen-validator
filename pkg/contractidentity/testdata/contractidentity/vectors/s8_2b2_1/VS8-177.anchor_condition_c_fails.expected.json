@@ -1,0 +1,19 @@
+{
+ "headline": "unproven",
+ "parts": {
+  "authorization_attest": "verified",
+  "intra_block_window": "unproven"
+ },
+ "states": [
+  {
+   "part": "intra_block_window",
+   "code": "contract_identity_unproven",
+   "fields": {
+    "build": "CertenAnchorV8_2/r5",
+    "condition": "c",
+    "part": "intra_block_window",
+    "reason": "build_without_writer_proof"
+   }
+  }
+ ]
+}

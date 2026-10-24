@@ -1,0 +1,19 @@
+{
+ "headline": "refused",
+ "parts": {
+  "account_provenance": "refused"
+ },
+ "states": [
+  {
+   "part": "account_provenance",
+   "code": "contract_identity_immutable_mismatch",
+   "fields": {
+    "got": "0x0000000000000000000000001111111111111111111111111111111111111111",
+    "name": "governingBookHash",
+    "offset": "1876",
+    "role": "account",
+    "want": "0x538116407f91b0033fa6530f325594faa45b136ed5848b530fa55ce49882fd16"
+   }
+  }
+ ]
+}

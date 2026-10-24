@@ -1,0 +1,1163 @@
+{
+ "format": "certen-contract-identity-states/1",
+ "spec": {
+  "file": "V2_SPEC_S8.md",
+  "revision": "r3.2",
+  "sha256": "2eccbae5e64fccda1df10decae1763f96bc4a6acad885e5689df30115de08a6f"
+ },
+ "prefix": "contract_identity_",
+ "common_fields": [
+  "chain",
+  "block",
+  "block_hash",
+  "judged_at_level",
+  "manifest_sha256",
+  "manifest_source"
+ ],
+ "classes": {
+  "FR": "framework refusal",
+  "JR": "judgement refusal",
+  "U": "unproven",
+  "OPEN": "open (bars verified, not verified_core)",
+  "PEND": "pending",
+  "VER": "verified forms",
+  "NA": "not applicable",
+  "WRAP": "headline wrapper"
+ },
+ "effects": [
+  "refused",
+  "refused*",
+  "unproven",
+  "open",
+  "pending",
+  "verified",
+  "na"
+ ],
+ "rows": [
+  {
+   "code": "contract_identity_manifest_corrupt",
+   "row": "-",
+   "part": "",
+   "reason": "",
+   "class": "FR",
+   "fields": [],
+   "optional": [],
+   "step": "0",
+   "effect": "refused (refuse to start)"
+  },
+  {
+   "code": "contract_identity_manifest_unknown",
+   "row": "-",
+   "part": "",
+   "reason": "",
+   "class": "FR",
+   "fields": [
+    "chain"
+   ],
+   "optional": [],
+   "step": "0",
+   "effect": "refused"
+  },
+  {
+   "code": "contract_identity_manifest_shadow",
+   "row": "-",
+   "part": "",
+   "reason": "",
+   "class": "FR",
+   "fields": [
+    "table",
+    "key"
+   ],
+   "optional": [],
+   "step": "0",
+   "effect": "refused"
+  },
+  {
+   "code": "contract_identity_evidence_unrecognised",
+   "row": "-",
+   "part": "",
+   "reason": "",
+   "class": "FR",
+   "fields": [
+    "kind",
+    "version"
+   ],
+   "optional": [],
+   "step": "1",
+   "effect": "refused"
+  },
+  {
+   "code": "contract_identity_evidence_malformed",
+   "row": "-",
+   "part": "",
+   "reason": "",
+   "class": "FR",
+   "fields": [
+    "part",
+    "index",
+    "reason",
+    "got_len",
+    "want_len"
+   ],
+   "optional": [],
+   "step": "1, 1c, 22b",
+   "effect": "refused"
+  },
+  {
+   "code": "contract_identity_evidence_too_large",
+   "row": "-",
+   "part": "",
+   "reason": "",
+   "class": "FR",
+   "fields": [
+    "part",
+    "count",
+    "limit"
+   ],
+   "optional": [],
+   "step": "1",
+   "effect": "refused"
+  },
+  {
+   "code": "contract_identity_block_mismatch",
+   "row": "-",
+   "part": "",
+   "reason": "",
+   "class": "FR",
+   "fields": [
+    "field",
+    "want",
+    "got"
+   ],
+   "optional": [],
+   "step": "2",
+   "effect": "refused"
+  },
+  {
+   "code": "contract_identity_context_incomplete",
+   "row": "-",
+   "part": "",
+   "reason": "",
+   "class": "FR",
+   "fields": [
+    "missing"
+   ],
+   "optional": [],
+   "step": "1b",
+   "effect": "refused"
+  },
+  {
+   "code": "contract_identity_proof_invalid",
+   "row": "-",
+   "part": "",
+   "reason": "",
+   "class": "JR",
+   "fields": [
+    "root",
+    "address",
+    "slot"
+   ],
+   "optional": [],
+   "step": "5-22",
+   "effect": "refused*"
+  },
+  {
+   "code": "contract_identity_account_absent",
+   "row": "-",
+   "part": "",
+   "reason": "",
+   "class": "JR",
+   "fields": [
+    "role",
+    "address",
+    "root"
+   ],
+   "optional": [],
+   "step": "5, 10, 12",
+   "effect": "refused*"
+  },
+  {
+   "code": "contract_identity_code_unproven_bytes",
+   "row": "-",
+   "part": "",
+   "reason": "",
+   "class": "JR",
+   "fields": [
+    "address"
+   ],
+   "optional": [],
+   "step": "5, 10, 12",
+   "effect": "refused*"
+  },
+  {
+   "code": "contract_identity_code_not_published",
+   "row": "-",
+   "part": "",
+   "reason": "",
+   "class": "JR",
+   "fields": [
+    "role",
+    "address",
+    "code_hash",
+    "masked_keccak",
+    "want"
+   ],
+   "optional": [],
+   "step": "3e, 5, 10, 12",
+   "effect": "refused*"
+  },
+  {
+   "code": "contract_identity_immutable_mismatch",
+   "row": "-",
+   "part": "",
+   "reason": "",
+   "class": "JR",
+   "fields": [
+    "role",
+    "name",
+    "offset",
+    "got",
+    "want"
+   ],
+   "optional": [],
+   "step": "7, 10, 12",
+   "effect": "refused*"
+  },
+  {
+   "code": "contract_identity_address_not_published",
+   "row": "-",
+   "part": "",
+   "reason": "",
+   "class": "JR",
+   "fields": [
+    "role",
+    "address"
+   ],
+   "optional": [],
+   "step": "9, 12",
+   "effect": "refused*"
+  },
+  {
+   "code": "contract_identity_pointer_mismatch",
+   "row": "-",
+   "part": "",
+   "reason": "",
+   "class": "JR",
+   "fields": [
+    "account",
+    "got",
+    "want"
+   ],
+   "optional": [],
+   "step": "9",
+   "effect": "refused*"
+  },
+  {
+   "code": "contract_identity_s6_link_mismatch",
+   "row": "-",
+   "part": "",
+   "reason": "",
+   "class": "JR",
+   "fields": [
+    "field"
+   ],
+   "optional": [],
+   "step": "3c, 4",
+   "effect": "refused*"
+  },
+  {
+   "code": "contract_identity_record_not_executed",
+   "row": "-",
+   "part": "",
+   "reason": "",
+   "class": "JR",
+   "fields": [
+    "anchorId",
+    "valid",
+    "proofExecuted"
+   ],
+   "optional": [],
+   "step": "11",
+   "effect": "refused*"
+  },
+  {
+   "code": "contract_identity_record_inconsistent",
+   "row": "-",
+   "part": "",
+   "reason": "",
+   "class": "JR",
+   "fields": [
+    "field"
+   ],
+   "optional": [],
+   "step": "11",
+   "effect": "refused*"
+  },
+  {
+   "code": "contract_identity_account_not_canonical",
+   "row": "-",
+   "part": "",
+   "reason": "",
+   "class": "JR",
+   "fields": [
+    "reason"
+   ],
+   "optional": [],
+   "step": "6, 8",
+   "effect": "refused*"
+  },
+  {
+   "code": "contract_identity_authorization_mismatch",
+   "row": "-",
+   "part": "",
+   "reason": "",
+   "class": "JR",
+   "fields": [
+    "field",
+    "onchain",
+    "want",
+    "at"
+   ],
+   "optional": [],
+   "step": "19, 21",
+   "effect": "refused*"
+  },
+  {
+   "code": "contract_identity_commitment_not_authorized",
+   "row": "-",
+   "part": "",
+   "reason": "",
+   "class": "JR",
+   "fields": [
+    "pkc",
+    "at"
+   ],
+   "optional": [],
+   "step": "19b",
+   "effect": "refused*"
+  },
+  {
+   "code": "contract_identity_attest_mismatch",
+   "row": "-",
+   "part": "",
+   "reason": "",
+   "class": "JR",
+   "fields": [
+    "field"
+   ],
+   "optional": [],
+   "step": "16-20, 22",
+   "effect": "refused*"
+  },
+  {
+   "code": "contract_identity_header_unlinked",
+   "row": "-",
+   "part": "",
+   "reason": "",
+   "class": "JR",
+   "fields": [
+    "link",
+    "index",
+    "reason"
+   ],
+   "optional": [],
+   "step": "16",
+   "effect": "refused*"
+  },
+  {
+   "code": "contract_identity_registry_mismatch",
+   "row": "-",
+   "part": "",
+   "reason": "",
+   "class": "JR",
+   "fields": [
+    "field"
+   ],
+   "optional": [],
+   "step": "21c",
+   "effect": "refused*"
+  },
+  {
+   "code": "contract_identity_pkc_mismatch",
+   "row": "-",
+   "part": "",
+   "reason": "",
+   "class": "JR",
+   "fields": [
+    "s9",
+    "onchain"
+   ],
+   "optional": [],
+   "step": "21d",
+   "effect": "refused*"
+  },
+  {
+   "code": "contract_identity_authority_level_invalid",
+   "row": "-",
+   "part": "",
+   "reason": "",
+   "class": "JR",
+   "fields": [
+    "field",
+    "got"
+   ],
+   "optional": [],
+   "step": "14",
+   "effect": "refused*"
+  },
+  {
+   "code": "contract_identity_unproven",
+   "row": "no_evidence_in_file",
+   "part": "",
+   "reason": "no_evidence_in_file",
+   "class": "U",
+   "fields": [
+    "reason",
+    "part"
+   ],
+   "optional": [],
+   "step": "1c",
+   "effect": "unproven"
+  },
+  {
+   "code": "contract_identity_unproven",
+   "row": "s7_chain_unsupported",
+   "part": "",
+   "reason": "s7_chain_unsupported",
+   "class": "U",
+   "fields": [
+    "reason",
+    "part",
+    "chain"
+   ],
+   "optional": [],
+   "step": "24",
+   "effect": "unproven"
+  },
+  {
+   "code": "contract_identity_unproven",
+   "row": "capture_not_attempted_in_window",
+   "part": "",
+   "reason": "capture_not_attempted_in_window",
+   "class": "U",
+   "fields": [
+    "reason",
+    "part",
+    "judgedBlock",
+    "judgedHash",
+    "failures"
+   ],
+   "optional": [],
+   "step": "1c, 15",
+   "effect": "unproven"
+  },
+  {
+   "code": "contract_identity_unproven",
+   "row": "state_unavailable",
+   "part": "",
+   "reason": "state_unavailable",
+   "class": "U",
+   "fields": [
+    "reason",
+    "part",
+    "judgedBlock",
+    "judgedHash",
+    "failures"
+   ],
+   "optional": [],
+   "step": "1c, 15",
+   "effect": "unproven"
+  },
+  {
+   "code": "contract_identity_unproven",
+   "row": "attest_block_state_unavailable",
+   "part": "",
+   "reason": "attest_block_state_unavailable",
+   "class": "U",
+   "fields": [
+    "reason",
+    "part",
+    "judgedBlock",
+    "judgedHash",
+    "failures"
+   ],
+   "optional": [],
+   "step": "15",
+   "effect": "unproven"
+  },
+  {
+   "code": "contract_identity_unproven",
+   "row": "block_too_large",
+   "part": "",
+   "reason": "block_too_large",
+   "class": "U",
+   "fields": [
+    "reason",
+    "part",
+    "bytes",
+    "limit"
+   ],
+   "optional": [],
+   "step": "15, 22 (detail `bytes=<n>;limit=<m>`)",
+   "effect": "unproven"
+  },
+  {
+   "code": "contract_identity_unproven",
+   "row": "attest_block_out_of_reach",
+   "part": "",
+   "reason": "attest_block_out_of_reach",
+   "class": "U",
+   "fields": [
+    "reason",
+    "gap",
+    "window",
+    "hops_carried",
+    "last_hop"
+   ],
+   "optional": [],
+   "step": "16",
+   "effect": "unproven"
+  },
+  {
+   "code": "contract_identity_unproven",
+   "row": "attest_event_not_found",
+   "part": "",
+   "reason": "attest_event_not_found",
+   "class": "U",
+   "fields": [
+    "reason",
+    "part"
+   ],
+   "optional": [],
+   "step": "1c, 15",
+   "effect": "unproven"
+  },
+  {
+   "code": "contract_identity_unproven",
+   "row": "attest_indirect_call",
+   "part": "",
+   "reason": "attest_indirect_call",
+   "class": "U",
+   "fields": [
+    "reason",
+    "to",
+    "selector"
+   ],
+   "optional": [],
+   "step": "17",
+   "effect": "unproven"
+  },
+  {
+   "code": "contract_identity_unproven",
+   "row": "attest_calldata_undecodable",
+   "part": "",
+   "reason": "attest_calldata_undecodable",
+   "class": "U",
+   "fields": [
+    "reason",
+    "field"
+   ],
+   "optional": [],
+   "step": "17",
+   "effect": "unproven",
+   "reason_set": "attest_calldata_undecodable_reason"
+  },
+  {
+   "code": "contract_identity_unproven",
+   "row": "attest_tx_type_unsupported",
+   "part": "",
+   "reason": "attest_tx_type_unsupported",
+   "class": "U",
+   "fields": [
+    "reason",
+    "type"
+   ],
+   "optional": [],
+   "step": "17",
+   "effect": "unproven"
+  },
+  {
+   "code": "contract_identity_unproven",
+   "row": "attest_absent",
+   "part": "",
+   "reason": "attest_absent",
+   "class": "U",
+   "fields": [
+    "reason",
+    "part"
+   ],
+   "optional": [],
+   "step": "15, 22",
+   "effect": "unproven"
+  },
+  {
+   "code": "contract_identity_unproven",
+   "row": "anchor_generation_unpinned",
+   "part": "",
+   "reason": "anchor_generation_unpinned",
+   "class": "U",
+   "fields": [
+    "reason",
+    "generation",
+    "code_hash",
+    "kind"
+   ],
+   "optional": [],
+   "step": "9",
+   "effect": "unproven"
+  },
+  {
+   "code": "contract_identity_unproven",
+   "row": "account_generation_unpinned",
+   "part": "",
+   "reason": "account_generation_unpinned",
+   "class": "U",
+   "fields": [
+    "reason",
+    "generation",
+    "code_hash",
+    "kind"
+   ],
+   "optional": [],
+   "step": "3e, 5",
+   "effect": "unproven"
+  },
+  {
+   "code": "contract_identity_unproven",
+   "row": "anchor_not_batch",
+   "part": "",
+   "reason": "anchor_not_batch",
+   "class": "U",
+   "fields": [
+    "reason",
+    "anchorId"
+   ],
+   "optional": [],
+   "step": "11, 18b",
+   "effect": "unproven"
+  },
+  {
+   "code": "contract_identity_unproven",
+   "row": "settlement_not_executed",
+   "part": "",
+   "reason": "settlement_not_executed",
+   "class": "U",
+   "fields": [
+    "reason",
+    "status"
+   ],
+   "optional": [],
+   "step": "3a",
+   "effect": "unproven"
+  },
+  {
+   "code": "contract_identity_unproven",
+   "row": "settlement_event_missing",
+   "part": "",
+   "reason": "settlement_event_missing",
+   "class": "U",
+   "fields": [
+    "reason",
+    "count"
+   ],
+   "optional": [],
+   "step": "3",
+   "effect": "unproven"
+  },
+  {
+   "code": "contract_identity_unproven",
+   "row": "settlement_path_unsupported",
+   "part": "",
+   "reason": "settlement_path_unsupported",
+   "class": "U",
+   "fields": [
+    "to",
+    "selector",
+    "reason"
+   ],
+   "optional": [],
+   "step": "3",
+   "effect": "unproven",
+   "reason_set": "settlement_path_unsupported_reason"
+  },
+  {
+   "code": "contract_identity_unproven",
+   "row": "code_not_carried",
+   "part": "",
+   "reason": "code_not_carried",
+   "class": "U",
+   "fields": [
+    "reason",
+    "part",
+    "address"
+   ],
+   "optional": [],
+   "step": "12, 19a",
+   "effect": "unproven"
+  },
+  {
+   "code": "contract_identity_unproven",
+   "row": "state_changed_in_block",
+   "part": "",
+   "reason": "state_changed_in_block",
+   "class": "U",
+   "fields": [
+    "reason",
+    "field",
+    "pre",
+    "post",
+    "block"
+   ],
+   "optional": [],
+   "step": "18",
+   "effect": "unproven"
+  },
+  {
+   "code": "contract_identity_unproven",
+   "row": "record_created_in_block",
+   "part": "",
+   "reason": "record_created_in_block",
+   "class": "U",
+   "fields": [
+    "reason",
+    "block"
+   ],
+   "optional": [],
+   "step": "18",
+   "effect": "unproven"
+  },
+  {
+   "code": "contract_identity_unproven",
+   "row": "governance_verifier_unpinned",
+   "part": "",
+   "reason": "governance_verifier_unpinned",
+   "class": "U",
+   "fields": [
+    "reason",
+    "address",
+    "at"
+   ],
+   "optional": [],
+   "step": "19h",
+   "effect": "unproven"
+  },
+  {
+   "code": "contract_identity_unproven",
+   "row": "authority_level_unproven",
+   "part": "",
+   "reason": "authority_level_unproven",
+   "class": "U",
+   "fields": [
+    "reason",
+    "leg",
+    "level",
+    "required",
+    "field",
+    "count",
+    "limit",
+    "logged",
+    "computed"
+   ],
+   "optional": [
+    "computed",
+    "count",
+    "field",
+    "leg",
+    "level",
+    "limit",
+    "logged",
+    "required"
+   ],
+   "step": "14",
+   "effect": "unproven",
+   "variants": {
+    "calldata_undecodable": [
+     "field"
+    ],
+    "level_below_required_at_N": [
+     "leg",
+     "level",
+     "required"
+    ],
+    "level_differs_from_logged": [
+     "logged",
+     "computed"
+    ],
+    "level_log_missing": [],
+    "self_call_leg": [
+     "leg"
+    ],
+    "too_many_legs": [
+     "count",
+     "limit"
+    ]
+   },
+   "reason_set": "authority_level_unproven_reason"
+  },
+  {
+   "code": "contract_identity_unproven",
+   "row": "owner_not_eoa",
+   "part": "",
+   "reason": "owner_not_eoa",
+   "class": "U",
+   "fields": [
+    "reason",
+    "part",
+    "address"
+   ],
+   "optional": [],
+   "step": "22",
+   "effect": "unproven"
+  },
+  {
+   "code": "contract_identity_unproven",
+   "row": "owner_active_in_block",
+   "part": "",
+   "reason": "owner_active_in_block",
+   "class": "U",
+   "fields": [
+    "reason",
+    "part",
+    "address",
+    "pre",
+    "post"
+   ],
+   "optional": [],
+   "step": "22",
+   "effect": "unproven"
+  },
+  {
+   "code": "contract_identity_unproven",
+   "row": "tx_type_unsupported",
+   "part": "",
+   "reason": "tx_type_unsupported",
+   "class": "U",
+   "fields": [
+    "reason",
+    "part",
+    "type",
+    "index"
+   ],
+   "optional": [],
+   "step": "22",
+   "effect": "unproven"
+  },
+  {
+   "code": "contract_identity_unproven",
+   "row": "build_without_writer_proof",
+   "part": "",
+   "reason": "build_without_writer_proof",
+   "class": "U",
+   "fields": [
+    "reason",
+    "part",
+    "build",
+    "condition"
+   ],
+   "optional": [],
+   "step": "22",
+   "effect": "unproven"
+  },
+  {
+   "code": "contract_identity_not_checked",
+   "row": "registry_link / no_registry_in_file",
+   "part": "registry_link",
+   "reason": "no_registry_in_file",
+   "class": "OPEN",
+   "fields": [
+    "part",
+    "reason"
+   ],
+   "optional": [],
+   "step": "21c",
+   "effect": "open"
+  },
+  {
+   "code": "contract_identity_not_checked",
+   "row": "registry_keys / row_without_keys_digest",
+   "part": "registry_keys",
+   "reason": "row_without_keys_digest",
+   "class": "OPEN",
+   "fields": [
+    "part",
+    "reason"
+   ],
+   "optional": [],
+   "step": "21c",
+   "effect": "open"
+  },
+  {
+   "code": "contract_identity_not_checked",
+   "row": "registry_keys / keys_digest_mismatch",
+   "part": "registry_keys",
+   "reason": "keys_digest_mismatch",
+   "class": "OPEN",
+   "fields": [
+    "part",
+    "reason",
+    "want",
+    "got"
+   ],
+   "optional": [],
+   "step": "21c",
+   "effect": "open"
+  },
+  {
+   "code": "contract_identity_not_checked",
+   "row": "registry_keys / threshold_mismatch",
+   "part": "registry_keys",
+   "reason": "threshold_mismatch",
+   "class": "OPEN",
+   "fields": [
+    "part",
+    "reason",
+    "want",
+    "got"
+   ],
+   "optional": [],
+   "step": "21c",
+   "effect": "open"
+  },
+  {
+   "code": "contract_identity_not_checked",
+   "row": "registry_keys / row_without_pkc_count",
+   "part": "registry_keys",
+   "reason": "row_without_pkc_count",
+   "class": "OPEN",
+   "fields": [
+    "part",
+    "reason"
+   ],
+   "optional": [],
+   "step": "21c",
+   "effect": "open"
+  },
+  {
+   "code": "contract_identity_not_checked",
+   "row": "registry_keys / pkc_count_mismatch",
+   "part": "registry_keys",
+   "reason": "pkc_count_mismatch",
+   "class": "OPEN",
+   "fields": [
+    "part",
+    "reason",
+    "want",
+    "got"
+   ],
+   "optional": [],
+   "step": "21c",
+   "effect": "open"
+  },
+  {
+   "code": "contract_identity_not_checked",
+   "row": "registry_keys / pkc_list_absent",
+   "part": "registry_keys",
+   "reason": "pkc_list_absent",
+   "class": "OPEN",
+   "fields": [
+    "part",
+    "reason"
+   ],
+   "optional": [],
+   "step": "21c",
+   "effect": "open"
+  },
+  {
+   "code": "contract_identity_not_checked",
+   "row": "registry_keys / pkc_list_malformed",
+   "part": "registry_keys",
+   "reason": "pkc_list_malformed",
+   "class": "OPEN",
+   "fields": [
+    "part",
+    "reason",
+    "index"
+   ],
+   "optional": [],
+   "step": "21c",
+   "effect": "open"
+  },
+  {
+   "code": "contract_identity_not_checked",
+   "row": "registry_keys / pkc_list_too_large",
+   "part": "registry_keys",
+   "reason": "pkc_list_too_large",
+   "class": "OPEN",
+   "fields": [
+    "part",
+    "reason",
+    "count",
+    "limit"
+   ],
+   "optional": [],
+   "step": "21c",
+   "effect": "open"
+  },
+  {
+   "code": "contract_identity_not_checked",
+   "row": "registry_keys / pkc_set_mismatch",
+   "part": "registry_keys",
+   "reason": "pkc_set_mismatch",
+   "class": "OPEN",
+   "fields": [
+    "part",
+    "reason",
+    "entry"
+   ],
+   "optional": [],
+   "step": "21c",
+   "effect": "open"
+  },
+  {
+   "code": "contract_identity_not_checked",
+   "row": "pkc_signer_check / no_s9_commitment",
+   "part": "pkc_signer_check",
+   "reason": "no_s9_commitment",
+   "class": "OPEN",
+   "fields": [
+    "part",
+    "reason"
+   ],
+   "optional": [],
+   "step": "21d",
+   "effect": "open"
+  },
+  {
+   "code": "contract_identity_not_checked",
+   "row": "s6_link / s6_not_proven",
+   "part": "s6_link",
+   "reason": "s6_not_proven",
+   "class": "OPEN",
+   "fields": [
+    "part",
+    "reason",
+    "state"
+   ],
+   "optional": [],
+   "step": "3",
+   "effect": "open"
+  },
+  {
+   "code": "contract_identity_drift",
+   "row": "-",
+   "part": "",
+   "reason": "",
+   "class": "OPEN",
+   "fields": [
+    "field",
+    "attest",
+    "settle"
+   ],
+   "optional": [],
+   "step": "13",
+   "effect": "open"
+  },
+  {
+   "code": "contract_identity_alert",
+   "row": "-",
+   "part": "",
+   "reason": "",
+   "class": "OPEN",
+   "fields": [
+    "field",
+    "at",
+    "onchain",
+    "want"
+   ],
+   "optional": [],
+   "step": "13, 19f",
+   "effect": "open"
+  },
+  {
+   "code": "contract_identity_pending",
+   "row": "state_root_not_authenticated",
+   "part": "",
+   "reason": "state_root_not_authenticated",
+   "class": "PEND",
+   "fields": [
+    "level_reached",
+    "next_level",
+    "reason",
+    "findings",
+    "s7_finalized_status"
+   ],
+   "optional": [
+    "findings",
+    "s7_finalized_status"
+   ],
+   "step": "24",
+   "effect": "pending"
+  },
+  {
+   "code": "contract_identity_verified_core",
+   "row": "-",
+   "part": "",
+   "reason": "",
+   "class": "VER",
+   "fields": [
+    "open"
+   ],
+   "optional": [],
+   "step": "23",
+   "effect": "open"
+  },
+  {
+   "code": "contract_identity_verified",
+   "row": "-",
+   "part": "",
+   "reason": "",
+   "class": "VER",
+   "fields": [
+    "judged_at_level",
+    "stateRoot",
+    "block",
+    "registry_link"
+   ],
+   "optional": [],
+   "step": "23",
+   "effect": "verified"
+  },
+  {
+   "code": "contract_identity_not_applicable",
+   "row": "certen_infrastructure_call",
+   "part": "",
+   "reason": "certen_infrastructure_call",
+   "class": "NA",
+   "fields": [
+    "reason",
+    "to",
+    "role"
+   ],
+   "optional": [],
+   "step": "3",
+   "effect": "na"
+  },
+  {
+   "code": "contract_identity_refused",
+   "row": "-",
+   "part": "",
+   "reason": "",
+   "class": "WRAP",
+   "fields": [
+    "first",
+    "parts"
+   ],
+   "optional": [],
+   "step": "23",
+   "effect": "refused"
+  },
+  {
+   "code": "contract_identity_unproven",
+   "row": "(wrapper)",
+   "part": "",
+   "reason": "",
+   "class": "WRAP",
+   "fields": [
+    "parts"
+   ],
+   "optional": [],
+   "step": "23",
+   "effect": "unproven"
+  }
+ ]
+}

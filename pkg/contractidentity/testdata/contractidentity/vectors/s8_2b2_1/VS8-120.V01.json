@@ -1,0 +1,31 @@
+{
+ "id": "VS8-120.V01",
+ "base": "H0",
+ "mutations": [
+  {
+   "op": "set_field",
+   "target": "world",
+   "path": "stations.attest_post.accounts.0x25ebfbc617e777ae983a2c22e3b9649e3eb93802.storage.0x0000000000000000000000000000000000000000000000000000000000000000",
+   "value": "0x00000000000000000000000000000000000000000000000000000000000000a7"
+  }
+ ],
+ "expected": {
+  "headline": "unproven",
+  "parts": {
+   "authorization_attest": "unproven"
+  },
+  "states": [
+   {
+    "part": "authorization_attest",
+    "code": "contract_identity_unproven",
+    "fields": {
+     "block": "11980017",
+     "field": "V01",
+     "post": "0x00000000000000000000000000000000000000000000000000000000000000a7",
+     "pre": "0x0000000000000000000000000000000000000000000000000000000000000002",
+     "reason": "state_changed_in_block"
+    }
+   }
+  ]
+ }
+}

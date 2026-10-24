@@ -1,0 +1,17 @@
+{
+ "headline": "unproven",
+ "parts": {
+  "authority_level": "unproven"
+ },
+ "states": [
+  {
+   "part": "authority_level",
+   "code": "contract_identity_unproven",
+   "fields": {
+    "count": "65",
+    "limit": "64",
+    "reason": "too_many_legs"
+   }
+  }
+ ]
+}

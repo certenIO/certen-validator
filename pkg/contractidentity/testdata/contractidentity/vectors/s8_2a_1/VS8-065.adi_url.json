@@ -1,0 +1,27 @@
+{
+ "id": "VS8-065.adi_url",
+ "base": "H0",
+ "mutations": [
+  {
+   "op": "set_field",
+   "target": "context",
+   "path": "adi_url",
+   "value": "acc://rb7-sep-10052031.acmex"
+  }
+ ],
+ "expected": {
+  "headline": "refused",
+  "parts": {
+   "account_provenance": "refused"
+  },
+  "states": [
+   {
+    "part": "account_provenance",
+    "code": "contract_identity_account_not_canonical",
+    "fields": {
+     "reason": "adi_url"
+    }
+   }
+  ]
+ }
+}

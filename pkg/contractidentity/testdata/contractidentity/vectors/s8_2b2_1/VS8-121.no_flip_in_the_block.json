@@ -1,0 +1,27 @@
+{
+ "id": "VS8-121.no_flip_in_the_block",
+ "base": "H0",
+ "mutations": [
+  {
+   "op": "set_field",
+   "target": "world",
+   "path": "stations.attest_post.accounts.0x830cfb484b6e5606687e00f64c40aeb9c7c84e3c.storage.0x6da5ca969bdda1a6f250a95952c911586297320ba3f3c1e908704ac6f4e640d3",
+   "value": "0x0000000000000000000000000000000000000000000000000000000000000000"
+  }
+ ],
+ "expected": {
+  "headline": "refused",
+  "parts": {
+   "authorization_attest": "refused"
+  },
+  "states": [
+   {
+    "part": "authorization_attest",
+    "code": "contract_identity_attest_mismatch",
+    "fields": {
+     "field": "flip"
+    }
+   }
+  ]
+ }
+}

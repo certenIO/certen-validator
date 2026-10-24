@@ -1,0 +1,28 @@
+{
+ "id": "VS8-182.judgement_refusal_not_authenticated",
+ "base": "H0",
+ "mutations": [
+  {
+   "op": "set_field",
+   "target": "world",
+   "path": "stations.attest_pre.accounts.0x830cfb484b6e5606687e00f64c40aeb9c7c84e3c.storage.0x0000000000000000000000000000000000000000000000000000000000000006",
+   "value": "0x0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+   "op": "set_field",
+   "target": "world",
+   "path": "stations.attest_post.accounts.0x830cfb484b6e5606687e00f64c40aeb9c7c84e3c.storage.0x0000000000000000000000000000000000000000000000000000000000000006",
+   "value": "0x0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+   "op": "set_field",
+   "target": "s7",
+   "path": "finalized_block.hash",
+   "value": "0x1111111111111111111111111111111111111111111111111111111111111111"
+  }
+ ],
+ "expected": {
+  "headline": "pending",
+  "s7_finalized_status": "verified_other_block"
+ }
+}

@@ -1,0 +1,19 @@
+{
+ "id": "VS8-172.owner_active_in_block_prepost",
+ "base": "H0",
+ "mutations": [
+  {
+   "op": "set_field",
+   "target": "world",
+   "path": "stations.attest_post.accounts.0x91c798aa0ad11d2670029b3b0572d154bd42c059.nonce",
+   "value": 7777
+  }
+ ],
+ "expected": {
+  "headline": "unproven",
+  "parts": {
+   "authorization_attest": "verified",
+   "intra_block_window": "unproven"
+  }
+ }
+}

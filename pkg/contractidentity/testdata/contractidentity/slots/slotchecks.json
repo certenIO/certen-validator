@@ -1,0 +1,2505 @@
+{
+ "source": "certen-contracts origin/pv2/rb12-manifest-1-1 @991de99fb47db8ec89c5aa107a2d503b0ee30814 evm/deployments/identity-manifest.json (sha256 ee7d56fac3d2a73fa11d546a6e61f1ae2f574b4812dd5e5a40428fb55524d104) slotChecks, live-verified storedWord == getter at each row block",
+ "rows": [
+  {
+   "chainId": 11155111,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x830cfB484b6e5606687e00f64C40aeb9c7c84E3c",
+   "label": "currentValidatorSetRoot",
+   "slot": "0x11",
+   "valueType": "bytes32",
+   "formula": "scalar: slot 17",
+   "args": [],
+   "storedWord": "0xa85a6911183f5085dedba666ab04b370550d8e0f1cd6b39dc0d716da7aa174e8"
+  },
+  {
+   "chainId": 11155111,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x830cfB484b6e5606687e00f64C40aeb9c7c84E3c",
+   "label": "owner",
+   "slot": "0x1b",
+   "valueType": "address",
+   "formula": "scalar: slot 27",
+   "args": [],
+   "storedWord": "0x00000000000000000000000091c798aa0ad11d2670029b3b0572d154bd42c059"
+  },
+  {
+   "chainId": 11155111,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x830cfB484b6e5606687e00f64C40aeb9c7c84E3c",
+   "label": "governanceVerifier",
+   "slot": "0x1d",
+   "valueType": "address",
+   "formula": "scalar: slot 29",
+   "args": [],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+   "chainId": 11155111,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x830cfB484b6e5606687e00f64C40aeb9c7c84E3c",
+   "label": "blsThresholdNumerator",
+   "slot": "0xf",
+   "valueType": "uint256",
+   "formula": "scalar: slot 15",
+   "args": [],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000002"
+  },
+  {
+   "chainId": 11155111,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x830cfB484b6e5606687e00f64C40aeb9c7c84E3c",
+   "label": "blsThresholdDenominator",
+   "slot": "0x10",
+   "valueType": "uint256",
+   "formula": "scalar: slot 16",
+   "args": [],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000003"
+  },
+  {
+   "chainId": 11155111,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x830cfB484b6e5606687e00f64C40aeb9c7c84E3c",
+   "label": "totalVotingPower",
+   "slot": "0xe",
+   "valueType": "uint256",
+   "formula": "scalar: slot 14",
+   "args": [],
+   "storedWord": "0x00000000000000000000000000000000000000000000000000000000000002bc"
+  },
+  {
+   "chainId": 11155111,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x830cfB484b6e5606687e00f64C40aeb9c7c84E3c",
+   "label": "authorizedPubkeyCommitmentCount",
+   "slot": "0x5",
+   "valueType": "uint256",
+   "formula": "scalar: slot 5",
+   "args": [],
+   "storedWord": "0x000000000000000000000000000000000000000000000000000000000000001d"
+  },
+  {
+   "chainId": 11155111,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x830cfB484b6e5606687e00f64C40aeb9c7c84E3c",
+   "label": "pubkeyBindingEnforced",
+   "slot": "0x6",
+   "valueType": "bool",
+   "formula": "scalar: slot 6",
+   "args": [],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000001"
+  },
+  {
+   "chainId": 11155111,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x830cfB484b6e5606687e00f64C40aeb9c7c84E3c",
+   "label": "_paused",
+   "slot": "0x0",
+   "valueType": "bool",
+   "formula": "scalar: slot 0",
+   "args": [],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+   "chainId": 11155111,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x830cfB484b6e5606687e00f64C40aeb9c7c84E3c",
+   "label": "blsZKVerifier + blsZKVerificationEnabled + minimumGovernanceLevel + minimumGovernanceLevelForValueOps",
+   "slot": "0x1e",
+   "valueType": "packed",
+   "formula": "slot 30: bytes 0-19 blsZKVerifier, byte 20 blsZKVerificationEnabled, byte 21 minimumGovernanceLevel, byte 22 minimumGovernanceLevelForValueOps",
+   "args": null,
+   "storedWord": "0x00000000000000000002010125ebfbc617e777ae983a2c22e3b9649e3eb93802"
+  },
+  {
+   "chainId": 11155111,
+   "contract": "BLSZKVerifierV2_1",
+   "address": "0x25ebFbC617e777Ae983a2C22E3B9649E3EB93802",
+   "label": "storedThresholdNumerator",
+   "slot": "0x0",
+   "valueType": "uint256",
+   "formula": "scalar: slot 0",
+   "args": [],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000002"
+  },
+  {
+   "chainId": 11155111,
+   "contract": "BLSZKVerifierV2_1",
+   "address": "0x25ebFbC617e777Ae983a2C22E3B9649E3EB93802",
+   "label": "storedThresholdDenominator",
+   "slot": "0x1",
+   "valueType": "uint256",
+   "formula": "scalar: slot 1",
+   "args": [],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000003"
+  },
+  {
+   "chainId": 11155111,
+   "contract": "BLSZKVerifierV2_1",
+   "address": "0x25ebFbC617e777Ae983a2C22E3B9649E3EB93802",
+   "label": "owner",
+   "slot": "0x2",
+   "valueType": "address",
+   "formula": "scalar: slot 2",
+   "args": [],
+   "storedWord": "0x00000000000000000000000091c798aa0ad11d2670029b3b0572d154bd42c059"
+  },
+  {
+   "chainId": 11155111,
+   "contract": "CertenAccountFactoryV11",
+   "address": "0x8387D061830E10Eb42BC25C2A047631164803F25",
+   "label": "_owner",
+   "slot": "0x0",
+   "valueType": "address",
+   "formula": "scalar: slot 0",
+   "args": [],
+   "storedWord": "0x00000000000000000000000091c798aa0ad11d2670029b3b0572d154bd42c059"
+  },
+  {
+   "chainId": 11155111,
+   "contract": "CertenAccountFactoryV11",
+   "address": "0x8387D061830E10Eb42BC25C2A047631164803F25",
+   "label": "anchorContract",
+   "slot": "0x1",
+   "valueType": "address",
+   "formula": "scalar: slot 1",
+   "args": [],
+   "storedWord": "0x000000000000000000000000830cfb484b6e5606687e00f64c40aeb9c7c84e3c"
+  },
+  {
+   "chainId": 11155111,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x830cfB484b6e5606687e00f64C40aeb9c7c84E3c",
+   "label": "operators",
+   "slot": "0x94bf703a529a3df38f0abaeaa8c71daea7a66817d1c4a604e61d1c6288ba0b7e",
+   "valueType": "bool",
+   "formula": "keccak256(abi.encode(address, uint256(28)))",
+   "args": [
+    "0x91C798AA0Ad11d2670029b3B0572d154bd42c059"
+   ],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000001"
+  },
+  {
+   "chainId": 11155111,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x830cfB484b6e5606687e00f64C40aeb9c7c84E3c",
+   "label": "validatorList",
+   "slot": "0xd7b6990105719101dabeb77144f2a3385c8033acd3af97e9423a695e81ad1eb5",
+   "valueType": "address",
+   "formula": "keccak256(abi.encode(uint256(13))) + floor(0 / 1)  (array length at slot 13 = 7)",
+   "kind": "arrayElement",
+   "index": 0,
+   "itemsPerSlot": 1,
+   "byteOffset": 0,
+   "lengthSlot": 13,
+   "args": [
+    "0"
+   ],
+   "storedWord": "0x000000000000000000000000d4a3dbbae0c04d4307c5e00a5e05b66acc289f5d"
+  },
+  {
+   "chainId": 11155111,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x830cfB484b6e5606687e00f64C40aeb9c7c84E3c",
+   "label": "validators",
+   "slot": "0x480027f32ca32a4fa43c58f6512be5f54897373f8cfefbb4ec02fb573145a658",
+   "valueType": "struct(bool registered @+0, uint256 votingPower @+1, bytes blsPublicKey @+2, uint256 registeredAt @+3)",
+   "formula": "keccak256(abi.encode(address, uint256(12))) + member slot offset; votingPower verified at +1",
+   "args": null,
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000001"
+  },
+  {
+   "chainId": 11155111,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x830cfB484b6e5606687e00f64C40aeb9c7c84E3c",
+   "label": "validatorList",
+   "slot": "0xd7b6990105719101dabeb77144f2a3385c8033acd3af97e9423a695e81ad1eb6",
+   "valueType": "address",
+   "formula": "keccak256(abi.encode(uint256(13))) + floor(1 / 1)  (array length at slot 13 = 7)",
+   "kind": "arrayElement",
+   "index": 1,
+   "itemsPerSlot": 1,
+   "byteOffset": 0,
+   "lengthSlot": 13,
+   "args": [
+    "1"
+   ],
+   "storedWord": "0x0000000000000000000000005555afa8ff8048bddaac1554afd790c9bf7ec6e0"
+  },
+  {
+   "chainId": 11155111,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x830cfB484b6e5606687e00f64C40aeb9c7c84E3c",
+   "label": "validatorList",
+   "slot": "0xd7b6990105719101dabeb77144f2a3385c8033acd3af97e9423a695e81ad1eb7",
+   "valueType": "address",
+   "formula": "keccak256(abi.encode(uint256(13))) + floor(2 / 1)  (array length at slot 13 = 7)",
+   "kind": "arrayElement",
+   "index": 2,
+   "itemsPerSlot": 1,
+   "byteOffset": 0,
+   "lengthSlot": 13,
+   "args": [
+    "2"
+   ],
+   "storedWord": "0x0000000000000000000000006acaa68417f5ad5d4a02d9d3d72e291effcdf30a"
+  },
+  {
+   "chainId": 11155111,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x830cfB484b6e5606687e00f64C40aeb9c7c84E3c",
+   "label": "validatorList",
+   "slot": "0xd7b6990105719101dabeb77144f2a3385c8033acd3af97e9423a695e81ad1eb8",
+   "valueType": "address",
+   "formula": "keccak256(abi.encode(uint256(13))) + floor(3 / 1)  (array length at slot 13 = 7)",
+   "kind": "arrayElement",
+   "index": 3,
+   "itemsPerSlot": 1,
+   "byteOffset": 0,
+   "lengthSlot": 13,
+   "args": [
+    "3"
+   ],
+   "storedWord": "0x00000000000000000000000016ab06f3634218a8f1f3b01dcdd32ddfbdc8a69d"
+  },
+  {
+   "chainId": 11155111,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x830cfB484b6e5606687e00f64C40aeb9c7c84E3c",
+   "label": "validatorList",
+   "slot": "0xd7b6990105719101dabeb77144f2a3385c8033acd3af97e9423a695e81ad1eb9",
+   "valueType": "address",
+   "formula": "keccak256(abi.encode(uint256(13))) + floor(4 / 1)  (array length at slot 13 = 7)",
+   "kind": "arrayElement",
+   "index": 4,
+   "itemsPerSlot": 1,
+   "byteOffset": 0,
+   "lengthSlot": 13,
+   "args": [
+    "4"
+   ],
+   "storedWord": "0x000000000000000000000000f150ff923e29f797b4598b89bd7d02002d00db3a"
+  },
+  {
+   "chainId": 11155111,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x830cfB484b6e5606687e00f64C40aeb9c7c84E3c",
+   "label": "validatorList",
+   "slot": "0xd7b6990105719101dabeb77144f2a3385c8033acd3af97e9423a695e81ad1eba",
+   "valueType": "address",
+   "formula": "keccak256(abi.encode(uint256(13))) + floor(5 / 1)  (array length at slot 13 = 7)",
+   "kind": "arrayElement",
+   "index": 5,
+   "itemsPerSlot": 1,
+   "byteOffset": 0,
+   "lengthSlot": 13,
+   "args": [
+    "5"
+   ],
+   "storedWord": "0x00000000000000000000000070a6a81bb5e3b63b1929301239de1f5c63ec4f3a"
+  },
+  {
+   "chainId": 11155111,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x830cfB484b6e5606687e00f64C40aeb9c7c84E3c",
+   "label": "validatorList",
+   "slot": "0xd7b6990105719101dabeb77144f2a3385c8033acd3af97e9423a695e81ad1ebb",
+   "valueType": "address",
+   "formula": "keccak256(abi.encode(uint256(13))) + floor(6 / 1)  (array length at slot 13 = 7)",
+   "kind": "arrayElement",
+   "index": 6,
+   "itemsPerSlot": 1,
+   "byteOffset": 0,
+   "lengthSlot": 13,
+   "args": [
+    "6"
+   ],
+   "storedWord": "0x000000000000000000000000ee2efa29989fe6e53572087680c661ec29e045fe"
+  },
+  {
+   "chainId": 11155111,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x830cfB484b6e5606687e00f64C40aeb9c7c84E3c",
+   "label": "validators",
+   "slot": "0xc208ebabb4c6db3fbb075518c997336c0bd8990734aa852e66f7197e05828676",
+   "valueType": "struct(bool registered @+0, uint256 votingPower @+1, bytes blsPublicKey @+2, uint256 registeredAt @+3)",
+   "formula": "keccak256(abi.encode(address, uint256(12))) + member slot offset; votingPower verified at +1",
+   "args": null,
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000001"
+  },
+  {
+   "chainId": 11155111,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x830cfB484b6e5606687e00f64C40aeb9c7c84E3c",
+   "label": "authorizedPubkeyCommitments",
+   "slot": "0x7ada374d6ad178044e755ed0196b1ffcd958cfa96db94abadefb8901cbfcb5a0",
+   "valueType": "bool",
+   "formula": "keccak256(abi.encode(bytes32, uint256(4)))",
+   "args": [
+    "0x0001228bb5b9c9944320e4027638ba49eb7f057b4ff51d0bff43dbd91efeb060"
+   ],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000001"
+  },
+  {
+   "chainId": 11155111,
+   "contract": "CertenAccountFactoryV11",
+   "address": "0x8387D061830E10Eb42BC25C2A047631164803F25",
+   "label": "_deployedAccounts",
+   "slot": "0x38e62d32207fe7c05b4810f6060ea3af5dd0427d7bcd1f3c2bcc3d05d7d54aef",
+   "valueType": "bool",
+   "formula": "keccak256(abi.encode(address, uint256(2)))",
+   "args": null,
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000001"
+  },
+  {
+   "chainId": 11155111,
+   "contract": "CertenAccountFactoryV11",
+   "address": "0x8387D061830E10Eb42BC25C2A047631164803F25",
+   "label": "_adiToAccount",
+   "slot": "0x0bb1958358ecc28a8667ff0fa2097d50d8031e72abc50879e5b412e56f9e18c2",
+   "valueType": "address",
+   "formula": "keccak256(abi.encode(bytes32 registrationKey, uint256(3)))",
+   "args": null,
+   "storedWord": "0x0000000000000000000000002ec2d261a4770e42dbe43826489d299d596bc5f7"
+  },
+  {
+   "chainId": 11155111,
+   "contract": "CertenAccountV7_3",
+   "address": "0x2ec2d261a4770e42dbe43826489d299d596bc5f7",
+   "label": "anchorContract",
+   "slot": "0x2",
+   "valueType": "address",
+   "formula": "scalar: slot 2 (all 3 accounts on this chain hold the chain's anchor there)",
+   "args": null,
+   "storedWord": "0x000000000000000000000000830cfb484b6e5606687e00f64c40aeb9c7c84e3c"
+  },
+  {
+   "chainId": 11155111,
+   "contract": "CertenAccountV7_3",
+   "address": "0x2ec2d261a4770e42dbe43826489d299d596bc5f7",
+   "label": "_consumedLeaf",
+   "slot": "0x2bf26a20c8c8990fac70148edc21509657fadc8788f2427bf202c61ce4552abc",
+   "valueType": "bool",
+   "formula": "keccak256(abi.encode(bytes32 leaf, uint256(4)))",
+   "args": null,
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000001"
+  },
+  {
+   "chainId": 11155111,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x830cfB484b6e5606687e00f64C40aeb9c7c84E3c",
+   "label": "anchorIds",
+   "slot": "0xa66cc928b5edb82af9bd49922954155ab7b0942694bea4ce44661d9a8736c688",
+   "valueType": "bytes32",
+   "formula": "keccak256(abi.encode(uint256(7))) + floor(0 / 1)  (array length at slot 7 = 15)",
+   "kind": "arrayElement",
+   "index": 0,
+   "itemsPerSlot": 1,
+   "byteOffset": 0,
+   "lengthSlot": 7,
+   "args": [
+    "0"
+   ],
+   "storedWord": "0xfab4c125fa209ef146532202ec2927be54719f0bd375272f9ccc92c4eb89e001"
+  },
+  {
+   "chainId": 11155111,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x830cfB484b6e5606687e00f64C40aeb9c7c84E3c",
+   "label": "isBatchAnchor",
+   "slot": "0x5fcc75bb245aac57e48e1419ed611b359a0e57cf5670c68c31f7cd39da6f7aa3",
+   "valueType": "bool",
+   "formula": "keccak256(abi.encode(bytes32 bundleId, uint256(2)))",
+   "args": [
+    "0xfab4c125fa209ef146532202ec2927be54719f0bd375272f9ccc92c4eb89e001"
+   ],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000001"
+  },
+  {
+   "chainId": 11155111,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x830cfB484b6e5606687e00f64C40aeb9c7c84E3c",
+   "label": "batchLeafCount",
+   "slot": "0x5ddf7795b606ecca2d5c88b72e8cdf460e4e179550ed00b836814df101896a57",
+   "valueType": "uint256",
+   "formula": "keccak256(abi.encode(bytes32 bundleId, uint256(3)))",
+   "args": [
+    "0xfab4c125fa209ef146532202ec2927be54719f0bd375272f9ccc92c4eb89e001"
+   ],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000001"
+  },
+  {
+   "chainId": 11155111,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x830cfB484b6e5606687e00f64C40aeb9c7c84E3c",
+   "label": "usedCommitments",
+   "slot": "0x0e9a22d57bc966404db2775778f4635e28d5ae45785b75a219cfe73f8315b284",
+   "valueType": "bool",
+   "formula": "keccak256(abi.encode(bytes32 key, uint256(18)))",
+   "kind": "mapping",
+   "key": "0x57342dc0e1297f6b8c1370abbf4928be3b8b101ea796d28cc47ac60efc8f768c",
+   "baseSlot": 18,
+   "args": [
+    "0x57342dc0e1297f6b8c1370abbf4928be3b8b101ea796d28cc47ac60efc8f768c"
+   ],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000001"
+  },
+  {
+   "chainId": 11155111,
+   "contract": "CertenAccountV7_3",
+   "address": "0x2ec2d261a4770e42dbe43826489d299d596bc5f7",
+   "label": "_operationRequirements",
+   "slot": "0x31ac570bc8abfb45c87f5c0fbc65b5bb9d481379351d25bcdda0240e03d9c42f",
+   "valueType": "uint8 (AuthorityLevel)",
+   "formula": "keccak256(abi.encode(bytes4 selector right-padded, uint256(8)))",
+   "kind": "mapping",
+   "key": "0x575652c200000000000000000000000000000000000000000000000000000000",
+   "baseSlot": 8,
+   "args": [
+    "0x575652c2"
+   ],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000004"
+  },
+  {
+   "chainId": 11155111,
+   "contract": "CertenAccountV7_3",
+   "address": "0x2ec2d261a4770e42dbe43826489d299d596bc5f7",
+   "label": "_operationRequirements",
+   "slot": "0x2d188033b5a1fa1c6786d9d12e314e165b09d4eb816ebfcf5f73b0f7fc09967c",
+   "valueType": "uint8 (AuthorityLevel)",
+   "formula": "keccak256(abi.encode(bytes4 selector right-padded, uint256(8)))",
+   "kind": "mapping",
+   "key": "0xe00bfc2900000000000000000000000000000000000000000000000000000000",
+   "baseSlot": 8,
+   "args": [
+    "0xe00bfc29"
+   ],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000004"
+  },
+  {
+   "chainId": 11155111,
+   "contract": "CertenAccountV7_3",
+   "address": "0x2ec2d261a4770e42dbe43826489d299d596bc5f7",
+   "label": "_operationRequirements",
+   "slot": "0xab913ef61daa6194524120afd1e198fe349a7510eebd2bf17e374be2c166a028",
+   "valueType": "uint8 (AuthorityLevel)",
+   "formula": "keccak256(abi.encode(bytes4 selector right-padded, uint256(8)))",
+   "kind": "mapping",
+   "key": "0xc291fe6200000000000000000000000000000000000000000000000000000000",
+   "baseSlot": 8,
+   "args": [
+    "0xc291fe62"
+   ],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000003"
+  },
+  {
+   "chainId": 11155111,
+   "contract": "CertenAccountV7_3",
+   "address": "0x2ec2d261a4770e42dbe43826489d299d596bc5f7",
+   "label": "_operationRequirements",
+   "slot": "0x094f86b6bbf68b5cf52cea23de5d6431087ca7919312e300dc7b470c6a1463f7",
+   "valueType": "uint8 (AuthorityLevel)",
+   "formula": "keccak256(abi.encode(bytes4 selector right-padded, uint256(8)))",
+   "kind": "mapping",
+   "key": "0x6f7013f500000000000000000000000000000000000000000000000000000000",
+   "baseSlot": 8,
+   "args": [
+    "0x6f7013f5"
+   ],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000003"
+  },
+  {
+   "chainId": 11155111,
+   "contract": "CertenAccountV7_3",
+   "address": "0x2ec2d261a4770e42dbe43826489d299d596bc5f7",
+   "label": "_operationRequirements",
+   "slot": "0x8a97e0eff3d0266c1e09205ab7b6889d2b972b887e4f0f49d3e2d3915a5176c6",
+   "valueType": "uint8 (AuthorityLevel)",
+   "formula": "keccak256(abi.encode(bytes4 selector right-padded, uint256(8)))",
+   "kind": "mapping",
+   "key": "0x3ac8733c00000000000000000000000000000000000000000000000000000000",
+   "baseSlot": 8,
+   "args": [
+    "0x3ac8733c"
+   ],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000004"
+  },
+  {
+   "chainId": 11155111,
+   "contract": "CertenAccountV7_3",
+   "address": "0x2ec2d261a4770e42dbe43826489d299d596bc5f7",
+   "label": "_operationRequirements",
+   "slot": "0x999ba897c79e079eb32df2b4225b7563ba4b9b00d210822f523cf57d96d7ee6a",
+   "valueType": "uint8 (AuthorityLevel)",
+   "formula": "keccak256(abi.encode(bytes4 selector right-padded, uint256(8)))",
+   "kind": "mapping",
+   "key": "0x67685ea400000000000000000000000000000000000000000000000000000000",
+   "baseSlot": 8,
+   "args": [
+    "0x67685ea4"
+   ],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000004"
+  },
+  {
+   "chainId": 11155111,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x830cfB484b6e5606687e00f64C40aeb9c7c84E3c",
+   "label": "anchors",
+   "slot": "0x393279c5eb233aff116320a5317060f53c351cd4bea2349c21491d2d62300723",
+   "valueType": "struct Anchor (bundleId @+0, merkleRoot @+1, ...)",
+   "formula": "keccak256(abi.encode(bytes32 bundleId, uint256(1))) + member slot offset; bundleId verified at +0",
+   "args": null,
+   "storedWord": "0xfab4c125fa209ef146532202ec2927be54719f0bd375272f9ccc92c4eb89e001"
+  },
+  {
+   "chainId": 11155111,
+   "contract": "CertenOutcomeRegistryV1",
+   "address": "0xd479841a17770D89Dae94B5b41C95D2117414c21",
+   "label": "outcomeRoots",
+   "slot": "0x96028d80428ab00c32d46c33c4e03b52efbf62bbfea81c9ee3006489b47dd21b",
+   "valueType": "bytes32",
+   "formula": "keccak256(abi.encode(bytes32 bundleId, uint256(0)))",
+   "args": [
+    "0xfab4c125fa209ef146532202ec2927be54719f0bd375272f9ccc92c4eb89e001"
+   ],
+   "storedWord": "0x811961f226ba64da6679122407e5e7dbf1a4e7d1475e65d0bcb95ea079001503"
+  },
+  {
+   "chainId": 11155111,
+   "contract": "CertenOutcomeRegistryV1",
+   "address": "0xd479841a17770D89Dae94B5b41C95D2117414c21",
+   "label": "recordedInBlock",
+   "slot": "0x393279c5eb233aff116320a5317060f53c351cd4bea2349c21491d2d62300723",
+   "valueType": "uint256",
+   "formula": "keccak256(abi.encode(bytes32 bundleId, uint256(1)))",
+   "args": [
+    "0xfab4c125fa209ef146532202ec2927be54719f0bd375272f9ccc92c4eb89e001"
+   ],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000b49ed0"
+  },
+  {
+   "chainId": 11155111,
+   "contract": "CertenAccountFactoryV11",
+   "address": "0x8387D061830E10Eb42BC25C2A047631164803F25",
+   "label": "_allAccounts",
+   "slot": "0x8a35acfbc15ff81a39ae7d344fd709f28e8600b4aa8c65c6b64bfe7fe36bd19b",
+   "valueType": "address",
+   "formula": "keccak256(abi.encode(uint256(4))) + floor(0 / 1)  (array length at slot 4 = 3)",
+   "kind": "arrayElement",
+   "index": 0,
+   "itemsPerSlot": 1,
+   "byteOffset": 0,
+   "lengthSlot": 4,
+   "args": null,
+   "storedWord": "0x0000000000000000000000002ec2d261a4770e42dbe43826489d299d596bc5f7"
+  },
+  {
+   "chainId": 11155111,
+   "contract": "CertenAccountV7_3",
+   "address": "0x2ec2d261a4770e42dbe43826489d299d596bc5f7",
+   "label": "adiURL",
+   "slot": "0x0",
+   "valueType": "string",
+   "formula": "string storage rule; decoded and compared for all 3 accounts on this chain",
+   "args": null,
+   "storedWord": "0x6163633a2f2f7262372d7365702d31303035323033312e61636d650000000036"
+  },
+  {
+   "chainId": 11155111,
+   "contract": "CertenAccountV7_3",
+   "address": "0x2ec2d261a4770e42dbe43826489d299d596bc5f7",
+   "label": "governingBook",
+   "slot": "0xb",
+   "valueType": "string",
+   "formula": "string storage rule; decoded and compared for all 3 accounts on this chain",
+   "args": null,
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000041"
+  },
+  {
+   "chainId": 11155111,
+   "contract": "CertenAccountV7_3",
+   "address": "0x2ec2d261a4770e42dbe43826489d299d596bc5f7",
+   "label": "adiValidator",
+   "slot": "0x1",
+   "valueType": "address",
+   "formula": "scalar: slot 1 (checked for all 3 accounts on this chain)",
+   "args": null,
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+   "chainId": 84532,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x830cfB484b6e5606687e00f64C40aeb9c7c84E3c",
+   "label": "currentValidatorSetRoot",
+   "slot": "0x11",
+   "valueType": "bytes32",
+   "formula": "scalar: slot 17",
+   "args": [],
+   "storedWord": "0xa85a6911183f5085dedba666ab04b370550d8e0f1cd6b39dc0d716da7aa174e8"
+  },
+  {
+   "chainId": 84532,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x830cfB484b6e5606687e00f64C40aeb9c7c84E3c",
+   "label": "owner",
+   "slot": "0x1b",
+   "valueType": "address",
+   "formula": "scalar: slot 27",
+   "args": [],
+   "storedWord": "0x00000000000000000000000091c798aa0ad11d2670029b3b0572d154bd42c059"
+  },
+  {
+   "chainId": 84532,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x830cfB484b6e5606687e00f64C40aeb9c7c84E3c",
+   "label": "governanceVerifier",
+   "slot": "0x1d",
+   "valueType": "address",
+   "formula": "scalar: slot 29",
+   "args": [],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+   "chainId": 84532,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x830cfB484b6e5606687e00f64C40aeb9c7c84E3c",
+   "label": "blsThresholdNumerator",
+   "slot": "0xf",
+   "valueType": "uint256",
+   "formula": "scalar: slot 15",
+   "args": [],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000002"
+  },
+  {
+   "chainId": 84532,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x830cfB484b6e5606687e00f64C40aeb9c7c84E3c",
+   "label": "blsThresholdDenominator",
+   "slot": "0x10",
+   "valueType": "uint256",
+   "formula": "scalar: slot 16",
+   "args": [],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000003"
+  },
+  {
+   "chainId": 84532,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x830cfB484b6e5606687e00f64C40aeb9c7c84E3c",
+   "label": "totalVotingPower",
+   "slot": "0xe",
+   "valueType": "uint256",
+   "formula": "scalar: slot 14",
+   "args": [],
+   "storedWord": "0x00000000000000000000000000000000000000000000000000000000000002bc"
+  },
+  {
+   "chainId": 84532,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x830cfB484b6e5606687e00f64C40aeb9c7c84E3c",
+   "label": "authorizedPubkeyCommitmentCount",
+   "slot": "0x5",
+   "valueType": "uint256",
+   "formula": "scalar: slot 5",
+   "args": [],
+   "storedWord": "0x000000000000000000000000000000000000000000000000000000000000001d"
+  },
+  {
+   "chainId": 84532,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x830cfB484b6e5606687e00f64C40aeb9c7c84E3c",
+   "label": "pubkeyBindingEnforced",
+   "slot": "0x6",
+   "valueType": "bool",
+   "formula": "scalar: slot 6",
+   "args": [],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000001"
+  },
+  {
+   "chainId": 84532,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x830cfB484b6e5606687e00f64C40aeb9c7c84E3c",
+   "label": "_paused",
+   "slot": "0x0",
+   "valueType": "bool",
+   "formula": "scalar: slot 0",
+   "args": [],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+   "chainId": 84532,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x830cfB484b6e5606687e00f64C40aeb9c7c84E3c",
+   "label": "blsZKVerifier + blsZKVerificationEnabled + minimumGovernanceLevel + minimumGovernanceLevelForValueOps",
+   "slot": "0x1e",
+   "valueType": "packed",
+   "formula": "slot 30: bytes 0-19 blsZKVerifier, byte 20 blsZKVerificationEnabled, byte 21 minimumGovernanceLevel, byte 22 minimumGovernanceLevelForValueOps",
+   "args": null,
+   "storedWord": "0x00000000000000000002010125ebfbc617e777ae983a2c22e3b9649e3eb93802"
+  },
+  {
+   "chainId": 84532,
+   "contract": "BLSZKVerifierV2_1",
+   "address": "0x25ebFbC617e777Ae983a2C22E3B9649E3EB93802",
+   "label": "storedThresholdNumerator",
+   "slot": "0x0",
+   "valueType": "uint256",
+   "formula": "scalar: slot 0",
+   "args": [],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000002"
+  },
+  {
+   "chainId": 84532,
+   "contract": "BLSZKVerifierV2_1",
+   "address": "0x25ebFbC617e777Ae983a2C22E3B9649E3EB93802",
+   "label": "storedThresholdDenominator",
+   "slot": "0x1",
+   "valueType": "uint256",
+   "formula": "scalar: slot 1",
+   "args": [],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000003"
+  },
+  {
+   "chainId": 84532,
+   "contract": "BLSZKVerifierV2_1",
+   "address": "0x25ebFbC617e777Ae983a2C22E3B9649E3EB93802",
+   "label": "owner",
+   "slot": "0x2",
+   "valueType": "address",
+   "formula": "scalar: slot 2",
+   "args": [],
+   "storedWord": "0x00000000000000000000000091c798aa0ad11d2670029b3b0572d154bd42c059"
+  },
+  {
+   "chainId": 84532,
+   "contract": "CertenAccountFactoryV11",
+   "address": "0x8387D061830E10Eb42BC25C2A047631164803F25",
+   "label": "_owner",
+   "slot": "0x0",
+   "valueType": "address",
+   "formula": "scalar: slot 0",
+   "args": [],
+   "storedWord": "0x00000000000000000000000091c798aa0ad11d2670029b3b0572d154bd42c059"
+  },
+  {
+   "chainId": 84532,
+   "contract": "CertenAccountFactoryV11",
+   "address": "0x8387D061830E10Eb42BC25C2A047631164803F25",
+   "label": "anchorContract",
+   "slot": "0x1",
+   "valueType": "address",
+   "formula": "scalar: slot 1",
+   "args": [],
+   "storedWord": "0x000000000000000000000000830cfb484b6e5606687e00f64c40aeb9c7c84e3c"
+  },
+  {
+   "chainId": 84532,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x830cfB484b6e5606687e00f64C40aeb9c7c84E3c",
+   "label": "operators",
+   "slot": "0x94bf703a529a3df38f0abaeaa8c71daea7a66817d1c4a604e61d1c6288ba0b7e",
+   "valueType": "bool",
+   "formula": "keccak256(abi.encode(address, uint256(28)))",
+   "args": [
+    "0x91C798AA0Ad11d2670029b3B0572d154bd42c059"
+   ],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000001"
+  },
+  {
+   "chainId": 84532,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x830cfB484b6e5606687e00f64C40aeb9c7c84E3c",
+   "label": "validatorList",
+   "slot": "0xd7b6990105719101dabeb77144f2a3385c8033acd3af97e9423a695e81ad1eb5",
+   "valueType": "address",
+   "formula": "keccak256(abi.encode(uint256(13))) + floor(0 / 1)  (array length at slot 13 = 7)",
+   "kind": "arrayElement",
+   "index": 0,
+   "itemsPerSlot": 1,
+   "byteOffset": 0,
+   "lengthSlot": 13,
+   "args": [
+    "0"
+   ],
+   "storedWord": "0x000000000000000000000000d4a3dbbae0c04d4307c5e00a5e05b66acc289f5d"
+  },
+  {
+   "chainId": 84532,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x830cfB484b6e5606687e00f64C40aeb9c7c84E3c",
+   "label": "validators",
+   "slot": "0x480027f32ca32a4fa43c58f6512be5f54897373f8cfefbb4ec02fb573145a658",
+   "valueType": "struct(bool registered @+0, uint256 votingPower @+1, bytes blsPublicKey @+2, uint256 registeredAt @+3)",
+   "formula": "keccak256(abi.encode(address, uint256(12))) + member slot offset; votingPower verified at +1",
+   "args": null,
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000001"
+  },
+  {
+   "chainId": 84532,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x830cfB484b6e5606687e00f64C40aeb9c7c84E3c",
+   "label": "validatorList",
+   "slot": "0xd7b6990105719101dabeb77144f2a3385c8033acd3af97e9423a695e81ad1eb6",
+   "valueType": "address",
+   "formula": "keccak256(abi.encode(uint256(13))) + floor(1 / 1)  (array length at slot 13 = 7)",
+   "kind": "arrayElement",
+   "index": 1,
+   "itemsPerSlot": 1,
+   "byteOffset": 0,
+   "lengthSlot": 13,
+   "args": [
+    "1"
+   ],
+   "storedWord": "0x0000000000000000000000005555afa8ff8048bddaac1554afd790c9bf7ec6e0"
+  },
+  {
+   "chainId": 84532,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x830cfB484b6e5606687e00f64C40aeb9c7c84E3c",
+   "label": "validatorList",
+   "slot": "0xd7b6990105719101dabeb77144f2a3385c8033acd3af97e9423a695e81ad1eb7",
+   "valueType": "address",
+   "formula": "keccak256(abi.encode(uint256(13))) + floor(2 / 1)  (array length at slot 13 = 7)",
+   "kind": "arrayElement",
+   "index": 2,
+   "itemsPerSlot": 1,
+   "byteOffset": 0,
+   "lengthSlot": 13,
+   "args": [
+    "2"
+   ],
+   "storedWord": "0x0000000000000000000000006acaa68417f5ad5d4a02d9d3d72e291effcdf30a"
+  },
+  {
+   "chainId": 84532,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x830cfB484b6e5606687e00f64C40aeb9c7c84E3c",
+   "label": "validatorList",
+   "slot": "0xd7b6990105719101dabeb77144f2a3385c8033acd3af97e9423a695e81ad1eb8",
+   "valueType": "address",
+   "formula": "keccak256(abi.encode(uint256(13))) + floor(3 / 1)  (array length at slot 13 = 7)",
+   "kind": "arrayElement",
+   "index": 3,
+   "itemsPerSlot": 1,
+   "byteOffset": 0,
+   "lengthSlot": 13,
+   "args": [
+    "3"
+   ],
+   "storedWord": "0x00000000000000000000000016ab06f3634218a8f1f3b01dcdd32ddfbdc8a69d"
+  },
+  {
+   "chainId": 84532,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x830cfB484b6e5606687e00f64C40aeb9c7c84E3c",
+   "label": "validatorList",
+   "slot": "0xd7b6990105719101dabeb77144f2a3385c8033acd3af97e9423a695e81ad1eb9",
+   "valueType": "address",
+   "formula": "keccak256(abi.encode(uint256(13))) + floor(4 / 1)  (array length at slot 13 = 7)",
+   "kind": "arrayElement",
+   "index": 4,
+   "itemsPerSlot": 1,
+   "byteOffset": 0,
+   "lengthSlot": 13,
+   "args": [
+    "4"
+   ],
+   "storedWord": "0x000000000000000000000000f150ff923e29f797b4598b89bd7d02002d00db3a"
+  },
+  {
+   "chainId": 84532,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x830cfB484b6e5606687e00f64C40aeb9c7c84E3c",
+   "label": "validatorList",
+   "slot": "0xd7b6990105719101dabeb77144f2a3385c8033acd3af97e9423a695e81ad1eba",
+   "valueType": "address",
+   "formula": "keccak256(abi.encode(uint256(13))) + floor(5 / 1)  (array length at slot 13 = 7)",
+   "kind": "arrayElement",
+   "index": 5,
+   "itemsPerSlot": 1,
+   "byteOffset": 0,
+   "lengthSlot": 13,
+   "args": [
+    "5"
+   ],
+   "storedWord": "0x00000000000000000000000070a6a81bb5e3b63b1929301239de1f5c63ec4f3a"
+  },
+  {
+   "chainId": 84532,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x830cfB484b6e5606687e00f64C40aeb9c7c84E3c",
+   "label": "validatorList",
+   "slot": "0xd7b6990105719101dabeb77144f2a3385c8033acd3af97e9423a695e81ad1ebb",
+   "valueType": "address",
+   "formula": "keccak256(abi.encode(uint256(13))) + floor(6 / 1)  (array length at slot 13 = 7)",
+   "kind": "arrayElement",
+   "index": 6,
+   "itemsPerSlot": 1,
+   "byteOffset": 0,
+   "lengthSlot": 13,
+   "args": [
+    "6"
+   ],
+   "storedWord": "0x000000000000000000000000ee2efa29989fe6e53572087680c661ec29e045fe"
+  },
+  {
+   "chainId": 84532,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x830cfB484b6e5606687e00f64C40aeb9c7c84E3c",
+   "label": "validators",
+   "slot": "0xc208ebabb4c6db3fbb075518c997336c0bd8990734aa852e66f7197e05828676",
+   "valueType": "struct(bool registered @+0, uint256 votingPower @+1, bytes blsPublicKey @+2, uint256 registeredAt @+3)",
+   "formula": "keccak256(abi.encode(address, uint256(12))) + member slot offset; votingPower verified at +1",
+   "args": null,
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000001"
+  },
+  {
+   "chainId": 84532,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x830cfB484b6e5606687e00f64C40aeb9c7c84E3c",
+   "label": "authorizedPubkeyCommitments",
+   "slot": "0x7ada374d6ad178044e755ed0196b1ffcd958cfa96db94abadefb8901cbfcb5a0",
+   "valueType": "bool",
+   "formula": "keccak256(abi.encode(bytes32, uint256(4)))",
+   "args": [
+    "0x0001228bb5b9c9944320e4027638ba49eb7f057b4ff51d0bff43dbd91efeb060"
+   ],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000001"
+  },
+  {
+   "chainId": 84532,
+   "contract": "CertenAccountFactoryV11",
+   "address": "0x8387D061830E10Eb42BC25C2A047631164803F25",
+   "label": "_deployedAccounts",
+   "slot": "0x40d0476b62f0df604a040993fbc4b5a5141c95bee1b6745dce3b9411b81baaff",
+   "valueType": "bool",
+   "formula": "keccak256(abi.encode(address, uint256(2)))",
+   "args": null,
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000001"
+  },
+  {
+   "chainId": 84532,
+   "contract": "CertenAccountFactoryV11",
+   "address": "0x8387D061830E10Eb42BC25C2A047631164803F25",
+   "label": "_adiToAccount",
+   "slot": "0xdc144c2698a7f348c81eb07430136d1f6b25346b75282917e0a5f7a3127eeeb4",
+   "valueType": "address",
+   "formula": "keccak256(abi.encode(bytes32 registrationKey, uint256(3)))",
+   "args": null,
+   "storedWord": "0x000000000000000000000000753efdd8f5b6cceedb3014c6dd6eedd2dfc83ced"
+  },
+  {
+   "chainId": 84532,
+   "contract": "CertenAccountV7_3",
+   "address": "0x753efdd8f5b6cceedb3014c6dd6eedd2dfc83ced",
+   "label": "anchorContract",
+   "slot": "0x2",
+   "valueType": "address",
+   "formula": "scalar: slot 2 (all 53 accounts on this chain hold the chain's anchor there)",
+   "args": null,
+   "storedWord": "0x000000000000000000000000830cfb484b6e5606687e00f64c40aeb9c7c84e3c"
+  },
+  {
+   "chainId": 84532,
+   "contract": "CertenAccountV7_3",
+   "address": "0x753efdd8f5b6cceedb3014c6dd6eedd2dfc83ced",
+   "label": "_consumedLeaf",
+   "slot": "0xd0b918a9cf2568419e095a345ec1af156a58fa6c708f1aedd65fd86c77a1ee0d",
+   "valueType": "bool",
+   "formula": "keccak256(abi.encode(bytes32 leaf, uint256(4)))",
+   "args": null,
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000001"
+  },
+  {
+   "chainId": 84532,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x830cfB484b6e5606687e00f64C40aeb9c7c84E3c",
+   "label": "anchorIds",
+   "slot": "0xa66cc928b5edb82af9bd49922954155ab7b0942694bea4ce44661d9a8736c688",
+   "valueType": "bytes32",
+   "formula": "keccak256(abi.encode(uint256(7))) + floor(0 / 1)  (array length at slot 7 = 46)",
+   "kind": "arrayElement",
+   "index": 0,
+   "itemsPerSlot": 1,
+   "byteOffset": 0,
+   "lengthSlot": 7,
+   "args": [
+    "0"
+   ],
+   "storedWord": "0xdc632dc8d77f7d31ec5154c8429990db9e34fb8cd730f6dd17eb559a9954105d"
+  },
+  {
+   "chainId": 84532,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x830cfB484b6e5606687e00f64C40aeb9c7c84E3c",
+   "label": "isBatchAnchor",
+   "slot": "0xc12a4b71ec6aa48673a799c0bc05ea75b53c872506e9136755a247e714e407b2",
+   "valueType": "bool",
+   "formula": "keccak256(abi.encode(bytes32 bundleId, uint256(2)))",
+   "args": [
+    "0xdc632dc8d77f7d31ec5154c8429990db9e34fb8cd730f6dd17eb559a9954105d"
+   ],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000001"
+  },
+  {
+   "chainId": 84532,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x830cfB484b6e5606687e00f64C40aeb9c7c84E3c",
+   "label": "batchLeafCount",
+   "slot": "0x6c1f5e6a25eb83abcb84e7f69e035bd3cb8994a5bd8359034c825a1ca9f21c40",
+   "valueType": "uint256",
+   "formula": "keccak256(abi.encode(bytes32 bundleId, uint256(3)))",
+   "args": [
+    "0xdc632dc8d77f7d31ec5154c8429990db9e34fb8cd730f6dd17eb559a9954105d"
+   ],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000001"
+  },
+  {
+   "chainId": 84532,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x830cfB484b6e5606687e00f64C40aeb9c7c84E3c",
+   "label": "usedCommitments",
+   "slot": "0xf55bd7261b77640caa781d709a2ce71fd62b28e827623e169062d4ee60b5fc7e",
+   "valueType": "bool",
+   "formula": "keccak256(abi.encode(bytes32 key, uint256(18)))",
+   "kind": "mapping",
+   "key": "0x5879299270db61ef6811606999b0bb270bb59b02206f38c2853b59f651585f3e",
+   "baseSlot": 18,
+   "args": [
+    "0x5879299270db61ef6811606999b0bb270bb59b02206f38c2853b59f651585f3e"
+   ],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000001"
+  },
+  {
+   "chainId": 84532,
+   "contract": "CertenAccountV7_3",
+   "address": "0x753efdd8f5b6cceedb3014c6dd6eedd2dfc83ced",
+   "label": "_operationRequirements",
+   "slot": "0x31ac570bc8abfb45c87f5c0fbc65b5bb9d481379351d25bcdda0240e03d9c42f",
+   "valueType": "uint8 (AuthorityLevel)",
+   "formula": "keccak256(abi.encode(bytes4 selector right-padded, uint256(8)))",
+   "kind": "mapping",
+   "key": "0x575652c200000000000000000000000000000000000000000000000000000000",
+   "baseSlot": 8,
+   "args": [
+    "0x575652c2"
+   ],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000004"
+  },
+  {
+   "chainId": 84532,
+   "contract": "CertenAccountV7_3",
+   "address": "0x753efdd8f5b6cceedb3014c6dd6eedd2dfc83ced",
+   "label": "_operationRequirements",
+   "slot": "0x2d188033b5a1fa1c6786d9d12e314e165b09d4eb816ebfcf5f73b0f7fc09967c",
+   "valueType": "uint8 (AuthorityLevel)",
+   "formula": "keccak256(abi.encode(bytes4 selector right-padded, uint256(8)))",
+   "kind": "mapping",
+   "key": "0xe00bfc2900000000000000000000000000000000000000000000000000000000",
+   "baseSlot": 8,
+   "args": [
+    "0xe00bfc29"
+   ],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000004"
+  },
+  {
+   "chainId": 84532,
+   "contract": "CertenAccountV7_3",
+   "address": "0x753efdd8f5b6cceedb3014c6dd6eedd2dfc83ced",
+   "label": "_operationRequirements",
+   "slot": "0xab913ef61daa6194524120afd1e198fe349a7510eebd2bf17e374be2c166a028",
+   "valueType": "uint8 (AuthorityLevel)",
+   "formula": "keccak256(abi.encode(bytes4 selector right-padded, uint256(8)))",
+   "kind": "mapping",
+   "key": "0xc291fe6200000000000000000000000000000000000000000000000000000000",
+   "baseSlot": 8,
+   "args": [
+    "0xc291fe62"
+   ],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000003"
+  },
+  {
+   "chainId": 84532,
+   "contract": "CertenAccountV7_3",
+   "address": "0x753efdd8f5b6cceedb3014c6dd6eedd2dfc83ced",
+   "label": "_operationRequirements",
+   "slot": "0x094f86b6bbf68b5cf52cea23de5d6431087ca7919312e300dc7b470c6a1463f7",
+   "valueType": "uint8 (AuthorityLevel)",
+   "formula": "keccak256(abi.encode(bytes4 selector right-padded, uint256(8)))",
+   "kind": "mapping",
+   "key": "0x6f7013f500000000000000000000000000000000000000000000000000000000",
+   "baseSlot": 8,
+   "args": [
+    "0x6f7013f5"
+   ],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000003"
+  },
+  {
+   "chainId": 84532,
+   "contract": "CertenAccountV7_3",
+   "address": "0x753efdd8f5b6cceedb3014c6dd6eedd2dfc83ced",
+   "label": "_operationRequirements",
+   "slot": "0x8a97e0eff3d0266c1e09205ab7b6889d2b972b887e4f0f49d3e2d3915a5176c6",
+   "valueType": "uint8 (AuthorityLevel)",
+   "formula": "keccak256(abi.encode(bytes4 selector right-padded, uint256(8)))",
+   "kind": "mapping",
+   "key": "0x3ac8733c00000000000000000000000000000000000000000000000000000000",
+   "baseSlot": 8,
+   "args": [
+    "0x3ac8733c"
+   ],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000004"
+  },
+  {
+   "chainId": 84532,
+   "contract": "CertenAccountV7_3",
+   "address": "0x753efdd8f5b6cceedb3014c6dd6eedd2dfc83ced",
+   "label": "_operationRequirements",
+   "slot": "0x999ba897c79e079eb32df2b4225b7563ba4b9b00d210822f523cf57d96d7ee6a",
+   "valueType": "uint8 (AuthorityLevel)",
+   "formula": "keccak256(abi.encode(bytes4 selector right-padded, uint256(8)))",
+   "kind": "mapping",
+   "key": "0x67685ea400000000000000000000000000000000000000000000000000000000",
+   "baseSlot": 8,
+   "args": [
+    "0x67685ea4"
+   ],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000004"
+  },
+  {
+   "chainId": 84532,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x830cfB484b6e5606687e00f64C40aeb9c7c84E3c",
+   "label": "anchors",
+   "slot": "0x6358d69e450442e4f6a62dc07fb0f4f0efa4a165d1a53492a1b5d287b990fda0",
+   "valueType": "struct Anchor (bundleId @+0, merkleRoot @+1, ...)",
+   "formula": "keccak256(abi.encode(bytes32 bundleId, uint256(1))) + member slot offset; bundleId verified at +0",
+   "args": null,
+   "storedWord": "0xdc632dc8d77f7d31ec5154c8429990db9e34fb8cd730f6dd17eb559a9954105d"
+  },
+  {
+   "chainId": 84532,
+   "contract": "CertenOutcomeRegistryV1",
+   "address": "0xd479841a17770D89Dae94B5b41C95D2117414c21",
+   "label": "outcomeRoots",
+   "slot": "0x5e210575d0fea501a7803a858976795c4973761d07757210932d1699f3c0f6f5",
+   "valueType": "bytes32",
+   "formula": "keccak256(abi.encode(bytes32 bundleId, uint256(0)))",
+   "args": [
+    "0xdc632dc8d77f7d31ec5154c8429990db9e34fb8cd730f6dd17eb559a9954105d"
+   ],
+   "storedWord": "0x77e46dc7cdf02a208338346ffbb40fbe047ae4b5abbaef261724e77a45d4e52e"
+  },
+  {
+   "chainId": 84532,
+   "contract": "CertenOutcomeRegistryV1",
+   "address": "0xd479841a17770D89Dae94B5b41C95D2117414c21",
+   "label": "recordedInBlock",
+   "slot": "0x6358d69e450442e4f6a62dc07fb0f4f0efa4a165d1a53492a1b5d287b990fda0",
+   "valueType": "uint256",
+   "formula": "keccak256(abi.encode(bytes32 bundleId, uint256(1)))",
+   "args": [
+    "0xdc632dc8d77f7d31ec5154c8429990db9e34fb8cd730f6dd17eb559a9954105d"
+   ],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000002d6ee93"
+  },
+  {
+   "chainId": 84532,
+   "contract": "CertenAccountFactoryV11",
+   "address": "0x8387D061830E10Eb42BC25C2A047631164803F25",
+   "label": "_allAccounts",
+   "slot": "0x8a35acfbc15ff81a39ae7d344fd709f28e8600b4aa8c65c6b64bfe7fe36bd19b",
+   "valueType": "address",
+   "formula": "keccak256(abi.encode(uint256(4))) + floor(0 / 1)  (array length at slot 4 = 53)",
+   "kind": "arrayElement",
+   "index": 0,
+   "itemsPerSlot": 1,
+   "byteOffset": 0,
+   "lengthSlot": 4,
+   "args": null,
+   "storedWord": "0x000000000000000000000000753efdd8f5b6cceedb3014c6dd6eedd2dfc83ced"
+  },
+  {
+   "chainId": 84532,
+   "contract": "CertenAccountV7_3",
+   "address": "0x753efdd8f5b6cceedb3014c6dd6eedd2dfc83ced",
+   "label": "adiURL",
+   "slot": "0x0",
+   "valueType": "string",
+   "formula": "string storage rule; decoded and compared for all 53 accounts on this chain",
+   "args": null,
+   "storedWord": "0x6163633a2f2f7262342d70686173652d632d30393238323132352e61636d653e"
+  },
+  {
+   "chainId": 84532,
+   "contract": "CertenAccountV7_3",
+   "address": "0x753efdd8f5b6cceedb3014c6dd6eedd2dfc83ced",
+   "label": "governingBook",
+   "slot": "0xb",
+   "valueType": "string",
+   "formula": "string storage rule; decoded and compared for all 53 accounts on this chain",
+   "args": null,
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000049"
+  },
+  {
+   "chainId": 84532,
+   "contract": "CertenAccountV7_3",
+   "address": "0x753efdd8f5b6cceedb3014c6dd6eedd2dfc83ced",
+   "label": "adiValidator",
+   "slot": "0x1",
+   "valueType": "address",
+   "formula": "scalar: slot 1 (checked for all 53 accounts on this chain)",
+   "args": null,
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+   "chainId": 421614,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x3F5B4d4371f06bdFff341d08Ca72A156233e3eA6",
+   "label": "currentValidatorSetRoot",
+   "slot": "0x11",
+   "valueType": "bytes32",
+   "formula": "scalar: slot 17",
+   "args": [],
+   "storedWord": "0xa85a6911183f5085dedba666ab04b370550d8e0f1cd6b39dc0d716da7aa174e8"
+  },
+  {
+   "chainId": 421614,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x3F5B4d4371f06bdFff341d08Ca72A156233e3eA6",
+   "label": "owner",
+   "slot": "0x1b",
+   "valueType": "address",
+   "formula": "scalar: slot 27",
+   "args": [],
+   "storedWord": "0x00000000000000000000000091c798aa0ad11d2670029b3b0572d154bd42c059"
+  },
+  {
+   "chainId": 421614,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x3F5B4d4371f06bdFff341d08Ca72A156233e3eA6",
+   "label": "governanceVerifier",
+   "slot": "0x1d",
+   "valueType": "address",
+   "formula": "scalar: slot 29",
+   "args": [],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+   "chainId": 421614,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x3F5B4d4371f06bdFff341d08Ca72A156233e3eA6",
+   "label": "blsThresholdNumerator",
+   "slot": "0xf",
+   "valueType": "uint256",
+   "formula": "scalar: slot 15",
+   "args": [],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000002"
+  },
+  {
+   "chainId": 421614,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x3F5B4d4371f06bdFff341d08Ca72A156233e3eA6",
+   "label": "blsThresholdDenominator",
+   "slot": "0x10",
+   "valueType": "uint256",
+   "formula": "scalar: slot 16",
+   "args": [],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000003"
+  },
+  {
+   "chainId": 421614,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x3F5B4d4371f06bdFff341d08Ca72A156233e3eA6",
+   "label": "totalVotingPower",
+   "slot": "0xe",
+   "valueType": "uint256",
+   "formula": "scalar: slot 14",
+   "args": [],
+   "storedWord": "0x00000000000000000000000000000000000000000000000000000000000002bc"
+  },
+  {
+   "chainId": 421614,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x3F5B4d4371f06bdFff341d08Ca72A156233e3eA6",
+   "label": "authorizedPubkeyCommitmentCount",
+   "slot": "0x5",
+   "valueType": "uint256",
+   "formula": "scalar: slot 5",
+   "args": [],
+   "storedWord": "0x000000000000000000000000000000000000000000000000000000000000001d"
+  },
+  {
+   "chainId": 421614,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x3F5B4d4371f06bdFff341d08Ca72A156233e3eA6",
+   "label": "pubkeyBindingEnforced",
+   "slot": "0x6",
+   "valueType": "bool",
+   "formula": "scalar: slot 6",
+   "args": [],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000001"
+  },
+  {
+   "chainId": 421614,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x3F5B4d4371f06bdFff341d08Ca72A156233e3eA6",
+   "label": "_paused",
+   "slot": "0x0",
+   "valueType": "bool",
+   "formula": "scalar: slot 0",
+   "args": [],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+   "chainId": 421614,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x3F5B4d4371f06bdFff341d08Ca72A156233e3eA6",
+   "label": "blsZKVerifier + blsZKVerificationEnabled + minimumGovernanceLevel + minimumGovernanceLevelForValueOps",
+   "slot": "0x1e",
+   "valueType": "packed",
+   "formula": "slot 30: bytes 0-19 blsZKVerifier, byte 20 blsZKVerificationEnabled, byte 21 minimumGovernanceLevel, byte 22 minimumGovernanceLevelForValueOps",
+   "args": null,
+   "storedWord": "0x00000000000000000002010111f0e387d14aee3c2894af72189dfdd92d0925be"
+  },
+  {
+   "chainId": 421614,
+   "contract": "BLSZKVerifierV2_1",
+   "address": "0x11f0E387d14aee3c2894af72189dfDD92d0925BE",
+   "label": "storedThresholdNumerator",
+   "slot": "0x0",
+   "valueType": "uint256",
+   "formula": "scalar: slot 0",
+   "args": [],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000002"
+  },
+  {
+   "chainId": 421614,
+   "contract": "BLSZKVerifierV2_1",
+   "address": "0x11f0E387d14aee3c2894af72189dfDD92d0925BE",
+   "label": "storedThresholdDenominator",
+   "slot": "0x1",
+   "valueType": "uint256",
+   "formula": "scalar: slot 1",
+   "args": [],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000003"
+  },
+  {
+   "chainId": 421614,
+   "contract": "BLSZKVerifierV2_1",
+   "address": "0x11f0E387d14aee3c2894af72189dfDD92d0925BE",
+   "label": "owner",
+   "slot": "0x2",
+   "valueType": "address",
+   "formula": "scalar: slot 2",
+   "args": [],
+   "storedWord": "0x00000000000000000000000091c798aa0ad11d2670029b3b0572d154bd42c059"
+  },
+  {
+   "chainId": 421614,
+   "contract": "CertenAccountFactoryV11",
+   "address": "0x8387D061830E10Eb42BC25C2A047631164803F25",
+   "label": "_owner",
+   "slot": "0x0",
+   "valueType": "address",
+   "formula": "scalar: slot 0",
+   "args": [],
+   "storedWord": "0x00000000000000000000000091c798aa0ad11d2670029b3b0572d154bd42c059"
+  },
+  {
+   "chainId": 421614,
+   "contract": "CertenAccountFactoryV11",
+   "address": "0x8387D061830E10Eb42BC25C2A047631164803F25",
+   "label": "anchorContract",
+   "slot": "0x1",
+   "valueType": "address",
+   "formula": "scalar: slot 1",
+   "args": [],
+   "storedWord": "0x0000000000000000000000003f5b4d4371f06bdfff341d08ca72a156233e3ea6"
+  },
+  {
+   "chainId": 421614,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x3F5B4d4371f06bdFff341d08Ca72A156233e3eA6",
+   "label": "operators",
+   "slot": "0x94bf703a529a3df38f0abaeaa8c71daea7a66817d1c4a604e61d1c6288ba0b7e",
+   "valueType": "bool",
+   "formula": "keccak256(abi.encode(address, uint256(28)))",
+   "args": [
+    "0x91C798AA0Ad11d2670029b3B0572d154bd42c059"
+   ],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000001"
+  },
+  {
+   "chainId": 421614,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x3F5B4d4371f06bdFff341d08Ca72A156233e3eA6",
+   "label": "validatorList",
+   "slot": "0xd7b6990105719101dabeb77144f2a3385c8033acd3af97e9423a695e81ad1eb5",
+   "valueType": "address",
+   "formula": "keccak256(abi.encode(uint256(13))) + floor(0 / 1)  (array length at slot 13 = 7)",
+   "kind": "arrayElement",
+   "index": 0,
+   "itemsPerSlot": 1,
+   "byteOffset": 0,
+   "lengthSlot": 13,
+   "args": [
+    "0"
+   ],
+   "storedWord": "0x000000000000000000000000d4a3dbbae0c04d4307c5e00a5e05b66acc289f5d"
+  },
+  {
+   "chainId": 421614,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x3F5B4d4371f06bdFff341d08Ca72A156233e3eA6",
+   "label": "validators",
+   "slot": "0x480027f32ca32a4fa43c58f6512be5f54897373f8cfefbb4ec02fb573145a658",
+   "valueType": "struct(bool registered @+0, uint256 votingPower @+1, bytes blsPublicKey @+2, uint256 registeredAt @+3)",
+   "formula": "keccak256(abi.encode(address, uint256(12))) + member slot offset; votingPower verified at +1",
+   "args": null,
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000001"
+  },
+  {
+   "chainId": 421614,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x3F5B4d4371f06bdFff341d08Ca72A156233e3eA6",
+   "label": "validatorList",
+   "slot": "0xd7b6990105719101dabeb77144f2a3385c8033acd3af97e9423a695e81ad1eb6",
+   "valueType": "address",
+   "formula": "keccak256(abi.encode(uint256(13))) + floor(1 / 1)  (array length at slot 13 = 7)",
+   "kind": "arrayElement",
+   "index": 1,
+   "itemsPerSlot": 1,
+   "byteOffset": 0,
+   "lengthSlot": 13,
+   "args": [
+    "1"
+   ],
+   "storedWord": "0x0000000000000000000000005555afa8ff8048bddaac1554afd790c9bf7ec6e0"
+  },
+  {
+   "chainId": 421614,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x3F5B4d4371f06bdFff341d08Ca72A156233e3eA6",
+   "label": "validatorList",
+   "slot": "0xd7b6990105719101dabeb77144f2a3385c8033acd3af97e9423a695e81ad1eb7",
+   "valueType": "address",
+   "formula": "keccak256(abi.encode(uint256(13))) + floor(2 / 1)  (array length at slot 13 = 7)",
+   "kind": "arrayElement",
+   "index": 2,
+   "itemsPerSlot": 1,
+   "byteOffset": 0,
+   "lengthSlot": 13,
+   "args": [
+    "2"
+   ],
+   "storedWord": "0x0000000000000000000000006acaa68417f5ad5d4a02d9d3d72e291effcdf30a"
+  },
+  {
+   "chainId": 421614,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x3F5B4d4371f06bdFff341d08Ca72A156233e3eA6",
+   "label": "validatorList",
+   "slot": "0xd7b6990105719101dabeb77144f2a3385c8033acd3af97e9423a695e81ad1eb8",
+   "valueType": "address",
+   "formula": "keccak256(abi.encode(uint256(13))) + floor(3 / 1)  (array length at slot 13 = 7)",
+   "kind": "arrayElement",
+   "index": 3,
+   "itemsPerSlot": 1,
+   "byteOffset": 0,
+   "lengthSlot": 13,
+   "args": [
+    "3"
+   ],
+   "storedWord": "0x00000000000000000000000016ab06f3634218a8f1f3b01dcdd32ddfbdc8a69d"
+  },
+  {
+   "chainId": 421614,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x3F5B4d4371f06bdFff341d08Ca72A156233e3eA6",
+   "label": "validatorList",
+   "slot": "0xd7b6990105719101dabeb77144f2a3385c8033acd3af97e9423a695e81ad1eb9",
+   "valueType": "address",
+   "formula": "keccak256(abi.encode(uint256(13))) + floor(4 / 1)  (array length at slot 13 = 7)",
+   "kind": "arrayElement",
+   "index": 4,
+   "itemsPerSlot": 1,
+   "byteOffset": 0,
+   "lengthSlot": 13,
+   "args": [
+    "4"
+   ],
+   "storedWord": "0x000000000000000000000000f150ff923e29f797b4598b89bd7d02002d00db3a"
+  },
+  {
+   "chainId": 421614,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x3F5B4d4371f06bdFff341d08Ca72A156233e3eA6",
+   "label": "validatorList",
+   "slot": "0xd7b6990105719101dabeb77144f2a3385c8033acd3af97e9423a695e81ad1eba",
+   "valueType": "address",
+   "formula": "keccak256(abi.encode(uint256(13))) + floor(5 / 1)  (array length at slot 13 = 7)",
+   "kind": "arrayElement",
+   "index": 5,
+   "itemsPerSlot": 1,
+   "byteOffset": 0,
+   "lengthSlot": 13,
+   "args": [
+    "5"
+   ],
+   "storedWord": "0x00000000000000000000000070a6a81bb5e3b63b1929301239de1f5c63ec4f3a"
+  },
+  {
+   "chainId": 421614,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x3F5B4d4371f06bdFff341d08Ca72A156233e3eA6",
+   "label": "validatorList",
+   "slot": "0xd7b6990105719101dabeb77144f2a3385c8033acd3af97e9423a695e81ad1ebb",
+   "valueType": "address",
+   "formula": "keccak256(abi.encode(uint256(13))) + floor(6 / 1)  (array length at slot 13 = 7)",
+   "kind": "arrayElement",
+   "index": 6,
+   "itemsPerSlot": 1,
+   "byteOffset": 0,
+   "lengthSlot": 13,
+   "args": [
+    "6"
+   ],
+   "storedWord": "0x000000000000000000000000ee2efa29989fe6e53572087680c661ec29e045fe"
+  },
+  {
+   "chainId": 421614,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x3F5B4d4371f06bdFff341d08Ca72A156233e3eA6",
+   "label": "validators",
+   "slot": "0xc208ebabb4c6db3fbb075518c997336c0bd8990734aa852e66f7197e05828676",
+   "valueType": "struct(bool registered @+0, uint256 votingPower @+1, bytes blsPublicKey @+2, uint256 registeredAt @+3)",
+   "formula": "keccak256(abi.encode(address, uint256(12))) + member slot offset; votingPower verified at +1",
+   "args": null,
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000001"
+  },
+  {
+   "chainId": 421614,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x3F5B4d4371f06bdFff341d08Ca72A156233e3eA6",
+   "label": "authorizedPubkeyCommitments",
+   "slot": "0x7ada374d6ad178044e755ed0196b1ffcd958cfa96db94abadefb8901cbfcb5a0",
+   "valueType": "bool",
+   "formula": "keccak256(abi.encode(bytes32, uint256(4)))",
+   "args": [
+    "0x0001228bb5b9c9944320e4027638ba49eb7f057b4ff51d0bff43dbd91efeb060"
+   ],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000001"
+  },
+  {
+   "chainId": 421614,
+   "contract": "CertenAccountFactoryV11",
+   "address": "0x8387D061830E10Eb42BC25C2A047631164803F25",
+   "label": "_deployedAccounts",
+   "slot": "0xa8563f66acc10b3b8e0c6683c99331740b1fd62494d171e5c30c425a849fd8f4",
+   "valueType": "bool",
+   "formula": "keccak256(abi.encode(address, uint256(2)))",
+   "args": null,
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000001"
+  },
+  {
+   "chainId": 421614,
+   "contract": "CertenAccountFactoryV11",
+   "address": "0x8387D061830E10Eb42BC25C2A047631164803F25",
+   "label": "_adiToAccount",
+   "slot": "0x2928cc6830d1d0b92ac7a68f43869426f81d5c50fe443effc652650e214c382b",
+   "valueType": "address",
+   "formula": "keccak256(abi.encode(bytes32 registrationKey, uint256(3)))",
+   "args": null,
+   "storedWord": "0x00000000000000000000000041be4466ec1e4159f21c6824374db2e0d7ac3ba0"
+  },
+  {
+   "chainId": 421614,
+   "contract": "CertenAccountV7_3",
+   "address": "0x41be4466ec1e4159f21c6824374db2e0d7ac3ba0",
+   "label": "anchorContract",
+   "slot": "0x2",
+   "valueType": "address",
+   "formula": "scalar: slot 2 (all 4 accounts on this chain hold the chain's anchor there)",
+   "args": null,
+   "storedWord": "0x0000000000000000000000003f5b4d4371f06bdfff341d08ca72a156233e3ea6"
+  },
+  {
+   "chainId": 421614,
+   "contract": "CertenAccountV7_3",
+   "address": "0x41be4466ec1e4159f21c6824374db2e0d7ac3ba0",
+   "label": "_consumedLeaf",
+   "slot": "0xdd0906eb5b9a313bc82706d979ed1b89ad59367774b287f19ed9469eb4c73604",
+   "valueType": "bool",
+   "formula": "keccak256(abi.encode(bytes32 leaf, uint256(4)))",
+   "args": null,
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000001"
+  },
+  {
+   "chainId": 421614,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x3F5B4d4371f06bdFff341d08Ca72A156233e3eA6",
+   "label": "anchorIds",
+   "slot": "0xa66cc928b5edb82af9bd49922954155ab7b0942694bea4ce44661d9a8736c688",
+   "valueType": "bytes32",
+   "formula": "keccak256(abi.encode(uint256(7))) + floor(0 / 1)  (array length at slot 7 = 15)",
+   "kind": "arrayElement",
+   "index": 0,
+   "itemsPerSlot": 1,
+   "byteOffset": 0,
+   "lengthSlot": 7,
+   "args": [
+    "0"
+   ],
+   "storedWord": "0x24a53d4808699b22acd5a5ceac431083c8426678d0241b2db5ccfd465ab97ad9"
+  },
+  {
+   "chainId": 421614,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x3F5B4d4371f06bdFff341d08Ca72A156233e3eA6",
+   "label": "isBatchAnchor",
+   "slot": "0xc556e12bad941e3f902a5654aff492524e659bd8c182191f3ef862d4cf5b17a6",
+   "valueType": "bool",
+   "formula": "keccak256(abi.encode(bytes32 bundleId, uint256(2)))",
+   "args": [
+    "0x24a53d4808699b22acd5a5ceac431083c8426678d0241b2db5ccfd465ab97ad9"
+   ],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000001"
+  },
+  {
+   "chainId": 421614,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x3F5B4d4371f06bdFff341d08Ca72A156233e3eA6",
+   "label": "batchLeafCount",
+   "slot": "0xd72d683e8553ee7954ee858a41c8a6a00e80413bbdcd57ece1f5b3405c1dc1cc",
+   "valueType": "uint256",
+   "formula": "keccak256(abi.encode(bytes32 bundleId, uint256(3)))",
+   "args": [
+    "0x24a53d4808699b22acd5a5ceac431083c8426678d0241b2db5ccfd465ab97ad9"
+   ],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000001"
+  },
+  {
+   "chainId": 421614,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x3F5B4d4371f06bdFff341d08Ca72A156233e3eA6",
+   "label": "usedCommitments",
+   "slot": "0x9818c3256489cf7c75cf06d12489346e0e2930169246356b25b008cebdf55746",
+   "valueType": "bool",
+   "formula": "keccak256(abi.encode(bytes32 key, uint256(18)))",
+   "kind": "mapping",
+   "key": "0x61914a5f5734621f060a776c18ca45aee40994120a38d93618a69bf1f17c6037",
+   "baseSlot": 18,
+   "args": [
+    "0x61914a5f5734621f060a776c18ca45aee40994120a38d93618a69bf1f17c6037"
+   ],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000001"
+  },
+  {
+   "chainId": 421614,
+   "contract": "CertenAccountV7_3",
+   "address": "0x41be4466ec1e4159f21c6824374db2e0d7ac3ba0",
+   "label": "_operationRequirements",
+   "slot": "0x31ac570bc8abfb45c87f5c0fbc65b5bb9d481379351d25bcdda0240e03d9c42f",
+   "valueType": "uint8 (AuthorityLevel)",
+   "formula": "keccak256(abi.encode(bytes4 selector right-padded, uint256(8)))",
+   "kind": "mapping",
+   "key": "0x575652c200000000000000000000000000000000000000000000000000000000",
+   "baseSlot": 8,
+   "args": [
+    "0x575652c2"
+   ],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000004"
+  },
+  {
+   "chainId": 421614,
+   "contract": "CertenAccountV7_3",
+   "address": "0x41be4466ec1e4159f21c6824374db2e0d7ac3ba0",
+   "label": "_operationRequirements",
+   "slot": "0x2d188033b5a1fa1c6786d9d12e314e165b09d4eb816ebfcf5f73b0f7fc09967c",
+   "valueType": "uint8 (AuthorityLevel)",
+   "formula": "keccak256(abi.encode(bytes4 selector right-padded, uint256(8)))",
+   "kind": "mapping",
+   "key": "0xe00bfc2900000000000000000000000000000000000000000000000000000000",
+   "baseSlot": 8,
+   "args": [
+    "0xe00bfc29"
+   ],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000004"
+  },
+  {
+   "chainId": 421614,
+   "contract": "CertenAccountV7_3",
+   "address": "0x41be4466ec1e4159f21c6824374db2e0d7ac3ba0",
+   "label": "_operationRequirements",
+   "slot": "0xab913ef61daa6194524120afd1e198fe349a7510eebd2bf17e374be2c166a028",
+   "valueType": "uint8 (AuthorityLevel)",
+   "formula": "keccak256(abi.encode(bytes4 selector right-padded, uint256(8)))",
+   "kind": "mapping",
+   "key": "0xc291fe6200000000000000000000000000000000000000000000000000000000",
+   "baseSlot": 8,
+   "args": [
+    "0xc291fe62"
+   ],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000003"
+  },
+  {
+   "chainId": 421614,
+   "contract": "CertenAccountV7_3",
+   "address": "0x41be4466ec1e4159f21c6824374db2e0d7ac3ba0",
+   "label": "_operationRequirements",
+   "slot": "0x094f86b6bbf68b5cf52cea23de5d6431087ca7919312e300dc7b470c6a1463f7",
+   "valueType": "uint8 (AuthorityLevel)",
+   "formula": "keccak256(abi.encode(bytes4 selector right-padded, uint256(8)))",
+   "kind": "mapping",
+   "key": "0x6f7013f500000000000000000000000000000000000000000000000000000000",
+   "baseSlot": 8,
+   "args": [
+    "0x6f7013f5"
+   ],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000003"
+  },
+  {
+   "chainId": 421614,
+   "contract": "CertenAccountV7_3",
+   "address": "0x41be4466ec1e4159f21c6824374db2e0d7ac3ba0",
+   "label": "_operationRequirements",
+   "slot": "0x8a97e0eff3d0266c1e09205ab7b6889d2b972b887e4f0f49d3e2d3915a5176c6",
+   "valueType": "uint8 (AuthorityLevel)",
+   "formula": "keccak256(abi.encode(bytes4 selector right-padded, uint256(8)))",
+   "kind": "mapping",
+   "key": "0x3ac8733c00000000000000000000000000000000000000000000000000000000",
+   "baseSlot": 8,
+   "args": [
+    "0x3ac8733c"
+   ],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000004"
+  },
+  {
+   "chainId": 421614,
+   "contract": "CertenAccountV7_3",
+   "address": "0x41be4466ec1e4159f21c6824374db2e0d7ac3ba0",
+   "label": "_operationRequirements",
+   "slot": "0x999ba897c79e079eb32df2b4225b7563ba4b9b00d210822f523cf57d96d7ee6a",
+   "valueType": "uint8 (AuthorityLevel)",
+   "formula": "keccak256(abi.encode(bytes4 selector right-padded, uint256(8)))",
+   "kind": "mapping",
+   "key": "0x67685ea400000000000000000000000000000000000000000000000000000000",
+   "baseSlot": 8,
+   "args": [
+    "0x67685ea4"
+   ],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000004"
+  },
+  {
+   "chainId": 421614,
+   "contract": "CertenAnchorV8_2",
+   "address": "0x3F5B4d4371f06bdFff341d08Ca72A156233e3eA6",
+   "label": "anchors",
+   "slot": "0x70ed9ae34cad772c5b409d003fefc16d658e9ad7086c6178ae2a1302df6aa5d8",
+   "valueType": "struct Anchor (bundleId @+0, merkleRoot @+1, ...)",
+   "formula": "keccak256(abi.encode(bytes32 bundleId, uint256(1))) + member slot offset; bundleId verified at +0",
+   "args": null,
+   "storedWord": "0x24a53d4808699b22acd5a5ceac431083c8426678d0241b2db5ccfd465ab97ad9"
+  },
+  {
+   "chainId": 421614,
+   "contract": "CertenOutcomeRegistryV1",
+   "address": "0xbBa0a4aE0fDF5F7cFC7DE67358a32d1E82aFEE0e",
+   "label": "outcomeRoots",
+   "slot": "0x5cb06eb92036b8a8c5cb99af6063fa20a1f5eaeeaa6094a560c6edb2a5018dc7",
+   "valueType": "bytes32",
+   "formula": "keccak256(abi.encode(bytes32 bundleId, uint256(0)))",
+   "args": [
+    "0x24a53d4808699b22acd5a5ceac431083c8426678d0241b2db5ccfd465ab97ad9"
+   ],
+   "storedWord": "0xf8f3a245bc772fcee0d98336e756bb97a5c0ab24bb10e839577483e7b8607f79"
+  },
+  {
+   "chainId": 421614,
+   "contract": "CertenOutcomeRegistryV1",
+   "address": "0xbBa0a4aE0fDF5F7cFC7DE67358a32d1E82aFEE0e",
+   "label": "recordedInBlock",
+   "slot": "0x70ed9ae34cad772c5b409d003fefc16d658e9ad7086c6178ae2a1302df6aa5d8",
+   "valueType": "uint256",
+   "formula": "keccak256(abi.encode(bytes32 bundleId, uint256(1)))",
+   "args": [
+    "0x24a53d4808699b22acd5a5ceac431083c8426678d0241b2db5ccfd465ab97ad9"
+   ],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000b49f2c"
+  },
+  {
+   "chainId": 421614,
+   "contract": "CertenAccountFactoryV11",
+   "address": "0x8387D061830E10Eb42BC25C2A047631164803F25",
+   "label": "_allAccounts",
+   "slot": "0x8a35acfbc15ff81a39ae7d344fd709f28e8600b4aa8c65c6b64bfe7fe36bd19b",
+   "valueType": "address",
+   "formula": "keccak256(abi.encode(uint256(4))) + floor(0 / 1)  (array length at slot 4 = 4)",
+   "kind": "arrayElement",
+   "index": 0,
+   "itemsPerSlot": 1,
+   "byteOffset": 0,
+   "lengthSlot": 4,
+   "args": null,
+   "storedWord": "0x00000000000000000000000041be4466ec1e4159f21c6824374db2e0d7ac3ba0"
+  },
+  {
+   "chainId": 421614,
+   "contract": "CertenAccountV7_3",
+   "address": "0x41be4466ec1e4159f21c6824374db2e0d7ac3ba0",
+   "label": "adiURL",
+   "slot": "0x0",
+   "valueType": "string",
+   "formula": "string storage rule; decoded and compared for all 4 accounts on this chain",
+   "args": null,
+   "storedWord": "0x6163633a2f2f7262372d6172622d31303035323033312e61636d650000000036"
+  },
+  {
+   "chainId": 421614,
+   "contract": "CertenAccountV7_3",
+   "address": "0x41be4466ec1e4159f21c6824374db2e0d7ac3ba0",
+   "label": "governingBook",
+   "slot": "0xb",
+   "valueType": "string",
+   "formula": "string storage rule; decoded and compared for all 4 accounts on this chain",
+   "args": null,
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000041"
+  },
+  {
+   "chainId": 421614,
+   "contract": "CertenAccountV7_3",
+   "address": "0x41be4466ec1e4159f21c6824374db2e0d7ac3ba0",
+   "label": "adiValidator",
+   "slot": "0x1",
+   "valueType": "address",
+   "formula": "scalar: slot 1 (checked for all 4 accounts on this chain)",
+   "args": null,
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+   "chainId": 2017,
+   "contract": "CertenAnchorV8_2",
+   "address": "0xEE381d01Dab7ffeA0F0006943F8337bA88B4070C",
+   "label": "currentValidatorSetRoot",
+   "slot": "0x11",
+   "valueType": "bytes32",
+   "formula": "scalar: slot 17",
+   "args": [],
+   "storedWord": "0xa85a6911183f5085dedba666ab04b370550d8e0f1cd6b39dc0d716da7aa174e8"
+  },
+  {
+   "chainId": 2017,
+   "contract": "CertenAnchorV8_2",
+   "address": "0xEE381d01Dab7ffeA0F0006943F8337bA88B4070C",
+   "label": "owner",
+   "slot": "0x1b",
+   "valueType": "address",
+   "formula": "scalar: slot 27",
+   "args": [],
+   "storedWord": "0x00000000000000000000000091c798aa0ad11d2670029b3b0572d154bd42c059"
+  },
+  {
+   "chainId": 2017,
+   "contract": "CertenAnchorV8_2",
+   "address": "0xEE381d01Dab7ffeA0F0006943F8337bA88B4070C",
+   "label": "governanceVerifier",
+   "slot": "0x1d",
+   "valueType": "address",
+   "formula": "scalar: slot 29",
+   "args": [],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+   "chainId": 2017,
+   "contract": "CertenAnchorV8_2",
+   "address": "0xEE381d01Dab7ffeA0F0006943F8337bA88B4070C",
+   "label": "blsThresholdNumerator",
+   "slot": "0xf",
+   "valueType": "uint256",
+   "formula": "scalar: slot 15",
+   "args": [],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000002"
+  },
+  {
+   "chainId": 2017,
+   "contract": "CertenAnchorV8_2",
+   "address": "0xEE381d01Dab7ffeA0F0006943F8337bA88B4070C",
+   "label": "blsThresholdDenominator",
+   "slot": "0x10",
+   "valueType": "uint256",
+   "formula": "scalar: slot 16",
+   "args": [],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000003"
+  },
+  {
+   "chainId": 2017,
+   "contract": "CertenAnchorV8_2",
+   "address": "0xEE381d01Dab7ffeA0F0006943F8337bA88B4070C",
+   "label": "totalVotingPower",
+   "slot": "0xe",
+   "valueType": "uint256",
+   "formula": "scalar: slot 14",
+   "args": [],
+   "storedWord": "0x00000000000000000000000000000000000000000000000000000000000002bc"
+  },
+  {
+   "chainId": 2017,
+   "contract": "CertenAnchorV8_2",
+   "address": "0xEE381d01Dab7ffeA0F0006943F8337bA88B4070C",
+   "label": "authorizedPubkeyCommitmentCount",
+   "slot": "0x5",
+   "valueType": "uint256",
+   "formula": "scalar: slot 5",
+   "args": [],
+   "storedWord": "0x000000000000000000000000000000000000000000000000000000000000001d"
+  },
+  {
+   "chainId": 2017,
+   "contract": "CertenAnchorV8_2",
+   "address": "0xEE381d01Dab7ffeA0F0006943F8337bA88B4070C",
+   "label": "pubkeyBindingEnforced",
+   "slot": "0x6",
+   "valueType": "bool",
+   "formula": "scalar: slot 6",
+   "args": [],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000001"
+  },
+  {
+   "chainId": 2017,
+   "contract": "CertenAnchorV8_2",
+   "address": "0xEE381d01Dab7ffeA0F0006943F8337bA88B4070C",
+   "label": "_paused",
+   "slot": "0x0",
+   "valueType": "bool",
+   "formula": "scalar: slot 0",
+   "args": [],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+   "chainId": 2017,
+   "contract": "CertenAnchorV8_2",
+   "address": "0xEE381d01Dab7ffeA0F0006943F8337bA88B4070C",
+   "label": "blsZKVerifier + blsZKVerificationEnabled + minimumGovernanceLevel + minimumGovernanceLevelForValueOps",
+   "slot": "0x1e",
+   "valueType": "packed",
+   "formula": "slot 30: bytes 0-19 blsZKVerifier, byte 20 blsZKVerificationEnabled, byte 21 minimumGovernanceLevel, byte 22 minimumGovernanceLevelForValueOps",
+   "args": null,
+   "storedWord": "0x000000000000000000020101426c390650f52f83f6799f1c7b32cb63648b55b8"
+  },
+  {
+   "chainId": 2017,
+   "contract": "BLSZKVerifierV2_1",
+   "address": "0x426c390650F52f83f6799F1C7b32CB63648B55b8",
+   "label": "storedThresholdNumerator",
+   "slot": "0x0",
+   "valueType": "uint256",
+   "formula": "scalar: slot 0",
+   "args": [],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000002"
+  },
+  {
+   "chainId": 2017,
+   "contract": "BLSZKVerifierV2_1",
+   "address": "0x426c390650F52f83f6799F1C7b32CB63648B55b8",
+   "label": "storedThresholdDenominator",
+   "slot": "0x1",
+   "valueType": "uint256",
+   "formula": "scalar: slot 1",
+   "args": [],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000003"
+  },
+  {
+   "chainId": 2017,
+   "contract": "BLSZKVerifierV2_1",
+   "address": "0x426c390650F52f83f6799F1C7b32CB63648B55b8",
+   "label": "owner",
+   "slot": "0x2",
+   "valueType": "address",
+   "formula": "scalar: slot 2",
+   "args": [],
+   "storedWord": "0x00000000000000000000000091c798aa0ad11d2670029b3b0572d154bd42c059"
+  },
+  {
+   "chainId": 2017,
+   "contract": "CertenAccountFactoryV11",
+   "address": "0x8387D061830E10Eb42BC25C2A047631164803F25",
+   "label": "_owner",
+   "slot": "0x0",
+   "valueType": "address",
+   "formula": "scalar: slot 0",
+   "args": [],
+   "storedWord": "0x00000000000000000000000091c798aa0ad11d2670029b3b0572d154bd42c059"
+  },
+  {
+   "chainId": 2017,
+   "contract": "CertenAccountFactoryV11",
+   "address": "0x8387D061830E10Eb42BC25C2A047631164803F25",
+   "label": "anchorContract",
+   "slot": "0x1",
+   "valueType": "address",
+   "formula": "scalar: slot 1",
+   "args": [],
+   "storedWord": "0x000000000000000000000000ee381d01dab7ffea0f0006943f8337ba88b4070c"
+  },
+  {
+   "chainId": 2017,
+   "contract": "CertenAnchorV8_2",
+   "address": "0xEE381d01Dab7ffeA0F0006943F8337bA88B4070C",
+   "label": "operators",
+   "slot": "0x94bf703a529a3df38f0abaeaa8c71daea7a66817d1c4a604e61d1c6288ba0b7e",
+   "valueType": "bool",
+   "formula": "keccak256(abi.encode(address, uint256(28)))",
+   "args": [
+    "0x91C798AA0Ad11d2670029b3B0572d154bd42c059"
+   ],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+   "chainId": 2017,
+   "contract": "CertenAnchorV8_2",
+   "address": "0xEE381d01Dab7ffeA0F0006943F8337bA88B4070C",
+   "label": "validatorList",
+   "slot": "0xd7b6990105719101dabeb77144f2a3385c8033acd3af97e9423a695e81ad1eb5",
+   "valueType": "address",
+   "formula": "keccak256(abi.encode(uint256(13))) + floor(0 / 1)  (array length at slot 13 = 7)",
+   "kind": "arrayElement",
+   "index": 0,
+   "itemsPerSlot": 1,
+   "byteOffset": 0,
+   "lengthSlot": 13,
+   "args": [
+    "0"
+   ],
+   "storedWord": "0x000000000000000000000000d4a3dbbae0c04d4307c5e00a5e05b66acc289f5d"
+  },
+  {
+   "chainId": 2017,
+   "contract": "CertenAnchorV8_2",
+   "address": "0xEE381d01Dab7ffeA0F0006943F8337bA88B4070C",
+   "label": "validators",
+   "slot": "0x480027f32ca32a4fa43c58f6512be5f54897373f8cfefbb4ec02fb573145a658",
+   "valueType": "struct(bool registered @+0, uint256 votingPower @+1, bytes blsPublicKey @+2, uint256 registeredAt @+3)",
+   "formula": "keccak256(abi.encode(address, uint256(12))) + member slot offset; votingPower verified at +1",
+   "args": null,
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000001"
+  },
+  {
+   "chainId": 2017,
+   "contract": "CertenAnchorV8_2",
+   "address": "0xEE381d01Dab7ffeA0F0006943F8337bA88B4070C",
+   "label": "validatorList",
+   "slot": "0xd7b6990105719101dabeb77144f2a3385c8033acd3af97e9423a695e81ad1eb6",
+   "valueType": "address",
+   "formula": "keccak256(abi.encode(uint256(13))) + floor(1 / 1)  (array length at slot 13 = 7)",
+   "kind": "arrayElement",
+   "index": 1,
+   "itemsPerSlot": 1,
+   "byteOffset": 0,
+   "lengthSlot": 13,
+   "args": [
+    "1"
+   ],
+   "storedWord": "0x0000000000000000000000005555afa8ff8048bddaac1554afd790c9bf7ec6e0"
+  },
+  {
+   "chainId": 2017,
+   "contract": "CertenAnchorV8_2",
+   "address": "0xEE381d01Dab7ffeA0F0006943F8337bA88B4070C",
+   "label": "validatorList",
+   "slot": "0xd7b6990105719101dabeb77144f2a3385c8033acd3af97e9423a695e81ad1eb7",
+   "valueType": "address",
+   "formula": "keccak256(abi.encode(uint256(13))) + floor(2 / 1)  (array length at slot 13 = 7)",
+   "kind": "arrayElement",
+   "index": 2,
+   "itemsPerSlot": 1,
+   "byteOffset": 0,
+   "lengthSlot": 13,
+   "args": [
+    "2"
+   ],
+   "storedWord": "0x0000000000000000000000006acaa68417f5ad5d4a02d9d3d72e291effcdf30a"
+  },
+  {
+   "chainId": 2017,
+   "contract": "CertenAnchorV8_2",
+   "address": "0xEE381d01Dab7ffeA0F0006943F8337bA88B4070C",
+   "label": "validatorList",
+   "slot": "0xd7b6990105719101dabeb77144f2a3385c8033acd3af97e9423a695e81ad1eb8",
+   "valueType": "address",
+   "formula": "keccak256(abi.encode(uint256(13))) + floor(3 / 1)  (array length at slot 13 = 7)",
+   "kind": "arrayElement",
+   "index": 3,
+   "itemsPerSlot": 1,
+   "byteOffset": 0,
+   "lengthSlot": 13,
+   "args": [
+    "3"
+   ],
+   "storedWord": "0x00000000000000000000000016ab06f3634218a8f1f3b01dcdd32ddfbdc8a69d"
+  },
+  {
+   "chainId": 2017,
+   "contract": "CertenAnchorV8_2",
+   "address": "0xEE381d01Dab7ffeA0F0006943F8337bA88B4070C",
+   "label": "validatorList",
+   "slot": "0xd7b6990105719101dabeb77144f2a3385c8033acd3af97e9423a695e81ad1eb9",
+   "valueType": "address",
+   "formula": "keccak256(abi.encode(uint256(13))) + floor(4 / 1)  (array length at slot 13 = 7)",
+   "kind": "arrayElement",
+   "index": 4,
+   "itemsPerSlot": 1,
+   "byteOffset": 0,
+   "lengthSlot": 13,
+   "args": [
+    "4"
+   ],
+   "storedWord": "0x000000000000000000000000f150ff923e29f797b4598b89bd7d02002d00db3a"
+  },
+  {
+   "chainId": 2017,
+   "contract": "CertenAnchorV8_2",
+   "address": "0xEE381d01Dab7ffeA0F0006943F8337bA88B4070C",
+   "label": "validatorList",
+   "slot": "0xd7b6990105719101dabeb77144f2a3385c8033acd3af97e9423a695e81ad1eba",
+   "valueType": "address",
+   "formula": "keccak256(abi.encode(uint256(13))) + floor(5 / 1)  (array length at slot 13 = 7)",
+   "kind": "arrayElement",
+   "index": 5,
+   "itemsPerSlot": 1,
+   "byteOffset": 0,
+   "lengthSlot": 13,
+   "args": [
+    "5"
+   ],
+   "storedWord": "0x00000000000000000000000070a6a81bb5e3b63b1929301239de1f5c63ec4f3a"
+  },
+  {
+   "chainId": 2017,
+   "contract": "CertenAnchorV8_2",
+   "address": "0xEE381d01Dab7ffeA0F0006943F8337bA88B4070C",
+   "label": "validatorList",
+   "slot": "0xd7b6990105719101dabeb77144f2a3385c8033acd3af97e9423a695e81ad1ebb",
+   "valueType": "address",
+   "formula": "keccak256(abi.encode(uint256(13))) + floor(6 / 1)  (array length at slot 13 = 7)",
+   "kind": "arrayElement",
+   "index": 6,
+   "itemsPerSlot": 1,
+   "byteOffset": 0,
+   "lengthSlot": 13,
+   "args": [
+    "6"
+   ],
+   "storedWord": "0x000000000000000000000000ee2efa29989fe6e53572087680c661ec29e045fe"
+  },
+  {
+   "chainId": 2017,
+   "contract": "CertenAnchorV8_2",
+   "address": "0xEE381d01Dab7ffeA0F0006943F8337bA88B4070C",
+   "label": "validators",
+   "slot": "0xc208ebabb4c6db3fbb075518c997336c0bd8990734aa852e66f7197e05828676",
+   "valueType": "struct(bool registered @+0, uint256 votingPower @+1, bytes blsPublicKey @+2, uint256 registeredAt @+3)",
+   "formula": "keccak256(abi.encode(address, uint256(12))) + member slot offset; votingPower verified at +1",
+   "args": null,
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000001"
+  },
+  {
+   "chainId": 2017,
+   "contract": "CertenAnchorV8_2",
+   "address": "0xEE381d01Dab7ffeA0F0006943F8337bA88B4070C",
+   "label": "authorizedPubkeyCommitments",
+   "slot": "0x7ada374d6ad178044e755ed0196b1ffcd958cfa96db94abadefb8901cbfcb5a0",
+   "valueType": "bool",
+   "formula": "keccak256(abi.encode(bytes32, uint256(4)))",
+   "args": [
+    "0x0001228bb5b9c9944320e4027638ba49eb7f057b4ff51d0bff43dbd91efeb060"
+   ],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000001"
+  },
+  {
+   "chainId": 2017,
+   "contract": "CertenAccountFactoryV11",
+   "address": "0x8387D061830E10Eb42BC25C2A047631164803F25",
+   "label": "_deployedAccounts",
+   "slot": "0x2293474b6bb364fd61db9425c971e2b79071d51bc0ce52d74185001013616772",
+   "valueType": "bool",
+   "formula": "keccak256(abi.encode(address, uint256(2)))",
+   "args": null,
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000001"
+  },
+  {
+   "chainId": 2017,
+   "contract": "CertenAccountFactoryV11",
+   "address": "0x8387D061830E10Eb42BC25C2A047631164803F25",
+   "label": "_adiToAccount",
+   "slot": "0x77665902b9723c7a8255b6f9e16847d5b87791a46934110461c0bb939ce5c863",
+   "valueType": "address",
+   "formula": "keccak256(abi.encode(bytes32 registrationKey, uint256(3)))",
+   "args": null,
+   "storedWord": "0x000000000000000000000000057fc30274d1ab39dc1ef51a84cf995c9b8c50f2"
+  },
+  {
+   "chainId": 2017,
+   "contract": "CertenAccountV7_3",
+   "address": "0x057fc30274d1ab39dc1ef51a84cf995c9b8c50f2",
+   "label": "anchorContract",
+   "slot": "0x2",
+   "valueType": "address",
+   "formula": "scalar: slot 2 (all 2 accounts on this chain hold the chain's anchor there)",
+   "args": null,
+   "storedWord": "0x000000000000000000000000ee381d01dab7ffea0f0006943f8337ba88b4070c"
+  },
+  {
+   "chainId": 2017,
+   "contract": "CertenAccountV7_3",
+   "address": "0x057fc30274d1ab39dc1ef51a84cf995c9b8c50f2",
+   "label": "_consumedLeaf",
+   "slot": "0x5cbfdea5204e043cd9523985f3da0c0a317d901dd2a65497d25c89fa629352c3",
+   "valueType": "bool",
+   "formula": "keccak256(abi.encode(bytes32 leaf, uint256(4)))",
+   "args": null,
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000001"
+  },
+  {
+   "chainId": 2017,
+   "contract": "CertenAnchorV8_2",
+   "address": "0xEE381d01Dab7ffeA0F0006943F8337bA88B4070C",
+   "label": "anchorIds",
+   "slot": "0xa66cc928b5edb82af9bd49922954155ab7b0942694bea4ce44661d9a8736c688",
+   "valueType": "bytes32",
+   "formula": "keccak256(abi.encode(uint256(7))) + floor(0 / 1)  (array length at slot 7 = 11)",
+   "kind": "arrayElement",
+   "index": 0,
+   "itemsPerSlot": 1,
+   "byteOffset": 0,
+   "lengthSlot": 7,
+   "args": [
+    "0"
+   ],
+   "storedWord": "0x49e726bdb1d320467640c957fe1c78740ee983d787d9874c55087358ab122d99"
+  },
+  {
+   "chainId": 2017,
+   "contract": "CertenAnchorV8_2",
+   "address": "0xEE381d01Dab7ffeA0F0006943F8337bA88B4070C",
+   "label": "isBatchAnchor",
+   "slot": "0x6dc64a1d2b84aeb0aa0688e693e6a8c71f504d738aba17e8a10be3aa97da533d",
+   "valueType": "bool",
+   "formula": "keccak256(abi.encode(bytes32 bundleId, uint256(2)))",
+   "args": [
+    "0x49e726bdb1d320467640c957fe1c78740ee983d787d9874c55087358ab122d99"
+   ],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000001"
+  },
+  {
+   "chainId": 2017,
+   "contract": "CertenAnchorV8_2",
+   "address": "0xEE381d01Dab7ffeA0F0006943F8337bA88B4070C",
+   "label": "batchLeafCount",
+   "slot": "0x43f4d5dc6417cb8a5aede95ca2507305b667ba8669ae6cf64da4e2ea06355c3f",
+   "valueType": "uint256",
+   "formula": "keccak256(abi.encode(bytes32 bundleId, uint256(3)))",
+   "args": [
+    "0x49e726bdb1d320467640c957fe1c78740ee983d787d9874c55087358ab122d99"
+   ],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000001"
+  },
+  {
+   "chainId": 2017,
+   "contract": "CertenAnchorV8_2",
+   "address": "0xEE381d01Dab7ffeA0F0006943F8337bA88B4070C",
+   "label": "usedCommitments",
+   "slot": "0x7a78b23827585b4e356fd455ce9e9bb1afb7f2b5203a6e14028bbfc9f3bd4eaf",
+   "valueType": "bool",
+   "formula": "keccak256(abi.encode(bytes32 key, uint256(18)))",
+   "kind": "mapping",
+   "key": "0x1fa1998a1fefe858534bd94449dfce7feb8b3631b919d40ede5fb33388471648",
+   "baseSlot": 18,
+   "args": [
+    "0x1fa1998a1fefe858534bd94449dfce7feb8b3631b919d40ede5fb33388471648"
+   ],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000001"
+  },
+  {
+   "chainId": 2017,
+   "contract": "CertenAccountV7_3",
+   "address": "0x057fc30274d1ab39dc1ef51a84cf995c9b8c50f2",
+   "label": "_operationRequirements",
+   "slot": "0x31ac570bc8abfb45c87f5c0fbc65b5bb9d481379351d25bcdda0240e03d9c42f",
+   "valueType": "uint8 (AuthorityLevel)",
+   "formula": "keccak256(abi.encode(bytes4 selector right-padded, uint256(8)))",
+   "kind": "mapping",
+   "key": "0x575652c200000000000000000000000000000000000000000000000000000000",
+   "baseSlot": 8,
+   "args": [
+    "0x575652c2"
+   ],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000004"
+  },
+  {
+   "chainId": 2017,
+   "contract": "CertenAccountV7_3",
+   "address": "0x057fc30274d1ab39dc1ef51a84cf995c9b8c50f2",
+   "label": "_operationRequirements",
+   "slot": "0x2d188033b5a1fa1c6786d9d12e314e165b09d4eb816ebfcf5f73b0f7fc09967c",
+   "valueType": "uint8 (AuthorityLevel)",
+   "formula": "keccak256(abi.encode(bytes4 selector right-padded, uint256(8)))",
+   "kind": "mapping",
+   "key": "0xe00bfc2900000000000000000000000000000000000000000000000000000000",
+   "baseSlot": 8,
+   "args": [
+    "0xe00bfc29"
+   ],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000004"
+  },
+  {
+   "chainId": 2017,
+   "contract": "CertenAccountV7_3",
+   "address": "0x057fc30274d1ab39dc1ef51a84cf995c9b8c50f2",
+   "label": "_operationRequirements",
+   "slot": "0xab913ef61daa6194524120afd1e198fe349a7510eebd2bf17e374be2c166a028",
+   "valueType": "uint8 (AuthorityLevel)",
+   "formula": "keccak256(abi.encode(bytes4 selector right-padded, uint256(8)))",
+   "kind": "mapping",
+   "key": "0xc291fe6200000000000000000000000000000000000000000000000000000000",
+   "baseSlot": 8,
+   "args": [
+    "0xc291fe62"
+   ],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000003"
+  },
+  {
+   "chainId": 2017,
+   "contract": "CertenAccountV7_3",
+   "address": "0x057fc30274d1ab39dc1ef51a84cf995c9b8c50f2",
+   "label": "_operationRequirements",
+   "slot": "0x094f86b6bbf68b5cf52cea23de5d6431087ca7919312e300dc7b470c6a1463f7",
+   "valueType": "uint8 (AuthorityLevel)",
+   "formula": "keccak256(abi.encode(bytes4 selector right-padded, uint256(8)))",
+   "kind": "mapping",
+   "key": "0x6f7013f500000000000000000000000000000000000000000000000000000000",
+   "baseSlot": 8,
+   "args": [
+    "0x6f7013f5"
+   ],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000003"
+  },
+  {
+   "chainId": 2017,
+   "contract": "CertenAccountV7_3",
+   "address": "0x057fc30274d1ab39dc1ef51a84cf995c9b8c50f2",
+   "label": "_operationRequirements",
+   "slot": "0x8a97e0eff3d0266c1e09205ab7b6889d2b972b887e4f0f49d3e2d3915a5176c6",
+   "valueType": "uint8 (AuthorityLevel)",
+   "formula": "keccak256(abi.encode(bytes4 selector right-padded, uint256(8)))",
+   "kind": "mapping",
+   "key": "0x3ac8733c00000000000000000000000000000000000000000000000000000000",
+   "baseSlot": 8,
+   "args": [
+    "0x3ac8733c"
+   ],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000004"
+  },
+  {
+   "chainId": 2017,
+   "contract": "CertenAccountV7_3",
+   "address": "0x057fc30274d1ab39dc1ef51a84cf995c9b8c50f2",
+   "label": "_operationRequirements",
+   "slot": "0x999ba897c79e079eb32df2b4225b7563ba4b9b00d210822f523cf57d96d7ee6a",
+   "valueType": "uint8 (AuthorityLevel)",
+   "formula": "keccak256(abi.encode(bytes4 selector right-padded, uint256(8)))",
+   "kind": "mapping",
+   "key": "0x67685ea400000000000000000000000000000000000000000000000000000000",
+   "baseSlot": 8,
+   "args": [
+    "0x67685ea4"
+   ],
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000004"
+  },
+  {
+   "chainId": 2017,
+   "contract": "CertenAnchorV8_2",
+   "address": "0xEE381d01Dab7ffeA0F0006943F8337bA88B4070C",
+   "label": "anchors",
+   "slot": "0x05fdd7ec7a0f53595f90773fa9617fc8ded624d453958eb42772aba4f8f8501c",
+   "valueType": "struct Anchor (bundleId @+0, merkleRoot @+1, ...)",
+   "formula": "keccak256(abi.encode(bytes32 bundleId, uint256(1))) + member slot offset; bundleId verified at +0",
+   "args": null,
+   "storedWord": "0x49e726bdb1d320467640c957fe1c78740ee983d787d9874c55087358ab122d99"
+  },
+  {
+   "chainId": 2017,
+   "contract": "CertenOutcomeRegistryV1",
+   "address": "0xa34A0732432dFd66808607dC2b492aE273F42f22",
+   "label": "outcomeRoots",
+   "slot": "0xb901ad39eab3919be20c24626cbf1c8582eea871e1b39d011e121a6108fd6075",
+   "valueType": "bytes32",
+   "formula": "keccak256(abi.encode(bytes32 bundleId, uint256(0)))",
+   "args": [
+    "0x49e726bdb1d320467640c957fe1c78740ee983d787d9874c55087358ab122d99"
+   ],
+   "storedWord": "0xabe1da2ba5d81222e69d2b786b6957d70201f3df4eab9fb9cb4b67d6b8c4160a"
+  },
+  {
+   "chainId": 2017,
+   "contract": "CertenOutcomeRegistryV1",
+   "address": "0xa34A0732432dFd66808607dC2b492aE273F42f22",
+   "label": "recordedInBlock",
+   "slot": "0x05fdd7ec7a0f53595f90773fa9617fc8ded624d453958eb42772aba4f8f8501c",
+   "valueType": "uint256",
+   "formula": "keccak256(abi.encode(bytes32 bundleId, uint256(1)))",
+   "args": [
+    "0x49e726bdb1d320467640c957fe1c78740ee983d787d9874c55087358ab122d99"
+   ],
+   "storedWord": "0x000000000000000000000000000000000000000000000000000000000007a3f0"
+  },
+  {
+   "chainId": 2017,
+   "contract": "CertenAccountFactoryV11",
+   "address": "0x8387D061830E10Eb42BC25C2A047631164803F25",
+   "label": "_allAccounts",
+   "slot": "0x8a35acfbc15ff81a39ae7d344fd709f28e8600b4aa8c65c6b64bfe7fe36bd19b",
+   "valueType": "address",
+   "formula": "keccak256(abi.encode(uint256(4))) + floor(0 / 1)  (array length at slot 4 = 2)",
+   "kind": "arrayElement",
+   "index": 0,
+   "itemsPerSlot": 1,
+   "byteOffset": 0,
+   "lengthSlot": 4,
+   "args": null,
+   "storedWord": "0x000000000000000000000000057fc30274d1ab39dc1ef51a84cf995c9b8c50f2"
+  },
+  {
+   "chainId": 2017,
+   "contract": "CertenAccountV7_3",
+   "address": "0x057fc30274d1ab39dc1ef51a84cf995c9b8c50f2",
+   "label": "adiURL",
+   "slot": "0x0",
+   "valueType": "string",
+   "formula": "string storage rule; decoded and compared for all 2 accounts on this chain",
+   "args": null,
+   "storedWord": "0x6163633a2f2f7262372d61646972692d31303036313834322e61636d6500003a"
+  },
+  {
+   "chainId": 2017,
+   "contract": "CertenAccountV7_3",
+   "address": "0x057fc30274d1ab39dc1ef51a84cf995c9b8c50f2",
+   "label": "governingBook",
+   "slot": "0xb",
+   "valueType": "string",
+   "formula": "string storage rule; decoded and compared for all 2 accounts on this chain",
+   "args": null,
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000045"
+  },
+  {
+   "chainId": 2017,
+   "contract": "CertenAccountV7_3",
+   "address": "0x057fc30274d1ab39dc1ef51a84cf995c9b8c50f2",
+   "label": "adiValidator",
+   "slot": "0x1",
+   "valueType": "address",
+   "formula": "scalar: slot 1 (checked for all 2 accounts on this chain)",
+   "args": null,
+   "storedWord": "0x0000000000000000000000000000000000000000000000000000000000000000"
+  }
+ ]
+}

@@ -1,0 +1,27 @@
+{
+ "id": "VS8-018.one_unreferenced_node",
+ "base": "H0",
+ "mutations": [
+  {
+   "op": "add_node",
+   "target": "container",
+   "value": "f84401080f161d242b323940474e555c636a71787f868d949ba2a9b0b7bec5ccd3dae1e8eff6fd040b121920272e353c434a51585f666d747b828990979ea5acb3bac1c8cfd6"
+  }
+ ],
+ "expected": {
+  "headline": "refused",
+  "states": [
+   {
+    "part": "first",
+    "code": "contract_identity_evidence_malformed",
+    "fields": {
+     "got_len": "0",
+     "index": "19",
+     "part": "nodes",
+     "reason": "nodes_unreferenced",
+     "want_len": "0"
+    }
+   }
+  ]
+ }
+}

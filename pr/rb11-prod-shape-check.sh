@@ -1581,6 +1581,45 @@ elif [ "$HAVE_TOOLS" -eq 1 ]; then
 fi
 
 # ==============================================================================================================================
+# (c2) S8 capture rows: the hop-tick item names (WP-S8-3c). Positions and classes only: item NAMES are never printed, only counts.
+# The capture store (WP-S8-5) is found by its columns (chain, anchor_id, block_hash, item), not by a table name; none yet = NOT-CHECKED.
+#   tick/<T:20 digits>/<P:20 digits>   the global tick chain (P = 0 for a start tick, else P < T)
+#   hop/first/<T:20 digits>            the per-anchor first link
+# ==============================================================================================================================
+section "(c2) S8 capture store: hop tick item names"
+s8_tabs=$(printf '%s\n' "SELECT table_name FROM information_schema.columns WHERE table_schema = \$\$public\$\$ AND column_name IN (\$\$chain\$\$,\$\$anchor_id\$\$,\$\$block_hash\$\$,\$\$item\$\$) GROUP BY table_name HAVING count(*) = 4 ORDER BY 1;" | sqlro) || s8_tabs=""
+if [ -z "$s8_tabs" ]; then
+  rec NOT-CHECKED S8T0 "S8 capture store item names" "a table with columns chain, anchor_id, block_hash, item (WP-S8-5)" "no such table in the live schema: the tick item grammar is enforced by the writer (capture.CheckKey, parseTickItem) until the store exists"
+else
+  for s8_t in $s8_tabs; do
+    case "$s8_t" in *[!a-z0-9_]*|'') rec FAIL S8T0 "S8 capture store table name" "[a-z0-9_]+" "an unexpected table name was refused"; continue ;; esac
+    if out=$(sqlro <<SQL
+SELECT
+  count(*) FILTER (WHERE item ~ '^(tick|hop/first)/'
+     AND item !~ '^(tick/[0-9]{20}/[0-9]{20}|hop/first/[0-9]{20})\$'),
+  count(*) FILTER (WHERE item ~ '^tick/[0-9]{20}/[0-9]{20}\$'
+     AND substring(item from 27 for 20)::numeric <> 0 AND substring(item from 27 for 20)::numeric >= substring(item from 6 for 20)::numeric),
+  count(*) FILTER (WHERE item ~ '^(tick|hop/first)/'),
+  coalesce((SELECT max(c) FROM (SELECT count(*) AS c FROM $s8_t t2 WHERE t2.item ~ '^tick/' GROUP BY t2.chain, t2.anchor_id) x), 0)
+  FROM $s8_t;
+SQL
+    ); then
+      IFS='|' read -r s8_bad s8_order s8_n s8_max <<S8ROW
+$out
+S8ROW
+      [ "$s8_bad" -eq 0 ] && rec PASS S8T1 "tick/first item names ($s8_t)" "every item under tick/ or hop/first/ is tick/<20 digits>/<20 digits> or hop/first/<20 digits>" "$s8_n such rows, 0 off-grammar" \
+        || rec FAIL S8T1 "tick/first item names ($s8_t)" "every item under tick/ or hop/first/ is tick/<20 digits>/<20 digits> or hop/first/<20 digits>" "$s8_bad of $s8_n rows are off-grammar"
+      [ "$s8_order" -eq 0 ] && rec PASS S8T2 "tick previous < tick ($s8_t)" "P = 0 or P < T in every tick row name" "0 violations" \
+        || rec FAIL S8T2 "tick previous < tick ($s8_t)" "P = 0 or P < T in every tick row name" "$s8_order violations"
+      [ "$s8_max" -le 4096 ] && rec PASS S8T3 "tick rows per epoch listing ($s8_t)" "<= 4096 tick keys under one (chain, anchor id): capture.maxTickKeys" "largest listing $s8_max" \
+        || rec FAIL S8T3 "tick rows per epoch listing ($s8_t)" "<= 4096 tick keys under one (chain, anchor id): capture.maxTickKeys" "largest listing $s8_max"
+    else
+      rec NOT-CHECKED S8T1 "S8 capture store item names ($s8_t)" "a readable table" "query failed: $(errline)"
+    fi
+  done
+fi
+
+# ==============================================================================================================================
 # what this script CANNOT check read-only
 # ==============================================================================================================================
 section "NOT CHECKABLE read-only from here (assumptions that live elsewhere)"

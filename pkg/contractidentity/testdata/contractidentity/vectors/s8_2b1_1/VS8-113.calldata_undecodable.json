@@ -1,0 +1,28 @@
+{
+ "id": "VS8-113.calldata_undecodable",
+ "base": "H0",
+ "mutations": [
+  {
+   "op": "set_field",
+   "target": "world",
+   "path": "blocks.attest.txs.5.wire",
+   "value": "0x02f84883aa36a701010182520894830cfb484b6e5606687e00f64c40aeb9c7c84e3c80a34ca9d0c800000000000000000000000000000000000000000000000000000000000000c0808080"
+  }
+ ],
+ "expected": {
+  "headline": "unproven",
+  "parts": {
+   "authorization_attest": "unproven"
+  },
+  "states": [
+   {
+    "part": "authorization_attest",
+    "code": "contract_identity_unproven",
+    "fields": {
+     "field": "anchorId",
+     "reason": "truncated"
+    }
+   }
+  ]
+ }
+}

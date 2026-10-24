@@ -1,0 +1,34 @@
+{
+ "id": "VS8-085.self_call",
+ "base": "H0",
+ "mutations": [
+  {
+   "op": "set_field",
+   "target": "world",
+   "path": "settlement.legs",
+   "value": [
+    {
+     "target": "0x2ec2d261a4770e42dbe43826489d299d596bc5f7",
+     "value": "0",
+     "data": "0xa9059cbb000000000000000000000000da3aea31e8a3343554ff125a83640b4185a946870000000000000000000000000000000000000000000000000000000000000005"
+    }
+   ]
+  }
+ ],
+ "expected": {
+  "headline": "unproven",
+  "parts": {
+   "authority_level": "unproven"
+  },
+  "states": [
+   {
+    "part": "authority_level",
+    "code": "contract_identity_unproven",
+    "fields": {
+     "leg": "0",
+     "reason": "self_call_leg"
+    }
+   }
+  ]
+ }
+}

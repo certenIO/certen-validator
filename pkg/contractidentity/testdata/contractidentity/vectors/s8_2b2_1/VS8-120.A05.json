@@ -1,0 +1,31 @@
+{
+ "id": "VS8-120.A05",
+ "base": "H0",
+ "mutations": [
+  {
+   "op": "set_field",
+   "target": "world",
+   "path": "stations.attest_post.accounts.0x830cfb484b6e5606687e00f64c40aeb9c7c84e3c.storage.0xfb02b19ce323ab6705bc9ae54f2e035965787dfd64ecca6415ac32415c08541f",
+   "value": "0x0000000000000000000000000000000000000000000000000000000000000000"
+  }
+ ],
+ "expected": {
+  "headline": "unproven",
+  "parts": {
+   "authorization_attest": "unproven"
+  },
+  "states": [
+   {
+    "part": "authorization_attest",
+    "code": "contract_identity_unproven",
+    "fields": {
+     "block": "11980017",
+     "field": "A05",
+     "post": "0x0000000000000000000000000000000000000000000000000000000000000000",
+     "pre": "0x0000000000000000000000000000000000000000000000000000000000000001",
+     "reason": "state_changed_in_block"
+    }
+   }
+  ]
+ }
+}

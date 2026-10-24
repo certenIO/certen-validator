@@ -1,0 +1,9 @@
+{
+ "id": "G-S8-0",
+ "note": "digest preimage for the ASCII evidence CIE1-test-vector under D0 of (chain 11155111, number 11845679, hash 32 x 0x22)",
+ "d0": "1cea0a369d4a4167f9f3b9be09de1670dfb5718a866bbf7d2a6519b540643445",
+ "evidence_ascii": "CIE1-test-vector",
+ "sha256_evidence": "3ead3c1527420fcc681037f621f0d9362ce452f3496162d92fd47ab5e23d6923",
+ "preimage_bytes": 103,
+ "digest": "d7070fd59481084db1d6c97caf4cfb18865d4400a7a324a93799b39db7511edf"
+}

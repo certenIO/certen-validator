@@ -1,0 +1,22 @@
+{
+ "id": "VS8-190.finalized_refused",
+ "base": "H0",
+ "mutations": [
+  {
+   "op": "set_field",
+   "target": "s7",
+   "path": "finalized.status",
+   "value": "refused"
+  },
+  {
+   "op": "set_field",
+   "target": "s7",
+   "path": "finalized.state",
+   "value": "finality_chain_broken"
+  }
+ ],
+ "expected": {
+  "headline": "pending",
+  "s7_finalized_status": "refused:finality_chain_broken"
+ }
+}

@@ -1,0 +1,19 @@
+{
+ "headline": "unproven",
+ "parts": {
+  "authorization_attest": "verified",
+  "intra_block_window": "unproven"
+ },
+ "states": [
+  {
+   "part": "intra_block_window",
+   "code": "contract_identity_unproven",
+   "fields": {
+    "index": "1",
+    "part": "intra_block_window",
+    "reason": "tx_type_unsupported",
+    "type": "0x04"
+   }
+  }
+ ]
+}

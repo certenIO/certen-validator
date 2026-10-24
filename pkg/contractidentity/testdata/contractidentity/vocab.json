@@ -1,0 +1,464 @@
+{
+ "format": "certen-contract-identity-vocab/1",
+ "spec": {
+  "file": "V2_SPEC_S8.md",
+  "revision": "r3.2",
+  "sha256": "2eccbae5e64fccda1df10decae1763f96bc4a6acad885e5689df30115de08a6f"
+ },
+ "sets": {
+  "account_not_canonical_reason": {
+   "title": "account_not_canonical reason",
+   "values": [
+    "adi_url",
+    "governing_book",
+    "create2",
+    "registry",
+    "deployed_flag"
+   ]
+  },
+  "alert_field": {
+   "title": "alert field",
+   "values": [
+    "binding",
+    "threshold",
+    "verifier_threshold",
+    "enabled",
+    "owner",
+    "paused",
+    "governance_verifier",
+    "minimum_governance_level",
+    "inner_outer_differ",
+    "set_root",
+    "registered",
+    "power",
+    "total_power"
+   ]
+  },
+  "at": {
+   "title": "at",
+   "values": [
+    "settle",
+    "attest_pre",
+    "attest_post"
+   ]
+  },
+  "attest_calldata_undecodable_reason": {
+   "title": "attest_calldata_undecodable reason",
+   "values": [
+    "selector",
+    "truncated",
+    "offset",
+    "length",
+    "cap",
+    "padding",
+    "word",
+    "trailing",
+    "shape"
+   ]
+  },
+  "attest_mismatch_field": {
+   "title": "attest_mismatch field",
+   "values": [
+    "tx_to",
+    "selector",
+    "status",
+    "log",
+    "anchor_id",
+    "message_hash",
+    "flip",
+    "order",
+    "blob_layout",
+    "authority_level",
+    "block_txs",
+    "operation_commitment"
+   ]
+  },
+  "auth_row_field": {
+   "title": "drift / state_changed_in_block field",
+   "patterns": [
+    "^(A(0[1-9]|1[0-9]|2[01])|V0[1-3]|C01)(:.+)?$"
+   ]
+  },
+  "authority_level": {
+   "title": "authority level",
+   "values": [
+    "NONE",
+    "OPERATOR",
+    "MANAGER",
+    "ADMIN",
+    "ROOT"
+   ],
+   "numbers": {
+    "NONE": 0,
+    "OPERATOR": 1,
+    "MANAGER": 2,
+    "ADMIN": 3,
+    "ROOT": 4
+   }
+  },
+  "authority_level_invalid_field": {
+   "title": "authority_level_invalid field",
+   "values": [
+    "page_level"
+   ]
+  },
+  "authority_level_unproven_reason": {
+   "title": "authority_level_unproven reason",
+   "values": [
+    "calldata_undecodable",
+    "too_many_legs",
+    "self_call_leg",
+    "level_log_missing",
+    "level_differs_from_logged",
+    "level_below_required_at_N"
+   ]
+  },
+  "authority_source": {
+   "title": "authority source",
+   "values": [
+    "stored",
+    "governing_default",
+    "none"
+   ]
+  },
+  "authorization_mismatch_field": {
+   "title": "authorization_mismatch field",
+   "values": [
+    "set_root",
+    "threshold",
+    "verifier_threshold",
+    "binding",
+    "enabled",
+    "verifier",
+    "key",
+    "power",
+    "count",
+    "total_power",
+    "anchor_owner",
+    "verifier_owner",
+    "paused",
+    "minimum_governance_level"
+   ]
+  },
+  "block_mismatch_field": {
+   "title": "block_mismatch field",
+   "values": [
+    "chain",
+    "number",
+    "hash"
+   ]
+  },
+  "build_without_writer_proof_condition": {
+   "title": "build_without_writer_proof condition",
+   "values": [
+    "status_missing",
+    "a",
+    "b",
+    "c",
+    "d",
+    "e",
+    "f",
+    "allowlist_not_frozen"
+   ]
+  },
+  "generation_kind": {
+   "title": "generation kind",
+   "values": [
+    "catalogued",
+    "observed"
+   ]
+  },
+  "header_unlinked_link": {
+   "title": "header_unlinked link",
+   "values": [
+    "same_block",
+    "hops",
+    "spine"
+   ]
+  },
+  "header_unlinked_reason": {
+   "title": "header_unlinked reason",
+   "values": [
+    "gap_out_of_range",
+    "history_code_mismatch",
+    "slot_mismatch",
+    "hash_chain_broken",
+    "numbers_not_consecutive",
+    "parent_mismatch"
+   ]
+  },
+  "headline": {
+   "title": "headline",
+   "values": [
+    "refused",
+    "pending",
+    "unproven",
+    "verified_core",
+    "verified",
+    "not_applicable"
+   ]
+  },
+  "judged_part": {
+   "title": "judged part (part table)",
+   "values": [
+    "settlement_path",
+    "s6_link",
+    "code_identity",
+    "account_provenance",
+    "pointer",
+    "authority_level",
+    "record",
+    "authorization_attest",
+    "intra_block_window",
+    "registry_link",
+    "state_at_settlement"
+   ]
+  },
+  "malformed_reason": {
+   "title": "malformed reason",
+   "values": [
+    "bad_magic",
+    "truncated",
+    "trailing_bytes",
+    "nodes_not_ascending",
+    "nodes_duplicate",
+    "codes_not_ascending",
+    "codes_duplicate",
+    "unknown_part_tag",
+    "unknown_link",
+    "bad_stated_state",
+    "bad_stated_reason",
+    "string_not_ascii",
+    "nodes_unreferenced",
+    "unknown_stated_reason"
+   ]
+  },
+  "manifest_source": {
+   "title": "manifest_source",
+   "values": [
+    "embedded"
+   ],
+   "patterns": [
+    "^override:[0-9a-f]{64}$",
+    "^extension:[0-9a-f]{64}$"
+   ]
+  },
+  "open_kind": {
+   "title": "open kind",
+   "values": [
+    "alert",
+    "drift",
+    "not_checked"
+   ]
+  },
+  "part_malformed": {
+   "title": "part (malformed / too_large)",
+   "values": [
+    "magic",
+    "kind",
+    "container",
+    "codes",
+    "nodes",
+    "settle",
+    "attest",
+    "hopHeaders",
+    "spine",
+    "blockTxs",
+    "failures"
+   ]
+  },
+  "proof_invalid_root": {
+   "title": "proof_invalid root",
+   "values": [
+    "settle",
+    "attest_pre",
+    "attest_post",
+    "attest_tx",
+    "attest_receipt"
+   ],
+   "patterns": [
+    "^hop:[0-9]+$"
+   ]
+  },
+  "record_inconsistent_field": {
+   "title": "record_inconsistent field",
+   "values": [
+    "bundle_id",
+    "merkle_root",
+    "operation_id",
+    "acc_set_root",
+    "incarnation"
+   ]
+  },
+  "registry_link_value": {
+   "title": "registry_link value",
+   "values": [
+    "via S9",
+    "via manifest_history{keys:digest,pkc:exact_set}"
+   ]
+  },
+  "registry_mismatch_field": {
+   "title": "registry_mismatch field",
+   "values": [
+    "member_address",
+    "member_power",
+    "member_key",
+    "count",
+    "threshold",
+    "set_root",
+    "certen_set_root",
+    "message_root"
+   ]
+  },
+  "residual_id": {
+   "title": "residual id",
+   "values": [
+    "R-PKC",
+    "R-INNER",
+    "R-SETTLE-POINTER",
+    "R-WRITERS"
+   ]
+  },
+  "role": {
+   "title": "role",
+   "values": [
+    "account",
+    "anchor",
+    "blsZkVerifier",
+    "groth16Verifier",
+    "accountFactory",
+    "outcomeRegistry",
+    "owner"
+   ]
+  },
+  "rule_id": {
+   "title": "rule id",
+   "values": [
+    "PAUSED",
+    "BINDING",
+    "ENABLED",
+    "THRESHOLD-A",
+    "THRESHOLD-V",
+    "OWNER",
+    "GOVVERIFIER",
+    "MINGOV",
+    "SETROOT",
+    "VERIFIER-ID"
+   ]
+  },
+  "s6_link_mismatch_field": {
+   "title": "s6_link_mismatch field",
+   "values": [
+    "account",
+    "block",
+    "proven_at",
+    "code_hash"
+   ]
+  },
+  "s6_reason": {
+   "title": "S6Reason",
+   "values": [
+    "unsupported_generation",
+    "absent"
+   ]
+  },
+  "s6_state": {
+   "title": "S6State",
+   "free": "the S6 named state, verbatim (non-empty)"
+  },
+  "s6_status": {
+   "title": "S6Status",
+   "values": [
+    "s6_proven",
+    "s6_silent",
+    "s6_not_proven"
+   ]
+  },
+  "settlement_path_unsupported_reason": {
+   "title": "settlement_path_unsupported reason",
+   "values": [
+    "not_direct_call",
+    "multiple_leaf_consumed",
+    "selector_not_pinned"
+   ]
+  },
+  "settlement_rule_id": {
+   "title": "settlement rule id",
+   "values": [
+    "REGISTERED",
+    "POWER",
+    "TOTAL-POWER"
+   ]
+  },
+  "stated_reason_builders": {
+   "title": "Stated reason (builders)",
+   "values": [
+    "capture_not_attempted_in_window",
+    "state_unavailable",
+    "attest_block_state_unavailable",
+    "attest_block_out_of_reach",
+    "attest_event_not_found",
+    "block_too_large"
+   ]
+  },
+  "tx_type_text": {
+   "title": "tx type text",
+   "patterns": [
+    "^0x[0-9a-f]{2}$"
+   ]
+  },
+  "unproven_part": {
+   "title": "unproven part",
+   "values": [
+    "settlement_path",
+    "s6_link",
+    "code_identity",
+    "account_provenance",
+    "pointer",
+    "authority_level",
+    "record",
+    "authorization_attest",
+    "intra_block_window",
+    "registry_link",
+    "state_at_settlement",
+    "settle",
+    "attest",
+    "all"
+   ]
+  }
+ },
+ "bindings": {
+  "account_absent.role": "role",
+  "account_not_canonical.reason": "account_not_canonical_reason",
+  "address_not_published.role": "role",
+  "alert.at": "at",
+  "alert.field": "alert_field",
+  "attest_mismatch.field": "attest_mismatch_field",
+  "authority_level_invalid.field": "authority_level_invalid_field",
+  "authorization_mismatch.at": "at",
+  "authorization_mismatch.field": "authorization_mismatch_field",
+  "block_mismatch.field": "block_mismatch_field",
+  "code_not_published.role": "role",
+  "commitment_not_authorized.at": "at",
+  "drift.field": "auth_row_field",
+  "evidence_malformed.part": "part_malformed",
+  "evidence_malformed.reason": "malformed_reason",
+  "evidence_too_large.part": "part_malformed",
+  "header_unlinked.link": "header_unlinked_link",
+  "header_unlinked.reason": "header_unlinked_reason",
+  "immutable_mismatch.role": "role",
+  "proof_invalid.root": "proof_invalid_root",
+  "record_inconsistent.field": "record_inconsistent_field",
+  "registry_mismatch.field": "registry_mismatch_field",
+  "s6_link_mismatch.field": "s6_link_mismatch_field",
+  "unproven.at": "at",
+  "unproven.condition": "build_without_writer_proof_condition",
+  "unproven.field@state_changed_in_block": "auth_row_field",
+  "unproven.kind": "generation_kind",
+  "unproven.part": "unproven_part",
+  "unproven.reason@attest_calldata_undecodable": "attest_calldata_undecodable_reason",
+  "unproven.reason@authority_level_unproven": "authority_level_unproven_reason",
+  "unproven.reason@settlement_path_unsupported": "settlement_path_unsupported_reason",
+  "unproven.type": "tx_type_text"
+ }
+}

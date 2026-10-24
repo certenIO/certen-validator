@@ -1,0 +1,11 @@
+{
+ "headline": "verified",
+ "parts": {
+  "account_provenance": "verified",
+  "authority_level": "verified",
+  "code_identity": "verified",
+  "pointer": "verified",
+  "record": "verified",
+  "settlement_path": "verified"
+ }
+}

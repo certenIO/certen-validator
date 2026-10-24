@@ -1,0 +1,27 @@
+{
+ "id": "VS8-011.kind_65_bytes",
+ "base": "H0",
+ "mutations": [
+  {
+   "op": "replace_hex",
+   "target": "container",
+   "offset": 4,
+   "old": "00000014636f6e74726163742d6964656e746974792f7631",
+   "new": "000000416161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161"
+  }
+ ],
+ "expected": {
+  "headline": "refused",
+  "states": [
+   {
+    "part": "first",
+    "code": "contract_identity_evidence_too_large",
+    "fields": {
+     "count": "65",
+     "limit": "64",
+     "part": "kind"
+    }
+   }
+  ]
+ }
+}

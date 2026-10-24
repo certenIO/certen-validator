@@ -1,0 +1,25 @@
+{
+ "id": "VS8-100.unknown_reason",
+ "base": "H0",
+ "mutations": [
+  {
+   "op": "set_field",
+   "target": "container",
+   "path": "attest",
+   "value": {
+    "stated": {
+     "detail": "",
+     "failures": [],
+     "judged_block": "77",
+     "judged_hash": "0707070707070707070707070707070707070707070707070707070707070707",
+     "reason": "some_new_reason",
+     "state": "contract_identity_unproven"
+    },
+    "tag": "2"
+   }
+  }
+ ],
+ "expected": {
+  "headline": "refused"
+ }
+}

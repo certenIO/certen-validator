@@ -1,0 +1,37 @@
+{
+ "id": "VS8-177.verifier_condition_a_fails",
+ "base": "H0",
+ "mutations": [
+  {
+   "op": "set_field",
+   "target": "manifest",
+   "path": "builds.BLSZKVerifierV2_1/r5.authWriters.status",
+   "value": "fail"
+  },
+  {
+   "op": "set_field",
+   "target": "manifest",
+   "path": "builds.BLSZKVerifierV2_1/r5.authWriters.conditions.a",
+   "value": "fail"
+  }
+ ],
+ "expected": {
+  "headline": "unproven",
+  "parts": {
+   "authorization_attest": "verified",
+   "intra_block_window": "unproven"
+  },
+  "states": [
+   {
+    "part": "intra_block_window",
+    "code": "contract_identity_unproven",
+    "fields": {
+     "build": "BLSZKVerifierV2_1/r5",
+     "condition": "a",
+     "part": "intra_block_window",
+     "reason": "build_without_writer_proof"
+    }
+   }
+  ]
+ }
+}

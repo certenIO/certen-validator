@@ -1,0 +1,32 @@
+{
+ "id": "VS8-076.drift_A07",
+ "base": "H0",
+ "mutations": [
+  {
+   "op": "set_field",
+   "target": "world",
+   "path": "stations.settle.accounts.0x830cfb484b6e5606687e00f64c40aeb9c7c84e3c.storage.0x0000000000000000000000000000000000000000000000000000000000000005",
+   "value": "0x000000000000000000000000000000000000000000000000000000000000001e"
+  }
+ ],
+ "expected": {
+  "headline": "verified_core",
+  "parts": {
+   "authorization_attest": "verified",
+   "registry_link": "verified",
+   "state_at_settlement": "open"
+  },
+  "open": [
+   {
+    "part": "state_at_settlement",
+    "kind": "drift",
+    "code": "contract_identity_drift",
+    "fields": {
+     "attest": "0x000000000000000000000000000000000000000000000000000000000000001d",
+     "field": "A07",
+     "settle": "0x000000000000000000000000000000000000000000000000000000000000001e"
+    }
+   }
+  ]
+ }
+}

@@ -1,0 +1,27 @@
+{
+ "id": "VS8-151.threshold",
+ "base": "H0",
+ "mutations": [
+  {
+   "op": "set_field",
+   "target": "context",
+   "path": "registry9.num",
+   "value": 1
+  }
+ ],
+ "expected": {
+  "headline": "refused",
+  "parts": {
+   "registry_link": "refused"
+  },
+  "states": [
+   {
+    "part": "registry_link",
+    "code": "contract_identity_registry_mismatch",
+    "fields": {
+     "field": "threshold"
+    }
+   }
+  ]
+ }
+}

@@ -1,0 +1,28 @@
+{
+ "id": "VS8-010.magic_cie2",
+ "base": "H0",
+ "mutations": [
+  {
+   "op": "set_byte",
+   "target": "container",
+   "offset": 3,
+   "value": "32"
+  }
+ ],
+ "expected": {
+  "headline": "refused",
+  "states": [
+   {
+    "part": "first",
+    "code": "contract_identity_evidence_malformed",
+    "fields": {
+     "got_len": "0",
+     "index": "0",
+     "part": "magic",
+     "reason": "bad_magic",
+     "want_len": "0"
+    }
+   }
+  ]
+ }
+}

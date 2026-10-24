@@ -1,0 +1,28 @@
+{
+ "id": "VS8-073",
+ "base": "H0",
+ "mutations": [
+  {
+   "op": "set_field",
+   "target": "world",
+   "path": "stations.settle.accounts.0x830cfb484b6e5606687e00f64c40aeb9c7c84e3c.storage.0x5f0be5c57464e94932026defc92772617d420dc5d190e48b893e1c81e1e19e17",
+   "value": "0x0000000000000000000000000000000000000000000000000000000000000000"
+  }
+ ],
+ "expected": {
+  "headline": "unproven",
+  "parts": {
+   "record": "unproven"
+  },
+  "states": [
+   {
+    "part": "record",
+    "code": "contract_identity_unproven",
+    "fields": {
+     "anchorId": "0x6d4878da97954b76a17224b629f5eafded4fb047d0d62e98278732261334f7b5",
+     "reason": "anchor_not_batch"
+    }
+   }
+  ]
+ }
+}

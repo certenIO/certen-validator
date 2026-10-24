@@ -1,0 +1,20 @@
+{
+ "id": "VS8-162.registry_object",
+ "base": "H0",
+ "mutations": [],
+ "expected": {
+  "headline": "verified",
+  "registry": {
+   "count": "7",
+   "totalVotingPower": "70",
+   "threshold": {
+    "num": "2",
+    "den": "3"
+   },
+   "binding": true,
+   "authorizedCommitments": {
+    "expected_subset_count": "29"
+   }
+  }
+ }
+}

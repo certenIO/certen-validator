@@ -1,0 +1,19 @@
+{
+ "headline": "unproven",
+ "parts": {
+  "authorization_attest": "unproven"
+ },
+ "states": [
+  {
+   "part": "authorization_attest",
+   "code": "contract_identity_unproven",
+   "fields": {
+    "block": "11980017",
+    "field": "A07",
+    "post": "0x00000000000000000000000000000000000000000000000000000000000000a7",
+    "pre": "0x000000000000000000000000000000000000000000000000000000000000001d",
+    "reason": "state_changed_in_block"
+   }
+  }
+ ]
+}

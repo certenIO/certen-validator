@@ -1,0 +1,21 @@
+{
+ "headline": "unproven",
+ "rules_not_judged": [
+  {
+   "row": "A21",
+   "reason": "minimumGovernanceLevelForValueOps is read only by executeWithGovernance (CertenAnchorV8_2.sol:1398), not on the attestation path; reported in registry"
+  },
+  {
+   "row": "A09:3",
+   "reason": "registeredAt is informational; no acceptance decision reads it"
+  },
+  {
+   "row": "slot19:usedNonces",
+   "reason": "restrict-only: its single reader is nonceValid = !usedNonces[...] (CertenAnchorV8_2.sol:2002) and its single writer assigns the literal true (:1352)"
+  },
+  {
+   "row": "slot28:operators",
+   "reason": "not read by the attestation path"
+  }
+ ]
+}

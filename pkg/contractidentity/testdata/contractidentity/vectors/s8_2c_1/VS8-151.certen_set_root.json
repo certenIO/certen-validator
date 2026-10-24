@@ -1,0 +1,27 @@
+{
+ "id": "VS8-151.certen_set_root",
+ "base": "H0",
+ "mutations": [
+  {
+   "op": "set_field",
+   "target": "context",
+   "path": "registry9.certen_set_root",
+   "value": "0xabababababababababababababababababababababababababababababababab"
+  }
+ ],
+ "expected": {
+  "headline": "refused",
+  "parts": {
+   "registry_link": "refused"
+  },
+  "states": [
+   {
+    "part": "registry_link",
+    "code": "contract_identity_registry_mismatch",
+    "fields": {
+     "field": "certen_set_root"
+    }
+   }
+  ]
+ }
+}

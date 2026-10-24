@@ -885,19 +885,21 @@ func main() {
 			StatusExplanation string                 `json:"status_explanation"`
 			// Staged finality (RB11): upgrader switch and, per chain, capture lag, last captured block, pending legs by level
 			// and last append. Informational: it never changes Status.
-			Finality map[string]any `json:"finality"`
+			Finality         map[string]any `json:"finality"`
+			ContractIdentity map[string]any `json:"contract_identity"`
 		}{
-			Status:        healthStatus.Status,
-			Phase:         healthStatus.Phase,
-			Consensus:     healthStatus.Consensus,
-			Database:      healthStatus.Database,
-			Ethereum:      healthStatus.Ethereum,
-			Accumulate:    healthStatus.Accumulate,
-			BatchSystem:   healthStatus.BatchSystem,
-			ProofCycle:    healthStatus.ProofCycle,
-			UptimeSeconds: int64(time.Since(healthStatus.startTime).Seconds()),
-			BatchDetails:  make(map[string]interface{}),
-			Finality:      metrics.FinalityHealth(),
+			Status:           healthStatus.Status,
+			Phase:            healthStatus.Phase,
+			Consensus:        healthStatus.Consensus,
+			Database:         healthStatus.Database,
+			Ethereum:         healthStatus.Ethereum,
+			Accumulate:       healthStatus.Accumulate,
+			BatchSystem:      healthStatus.BatchSystem,
+			ProofCycle:       healthStatus.ProofCycle,
+			UptimeSeconds:    int64(time.Since(healthStatus.startTime).Seconds()),
+			BatchDetails:     make(map[string]interface{}),
+			Finality:         metrics.FinalityHealth(),
+			ContractIdentity: metrics.ContractIdentityHealth(),
 		}
 
 		// Build status explanation
@@ -1641,6 +1643,7 @@ func startValidator(
 			outcomeChains[id].Anchor().Hex())
 	}
 	submitter := execution.NewBatchProofSubmitter(resolver, log.Printf)
+	submitter.SetAttestationObserver(contractIdentityAttested) // S8 capture (contract_identity_start.go): off unless CERTEN_CONTRACT_IDENTITY_CAPTURE is on
 	peers := execution.BatchAttestationPeersFromEnv()
 	if len(peers) == 0 {
 		return nil, nil, fmt.Errorf("batch path: ATTESTATION_PEERS unset - no quorum can form without peers")
@@ -1670,6 +1673,7 @@ func startValidator(
 	if sErr != nil {
 		return nil, nil, fmt.Errorf("batch path: stack assembly: %w", sErr)
 	}
+	contractIdentityBundles.Store(stack) // S8 capture: the hop ticks' deadlines are read from this stack (contract_identity_deadline.go)
 	// The heartbeat of every settlement chain whose blocks stop when idle (RB7 D7); none on the chains whose blocks never
 	// stop.
 	stack.RunChainHeartbeats(context.Background())
@@ -2328,6 +2332,8 @@ func startValidator(
 		if ferr := startFinality(context.Background(), dbClient, log.Printf); ferr != nil {
 			return nil, nil, ferr
 		}
+		// S8 contract-identity capture (RB12 WP-S8-3b): off by default; no failure of its start ends this process.
+		startContractIdentityCapture(context.Background(), log.Printf)
 	}
 
 	go intentDiscovery.StartMonitoring()

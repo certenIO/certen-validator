@@ -1,0 +1,16 @@
+{
+ "id": "VS8-190.finalized_other_block",
+ "base": "H0",
+ "mutations": [
+  {
+   "op": "set_field",
+   "target": "s7",
+   "path": "finalized_block.hash",
+   "value": "0x1111111111111111111111111111111111111111111111111111111111111111"
+  }
+ ],
+ "expected": {
+  "headline": "pending",
+  "s7_finalized_status": "verified_other_block"
+ }
+}

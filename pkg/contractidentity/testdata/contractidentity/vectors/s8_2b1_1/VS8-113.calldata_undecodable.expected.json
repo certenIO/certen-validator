@@ -1,0 +1,16 @@
+{
+ "headline": "unproven",
+ "parts": {
+  "authorization_attest": "unproven"
+ },
+ "states": [
+  {
+   "part": "authorization_attest",
+   "code": "contract_identity_unproven",
+   "fields": {
+    "field": "anchorId",
+    "reason": "truncated"
+   }
+  }
+ ]
+}

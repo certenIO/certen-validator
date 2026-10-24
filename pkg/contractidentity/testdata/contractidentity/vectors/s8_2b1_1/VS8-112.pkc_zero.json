@@ -1,0 +1,27 @@
+{
+ "id": "VS8-112.pkc_zero",
+ "base": "H0",
+ "mutations": [
+  {
+   "op": "set_field",
+   "target": "world",
+   "path": "attestation.blob.13",
+   "value": "0x0000000000000000000000000000000000000000000000000000000000000000"
+  }
+ ],
+ "expected": {
+  "headline": "refused",
+  "parts": {
+   "authorization_attest": "refused"
+  },
+  "states": [
+   {
+    "part": "authorization_attest",
+    "code": "contract_identity_attest_mismatch",
+    "fields": {
+     "field": "blob_layout"
+    }
+   }
+  ]
+ }
+}
