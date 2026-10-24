@@ -708,6 +708,15 @@ func TestC2RegistryAndPkcObeyTheVerdictPrecedence(t *testing.T) {
 		{"threshold denominator changed before the attestation (pre only)", func(sp *world.Spec) []ci.Mutation {
 			return []ci.Mutation{world.SetStorage(world.StationPre, hexAddr(sp.Roles.Anchor), ci.SlotIndex(16), common.BigToHash(big.NewInt(4)))}
 		}, nil, nil, "state_changed_in_block", "A13", "unproven", ""},
+		{"the roster has one validator fewer before the attestation (pre only)", func(sp *world.Spec) []ci.Mutation {
+			a := hexAddr(sp.Roles.Anchor)
+			ms := []ci.Mutation{world.SetStorage(world.StationPre, a, ci.SlotIndex(13), common.BigToHash(big.NewInt(6)))}
+			for i := 0; i < 6; i++ { // the first six of the address-sorted roster: the missing one is the last in the order of the comparison
+				el, _, _ := ci.ArrayElementSlot(13, uint64(i), 20)
+				ms = append(ms, world.SetStorage(world.StationPre, a, el, word(hexAddr(sp.Context.Registry9.Members[i].Address))))
+			}
+			return ms
+		}, nil, nil, "state_changed_in_block", "A09:", "unproven", ""}, // the first differing word in key order is the dropped validator's record (absent at pre); A10 changed too
 		{"registeredAt changed in block is informational: the mismatch stays R", func(sp *world.Spec) []ci.Mutation {
 			return []ci.Mutation{world.SetStorage(world.StationPost, hexAddr(sp.Roles.Anchor), ci.MemberSlot(ci.MappingSlotAt(ci.KeyAddress(hexAddr(sp.Context.Registry9.Members[1].Address)), 12), 3), common.BigToHash(big.NewInt(12345)))}
 		}, badPower, nil, "", "member_power", "refused", "registry_mismatch"},

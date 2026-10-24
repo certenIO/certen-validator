@@ -317,14 +317,11 @@ func c2AttestAbsentRegistry() (*StateError, error) {
 	return New(CodeUnproven, RowUnprovenAttestAbsent, map[string]any{"part": JudgedRegistryLink})
 }
 
-// c2Owners are the manifest owner rows of role covering block (the verifier role falls back to the anchor rows when the manifest has none, as
-// step 13 does).
+// c2Owners are the policy.owner rows of role ("anchor" or "verifier": the roles of the owner table) covering block. There is no fallback from
+// one role to the other: a manifest has both roles for every chain (a new chain needs both), and an owner that is in no row of its own role is a
+// foreign owner.
 func c2Owners(env *Env, role string, block uint64) []OwnerRow {
-	rows := env.Manifest.OwnerCovering(env.Ctx.Chain, role, block)
-	if len(rows) == 0 && role == "blsZkVerifier" && len(env.Manifest.OwnerRows(env.Ctx.Chain, role)) == 0 {
-		rows = env.Manifest.OwnerCovering(env.Ctx.Chain, "anchor", block)
-	}
-	return rows
+	return env.Manifest.OwnerCovering(env.Ctx.Chain, role, block)
 }
 
 // c2CarryIB re-creates the U state of rule IB on another part (the part field is replaced): "the part carries the same U code".
@@ -411,7 +408,7 @@ func c2Precedence(env *Env, pre, post *c2Station, block uint64, keys []string, r
 // verified), a state otherwise. Verdict precedence (spec "Policy rules"): R only when the word is equal at pre and post, fails at both and rule IB
 // is verified; a changed word is U state_changed_in_block; an equal failing word with IB not verified carries the U of rule IB.
 func c2OwnerPin(env *Env, pre, post *c2Station, block uint64) (*PartResult, error) {
-	for _, o := range []struct{ field, key, role string }{{"anchor_owner", "A16", "anchor"}, {"verifier_owner", "V03", "blsZkVerifier"}} {
+	for _, o := range []struct{ field, key, role string }{{"anchor_owner", "A16", "anchor"}, {"verifier_owner", "V03", "verifier"}} {
 		pw, qw := pre.W[o.key], post.W[o.key]
 		rows := c2Owners(env, o.role, block)
 		in := func(w common.Hash) bool {
