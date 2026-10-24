@@ -1,0 +1,33 @@
+{
+ "id": "VS8-151.set_root",
+ "base": "H0",
+ "mutations": [
+  {
+   "op": "set_field",
+   "target": "world",
+   "path": "stations.attest_pre.accounts.0x830cfb484b6e5606687e00f64c40aeb9c7c84e3c.storage.0x0000000000000000000000000000000000000000000000000000000000000011",
+   "value": "0x0000000000000000000000000000000000000000000000000000000000000abc"
+  },
+  {
+   "op": "set_field",
+   "target": "world",
+   "path": "stations.attest_post.accounts.0x830cfb484b6e5606687e00f64c40aeb9c7c84e3c.storage.0x0000000000000000000000000000000000000000000000000000000000000011",
+   "value": "0x0000000000000000000000000000000000000000000000000000000000000abc"
+  }
+ ],
+ "expected": {
+  "headline": "refused",
+  "parts": {
+   "registry_link": "refused"
+  },
+  "states": [
+   {
+    "part": "registry_link",
+    "code": "contract_identity_registry_mismatch",
+    "fields": {
+     "field": "set_root"
+    }
+   }
+  ]
+ }
+}

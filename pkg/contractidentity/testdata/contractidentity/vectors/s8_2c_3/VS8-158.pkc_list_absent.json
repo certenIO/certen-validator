@@ -1,0 +1,47 @@
+{
+ "id": "VS8-158.pkc_list_absent",
+ "base": "H0",
+ "mutations": [
+  {
+   "op": "unset_field",
+   "target": "context",
+   "path": "registry9"
+  },
+  {
+   "op": "set_field",
+   "target": "extension",
+   "path": "policy",
+   "value": {
+    "setRootHistory": [
+     {
+      "chainId": 11155111,
+      "keysDigest": "0x37d85b9bc6f5378f4237e06c86b62ed0cd808f1cb6d02663df02bf0a5df49645",
+      "pkcCount": 29,
+      "root": "0x26a209425127d950b1fdf7b4c97a634c6a0987f8c7458942812e02cb3ddef1c0",
+      "thresholdDenominator": 3,
+      "thresholdNumerator": 2,
+      "validFromBlock": 11980017,
+      "validToBlock": null
+     }
+    ]
+   }
+  }
+ ],
+ "expected": {
+  "headline": "verified_core",
+  "parts": {
+   "registry_link": "open"
+  },
+  "open": [
+   {
+    "part": "registry_link",
+    "kind": "not_checked",
+    "code": "contract_identity_not_checked",
+    "fields": {
+     "part": "registry_keys",
+     "reason": "pkc_list_absent"
+    }
+   }
+  ]
+ }
+}

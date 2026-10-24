@@ -397,11 +397,20 @@ func buildReport(env *Env, res *RunResult) (Report, error) {
 		return Report{}, fmt.Errorf("contractidentity: report: %w", err)
 	}
 	return Report{
-		Headline: h, Parts: res.Parts, RulesJudged: res.RulesJudged, RulesNotJudged: f.C.RulesNotJudged, Residuals: FixedResiduals(),
+		Headline: h, Parts: res.Parts, RulesJudged: res.RulesJudged, RulesNotJudged: rulesNotJudgedOf(f), Residuals: FixedResiduals(),
 		Registry: f.C.Registry, Authority: f.A.Authority, S6: s6Report(env.Ctx),
 		JudgedAtLevel: f.C.Level.JudgedAtLevel, StateRootAuthenticated: f.C.Level.Authenticated, S7FinalizedStatus: f.C.Level.S7FinalizedStatus,
 		Chain: env.Ctx.Chain, Block: leg.Number, BlockHash: leg.Hash, ManifestSHA256: env.Manifest.SHA256, ManifestSource: env.Manifest.Source,
 	}, nil
+}
+
+// rulesNotJudgedOf is step 23's rules_not_judged: every outcome prints it, also the outcomes in which step 23 did not run (a framework halt in
+// steps 0-2, the no-container outcome). The list is a constant of the verifier (FixedRulesNotJudged); step 23 writes the same list into Facts.C.
+func rulesNotJudgedOf(f *Facts) []RuleNotJudged {
+	if len(f.C.RulesNotJudged) > 0 {
+		return f.C.RulesNotJudged
+	}
+	return FixedRulesNotJudged()
 }
 
 func s6Report(c LegContext) S6Report {
@@ -414,7 +423,7 @@ func earlyReport(ctx LegContext, m *Manifest, st *StateError) (Report, error) {
 	if err != nil {
 		return Report{}, err
 	}
-	r := Report{Headline: h, Residuals: FixedResiduals(), Chain: ctx.Chain, ManifestSHA256: m.SHA256, ManifestSource: m.Source}
+	r := Report{Headline: h, RulesNotJudged: FixedRulesNotJudged(), Residuals: FixedResiduals(), Chain: ctx.Chain, ManifestSHA256: m.SHA256, ManifestSource: m.Source}
 	if s := s6Report(ctx); s.validate() == nil {
 		r.S6 = s // a valid triple is printed; an incomplete or invalid one is not (F8)
 	}

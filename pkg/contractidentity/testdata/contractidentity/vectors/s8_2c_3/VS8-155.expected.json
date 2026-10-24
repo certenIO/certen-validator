@@ -1,0 +1,19 @@
+{
+ "headline": "verified_core",
+ "parts": {
+  "registry_link": "open"
+ },
+ "open": [
+  {
+   "part": "registry_link",
+   "kind": "not_checked",
+   "code": "contract_identity_not_checked",
+   "fields": {
+    "got": "0x31b6a607dc2d4fd0f664b9dd528c8aa4823d6e64cc60221c1fbeb5b9d2742e0d",
+    "part": "registry_keys",
+    "reason": "keys_digest_mismatch",
+    "want": "0x37d85b9bc6f5378f4237e06c86b62ed0cd808f1cb6d02663df02bf0a5df49645"
+   }
+  }
+ ]
+}

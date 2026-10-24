@@ -1,0 +1,18 @@
+{
+ "headline": "refused",
+ "parts": {
+  "authorization_attest": "refused"
+ },
+ "states": [
+  {
+   "part": "authorization_attest",
+   "code": "contract_identity_authorization_mismatch",
+   "fields": {
+    "at": "attest_pre",
+    "field": "anchor_owner",
+    "onchain": "0x1111111111111111111111111111111111111111",
+    "want": "0x91c798aa0ad11d2670029b3b0572d154bd42c059"
+   }
+  }
+ ]
+}

@@ -1,0 +1,24 @@
+{
+ "id": "VS8-160.owner_active_in_block",
+ "base": "H0",
+ "mutations": [
+  {
+   "op": "set_field",
+   "target": "context",
+   "path": "registry9.signer_commitment",
+   "value": "0xc0908bd3536f019607e0dcd3d3553263ca3fd9b8882dd5dc4a43024d82389ead"
+  },
+  {
+   "op": "set_field",
+   "target": "world",
+   "path": "stations.attest_post.accounts.0x91c798aa0ad11d2670029b3b0572d154bd42c059.nonce",
+   "value": 7777
+  }
+ ],
+ "expected": {
+  "headline": "unproven",
+  "parts": {
+   "registry_link": "unproven"
+  }
+ }
+}
