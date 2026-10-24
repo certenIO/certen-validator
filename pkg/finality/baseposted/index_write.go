@@ -111,9 +111,10 @@ type Indexer struct {
 	reconcilePos uint64
 	rng          *rand.Rand
 	hintMu       sync.Mutex
-	selfRes      SelfCheckResult // what the last SelfCheck did (SelfCheckReport)
-	hints        map[uint64]bool // blocks noted as captured late (NoteLate)
-	dropLogged   bool            // the first dropped note has been logged
+	selfRes      SelfCheckResult   // what the last SelfCheck did (SelfCheckReport)
+	hints        map[uint64]bool   // blocks noted as captured late (NoteLate)
+	wide         map[[16]byte]bool // channels already counted as spanning more than the window (once per channel per process)
+	dropLogged   bool              // the first dropped note has been logged
 }
 
 var _ finality.CaptureIndexer = (*Indexer)(nil)
@@ -310,6 +311,13 @@ func (ix *Indexer) ensureEntry(ctx context.Context, tbl *frameTable, id [16]byte
 		return false, ix.markBroken(ctx, id, fr)
 	}
 	closing := fr[len(fr)-1]
+	if closing.Block-fr[0].Block > ix.window() {
+		// A channel whose frames lie further apart than the sequencing window can never be served (the verifier refuses a frame further than the
+		// window from the batch's origin). The in-order table forgets blocks older than the window and never sees it complete; a table loaded
+		// around a late block does. So that every validator holds the same entries whatever the order its blocks arrived in, NO path writes one.
+		ix.noteWide(id, fr[0].Block, closing.Block)
+		return false, nil
+	}
 	ck := finality.CaptureKey{Chain: uint64(Chain), L1Block: closing.Block, L1Hash: closing.Hash}
 	exists, err := ix.entryExists(ctx, ck, id)
 	if err != nil || exists {
@@ -1042,6 +1050,19 @@ func (ix *Indexer) recordUnindexable(ctx context.Context, bk finality.CaptureKey
 	metrics.IncFinalityIndexUnindexable(uint64(Chain), FamilyBaseInbox, ue.Reason)
 	ix.Cfg.logf("[FINALITY] index base-inbox: %s", finality.IndexBlockUnindexable(uint64(Chain), bk.L1Block, ue.Reason).Error())
 	return nil
+}
+
+// noteWide counts (once per channel per process) and logs a channel that spans more than the sequencing window: it gets no entry.
+func (ix *Indexer) noteWide(id [16]byte, first, closing uint64) {
+	if ix.wide == nil {
+		ix.wide = map[[16]byte]bool{}
+	}
+	if ix.wide[id] || len(ix.wide) >= 4096 {
+		return
+	}
+	ix.wide[id] = true
+	metrics.IncFinalityIndexEntrySkipped(uint64(Chain), FamilyBaseInbox, "over_window")
+	ix.Cfg.logf("[FINALITY] index base-inbox: channel %x spans L1 blocks %d..%d, more than the sequencing window (%d): it has no entry (certen_finality_index_entries_skipped_total{reason=over_window})", id[:4], first, closing, ix.window())
 }
 
 // maxHints bounds the blocks waiting to be noted; a note is a speed-up, the rotating walk is the guarantee, so a full set drops the note.

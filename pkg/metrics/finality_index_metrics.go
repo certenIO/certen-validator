@@ -19,6 +19,7 @@
 //	certen_finality_index_selfcheck_skipped_total{chain,family}  self-checks not run because the memory budget refused the rows (never silent)
 //	certen_finality_index_unindexable_blocks_total{chain,family,reason}  captured blocks the indexer could not read (index_block_unindexable)
 //	certen_finality_index_notes_dropped_total{chain,family}  late-block notes dropped because the set of pending notes was full (the rotation still reaches the block)
+//	certen_finality_index_entries_skipped_total{chain,family,reason}  complete channels that get no entry (reason over_window: frames further apart than the sequencing window)
 //	certen_finality_index_disabled{chain,family,key,reason}      1 while a bad setting has switched the index off (finality_index_disabled)
 //	certen_finality_capture_foreign_txs_total{chain}      batch-inbox transactions skipped because the batcher of their block did not send them (F19)
 //	certen_finality_capture_batcher_unestablished_total{chain}   blocks whose captured rows cannot establish the batcher (their frames are not filtered)
@@ -66,6 +67,10 @@ var (
 	finalityIndexUnindexable = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "certen_finality_index_unindexable_blocks_total",
 		Help: "Captured blocks the indexer could not read, recorded as index_block_unindexable by reason (a leg whose window holds one and whose channel is missing is told by name).",
+	}, []string{"chain", "family", "reason"})
+	finalityIndexEntriesSkipped = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "certen_finality_index_entries_skipped_total",
+		Help: "Complete channels that get no index entry, by reason (over_window: their frames lie further apart than the sequencing window, so no leg can be served by them).",
 	}, []string{"chain", "family", "reason"})
 	finalityIndexNotesDropped = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "certen_finality_index_notes_dropped_total",
@@ -118,6 +123,7 @@ func registerFinalityIndexMetrics() {
 	prometheus.MustRegister(finalityIndexStepSeconds)
 	prometheus.MustRegister(finalityIndexSelfCheckSkipped)
 	prometheus.MustRegister(finalityIndexNotesDropped)
+	prometheus.MustRegister(finalityIndexEntriesSkipped)
 	prometheus.MustRegister(finalityIndexUnindexable)
 	prometheus.MustRegister(finalityIndexDisabled)
 	prometheus.MustRegister(finalityForeignTxs)
@@ -209,4 +215,9 @@ func IncFinalityIndexUnindexable(chain uint64, family, reason string) {
 // IncFinalityIndexNoteDropped counts a late-block note dropped because the set of pending notes was full.
 func IncFinalityIndexNoteDropped(chain uint64, family string) {
 	finalityIndexNotesDropped.WithLabelValues(chainLabel(chain), family).Inc()
+}
+
+// IncFinalityIndexEntrySkipped counts a complete channel that gets no entry, by reason.
+func IncFinalityIndexEntrySkipped(chain uint64, family, reason string) {
+	finalityIndexEntriesSkipped.WithLabelValues(chainLabel(chain), family, reason).Inc()
 }
