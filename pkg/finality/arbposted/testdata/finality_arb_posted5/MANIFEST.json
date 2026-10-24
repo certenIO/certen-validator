@@ -1,0 +1,16 @@
+{
+ "cases": [
+  "valid_control_leg_and_container_agree",
+  "adv_leg_number_differs_from_container_leg_header_agrees",
+  "adv_leg_hash_differs_from_container_leg_header_agrees"
+ ],
+ "files": {
+  "cases/adv_leg_hash_differs_from_container_leg_header_agrees.json": "53183ec0764619716a5af25262d20b9700c4536a9df97782ead992b5d13f8319",
+  "cases/adv_leg_number_differs_from_container_leg_header_agrees.json": "6d2ff89854d17b00724c67cc8428bd4c43ab68769da8c3a9d7103daf7920f0ce",
+  "cases/valid_control_leg_and_container_agree.json": "87cc3c061a92ce95f6b252145ebb943eca6f2410500e551edf7455f3610f5277",
+  "pins/synth.json": "333ce295745348555a1e6f8d94983089d1441fa20ac8ca569fb4c54b6c17111f",
+  "raw/leg.json": "6233b9ac5b7f2099673b7bc8fc50aa69096837753f8ca5b633b07454b8305434"
+ },
+ "format": "certen-finality-manifest/1",
+ "set": "finality_arb_posted5"
+}
