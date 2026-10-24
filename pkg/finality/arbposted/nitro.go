@@ -5,6 +5,7 @@ package arbposted
 import (
 	"bytes"
 	"errors"
+	"math"
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -180,6 +181,20 @@ const (
 	payloadTooLarge
 )
 
+// zeroheavyLimit is Nitro's cap of the zero-heavy layer, 101% of the batch bound plus 64 (max + max/100 + 64), computed without wrapping: where
+// the sum does not fit an int it is the largest (or, for a negative bound, the smallest) int, never a number of the other sign. A pin is
+// bounded to (0, MaxUncompressedBatchLimit]; the function is total for the callers that pass a bound of their own.
+func zeroheavyLimit(max int) int {
+	extra := max/100 + 64
+	switch {
+	case extra > 0 && max > math.MaxInt-extra:
+		return math.MaxInt
+	case extra < 0 && max < math.MinInt-extra:
+		return math.MinInt
+	}
+	return max + extra
+}
+
 func decodePayload(payload []byte, maxUncompressed, maxSegments int) payloadResult {
 	var res payloadResult
 	if len(payload) == 0 {
@@ -195,7 +210,7 @@ func decodePayload(payload []byte, maxUncompressed, maxSegments int) payloadResu
 	case headerZeroheavy:
 		// Nitro decodes the zero-heavy layer once (limit 101% of the batch bound + 64) and then reads the result as an ordinary
 		// payload: it must begin with the Brotli header byte, nothing else is decoded after it.
-		dec, big := zeroheavyDecode(payload[1:], maxUncompressed+maxUncompressed/100+64)
+		dec, big := zeroheavyDecode(payload[1:], zeroheavyLimit(maxUncompressed))
 		if big {
 			res.status, res.exceededUncompressed = payloadTooLarge, true
 			return res
