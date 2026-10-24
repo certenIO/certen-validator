@@ -518,7 +518,7 @@ func (a *author) vectors() []ci.Vector {
 		world.SetStorage(world.StationSettle, verifier, ci.SlotIndex(0), common.BigToHash(new(big.Int).SetUint64(pol.VerifierThreshold.Numerator+1))))
 	val := spec.Context.Registry9.Members[0]
 	vbase := ci.MappingSlotAt(ci.KeyAddress(a.addr(val.Address)), 12)
-	add("VS8-076.set_root_inconsistent", alert("set_root", storedRoot, func() common.Hash {
+	rootEx := alert("set_root", storedRoot, func() common.Hash {
 		vv := append([]ci.RegistryMember(nil), vals...)
 		for i := range vv {
 			if vv[i].Address == a.addr(val.Address) {
@@ -531,7 +531,18 @@ func (a *author) vectors() []ci.Vector {
 		}
 		enc, _ := abi.Arguments{{Type: addrsT}, {Type: powT}, {Type: u256}, {Type: u256}}.Pack(ad, po, new(big.Int).SetUint64(pol.BLSThreshold.Numerator), new(big.Int).SetUint64(pol.BLSThreshold.Denominator))
 		return crypto.Keccak256Hash(enc)
-	}()), world.SetStorage(world.StationSettle, anchor, ci.MemberSlot(vbase, 1), common.BigToHash(big.NewInt(123456))))
+	}())
+	// [r3.3:S2] step 13: "differences from the attest state are drift": the power of the listed validator is 123456 at N, whatever it was at
+	// the attestation, so the record word A09:<addr>:1 drifts beside the set_root alert (r3.2 expectation: the alert alone)
+	var oldPower uint64
+	for _, v := range vals {
+		if v.Address == a.addr(val.Address) {
+			oldPower = v.Power
+		}
+	}
+	rootEx.Open = append(rootEx.Open, ci.ExpectedOpen{Part: ci.JudgedStateAtSettlement, Kind: ci.OpenDrift, Code: ci.Prefix + "drift", Fields: cf(map[string]any{
+		"field": "A09:" + strings.ToLower(a.addr(val.Address).Hex()) + ":1", "attest": common.BigToHash(new(big.Int).SetUint64(oldPower)), "settle": common.BigToHash(big.NewInt(123456))})})
+	add("VS8-076.set_root_inconsistent", rootEx, world.SetStorage(world.StationSettle, anchor, ci.MemberSlot(vbase, 1), common.BigToHash(big.NewInt(123456))))
 	// ---- unpinned generations (real live code, world/testdata/code) ----
 	unpinned := func(row, gen, kind string, code []byte) map[string]any {
 		return map[string]any{"reason": row, "generation": gen, "code_hash": crypto.Keccak256Hash(code), "kind": kind}

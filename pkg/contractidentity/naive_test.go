@@ -200,6 +200,10 @@ func TestNegativeControlsAcceptTheBadWorldsAndTheRealCheckWouldNot(t *testing.T)
 	if ok, why := h0.prePost(); !ok {
 		t.Fatalf("NaivePrePost refuses H0 (%s): not a faithful control", why)
 	}
+	real, err := ci.NewDefaultVerifier()
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, v := range set.Vectors {
 		in, has := set.Inputs[v.ID]
 		if !has {
@@ -222,6 +226,12 @@ func TestNegativeControlsAcceptTheBadWorldsAndTheRealCheckWouldNot(t *testing.T)
 			if ok, why := nw.prePost(); ok || why != "binding" {
 				t.Errorf("NaivePrePost on %s: %v %q, want the binding refusal (the pre/post control sees this hole)", v.ID, ok, why)
 			}
+			// the REAL composed verifier refuses it: step 19b, R authorization_mismatch{binding}, headline refused
+			rep, err := real.Verify(in.Ctx, in.Container, f.m)
+			if err != nil || rep.Headline.Kind != ci.HeadlineRefused {
+				t.Fatalf("%s: the real verifier gives %v (%v), want refused", v.ID, rep.Headline.Kind, err)
+			}
+			b1Want(t, rep, ci.JudgedAuthorizationAttest, "refused", "authorization_mismatch", "field", "binding")
 		case "VS8-100.owner_active_in_block":
 			if ok, why := nw.prePost(); !ok {
 				t.Errorf("NaivePrePost refuses %s (%s): the vector does not bite the control", v.ID, why)
@@ -233,6 +243,12 @@ func TestNegativeControlsAcceptTheBadWorldsAndTheRealCheckWouldNot(t *testing.T)
 			if err != nil || pre == post {
 				t.Errorf("%s: owner nonce pre %d post %d (%v): the owner did not act inside B_v", v.ID, pre, post, err)
 			}
+			// the REAL composed verifier does not accept it: rule IB (step 22), U owner_active_in_block on intra_block_window, headline unproven
+			rep, err := real.Verify(in.Ctx, in.Container, f.m)
+			if err != nil || rep.Headline.Kind != ci.HeadlineUnproven {
+				t.Fatalf("%s: the real verifier gives %v (%v), want unproven", v.ID, rep.Headline.Kind, err)
+			}
+			b1Want(t, rep, ci.JudgedIntraBlockWindow, "unproven", "owner_active_in_block")
 		default:
 			t.Errorf("unexpected control vector %s", v.ID)
 		}

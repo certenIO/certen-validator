@@ -150,7 +150,8 @@ func (a *author2c) vectors3() []ci.Vector {
 
 	// VS8-154: the honest row proves keys and the authorized set exactly: registry_link verified via manifest_history, headline verified
 	add("VS8-154", exp(ci.HeadlineVerified, only(ci.JudgedRegistryLink, "verified")), install(baseRow(), true)...)
-	// VS8-155: the owner swaps one BLS key (the root does not commit to keys): not_checked{registry_keys, keys_digest_mismatch}, never verified
+	// VS8-155: the owner swaps one BLS key (the root does not commit to keys) before the attestation and the swap persists at N (a key that differs at N
+	// from the attestation would be a drift, VS8-076.key_rotation): not_checked{registry_keys, keys_digest_mismatch}, never verified
 	m2 := hexAddr(members[2].Address)
 	dataSlot := ci.DynDataSlot(ci.MemberSlot(ci.MappingSlotAt(ci.KeyAddress(m2), 12), 2), 0)
 	swapped := append([]byte(nil), keys[2]...)
@@ -158,7 +159,7 @@ func (a *author2c) vectors3() []ci.Vector {
 	copy(swapped[:32], nw[:])
 	keys2 := append([][]byte(nil), keys...)
 	keys2[2] = swapped
-	add("VS8-155", keysNC("keys_digest_mismatch", map[string]any{"want": good, "got": refKeysDigest(addrs, keys2)}), install(baseRow(), true, both(dataSlot, nw)...)...)
+	add("VS8-155", keysNC("keys_digest_mismatch", map[string]any{"want": good, "got": refKeysDigest(addrs, keys2)}), install(baseRow(), true, append(both(dataSlot, nw), world.SetStorage(world.StationSettle, anchor, dataSlot, nw))...)...)
 	// VS8-156: the owner authorizes one extra commitment (slot 5 = 30, the row says 29); the root drifts nothing, A07 drifts at N
 	add("VS8-156", keysNC("pkc_count_mismatch", map[string]any{"want": uint64(29), "got": uint64(30)}, drift("A07", word64(30), word64(29))),
 		install(baseRow(), true, both(ci.SlotIndex(5), word64(30))...)...)

@@ -11,6 +11,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/crypto"
 
 	ci "github.com/certen/independant-validator/pkg/contractidentity"
 	"github.com/certen/independant-validator/pkg/contractidentity/world"
@@ -94,19 +95,26 @@ func (f *fixture) authWords(env *ci.Env, root common.Hash, flip bool) (map[strin
 	}
 	for i := uint64(0); i < nw.Big().Uint64(); i++ {
 		el, _, _ := ci.ArrayElementSlot(13, i, 20)
-		v, err := rd("", A, el)
+		v, err := rd(fmt.Sprintf("A10:%d", i), A, el)
 		if err != nil {
 			return nil, err
 		}
+		// the record words of the listed validator under the spelling of the real step 18 (S8_FREEZE 6.11): A09:<lowercase address>:0|1|3|key
+		k := "A09:" + strings.ToLower(common.BytesToAddress(v[12:]).Hex())
 		base := ci.MappingSlotAt(ci.KeyAddress(common.BytesToAddress(v[12:])), 12)
-		for _, s := range []common.Hash{base, ci.MemberSlot(base, 1), ci.MemberSlot(base, 3)} {
-			if _, err := rd("", A, s); err != nil {
+		for _, s := range []struct {
+			id string
+			s  common.Hash
+		}{{k + ":0", base}, {k + ":1", ci.MemberSlot(base, 1)}, {k + ":3", ci.MemberSlot(base, 3)}} {
+			if _, err := rd(s.id, A, s.s); err != nil {
 				return nil, err
 			}
 		}
-		if _, err := ci.ReadBytes(acct[A].StorageRoot, env.Nodes, ci.MemberSlot(base, 2), 256); err != nil {
+		kb, err := ci.ReadBytes(acct[A].StorageRoot, env.Nodes, ci.MemberSlot(base, 2), 256)
+		if err != nil {
 			return nil, err
 		}
+		words[k+":key"] = crypto.Keccak256Hash(kb)
 	}
 	for _, c := range []struct {
 		id string
@@ -371,7 +379,7 @@ func TestSettleMutations(t *testing.T) {
 		{name: "validator record changed at N: recomputed set root differs from the stored root", muts: func(f *fixture) []ci.Mutation {
 			base := ci.MappingSlotAt(ci.KeyAddress(f.addr(f.spec.Context.Registry9.Members[0].Address)), 12)
 			return []ci.Mutation{world.SetStorage(world.StationSettle, anchorOf(f), ci.MemberSlot(base, 1), common.BigToHash(big.NewInt(123456)))}
-		}, want: []want{{"state_at_settlement", "open", "", "", ""}}, open: "alert:set_root"},
+		}, want: []want{{"state_at_settlement", "open", "", "", ""}}, open: "alert:set_root,drift:A09:0x2dc2aad70bef3393822a6c27d1b9cd47f53e5d20:1"},
 		{name: "factory does not know the account", muts: func(f *fixture) []ci.Mutation {
 			return []ci.Mutation{world.SetStorage(world.StationSettle, f.addr(f.spec.Roles.Factory), ci.MappingSlotAt(ci.KeyAddress(acctOf(f)), 2), common.Hash{})}
 		}, want: []want{{"account_provenance", "refused", "account_not_canonical", "reason", "deployed_flag"}}},

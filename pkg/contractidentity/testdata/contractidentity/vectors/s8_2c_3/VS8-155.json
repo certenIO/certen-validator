@@ -104,6 +104,12 @@
    "target": "world",
    "path": "stations.attest_post.accounts.0x830cfb484b6e5606687e00f64c40aeb9c7c84e3c.storage.0xf6148c2bd995bbeb6c72916c14c87e02720a2eaf1a7721021f4c9dfcfd0dae48",
    "value": "0x0000000000000000000000000000000000000000000000000000000000005a5a"
+  },
+  {
+   "op": "set_field",
+   "target": "world",
+   "path": "stations.settle.accounts.0x830cfb484b6e5606687e00f64c40aeb9c7c84e3c.storage.0xf6148c2bd995bbeb6c72916c14c87e02720a2eaf1a7721021f4c9dfcfd0dae48",
+   "value": "0x0000000000000000000000000000000000000000000000000000000000005a5a"
   }
  ],
  "expected": {

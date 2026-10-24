@@ -200,3 +200,67 @@ func TestComposedVerifierVisitsExactlyTheNodesItCarriesOnEveryChainAndWorld(t *t
 		}
 	}
 }
+
+// ---- the header link (HeaderLinked): steps 21 and 22 never read an unlinked block and never end in UndecidedPartError ----
+
+func reportOf(t *testing.T, set *ci.VectorSet, v ci.Vector, ver ci.Verifier) ci.Report {
+	t.Helper()
+	in, ok := set.Inputs[v.ID]
+	if !ok {
+		t.Fatalf("%s: no materialised inputs", v.ID)
+	}
+	m, st, err := in.ResolveManifest()
+	if err != nil || st != nil {
+		t.Fatalf("%s: manifest: %v %v", v.ID, err, st)
+	}
+	rep, err := ver.Verify(in.Ctx, in.Container, m)
+	if err != nil {
+		t.Fatalf("%s: the verifier returned an error instead of a report: %v", v.ID, err)
+	}
+	return rep
+}
+
+func partOf(rep ci.Report, name string) (ci.PartResult, bool) {
+	for _, p := range rep.Parts {
+		if p.Part == name {
+			return p, true
+		}
+	}
+	return ci.PartResult{}, false
+}
+
+func TestAnUnprovenHeaderLinkDecidesRegistryLinkAndIntraBlockWindowWithTheCause(t *testing.T) {
+	ver, err := ci.NewDefaultVerifier()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sets := loadEverySet(t)
+	unlinked := 0
+	for _, name := range sortedNames(sets) {
+		set := sets[name]
+		for _, v := range set.Vectors {
+			rep := reportOf(t, set, v, ver)
+			auth, ok := partOf(rep, ci.JudgedAuthorizationAttest)
+			if !ok || auth.State == nil {
+				continue
+			}
+			link := auth.State.Code == ci.Prefix+"header_unlinked" ||
+				(auth.State.Code == ci.Prefix+"unproven" && auth.State.Fields["reason"] == "attest_block_out_of_reach")
+			if !link {
+				continue
+			}
+			unlinked++
+			for _, part := range []string{ci.JudgedRegistryLink, ci.JudgedIntraBlockWindow} {
+				p, ok := partOf(rep, part)
+				if !ok || p.Status != ci.StatusUnproven || p.State == nil || p.State.Code != ci.Prefix+"unproven" ||
+					p.State.Fields["reason"] != "attest_absent" || p.State.Fields["part"] != part {
+					t.Errorf("%s/%s: the header link is not proven (%s) but %s is %+v", name, v.ID, auth.State.Code, part, p)
+				}
+			}
+		}
+	}
+	if unlinked < 8 {
+		t.Fatalf("only %d published vectors have an unproven header link: the hop and spine refusal rows are not all exercised", unlinked)
+	}
+	t.Logf("%d published vectors with an unproven header link decide registry_link and intra_block_window with unproven attest_absent", unlinked)
+}
