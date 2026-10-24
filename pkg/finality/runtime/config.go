@@ -19,6 +19,7 @@ package runtime
 import (
 	"errors"
 	"fmt"
+	"math"
 	"net/url"
 	"os"
 	"strconv"
@@ -28,6 +29,8 @@ import (
 	"github.com/certen/independant-validator/pkg/envvar"
 	"github.com/certen/independant-validator/pkg/ethrpc"
 	"github.com/certen/independant-validator/pkg/finality"
+	"github.com/certen/independant-validator/pkg/finality/arbposted/capture"
+	"github.com/certen/independant-validator/pkg/finality/baseposted"
 )
 
 // The CERTEN_FINALITY_* variables this package reads (the switches CERTEN_FINALITY_UPGRADER_ENABLED and
@@ -53,7 +56,27 @@ const (
 	EnvBuildTimeout    = "CERTEN_FINALITY_BUILD_TIMEOUT_SECONDS"
 	EnvGapBlocks       = "CERTEN_FINALITY_GAPFILL_BLOCKS_PER_TICK"
 	EnvGapAuditSpacing = "CERTEN_FINALITY_GAP_AUDIT_SPACING"
+	// EnvBaseIndex switches the Base capture index (RB12-INDEX-A) on (default) or off. Off: the Base builder reads and decompresses
+	// the leg's window of the capture as before and nothing is indexed.
+	EnvBaseIndex       = "CERTEN_FINALITY_BASE_INDEX"
+	EnvIndexBlocks     = "CERTEN_FINALITY_INDEX_BLOCKS_PER_STEP"
+	EnvIndexStepSecond = "CERTEN_FINALITY_INDEX_STEP_SECONDS"
+	// RB12-ARCHIVE-BACKFILL: extending the capture store below the first block its loop scanned, for the legs that predate it.
+	EnvPrefixMax     = "CERTEN_FINALITY_PREFIX_MAX_BLOCKS"
+	EnvPrefixFloor   = "CERTEN_FINALITY_PREFIX_FLOOR_L1_BLOCK"
+	EnvPrefixLease   = "CERTEN_FINALITY_PREFIX_LEASE_SECONDS"
+	EnvPrefixChunk   = "CERTEN_FINALITY_PREFIX_CHUNK_BLOCKS"
+	EnvPrefixReprobe = "CERTEN_FINALITY_PREFIX_REPROBE_SECONDS"
+	EnvPrefixArbScan = "CERTEN_FINALITY_PREFIX_ARB_SCAN_BLOCKS"
+	// EnvArbIndex switches the Arbitrum batch index (RB12-INDEX-B) on (default) or off. Off: the Arbitrum builder reads every captured batch and
+	// decodes every batch of the leg's window as before, and nothing is indexed. EnvArbIndexGeneration starts a new generation.
+	EnvArbIndex           = "CERTEN_FINALITY_ARB_INDEX"
+	EnvArbIndexGeneration = "CERTEN_FINALITY_ARB_INDEX_GENERATION"
 )
+
+// DefaultPrefixMaxBlocks bounds the union of the requested prefix windows: about 85 KB of rows per Base L1 block (measured 2026-10-23),
+// so 100,000 blocks are about 8.5 GB of a table on a host with hundreds of GB free, and 41,316 blocks serve the 31 legs measured then.
+const DefaultPrefixMaxBlocks uint64 = 100_000
 
 // Defaults of the public providers the kind packages' live sources and recorders were measured against (V2_SPEC_S7 8.1; the
 // proof providers hold eth_getProof only near the head: Tenderly about 8 blocks, the others at most 100).
@@ -95,17 +118,32 @@ type Config struct {
 	BackoffRetries int
 	BackoffMax     time.Duration
 
-	CaptureEvery    time.Duration
-	CaptureBytes    int64
-	CaptureBlocks   int // L1 blocks one Base capture tick scans at most
-	GapBlocks       int // L1 blocks one gap-backfill tick captures at most (concurrency is one block at a time)
-	GapAuditSpacing int // a run of more than this many blocks between two captured inbox blocks is recorded as an unproven gap
-	Concurrency     int
-	Interval        time.Duration
-	BuildTimeout    time.Duration
-	MemoryBudget    int64  // bytes of in-flight builder working set per process (finality.EnvMemoryBudget)
-	ArchiveOrigin   string // "set" or "unset": whether OD4 is configured (reported, never the URL)
-	ProviderSources map[string]string
+	CaptureEvery       time.Duration
+	CaptureBytes       int64
+	CaptureBlocks      int                    // L1 blocks one Base capture tick scans at most
+	GapBlocks          int                    // L1 blocks one gap-backfill tick captures at most (concurrency is one block at a time)
+	GapAuditSpacing    int                    // a run of more than this many blocks between two captured inbox blocks is recorded as an unproven gap
+	PrefixMax          uint64                 // most blocks the requested prefix windows may hold (0: the extension is off)
+	PrefixFloor        uint64                 // lowest L1 block a prefix window may start at
+	PrefixLease        time.Duration          // how long a claim on a chunk of prefix blocks lasts
+	PrefixChunk        int                    // blocks per claim
+	PrefixReprobe      time.Duration          // how often blocks proven unavailable are asked again
+	PrefixArbScan      int                    // L1 blocks one Arbitrum prefix scan reads (one eth_getLogs answer) and the size of its claim chunk
+	PrefixDisabled     []*finality.StateError // finality_prefix_disabled{chain, variable, reason, refused}: one per chain and refused prefix setting; that chain's prefix work is off
+	ArbIndex           bool                   // the Arbitrum batch index is built and used (EnvArbIndex)
+	ArbIndexDisabled   *finality.StateError   // set when a bad setting switched the Arbitrum index off: finality_index_disabled{chain=421614, ...}
+	ArbIndexGeneration uint32                 // the Arbitrum index generation (EnvArbIndexGeneration)
+	Concurrency        int
+	Interval           time.Duration
+	BuildTimeout       time.Duration
+	MemoryBudget       int64                // bytes of in-flight builder working set per process (finality.EnvMemoryBudget)
+	BaseIndex          bool                 // the Base capture index is built and used (EnvBaseIndex)
+	IndexDisabled      *finality.StateError // set when a bad index setting switched the index off: finality_index_disabled{chain, key, reason}
+	IndexGeneration    uint32               // the index generation (finality.EnvIndexGeneration); a new one rebuilds
+	IndexBlocks        int                  // captured blocks one index step digests at most
+	IndexStep          time.Duration        // wall time after which an index step stops
+	ArchiveOrigin      string               // "set" or "unset": whether OD4 is configured (reported, never the URL)
+	ProviderSources    map[string]string
 }
 
 // urlSeparators are the separators of a provider list the validator has always accepted (ethrpc.ParseEndpoints).
@@ -365,10 +403,15 @@ func ConfigFromEnv() (Config, error) {
 	if err = readSettings(&c); err != nil {
 		return Config{}, err
 	}
+	// the capture index settings are NOT checked with the rest: a bad one never stops a consensus node (RB12-INDEX-FIX D2)
+	c.readIndexSettings()
+	// nor are the prefix settings: a bad one switches the prefix feature of the chains it governs off, by name (V-INT3b)
+	c.readPrefixSettings()
 	return c, nil
 }
 
-// readSettings reads every number, duration and size setting into c and returns EVERY refusal (a joined error of *envvar.Refusal, in
+// readSettings reads every number, duration and size setting that a bad value makes fatal for the finality runtime (the prefix settings are
+// not among them: readPrefixSettings isolates them) into c and returns EVERY refusal (a joined error of *envvar.Refusal, in
 // the order the settings are read), including the bound of the batch size that is checked after its reader accepted it.
 func readSettings(c *Config) error {
 	rd := []func() error{
@@ -407,7 +450,11 @@ func readSettings(c *Config) error {
 // refusal (all of them), without reading anything else. A refusal holds the name of the variable and what it must be, never its value.
 func RefusedSettings() []*envvar.Refusal {
 	var c Config
-	return envvar.Refusals(readSettings(&c))
+	out := envvar.Refusals(readSettings(&c))
+	for _, r := range c.readPrefixSettings() {
+		out = append(out, r.Refusal)
+	}
+	return out
 }
 
 // RegisterRedaction tells pkg/ethrpc every configured URL so no provider text carrying a credential reaches a log.
@@ -425,7 +472,7 @@ func (c Config) proofURLs() []string {
 // Describe is the secret-free view of the configuration for logs and the health endpoint: counts and host labels only.
 func (c Config) Describe() map[string]any {
 	n := func(l []string) int { return len(l) }
-	return map[string]any{
+	out := map[string]any{
 		"l1_rpc_providers": n(c.L1RPC), "l1_proof_providers": n(c.L1Proof), "archive_provider": c.ArchiveOrigin,
 		"lc_endpoints": Hosts(c.LC), "beacon_endpoints": Hosts(c.Beacon), "base_l2_providers": n(c.BaseL2), "arb_l2_providers": n(c.ArbL2),
 		"adiri_providers": n(c.Adiri), "adiri_proof_providers": n(c.AdiriPF), "pins_file": c.PinsFile != "",
@@ -433,7 +480,25 @@ func (c Config) Describe() map[string]any {
 		"capture_interval": c.CaptureEvery.String(), "concurrency": c.Concurrency, "interval": c.Interval.String(),
 		"memory_budget_bytes": c.MemoryBudget, "memory_gate_bytes": finality.HeapGate(c.MemoryBudget),
 		"gap_blocks_per_tick": c.GapBlocks, "gap_audit_spacing": c.GapAuditSpacing,
+		"base_index": c.BaseIndex, "index_generation": c.IndexGeneration, "index_blocks_per_step": c.IndexBlocks,
+		"prefix_max_blocks": c.PrefixMax, "prefix_floor_l1_block": c.PrefixFloor, "prefix_lease": c.PrefixLease.String(), "prefix_chunk_blocks": c.PrefixChunk,
+		"prefix_reprobe": c.PrefixReprobe.String(), "prefix_arb_scan_blocks": c.PrefixArbScan,
+		"arb_index": c.ArbIndex, "arb_index_generation": c.ArbIndexGeneration,
 	}
+	if c.IndexDisabled != nil {
+		out["index_disabled"] = c.IndexDisabled.Error()
+	}
+	if c.ArbIndexDisabled != nil {
+		out["arb_index_disabled"] = c.ArbIndexDisabled.Error()
+	}
+	if len(c.PrefixDisabled) > 0 {
+		states := make([]string, len(c.PrefixDisabled))
+		for i, st := range c.PrefixDisabled {
+			states[i] = st.Error()
+		}
+		out["prefix_disabled"] = states
+	}
+	return out
 }
 
 // Missing returns, for each chain, the settings whose absence makes the chain's builders impossible (no provider at all). A chain
@@ -465,4 +530,193 @@ func (c Config) Missing() map[uint64][]string {
 		add(finality.ChainAdiri, EnvAdiriURLs)
 	}
 	return out
+}
+
+// readIndexSettings reads the four capture index settings. A setting that is not what it must be switches the index OFF by the registered
+// named state finality_index_disabled{chain, key, reason} (announced at wiring: log, metric, /health/detailed) and the validator runs on
+// with the window reader: finality is not an input of consensus and the settings are shared by all seven validators, so a refusal that ended
+// the process would take them all down at one roll. The state names the setting and the class of the fault, never the value.
+func (c *Config) readIndexSettings() {
+	c.BaseIndex, c.IndexGeneration, c.IndexBlocks, c.IndexStep = true, finality.DefaultIndexGeneration, 128, 15*time.Second
+	c.IndexDisabled = nil
+	c.ArbIndex, c.ArbIndexGeneration, c.ArbIndexDisabled = true, finality.DefaultIndexGeneration, nil
+	// a setting of one chain switches that chain's index off; a setting both share (the step bounds) switches both off, each with its own state
+	offBase := func(variable, reason, refused string) {
+		c.BaseIndex = false
+		if c.IndexDisabled == nil {
+			c.IndexDisabled = finality.IndexDisabledState(finality.ChainBaseSepolia, variable, reason, refused)
+		}
+	}
+	offArb := func(variable, reason, refused string) {
+		c.ArbIndex = false
+		if c.ArbIndexDisabled == nil {
+			c.ArbIndexDisabled = finality.IndexDisabledState(finality.ChainArbitrumSepolia, variable, reason, refused)
+		}
+	}
+	off := func(variable, reason, refused string) {
+		offBase(variable, reason, refused)
+		offArb(variable, reason, refused)
+	}
+	on, err := envvar.Bool(EnvBaseIndex, true)
+	if err != nil {
+		offBase(EnvBaseIndex, finality.IndexSettingSwitchInvalid, "")
+	} else {
+		c.BaseIndex = on
+	}
+	if v, refused := indexInt(finality.EnvIndexGeneration, int64(finality.DefaultIndexGeneration), 1, math.MaxUint32); refused != "" {
+		offBase(finality.EnvIndexGeneration, finality.IndexSettingInvalid, refused)
+	} else {
+		c.IndexGeneration = uint32(v)
+	}
+	onArb, err := envvar.Bool(EnvArbIndex, true)
+	if err != nil {
+		offArb(EnvArbIndex, finality.IndexSettingSwitchInvalid, "")
+	} else {
+		c.ArbIndex = c.ArbIndex && onArb
+	}
+	if v, refused := indexInt(EnvArbIndexGeneration, int64(finality.DefaultIndexGeneration), 1, math.MaxUint32); refused != "" {
+		offArb(EnvArbIndexGeneration, finality.IndexSettingInvalid, refused)
+	} else {
+		c.ArbIndexGeneration = uint32(v)
+	}
+	if v, refused := indexInt(EnvIndexBlocks, 128, 1, math.MaxInt32); refused != "" {
+		off(EnvIndexBlocks, finality.IndexSettingInvalid, refused)
+	} else {
+		c.IndexBlocks = int(v)
+	}
+	if v, refused := indexInt(EnvIndexStepSecond, 15, 1, 86400); refused != "" {
+		off(EnvIndexStepSecond, finality.IndexSettingInvalid, refused)
+	} else {
+		c.IndexStep = time.Duration(v) * time.Second
+	}
+}
+
+// indexInt reads an integer setting in [lo, hi]; the second result is empty when it is, else which way it is refused (never the value).
+func indexInt(key string, def, lo, hi int64) (int64, string) {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return def, ""
+	}
+	v, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		if errors.Is(err, strconv.ErrRange) { // an integer too large to read (either sign) is out of range, as for the prefix settings
+			return def, finality.IndexRefusedOutOfRange
+		}
+		return def, finality.IndexRefusedNotInteger
+	}
+	if v < lo || v > hi {
+		return def, finality.IndexRefusedOutOfRange
+	}
+	return v, ""
+}
+
+// prefixSetting is one setting of the archive backfill (the capture-store prefix): its bounds, the chains whose prefix work it governs and
+// where its value goes. A value that is not what it must be switches the prefix work of those chains off; nothing else changes.
+type prefixSetting struct {
+	env         string
+	def, lo, hi uint64
+	base, arb   bool   // the chains it governs
+	want        string // what the setting must be (the text of a refusal; never the value)
+	set         func(c *Config, v uint64)
+}
+
+// prefixSettings are read in this order, which is the order of the states in Config.PrefixDisabled. The bounds are the ones the settings have
+// always had; the upper bounds of the two durations keep a whole number of seconds from overflowing a time.Duration (a lease longer than a
+// day would hold a dead validator's chunk for longer than the blobs live, a re-probe period of more than 30 days is never).
+var prefixSettings = []prefixSetting{
+	{EnvPrefixMax, DefaultPrefixMaxBlocks, 0, math.MaxUint64, true, true, "an unsigned integer (0 turns the extension off)",
+		func(c *Config, v uint64) { c.PrefixMax = v }},
+	{EnvPrefixFloor, 0, 0, math.MaxUint64, true, true, "an unsigned integer (an L1 block number)",
+		func(c *Config, v uint64) { c.PrefixFloor = v }},
+	{EnvPrefixLease, uint64(baseposted.DefaultLeaseSpan / time.Second), 60, 86400, true, true, "a whole number of seconds from 60 to 86400",
+		func(c *Config, v uint64) { c.PrefixLease = time.Duration(v) * time.Second }},
+	{EnvPrefixChunk, baseposted.DefaultLeaseChunk, 1, 1024, true, false, "an integer from 1 to 1024",
+		func(c *Config, v uint64) { c.PrefixChunk = int(v) }},
+	{EnvPrefixReprobe, uint64(24 * time.Hour / time.Second), 3600, 2592000, true, false, "a whole number of seconds from 3600 to 2592000",
+		func(c *Config, v uint64) { c.PrefixReprobe = time.Duration(v) * time.Second }},
+	{EnvPrefixArbScan, capture.DefaultPrefixScanBlocks, 1, 2000, false, true, "an integer from 1 to 2000 (one eth_getLogs answer)",
+		func(c *Config, v uint64) { c.PrefixArbScan = int(v) }},
+}
+
+// prefixRefusal is the refusal of one prefix setting and the way it was refused (finality.PrefixRefusedNotInteger or ...OutOfRange).
+type prefixRefusal struct {
+	Refusal *envvar.Refusal
+	Refused string
+}
+
+// readPrefixSettings reads the six prefix settings into c (a refused one keeps its default) and returns each refusal. For every refusal it adds
+// the named state finality_prefix_disabled{chain, variable, reason: setting_invalid, refused} to c.PrefixDisabled, once for each chain the setting
+// governs, so the validator runs on with the prefix work of those chains off. Like the index settings these are shared by all seven validators:
+// a refusal that stopped the finality runtime would take them all down at one roll, and finality is not an input of consensus.
+func (c *Config) readPrefixSettings() []prefixRefusal {
+	c.PrefixDisabled = nil
+	var out []prefixRefusal
+	for _, p := range prefixSettings {
+		v, refused := prefixUint(p.env, p.def, p.lo, p.hi)
+		p.set(c, v)
+		if refused == "" {
+			continue
+		}
+		out = append(out, prefixRefusal{Refusal: envvar.Refuse(p.env, strings.TrimSpace(os.Getenv(p.env)), p.want).(*envvar.Refusal), Refused: refused})
+		if p.base {
+			c.PrefixDisabled = append(c.PrefixDisabled, finality.PrefixDisabledState(finality.ChainBaseSepolia, p.env, refused))
+		}
+		if p.arb {
+			c.PrefixDisabled = append(c.PrefixDisabled, finality.PrefixDisabledState(finality.ChainArbitrumSepolia, p.env, refused))
+		}
+	}
+	return out
+}
+
+// prefixUint reads an unsigned integer setting in [lo, hi] (unset or blank: def); the second result is empty when it is acceptable, else which
+// way it is refused: not an integer at all, or an integer outside the bounds (a negative one, and one too large to read, are outside).
+func prefixUint(key string, def, lo, hi uint64) (uint64, string) {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return def, ""
+	}
+	var v uint64
+	if n, err := strconv.ParseInt(raw, 10, 64); err == nil {
+		if n < 0 {
+			return def, finality.PrefixRefusedOutOfRange
+		}
+		v = uint64(n)
+	} else if errors.Is(err, strconv.ErrRange) {
+		u, uerr := strconv.ParseUint(raw, 10, 64)
+		if uerr != nil {
+			return def, finality.PrefixRefusedOutOfRange
+		}
+		v = u
+	} else {
+		return def, finality.PrefixRefusedNotInteger
+	}
+	if v < lo || v > hi {
+		return def, finality.PrefixRefusedOutOfRange
+	}
+	return v, ""
+}
+
+// prefixOff reports whether the prefix work of the chain is switched off by a refused prefix setting.
+func (c Config) prefixOff(chain uint64) bool {
+	return len(c.prefixStates(chain)) > 0
+}
+
+// prefixStates returns the finality_prefix_disabled states of one chain.
+func (c Config) prefixStates(chain uint64) []*finality.StateError {
+	var out []*finality.StateError
+	for _, st := range c.PrefixDisabled {
+		if ch, _ := st.Fields["chain"].(uint64); ch == chain {
+			out = append(out, st)
+		}
+	}
+	return out
+}
+
+// prefixPolicy is the policy the l1_posted builder of the chain requests prefix windows by: the configured one, or none (prefix_state off)
+// while a refused setting has the chain's prefix work off.
+func (c Config) prefixPolicy(chain uint64) finality.PrefixPolicy {
+	if c.prefixOff(chain) {
+		return finality.PrefixPolicy{}
+	}
+	return finality.PrefixPolicy{MaxBlocks: c.PrefixMax, Floor: c.PrefixFloor}
 }

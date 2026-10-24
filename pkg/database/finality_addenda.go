@@ -21,6 +21,7 @@ import (
 
 	"github.com/certen/independant-validator/pkg/ethproof"
 	"github.com/certen/independant-validator/pkg/finality"
+	"github.com/certen/independant-validator/pkg/finality/legacyhdr"
 )
 
 // FinalityAddendaRepository stores the staged finality addenda of settled legs (migration 00027). It is INSERT-ONLY: it has
@@ -32,10 +33,20 @@ type FinalityAddendaRepository struct {
 	client *Client
 	// afterRead is a test seam: it runs after the chain was read under the lock and before the INSERT.
 	afterRead func(attempt int)
+	// legacyHeaders, when set, is where the header of a legacy leg (a stored execution proof written before block_header_rlp was
+	// captured) is read from: the row pkg/finality/legacyhdr keeps. Nil leaves such a leg in finality_included_unavailable{no_block_header}.
+	legacyHeaders finality.CaptureStore
 }
 
 func NewFinalityAddendaRepository(client *Client) *FinalityAddendaRepository {
 	return &FinalityAddendaRepository{client: client}
+}
+
+// WithLegacyHeaders makes the repository read the reconstructed header of a legacy leg from store (the capture store the legacyhdr
+// loop writes). The row is not trusted: ethproof.Settlement.Verify judges it with the stored proofs like any header. It returns r.
+func (r *FinalityAddendaRepository) WithLegacyHeaders(store finality.CaptureStore) *FinalityAddendaRepository {
+	r.legacyHeaders = store
+	return r
 }
 
 var (
@@ -297,6 +308,9 @@ type executionProof struct {
 	settlementTx sql.NullString
 	settlementAt sql.NullInt64
 	bundleID     string // the bundle component 5 was read from
+	// headerMissing is set only for a caller that asked for legacy legs: component 5 is non-empty and has no usable header, and raw
+	// is the component as stored.
+	headerMissing bool
 }
 
 // bundleInvalid is the named state of a stored bundle the source cannot read.
@@ -342,7 +356,7 @@ func idHex(id string) string {
 //     id; the writer, pkg/execution generateAndPersistBundle, has set it to the proof id on every bundle since 2026-01-26), or
 //     whose non-empty component 5 is not an object, has a block_header_rlp that is present but not a non-empty 0x-hex string, or
 //     names no chain_id that is a decimal number.
-func (r *FinalityAddendaRepository) executionProofOf(ctx context.Context, proofID, bundleID string) (*executionProof, error) {
+func (r *FinalityAddendaRepository) executionProofOf(ctx context.Context, proofID, bundleID string, wantLegacy bool) (*executionProof, error) {
 	ep := &executionProof{}
 	var foundID, format sql.NullString
 	var size sql.NullInt64
@@ -402,29 +416,54 @@ func (r *FinalityAddendaRepository) executionProofOf(ctx context.Context, proofI
 		return nil, finality.IncludedUnavailable(finality.IncludedNoExecutionProof, "proof_id", proofID)
 	}
 	// A component 5 without its header is what bundles written before the header was captured hold (the same keys otherwise, and a
-	// corrupt one cannot be told from it): nothing can be judged for it, and it is not a failure. A header that is present and
-	// unusable is corrupt.
-	rawHeader, present := members["block_header_rlp"]
-	if !present || string(bytes.TrimSpace(rawHeader)) == "null" {
-		return nil, finality.IncludedUnavailable(finality.IncludedNoBlockHeader, "proof_id", proofID)
+	// corrupt one cannot be told from it): its header is the one pkg/finality/legacyhdr reconstructed and verified, read from the
+	// capture store; while there is none, nothing can be judged and it is not a failure. A header that is present and unusable is
+	// corrupt.
+	chainOfComponent := func() (uint64, error) {
+		var chain string
+		if err := json.Unmarshal(members["chain_id"], &chain); err != nil || chain == "" {
+			return 0, bundleInvalid(proofID, "the bundle's execution proof names no chain_id (a non-empty decimal string)")
+		}
+		id, err := strconv.ParseUint(chain, 10, 64)
+		if err != nil {
+			return 0, bundleInvalid(proofID, fmt.Sprintf("the bundle's execution proof chain_id %q is not a decimal chain id", chain))
+		}
+		return id, nil
 	}
 	var header string
-	if err := json.Unmarshal(rawHeader, &header); err != nil {
-		return nil, bundleInvalid(proofID, "the bundle's execution proof block_header_rlp is not a string")
+	rawHeader, present := members["block_header_rlp"]
+	headerMissing := !present || string(bytes.TrimSpace(rawHeader)) == "null"
+	if !headerMissing {
+		if err := json.Unmarshal(rawHeader, &header); err != nil {
+			return nil, bundleInvalid(proofID, "the bundle's execution proof block_header_rlp is not a string")
+		}
+		headerMissing = header == ""
 	}
-	if header == "" {
-		return nil, finality.IncludedUnavailable(finality.IncludedNoBlockHeader, "proof_id", proofID)
+	if headerMissing {
+		if wantLegacy {
+			id, err := chainOfComponent()
+			if err != nil {
+				return nil, err
+			}
+			ep.raw, ep.chain, ep.bundleID, ep.headerMissing = raw, id, foundID.String, true
+			return ep, nil
+		}
+		hdr, err := r.reconstructedHeader(ctx, proofID, foundID.String, raw)
+		if err != nil {
+			return nil, err
+		}
+		header = hexutil.Encode(hdr)
+		members["block_header_rlp"] = json.RawMessage(strconv.Quote(header))
+		if raw, err = json.Marshal(members); err != nil {
+			return nil, bundleInvalid(proofID, "the bundle's execution proof cannot carry the reconstructed header: "+err.Error())
+		}
 	}
-	if raw, err := hexutil.Decode(header); err != nil || len(raw) == 0 {
+	if decoded, err := hexutil.Decode(header); err != nil || len(decoded) == 0 {
 		return nil, bundleInvalid(proofID, "the bundle's execution proof block_header_rlp is not a non-empty 0x-prefixed hex string")
 	}
-	var chain string
-	if err := json.Unmarshal(members["chain_id"], &chain); err != nil || chain == "" {
-		return nil, bundleInvalid(proofID, "the bundle's execution proof names no chain_id (a non-empty decimal string)")
-	}
-	id, err := strconv.ParseUint(chain, 10, 64)
+	id, err := chainOfComponent()
 	if err != nil {
-		return nil, bundleInvalid(proofID, fmt.Sprintf("the bundle's execution proof chain_id %q is not a decimal chain id", chain))
+		return nil, err
 	}
 	ep.raw, ep.chain, ep.bundleID = raw, id, foundID.String
 	return ep, nil
@@ -440,7 +479,7 @@ func (r *FinalityAddendaRepository) executionProofOf(ctx context.Context, proofI
 // checked, and the Settlement is returned marked Unrecorded: the writer records the settlement right after the bundle, and the
 // upgrader counts and reports such legs. The bundle read is the one ref.BundleID names (the newest when it is empty).
 func (r *FinalityAddendaRepository) LegSettlement(ctx context.Context, ref finality.LegRef) (finality.Settlement, error) {
-	ep, err := r.executionProofOf(ctx, ref.ProofID, ref.BundleID)
+	ep, err := r.executionProofOf(ctx, ref.ProofID, ref.BundleID, false)
 	if err != nil {
 		return finality.Settlement{}, err
 	}
@@ -474,10 +513,77 @@ func (r *FinalityAddendaRepository) LegSettlement(ctx context.Context, ref final
 // execution proof (component 5) has no leg: the named finality_included_unavailable state.
 func (r *FinalityAddendaRepository) LegRef(ctx context.Context, proofID string) (finality.LegRef, error) {
 	ref := finality.LegRef{ProofID: proofID}
-	ep, err := r.executionProofOf(ctx, proofID, "")
+	ep, err := r.executionProofOf(ctx, proofID, "", false)
 	if err != nil {
 		return ref, err
 	}
 	ref.Chain, ref.BundleID = ep.chain, ep.bundleID
 	return ref, nil
+}
+
+// reconstructedHeader returns the header pkg/finality/legacyhdr stored for the leg whose component 5 is raw, or the named state of
+// its absence: finality_included_unavailable{no_block_header} carrying the chain and block the leg names. Without a header store the
+// state carries no chain or block (the component is not read further). A component that cannot be read as a leg is
+// finality_included_invalid. The row is judged here by legacyhdr.Leg.Verify (and again by ethproof.Settlement.Verify when the
+// Settlement is derived), so a corrupt or foreign row is finality_included_invalid{check} and never evidence.
+func (r *FinalityAddendaRepository) reconstructedHeader(ctx context.Context, proofID, bundleID string, raw json.RawMessage) ([]byte, error) {
+	if r.legacyHeaders == nil {
+		return nil, finality.IncludedUnavailable(finality.IncludedNoBlockHeader, "proof_id", proofID)
+	}
+	leg, err := legacyhdr.ParseLeg(proofID, bundleID, raw)
+	if err != nil {
+		return nil, err
+	}
+	hdr, ok, err := r.legacyHeaders.Get(ctx, leg.Key())
+	if err != nil {
+		return nil, fmt.Errorf("reading the reconstructed header of proof %s: %w", proofID, err)
+	}
+	if !ok {
+		return nil, finality.IncludedUnavailable(finality.IncludedNoBlockHeader, "proof_id", proofID, "chain", leg.Chain, "block", leg.BlockNumber)
+	}
+	// the row is the store's, not evidence: it is judged exactly as the reconstruction judged it (hash, decode, block number, the roots
+	// the bundle states, the stored proofs), so a corrupt or foreign row is finality_included_invalid{check} and never a Settlement
+	if err := leg.Verify(hdr); err != nil {
+		return nil, err
+	}
+	return hdr, nil
+}
+
+// LegacyLegs lists, for one chain, the legs whose newest bundle holds an execution proof WITHOUT a block header (the legacy bundles
+// pkg/finality/legacyhdr reconstructs), looking at one page of SettledLegs (at most limit proofs, newest first, after the proof id
+// `after`). next is the cursor of the following page ("" when this page was the last). Each bundle of the chain is read once per call.
+// A bundle that is not legacy-shaped (no execution proof, a header, or unreadable) is not a candidate: the upgrader names those. A
+// legacy component that cannot be read as a leg is returned as a candidate carrying its named state.
+func (r *FinalityAddendaRepository) LegacyLegs(ctx context.Context, chain uint64, after string, limit int) (out []legacyhdr.Candidate, next string, err error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	refs, err := r.SettledLegs(ctx, after, limit)
+	if err != nil {
+		return nil, "", err
+	}
+	if len(refs) >= limit {
+		next = refs[len(refs)-1].ProofID
+	}
+	for _, ref := range refs {
+		if ref.Chain != chain {
+			continue
+		}
+		ep, err := r.executionProofOf(ctx, ref.ProofID, ref.BundleID, true)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, "", ctx.Err()
+			}
+			if _, named := finality.AsNamed(err); named {
+				continue
+			}
+			return nil, "", err
+		}
+		if !ep.headerMissing {
+			continue
+		}
+		leg, perr := legacyhdr.ParseLeg(ref.ProofID, ep.bundleID, ep.raw)
+		out = append(out, legacyhdr.Candidate{Leg: leg, Err: perr})
+	}
+	return out, next, nil
 }

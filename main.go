@@ -523,6 +523,14 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "repair" {
 		os.Exit(runRepairCommand(os.Args[2:]))
 	}
+	// RB12-INDEX-FIX D3: the on-demand self-check of the Base capture index (finality_index_selfcheck.go).
+	if len(os.Args) > 1 && os.Args[1] == "finality-index-selfcheck" {
+		os.Exit(runFinalityIndexSelfCheck(os.Args[2:], os.Stdout, os.Stderr))
+	}
+	// RB12-INDEX-B: the same for the Arbitrum batch index.
+	if len(os.Args) > 1 && os.Args[1] == "finality-arb-index-selfcheck" {
+		os.Exit(runFinalityArbIndexSelfCheck(os.Args[2:], os.Stdout, os.Stderr))
+	}
 
 	// Parse CLI flags
 	var (

@@ -18,6 +18,7 @@ import (
 	"github.com/certen/independant-validator/pkg/ethproof"
 	"github.com/certen/independant-validator/pkg/ethrpc"
 	"github.com/certen/independant-validator/pkg/finality"
+	"github.com/certen/independant-validator/pkg/metrics"
 )
 
 // The rollup deployment the capture serves (V2_SPEC_S7 4.2; the verifier reads the same addresses from the pins).
@@ -136,6 +137,14 @@ type Capturer struct {
 	L1     L1Source
 	Beacon BeaconSource
 	Cfg    Config
+	// Prefix, when set, scans the batches posted before the first block this capturer scanned, for the legs that asked for them
+	// (RB12-ARCHIVE-BACKFILL; nil: none).
+	Prefix *PrefixScan
+	// Authorize is THE authorization of a captured batch (authorize.go AuthorizeBatch): it judges a batch record against the accumulator proofs
+	// the capturer has stored for it, in the live capture AND in the batches the prefix scan stores (both register the same proof step), and is the
+	// same function the reference reader, the indexed reader and the index writer apply. nil means AuthorizeBatch itself; the Arbitrum wiring sets it
+	// explicitly. A batch the verdict calls foreign is counted and reported (Report.Foreign), its rows stay (insert-only) and no reader serves it.
+	Authorize func(rec BatchRecord, bridge [20]byte, accSlot uint64, views []ProofView) Authorization
 
 	mu          sync.Mutex
 	started     bool
@@ -152,11 +161,13 @@ type pendBlob struct {
 	tries  int
 	gaveUp bool
 	old    bool // found incomplete beyond RebuildBlocks: retried at the bounded cadence
+	prefix bool // registered by a prefix scan: retried every tick, PrefixBlobsPerTick at a time
 }
 type pendProof struct {
-	rec   BatchRecord
-	ticks int
-	old   bool
+	rec    BatchRecord
+	ticks  int
+	old    bool
+	prefix bool // registered by a prefix scan: retried every tick, PrefixProofsPerTick at a time
 }
 
 // NewCapturer returns a Capturer with defaults applied.
@@ -188,7 +199,20 @@ type Report struct {
 	Proofs      []uint64
 	ProofBlock  uint64
 	Unavailable []uint64
-	Errors      []string // redacted
+	// Foreign lists the batches whose record the chain does not hold: the proof just stored shows another accumulator at slot N than the
+	// record's afterAcc (AuthorizeBatch). Their rows stay (the table is insert-only); no reader serves them.
+	Foreign []uint64
+	// BlobBlocks are the L1 blocks of the batches whose blob rows were all stored this tick: the data of a block the index may have passed while it was
+	// incomplete (the capture loop notes them to the indexer).
+	BlobBlocks []uint64
+	Errors     []string // redacted
+	// RB12-ARCHIVE-BACKFILL
+	PrefixScanned     uint64      // L1 blocks of prefix windows scanned this tick
+	PrefixBatches     int         // batches those scans captured
+	PrefixRanges      [][2]uint64 // the L1 ranges the prefix scan CLOSED this tick (a gapscan row each), in the order they were scanned (highest first): the batch index is told each range
+	PrefixBlocks      []uint64    // the L1 blocks of those batches: far below the index cursor, so the capture loop notes them to the batch index
+	PrefixLeaseLost   int         // chunks another validator held
+	PrefixLeaseErrors int         // claims the store could not take
 }
 
 func (c *Capturer) logf(f string, a ...any) {
@@ -235,6 +259,10 @@ func (c *Capturer) Tick(ctx context.Context) (Report, error) {
 	if err := c.scan(ctx, head, &rep); err != nil {
 		rep.fail(c, "scan: %v", err)
 	}
+	// batches posted before the capture started, for the legs that asked for their windows
+	if err := c.scanPrefix(ctx, &rep); err != nil {
+		rep.fail(c, "prefix scan: %v", err)
+	}
 	// blobs awaiting a beacon answer
 	c.fetchBlobs(ctx, &rep)
 	// (b) proofs near the head
@@ -272,11 +300,12 @@ func (c *Capturer) rebuild(ctx context.Context, head uint64) error {
 	if err != nil {
 		return err
 	}
-	have := map[uint64]bool{}
+	// the blocks of the proof rows by batch: a proof taken BELOW the batch's own block shows the slot still empty and is no proof of the batch
+	proofAt := map[uint64][]uint64{}
 	for _, k := range pk {
 		var n uint64
 		if _, e := fmt.Sscanf(k.Item, "proof/%d", &n); e == nil {
-			have[n] = true
+			proofAt[n] = append(proofAt[n], k.L1Block)
 		}
 	}
 	// the blob rows by batch, from the keys alone: an old batch's blob rows are not read to find out whether they are all there
@@ -303,7 +332,11 @@ func (c *Capturer) rebuild(ctx context.Context, head uint64) error {
 			return err
 		}
 		var missing []finality.GapClass
-		if !have[rec.N] {
+		have := false
+		for _, b := range proofAt[rec.N] {
+			have = have || b >= rec.L1Block
+		}
+		if !have {
 			c.needProof[rec.N] = &pendProof{rec: rec, old: old}
 			missing = append(missing, finality.GapStateProofUnavailable)
 		}
@@ -578,10 +611,18 @@ func (c *Capturer) fetchBlobs(ctx context.Context, rep *Report) {
 		ns = append(ns, n)
 	}
 	sort.Slice(ns, func(i, j int) bool { return ns[i] < ns[j] })
+	prefixBlobs := 0
 	for _, n := range ns {
 		p := c.needBlobs[n]
-		if p.old && !c.dueOld() {
+		if p.old && !c.dueOld() && !p.prefix {
 			continue
+		}
+		if p.prefix {
+			// a prefix window holds hundreds of batches: a bounded few per tick, and once the beacon has given up on one only on the old cadence
+			if prefixBlobs >= PrefixBlobsPerTick || p.gaveUp && !c.dueOld() {
+				continue
+			}
+			prefixBlobs++
 		}
 		slot := (p.ts - c.Cfg.GenesisTime) / 12
 		scs, err := c.Beacon.Sidecars(ctx, slot, p.rec.VersionedHashes)
@@ -624,6 +665,7 @@ func (c *Capturer) fetchBlobs(ctx context.Context, rep *Report) {
 		}
 		if ok {
 			delete(c.needBlobs, n)
+			rep.BlobBlocks = append(rep.BlobBlocks, p.rec.L1Block)
 		}
 	}
 }
@@ -671,9 +713,15 @@ func (c *Capturer) captureProofs(ctx context.Context, head uint64, rep *Report) 
 		ns = append(ns, n)
 	}
 	sort.Slice(ns, func(i, j int) bool { return ns[i] < ns[j] })
+	prefixJobs := 0
 	for _, n := range ns {
-		if c.needProof[n].old && !c.dueOld() {
+		if pp := c.needProof[n]; pp.old && !c.dueOld() && !pp.prefix {
 			continue
+		} else if pp.prefix {
+			if prefixJobs >= PrefixProofsPerTick {
+				continue
+			}
+			prefixJobs++
 		}
 		jobs = append(jobs, proofJob{ProofBatchAcc, n, [][32]byte{ArraySlot(SequencerAccSlot, n)}, c.needProof[n]})
 	}
@@ -691,6 +739,12 @@ func (c *Capturer) captureProofs(ctx context.Context, head uint64, rep *Report) 
 	var failures []string
 	for try := 0; try < c.Cfg.ProofTries && uint64(try) <= head; try++ {
 		P := head - uint64(try)
+		// a batch posted above P cannot be proven at P (the slot is empty in the state below its block): its job waits for a nearer block, it is never
+		// cleared by a proof taken below it; a lower P cannot help either, so the tries end when no job is left
+		jobsAt := jobsEligibleAt(jobs, P)
+		if len(jobsAt) == 0 {
+			break
+		}
 		h, err := c.L1.Header(ctx, P)
 		if err != nil {
 			failures = append(failures, fmt.Sprintf("header %d: %s", P, ethrpc.RedactText(err.Error())))
@@ -701,7 +755,7 @@ func (c *Capturer) captureProofs(ctx context.Context, head uint64, rep *Report) 
 			failures = append(failures, fmt.Sprintf("header %d unreadable", P))
 			continue
 		}
-		if done := c.proveAt(ctx, h, hf.StateRoot, jobs, rep, &failures); done {
+		if done := c.proveAt(ctx, h, hf.StateRoot, jobsAt, rep, &failures); done {
 			rep.ProofBlock = P
 			return
 		}
@@ -726,6 +780,18 @@ func (c *Capturer) captureProofs(ctx context.Context, head uint64, rep *Report) 
 	for _, f := range failures {
 		rep.fail(c, "proof: %s", f)
 	}
+}
+
+// jobsEligibleAt are the jobs a proof block P can serve: every job but a batch accumulator proof of a batch whose event is above P.
+func jobsEligibleAt(jobs []proofJob, P uint64) []proofJob {
+	var out []proofJob
+	for _, j := range jobs {
+		if j.kind == ProofBatchAcc && j.rec != nil && j.rec.rec.L1Block > P {
+			continue
+		}
+		out = append(out, j)
+	}
+	return out
 }
 
 type proofJob struct {
@@ -809,6 +875,15 @@ func (c *Capturer) proveAt(ctx context.Context, h Header, stateRoot [32]byte, jo
 			if j.kind == ProofBatchAcc {
 				delete(c.needProof, j.index)
 				rep.Proofs = append(rep.Proofs, j.index)
+				// the same authorization every reader applies: a record the stored proof contradicts is counted and reported here
+				if j.rec != nil && j.rec.rec.N == j.index {
+					view := ProofView{Rec: pr, Block: h.Number, StateRoot: stateRoot}
+					if c.authorize()(j.rec.rec, c.Cfg.Bridge, SequencerAccSlot, []ProofView{view}) == AuthForeign {
+						rep.Foreign = append(rep.Foreign, j.index)
+						metrics.AddFinalityCaptureForeignTxs(c.Cfg.Chain, 1)
+						c.logf("capture: batch %d recorded at L1 block %d is not the batch the Bridge holds at slot %d (proof block %d): its record is foreign and is never served", j.index, j.rec.rec.L1Block, j.index, h.Number)
+					}
+				}
 			} else {
 				delete(c.wantDelayed, j.index)
 			}
@@ -819,3 +894,11 @@ func (c *Capturer) proveAt(ctx context.Context, h Header, stateRoot [32]byte, jo
 
 // Hex helpers for logs and the runner.
 func HexHash(b [32]byte) string { return "0x" + hex.EncodeToString(b[:]) }
+
+// authorize is the capturer's authorization function: the field, or AuthorizeBatch.
+func (c *Capturer) authorize() func(rec BatchRecord, bridge [20]byte, accSlot uint64, views []ProofView) Authorization {
+	if c.Authorize != nil {
+		return c.Authorize
+	}
+	return AuthorizeBatch
+}

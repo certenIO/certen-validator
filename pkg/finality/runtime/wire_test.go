@@ -71,8 +71,8 @@ func TestRTWireNamesTheMissingProviderSettingOfEachChain(t *testing.T) {
 		}
 	}
 	caps := reg.Capturers()
-	if len(caps) != 1 || caps[0].Chain() != finality.ChainArbitrumSepolia {
-		t.Fatalf("capture loops %v: only the Arbitrum loop is expected while Base is off", caps)
+	if len(caps) != 2 || caps[0].Chain() != finality.ChainArbitrumSepolia || caps[1].Chain() != finality.ChainArbitrumSepolia {
+		t.Fatalf("capture loops %v: only the Arbitrum loops (capture and batch index) are expected while Base is off", caps)
 	}
 	if !strings.Contains(logs.String(), "chains_off_by_configuration=[84532]") || !strings.Contains(logs.String(), "pins_source=embedded") {
 		t.Fatalf("the startup line does not report the chains off and the pins source:\n%s", logs.String())
@@ -99,8 +99,8 @@ func TestRTWireTakesTheEnvironmentSwitchesAndBounds(t *testing.T) {
 	for _, c := range reg.Capturers() {
 		names = append(names, c.Name())
 	}
-	if fmt.Sprint(names) != "[base-sepolia/inbox base-sepolia/gapfill arbitrum-sepolia/sequencer-inbox]" {
-		t.Fatalf("capture loops %v, want the Base inbox loop, the Base gap backfill loop (RB12-CAPTURE-GAP) and the Arbitrum sequencer-inbox loop", names)
+	if fmt.Sprint(names) != "[base-sepolia/inbox base-sepolia/gapfill arbitrum-sepolia/sequencer-inbox arbitrum-sepolia/batch-index]" {
+		t.Fatalf("capture loops %v, want the Base inbox loop, the Base gap backfill loop (RB12-CAPTURE-GAP), the Arbitrum sequencer-inbox loop and the Arbitrum batch-index loop (RB12-INDEX-B)", names)
 	}
 	// a switch that is not a switch is refused by name (an *envvar.Refusal; the process announces switch_invalid)
 	t.Setenv(finality.ChainEnv(finality.ChainBaseSepolia), "sometimes")

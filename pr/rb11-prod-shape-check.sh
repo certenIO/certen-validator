@@ -38,6 +38,14 @@ MAX_GZ=$((12 * 1024 * 1024))           # compressed bundle bound for sampling
 case "$SAMPLE" in ''|*[!0-9]*) SAMPLE=20 ;; esac
 [ "$SAMPLE" -gt 20 ] && SAMPLE=20
 [ "$SAMPLE" -lt 1 ] && SAMPLE=1
+LEGACY_SCAN="${LEGACY_SCAN:-1500}"   # (b4) at most this many of the OLDEST settled legs are looked at to find the legacy bundles
+case "$LEGACY_SCAN" in ''|*[!0-9]*) LEGACY_SCAN=1500 ;; esac
+[ "$LEGACY_SCAN" -gt 5000 ] && LEGACY_SCAN=5000
+[ "$LEGACY_SCAN" -lt 1 ] && LEGACY_SCAN=1
+LEGACY_SAMPLE="${LEGACY_SAMPLE:-$SAMPLE}"   # (b4) legacy bundles examined by SQL (default = SAMPLE, at most 1000: all 191 take about a minute)
+case "$LEGACY_SAMPLE" in ''|*[!0-9]*) LEGACY_SAMPLE=$SAMPLE ;; esac
+[ "$LEGACY_SAMPLE" -gt 1000 ] && LEGACY_SAMPLE=1000
+[ "$LEGACY_SAMPLE" -lt 1 ] && LEGACY_SAMPLE=1
 
 # The supported chains of the S7 table (pkg/finality/table.go): Sepolia, Base Sepolia, Arbitrum Sepolia, Adiri.
 CHAINS_SQL="11155111,84532,421614,2017"
@@ -818,15 +826,16 @@ SELECT count(*) FILTER (WHERE item LIKE 'gap/%'),
   count(*) FILTER (WHERE item LIKE 'gap/%' AND item !~ '^gap/[0-9]+/(block_unavailable|state_proof_unavailable|blob_unavailable|capture_failed|outage_unscanned|spacing_unproven|operator_declared|capture_prefix)\$'),
   count(*) FILTER (WHERE item LIKE 'gapfill/%' AND item <> 'gapfill/' || l1_block),
   count(*) FILTER (WHERE item LIKE 'gapend/%' AND item !~ '^gapend/[0-9]+/(unavailable_proven|retention_expired)\$'),
-  count(*) FILTER (WHERE item LIKE 'gapnote/%')
+  count(*) FILTER (WHERE item LIKE 'gapnote/%'),
+  count(*) FILTER (WHERE (item LIKE 'gapslot/%' AND item <> 'gapslot/' || l1_block) OR (item LIKE 'gapclaim/%' AND item <> 'gapclaim/' || l1_block) OR (item LIKE 'gapscan/%' AND item !~ '^gapscan/[0-9]+$'))
   FROM proof_finality_capture;
 SQL
 ); then
-  IFS='|' read -r g_n g_badgap g_badfill g_badend g_notes <<EOF
+  IFS='|' read -r g_n g_badgap g_badfill g_badend g_notes g_badaux <<EOF
 $out
 EOF
-  [ "$((g_badgap + g_badfill + g_badend))" -eq 0 ] && st=PASS || st=FAIL
-  rec $st C9 "gap bookkeeping rows (gap/<to>/<class>, gapfill/<block>, gapend/<block>/<kind>) are well-formed" "0 malformed" "gap rows $g_n (malformed $g_badgap), malformed fills $g_badfill, malformed ends $g_badend, notes $g_notes"
+  [ "$((g_badgap + g_badfill + g_badend + g_badaux))" -eq 0 ] && st=PASS || st=FAIL
+  rec $st C9 "gap bookkeeping rows (gap/<to>/<class>, gapfill/<block>, gapend/<block>/<kind>) are well-formed" "0 malformed" "gap rows $g_n (malformed $g_badgap), malformed fills $g_badfill, malformed ends $g_badend, malformed slot/claim rows $g_badaux, notes $g_notes"
 else rec FAIL C9 "gap bookkeeping query" "query answers" "failed: $(errline)"; fi
 if out=$(sqlro <<SQL
 WITH ib AS (SELECT DISTINCT l1_block AS blk FROM proof_finality_capture WHERE chain = 84532 AND item = 'inbox'),
@@ -914,6 +923,428 @@ EOF
 else rec FAIL SP2 "awaiting_spine status query" "query answers" "failed: $(errline)"; fi
 
 # ==============================================================================================================================
+# (h) RB12-INDEX-A: the stored-data assumptions of the Base capture index and of the windowed build (READ-ONLY, aggregates only)
+# ==============================================================================================================================
+# The index reads the Base (84532) capture rows through ListByRange/Get and the aggregate BlockBounds query. Every number it assumes about
+# those rows is checked here against the live table: the completion marker, the inbox/tx/blob row structure, the frame header inside the
+# first bytes of a blob row, the cursor rows, the capture holes and forks (which the index must name, not hide), the absence or shape of
+# the index rows themselves, and the query plans of the two statements a build runs.
+section "(h) Base capture index (RB12-INDEX-A): row structure, holes, forks, cursor rows, index rows, query plans"
+if out=$(sqlro <<'SQL'
+WITH inb AS (SELECT l1_block, l1_hash, bytes FROM proof_finality_capture WHERE chain=84532 AND item='inbox'),
+ sys AS (SELECT l1_block, l1_hash FROM proof_finality_capture WHERE chain=84532 AND item='syscfg')
+SELECT (SELECT count(*) FROM inb),
+  (SELECT count(*) FROM inb i WHERE NOT EXISTS (SELECT 1 FROM sys s WHERE s.l1_block=i.l1_block AND s.l1_hash=i.l1_hash)),
+  (SELECT count(*) FROM sys s WHERE NOT EXISTS (SELECT 1 FROM inb i WHERE s.l1_block=i.l1_block AND s.l1_hash=i.l1_hash)),
+  (SELECT count(*) FROM inb WHERE octet_length(bytes) < 4 OR octet_length(bytes) <> 4 + 4*((get_byte(bytes,0)<<24)+(get_byte(bytes,1)<<16)+(get_byte(bytes,2)<<8)+get_byte(bytes,3))),
+  (SELECT coalesce(sum((get_byte(bytes,0)<<24)+(get_byte(bytes,1)<<16)+(get_byte(bytes,2)<<8)+get_byte(bytes,3)),0) FROM inb),
+  (SELECT count(*) FROM proof_finality_capture WHERE chain=84532 AND item ~ '^tx/[0-9]+$'),
+  (SELECT count(*) FROM proof_finality_capture WHERE chain=84532 AND item ~ '^txnodes/[0-9]+$');
+SQL
+); then
+  IFS='|' read -r i_inb i_nosys i_noinb i_badinb i_txsum i_txrows i_nodes <<EOF
+$out
+EOF
+  if [ "$i_inb" -eq 0 ]; then rec WARN I1 "Base inbox blocks carry the completion row (syscfg, the capturer's last put) and a well-formed inbox row" "rows to examine" "no Base inbox rows"
+  else
+    [ "$((i_noinb + i_badinb))" -eq 0 ] && st=PASS || st=FAIL
+    [ "$st" = PASS ] && [ "$i_nosys" -gt 0 ] && st=WARN
+    rec $st I1 "every Base inbox block has its syscfg row (the index digests a block only once syscfg exists) and a well-formed inbox row (u32 count + u32 per tx)" "0 inbox blocks without syscfg, 0 syscfg without inbox, 0 malformed" "inbox blocks $i_inb; inbox without syscfg $i_nosys (a crash between puts: the index waits); syscfg without inbox $i_noinb; malformed inbox rows $i_badinb"
+    [ "$i_txsum" -eq "$i_txrows" ] && [ "$i_txrows" -eq "$i_nodes" ] && st=PASS || st=FAIL
+    rec $st I2 "the tx/N and txnodes/N rows are exactly the transactions the inbox rows list (the index and the builder Get tx/N for every listed N)" "listed = tx rows = txnodes rows" "listed $i_txsum; tx rows $i_txrows; txnodes rows $i_nodes"
+  fi
+else rec FAIL I1 "inbox/syscfg query" "query answers" "failed: $(errline)"; fi
+
+if out=$(sqlro <<'SQL'
+SELECT count(*),
+  count(*) FILTER (WHERE item !~ '^blob/[0-9]+/[0-9]+$'),
+  count(*) FILTER (WHERE octet_length(bytes) <> 131172),
+  count(*) FILTER (WHERE octet_length(bytes) = 131172 AND (get_byte(bytes,0)<<24)+(get_byte(bytes,1)<<16)+(get_byte(bytes,2)<<8)+get_byte(bytes,3) <> 131072),
+  count(*) FILTER (WHERE octet_length(bytes) = 131172 AND get_byte(bytes,5) <> 0),
+  count(*) FILTER (WHERE octet_length(bytes) = 131172 AND get_byte(bytes,9) <> 0),
+  count(*) FILTER (WHERE octet_length(bytes) = 131172 AND (get_byte(bytes,6)<<16)+(get_byte(bytes,7)<<8)+get_byte(bytes,8) > 130044),
+  count(*) FILTER (WHERE octet_length(bytes) = 131172 AND (get_byte(bytes,6)<<16)+(get_byte(bytes,7)<<8)+get_byte(bytes,8)
+      <> ((get_byte(bytes,28)::bigint<<24)+(get_byte(bytes,29)<<16)+(get_byte(bytes,30)<<8)+get_byte(bytes,31)) + 24)
+FROM proof_finality_capture WHERE chain=84532 AND item LIKE 'blob/%';
+SQL
+); then
+  IFS='|' read -r b_n b_name b_len b_lp b_ver b_deriv b_big b_multi <<EOF
+$out
+EOF
+  if [ "$b_n" -eq 0 ]; then rec WARN I3 "Base blob rows are 4+131072+96 bytes, blob version 0, derivation version 0, data length <= 130044" "rows to examine" "no blob rows"
+  else
+    [ "$((b_name + b_len + b_lp + b_ver + b_big))" -eq 0 ] && st=PASS || st=FAIL
+    rec $st I3 "every Base blob row is LP(131072)+B48+B48 = 131172 bytes with blob version 0 and a data length the blob format allows (loadTxRows/blobToData read exactly this)" "0 violations in $b_n rows" "bad item name $b_name; length != 131172 $b_len; LP prefix != 131072 $b_lp; blob version != 0 $b_ver; data length > 130044 $b_big"
+    # a blob whose data is not [derivation version 0][one frame] is read by the index anyway (parseFrames; a blob that is not frame data belongs to no channel): reported, not failed
+    [ "$b_deriv" -eq 0 ] && [ "$b_multi" -eq 0 ] && st=PASS || st=WARN
+    rec $st I4 "every Base blob carries derivation version 0 and exactly one frame (data length = frame length + 24): the shape the production-shaped fixtures use" "0 blobs with another shape" "derivation version != 0: $b_deriv; blobs whose data length is not one frame: $b_multi (of $b_n)"
+  fi
+else rec FAIL I3 "blob query" "query answers" "failed: $(errline)"; fi
+
+if out=$(sqlro <<'SQL'
+WITH b AS (
+ SELECT l1_block, l1_hash, substring(bytes from 11 for 16) AS ch, get_byte(bytes,26)*256+get_byte(bytes,27) AS num
+ FROM proof_finality_capture WHERE chain=84532 AND item LIKE 'blob/%' AND octet_length(bytes)=131172),
+c AS (SELECT ch, count(*) AS blobs, min(num) AS mn, max(num) AS mx, count(DISTINCT num) AS dn, max(l1_block)-min(l1_block) AS span FROM b GROUP BY ch)
+SELECT count(*), count(*) FILTER (WHERE blobs<>dn), count(*) FILTER (WHERE mn<>0), count(*) FILTER (WHERE mx-mn+1<>dn), coalesce(max(span),0), coalesce(max(blobs),0),
+  (SELECT count(*) FROM (SELECT l1_block FROM proof_finality_capture WHERE chain=84532 AND item='inbox' GROUP BY l1_block HAVING count(*)>1) f)
+FROM c;
+SQL
+); then
+  IFS='|' read -r ch_n ch_dup ch_nostart ch_gap ch_span ch_maxb forks <<EOF
+$out
+EOF
+  [ "$ch_n" -gt 0 ] && [ "$ch_span" -le 3600 ] && st=PASS || st=WARN
+  rec $st I5 "channels (by the frame header in the first bytes of each blob row) span at most the sequencing window (3600 L1 blocks); the index joins the frames of a channel within SeqWindowSize" "max span <= 3600" "channels $ch_n; max span $ch_span L1 blocks; max blobs per channel $ch_maxb"
+  [ "$ch_dup" -eq 0 ] && [ "$forks" -eq 0 ] && st=PASS || st=WARN
+  rec $st I6 "no reorged L1 height holds two inbox rows and no channel has duplicate frame numbers (the window reader and the verifier both call such a channel channel_incomplete; the index mirrors that and names the interval l1_capture_gap)" "0 forked heights, 0 channels with duplicate frames" "heights with two inbox hashes $forks; channels with duplicate frame numbers $ch_dup; channels not starting at frame 0 $ch_nostart (a frame is in a capture hole); channels with a number gap $ch_gap (of $ch_n)"
+else rec FAIL I5 "channel query" "query answers" "failed: $(errline)"; fi
+
+if out=$(sqlro <<'SQL'
+WITH b AS (SELECT DISTINCT l1_block FROM proof_finality_capture WHERE chain=84532 AND item='inbox'),
+ g AS (SELECT l1_block AS a, lead(l1_block) OVER (ORDER BY l1_block) AS z FROM b)
+SELECT count(*) FILTER (WHERE z-a>64), coalesce(max(z-a),0), coalesce(sum(z-a) FILTER (WHERE z-a>64),0),
+  coalesce(left(string_agg(a||'..'||z, ' ' ORDER BY z-a DESC) FILTER (WHERE z-a>64), 160), '')
+FROM g WHERE z IS NOT NULL;
+SQL
+); then
+  IFS='|' read -r h_n h_max h_sum h_list <<EOF
+$out
+EOF
+  [ "$h_n" -eq 0 ] && st=PASS || st=WARN
+  rec $st I7 "no stretch of more than 64 L1 blocks between consecutive Base inbox blocks (an empty block and an uncaptured one leave the same rows; the index derives holes from the L2 timeline and names them l1_capture_gap)" "0 suspect holes" "stretches > 64 blocks: $h_n (longest $h_max, total $h_sum blocks): $h_list"
+else rec FAIL I7 "hole query" "query answers" "failed: $(errline)"; fi
+
+if out=$(sqlro <<'SQL'
+SELECT count(*),
+  count(*) FILTER (WHERE octet_length(bytes) <> 8),
+  count(*) FILTER (WHERE l1_hash <> decode(repeat('00',32),'hex')),
+  count(*) FILTER (WHERE octet_length(bytes) = 8 AND ('x'||encode(bytes,'hex'))::bit(64)::bigint <> l1_block),
+  coalesce(min(l1_block),0), coalesce(max(l1_block),0)
+FROM proof_finality_capture WHERE chain=84532 AND item='runtime/cursor';
+SQL
+); then
+  IFS='|' read -r k_n k_len k_hash k_val k_min k_max <<EOF
+$out
+EOF
+  if [ "$k_n" -eq 0 ]; then rec WARN I8 "Base runtime/cursor rows are 8 bytes at the zero hash, valued at their own block (l1_capture_not_covering reads min/max with one aggregate query)" "rows to examine" "no cursor rows"
+  else
+    [ "$((k_len + k_hash + k_val))" -eq 0 ] && st=PASS || st=FAIL
+    rec $st I8 "Base runtime/cursor rows are 8 bytes at the zero hash, valued at their own block" "0 violations in $k_n rows" "length != 8: $k_len; hash != zero: $k_hash; value != block: $k_val; first cursor block $k_min, latest $k_max (min/max do NOT prove coverage: holes exist inside)"
+  fi
+else rec FAIL I8 "cursor query" "query answers" "failed: $(errline)"; fi
+
+if out=$(sqlro <<'SQL'
+SELECT count(*),
+  count(*) FILTER (WHERE item !~ '^idx/g[0-9]+/bi/(f|cursor|c/[0-9]+/[0-9]+/[0-9a-f]{32}|x/[0-9a-f]{32})$'),
+  count(*) FILTER (WHERE item ~ '^idx/g[0-9]+/bi/f$'),
+  count(*) FILTER (WHERE item ~ '^idx/g[0-9]+/bi/c/'),
+  count(*) FILTER (WHERE item ~ '^idx/g[0-9]+/bi/x/'),
+  count(*) FILTER (WHERE item ~ '^idx/g[0-9]+/bi/cursor$' AND (octet_length(bytes)<>8 OR l1_hash <> decode(repeat('00',32),'hex'))),
+  count(*) FILTER (WHERE item ~ '^idx/g[0-9]+/bi/f$' AND NOT EXISTS (SELECT 1 FROM proof_finality_capture s WHERE s.chain=84532 AND s.l1_block=p.l1_block AND s.l1_hash=p.l1_hash AND s.item='syscfg')),
+  coalesce(sum(octet_length(bytes)),0)
+FROM proof_finality_capture p WHERE chain=84532 AND item LIKE 'idx/%';
+SQL
+); then
+  IFS='|' read -r x_n x_name x_f x_c x_x x_cur x_nosys x_bytes <<EOF
+$out
+EOF
+  if [ "$x_n" -eq 0 ]; then rec WARN I9 "Base index rows (idx/g<G>/bi/...) have the documented names, sit at captured blocks and are tiny" "rows to examine" "no index rows yet (expected before the first deploy of the index; run again after the backfill)"
+  else
+    [ "$((x_name + x_cur + x_nosys))" -eq 0 ] && st=PASS || st=FAIL
+    rec $st I9 "every Base index row has a documented name, digests sit at blocks that have syscfg, cursor rows are 8 bytes at the zero hash" "0 violations in $x_n rows" "bad names $x_name; cursor rows malformed $x_cur; digests without syscfg $x_nosys; digests $x_f; entries $x_c; markers $x_x (a marker names a late duplicate frame); index bytes $x_bytes"
+  fi
+else rec FAIL I9 "index row query" "query answers" "failed: $(errline)"; fi
+
+# the two statements a build runs on this table, as plans (EXPLAIN without ANALYZE executes nothing)
+if plan=$(printf '%s\n' "EXPLAIN SELECT l1_block, l1_hash, item FROM proof_finality_capture WHERE chain = 84532 AND l1_block BETWEEN 11958043 AND 11958139 AND starts_with(item, 'idx/g1/bi/c/') ORDER BY l1_block, l1_hash, item;" | sqlro); then
+  case "$plan" in
+    *"Seq Scan"*) rec WARN I10 "the entry key listing (chain, l1_block range, item prefix) is served by the primary key index" "an Index Scan on proof_finality_capture_pkey" "the planner chose a sequential scan: $(printf '%s' "$plan" | head -1 | cut -c1-120) (acceptable only while the table is small)" ;;
+    *Index*) rec PASS I10 "the entry key listing (chain, l1_block range, item prefix) is served by the primary key index" "an Index Scan on proof_finality_capture_pkey" "$(printf '%s' "$plan" | head -1 | cut -c1-120)" ;;
+    *) rec WARN I10 "the entry key listing plan" "an Index Scan" "unrecognised plan: $(printf '%s' "$plan" | head -1 | cut -c1-120)" ;;
+  esac
+else rec FAIL I10 "entry listing plan" "EXPLAIN answers" "failed: $(errline)"; fi
+if plan=$(printf '%s\n' "EXPLAIN SELECT min(l1_block), max(l1_block) FROM proof_finality_capture WHERE chain = 84532 AND item = 'idx/g1/bi/cursor';" | sqlro); then
+  rec PASS I11 "the cursor read (BlockBounds: one aggregate query per build) is a plan the database can run" "a plan" "$(printf '%s' "$plan" | head -1 | cut -c1-140)"
+else rec FAIL I11 "cursor aggregate plan" "EXPLAIN answers" "failed: $(errline)"; fi
+
+# RB12-INDEX-FIX Note (c): the rest of what the indexer assumes about the rows it reads. Each check is read-only and reports positions and
+# classes only. A violation is not fatal for the validator: the indexer records the block as index_block_unindexable{reason} and goes on
+# (the leg whose window holds it is told by name), so these are WARN with the class of the fault, never a silent pass.
+if out=$(sqlro <<'SQL'
+SELECT count(*),
+  coalesce(max((get_byte(bytes,0)<<24)+(get_byte(bytes,1)<<16)+(get_byte(bytes,2)<<8)+get_byte(bytes,3)),0),
+  count(*) FILTER (WHERE (get_byte(bytes,0)<<24)+(get_byte(bytes,1)<<16)+(get_byte(bytes,2)<<8)+get_byte(bytes,3) > 4096)
+FROM proof_finality_capture WHERE chain=84532 AND item='inbox' AND octet_length(bytes) >= 4;
+SQL
+); then
+  IFS='|' read -r n_in n_max n_over <<EOF
+$out
+EOF
+  if [ "$n_in" -eq 0 ]; then rec WARN I12 "no Base inbox row lists more than 4096 transactions (the reader's bound: loadRange and the indexer refuse such a row)" "rows to examine" "no inbox rows"
+  else
+    [ "$n_over" -eq 0 ] && st=PASS || st=WARN
+    rec $st I12 "no Base inbox row lists more than 4096 transactions (the reader's bound; a block over it is recorded as index_block_unindexable{inbox_over_limit})" "0 inbox rows over 4096 in $n_in" "$n_over over the bound; the largest lists $n_max"
+  fi
+else rec FAIL I12 "inbox transaction-count query" "query answers" "failed: $(errline)"; fi
+
+if out=$(sqlro <<'SQL'
+WITH b AS (SELECT l1_block, l1_hash, split_part(item,'/',2)::int AS tx, split_part(item,'/',3)::int AS j
+           FROM proof_finality_capture WHERE chain=84532 AND item ~ '^blob/[0-9]+/[0-9]+$'),
+g AS (SELECT l1_block, l1_hash, tx, min(j) AS mn, max(j) AS mx, count(*) AS n FROM b GROUP BY 1,2,3),
+t AS (SELECT l1_block, l1_hash, split_part(item,'/',2)::int AS idx, get_byte(bytes,0) AS ty
+      FROM proof_finality_capture WHERE chain=84532 AND item ~ '^tx/[0-9]+$' AND octet_length(bytes) > 0)
+SELECT (SELECT count(*) FROM g),
+  (SELECT count(*) FROM g WHERE mn <> 0 OR mx + 1 <> n),
+  (SELECT count(*) FROM t WHERE ty = 3 AND NOT EXISTS (SELECT 1 FROM g WHERE g.l1_block=t.l1_block AND g.l1_hash=t.l1_hash AND g.tx=t.idx)),
+  (SELECT count(*) FROM t WHERE ty <> 3 AND EXISTS (SELECT 1 FROM g WHERE g.l1_block=t.l1_block AND g.l1_hash=t.l1_hash AND g.tx=t.idx));
+SQL
+); then
+  IFS='|' read -r g_n g_gap g_nobl g_wrong <<EOF
+$out
+EOF
+  if [ "$g_n" -eq 0 ]; then rec WARN I13 "the blob rows of a transaction are contiguous from index 0 (the loaders stop at the first missing index) and belong to a blob transaction" "rows to examine" "no blob rows"
+  else
+    [ "$((g_gap + g_nobl + g_wrong))" -eq 0 ] && st=PASS || st=WARN
+    rec $st I13 "blob rows of one transaction are contiguous from 0 (loaders stop at the first missing index), every type-3 transaction row has blob rows and no other type has (a fault is recorded as index_block_unindexable{blob_rows_inconsistent})" "0 violations in $g_n transactions with blobs" "non-contiguous or not from 0: $g_gap; type-3 rows without blob rows: $g_nobl; blob rows of a non-blob transaction: $g_wrong"
+    info "the number of blob rows equals the number of blob hashes in the transaction RLP: PostgreSQL has no RLP; the indexer compares them (blob_rows_inconsistent) and the production check is N8"
+  fi
+else rec FAIL I13 "blob contiguity query" "query answers" "failed: $(errline)"; fi
+
+if out=$(sqlro <<'SQL'
+WITH t AS (SELECT bytes, octet_length(bytes) AS len, get_byte(bytes,0) AS b0 FROM proof_finality_capture WHERE chain=84532 AND item ~ '^tx/[0-9]+$'),
+p AS (SELECT len, b0, bytes, CASE WHEN b0 >= 192 THEN 0 ELSE 1 END AS off FROM t WHERE len >= 2),
+q AS (SELECT len, b0, off, bytes, get_byte(bytes, off) AS lp FROM p),
+x AS (SELECT b0, len, CASE
+    WHEN lp BETWEEN 192 AND 247 THEN off + 1 + (lp - 192)
+    WHEN lp = 248 THEN off + 2 + get_byte(bytes, off + 1)
+    WHEN lp = 249 THEN off + 3 + get_byte(bytes, off + 1) * 256 + get_byte(bytes, off + 2)
+    WHEN lp = 250 THEN off + 4 + get_byte(bytes, off + 1) * 65536 + get_byte(bytes, off + 2) * 256 + get_byte(bytes, off + 3)
+    ELSE -1 END AS expected FROM q)
+SELECT (SELECT count(*) FROM t),
+  (SELECT count(*) FROM t WHERE len < 2 OR NOT (b0 IN (1,2,3,4) OR b0 >= 192)),
+  (SELECT count(*) FROM x WHERE (b0 IN (1,2,3,4) OR b0 >= 192) AND expected <> len);
+SQL
+); then
+  IFS='|' read -r r_n r_type r_env <<EOF
+$out
+EOF
+  if [ "$r_n" -eq 0 ]; then rec WARN I14 "every tx/N row is an EIP-2718 envelope (a legacy RLP list or a type byte and an RLP list) that the reader parses" "rows to examine" "no tx rows"
+  else
+    [ "$((r_type + r_env))" -eq 0 ] && st=PASS || st=WARN
+    rec $st I14 "every Base tx/N row starts like an EIP-2718 transaction (a legacy RLP list, or type 1-4 and an RLP list); the full parse is the vendored go-ethereum's, and a row it refuses is recorded as index_block_unindexable{tx_unparseable}" "0 malformed prefixes in $r_n rows" "bad first byte or length: $r_type; an RLP list whose declared length does not match the row: $r_env"
+  fi
+else rec FAIL I14 "tx row query" "query answers" "failed: $(errline)"; fi
+# C12 (RB12-ARCHIVE-BACKFILL): the capture-store prefix extension. Positions and counts only. A prefix request is a gap row of class
+# capture_prefix (gap/<to>/capture_prefix at l1_block=<from>); a block proven unavailable has a beacon-slot row (gapslot/<block>) written before
+# its end row; a claim row (gapclaim/<chunk>) is one per chunk and period. The union of the requested windows is bounded by
+# CERTEN_FINALITY_PREFIX_MAX_BLOCKS (default 100000).
+if out=$(sqlro <<'SQL'
+WITH w AS (SELECT chain, l1_block AS f, split_part(item, '/', 2)::bigint AS t FROM proof_finality_capture WHERE chain IN (84532, 421614) AND item LIKE 'gap/%/capture_prefix'),
+     u AS (SELECT count(DISTINCT (chain, g)) AS n FROM (SELECT chain, generate_series(f, t) AS g FROM w WHERE t >= f) x)
+SELECT (SELECT count(*) FROM w),
+       (SELECT count(*) FROM w WHERE t < f),
+       (SELECT n FROM u),
+       COALESCE((SELECT min(f) FROM w), 0),
+       (SELECT count(*) FROM proof_finality_capture e WHERE e.chain = 84532 AND e.item LIKE 'gapend/%'
+          AND NOT EXISTS (SELECT 1 FROM proof_finality_capture s WHERE s.chain = e.chain AND s.l1_block = e.l1_block AND s.item = 'gapslot/' || e.l1_block)),
+       (SELECT count(*) FROM proof_finality_capture WHERE chain IN (84532, 421614) AND item LIKE 'gapclaim/%');
+SQL
+); then
+  IFS='|' read -r x_n x_bad x_blocks x_low x_noslot x_claims <<EOF
+$out
+EOF
+  if [ "$x_bad" -ne 0 ]; then rec FAIL C12 "prefix requests (gap/<to>/capture_prefix) end at or after the block they start at" "0 malformed" "$x_bad of $x_n"
+  elif [ "$x_n" -eq 0 ]; then rec WARN C12 "prefix requests: the legs posted before the capture started are asked for by their builders" "requests once the validators of this branch run" "no prefix request yet ($x_claims claim rows)"
+  elif [ "$x_noslot" -ne 0 ]; then rec WARN C12 "every ended block has its beacon-slot row" "0 ends without a slot (ends written by an earlier binary have none)" "$x_noslot end row(s) without a slot; $x_n prefix windows ($x_blocks blocks from $x_low), $x_claims claim rows"
+  else rec PASS C12 "prefix requests are well-formed and every ended block has its beacon-slot row" "0 malformed, 0 ends without a slot" "$x_n prefix windows, $x_blocks blocks from $x_low, $x_claims claim rows"; fi
+else rec FAIL C12 "prefix requests query" "query answers" "failed: $(errline)"; fi
+
+# ==============================================================================================================================
+# (h2) RB12-INDEX-B: the stored-data assumptions of the Arbitrum batch index and of the indexed build (READ-ONLY, aggregates only)
+# ==============================================================================================================================
+# The index reads the Arbitrum (421614) capture rows through ListByRange/Get and the aggregate BlockBounds query over the capture's own cursor rows.
+# Every number it assumes about those rows is checked here against the live table: the batch record layout (magic ACB1; the item's N, the record's
+# L1 block and hash are the row's own key), the header row of every batch's block (the indexer takes the L1 timestamp from it), the blob rows
+# (131,168 bytes, contiguous from 0, as many as the record's versioned hashes), the time bounds (the lookup window assumes a width the caps allow),
+# dense batch numbers (a gap is a capture hole), the proofs (a batch with none is kept by every reader and named l1_proof_window_unavailable), the
+# capture cursor rows, the index rows themselves, and the plans of the statements a build runs. Positions and counts only; nothing of a row is printed.
+section "(h2) Arbitrum batch index (RB12-INDEX-B): batch records, header rows, blobs, time bounds, dense numbers, proofs, cursor rows, index rows, plans"
+if out=$(sqlro <<'SQL'
+WITH b AS (SELECT l1_block, l1_hash, item, bytes, octet_length(bytes) AS len, split_part(item,'/',2)::bigint AS n
+           FROM proof_finality_capture WHERE chain=421614 AND item ~ '^batch/[0-9]+$'),
+f AS (SELECT *,
+  CASE WHEN len >= 237 THEN ('x'||encode(substring(bytes from 5 for 8),'hex'))::bit(64)::bigint END AS rn,
+  CASE WHEN len >= 237 THEN ('x'||encode(substring(bytes from 150 for 8),'hex'))::bit(64)::bigint END AS rblock,
+  CASE WHEN len >= 237 THEN substring(bytes from 158 for 32) END AS rhash,
+  CASE WHEN len >= 237 THEN get_byte(bytes,148) END AS loc,
+  CASE WHEN len >= 237 THEN ('x'||encode(substring(bytes from 109 for 8),'hex'))::bit(64)::bigint END AS mints,
+  CASE WHEN len >= 237 THEN ('x'||encode(substring(bytes from 117 for 8),'hex'))::bit(64)::bigint END AS maxts
+  FROM b)
+SELECT count(*),
+  count(*) FILTER (WHERE len < 237 OR substring(bytes from 1 for 4) <> 'ACB1'::bytea),
+  count(*) FILTER (WHERE len >= 237 AND (rn <> n OR rblock <> l1_block OR rhash <> l1_hash)),
+  count(*) FILTER (WHERE len >= 237 AND loc NOT IN (0,1,2,3)),
+  count(*) FILTER (WHERE len >= 237 AND mints > maxts),
+  coalesce(max(maxts - mints) FILTER (WHERE len >= 237),0),
+  count(*) FILTER (WHERE len >= 237 AND maxts - mints > 104000),
+  (SELECT count(*) FROM f x WHERE NOT EXISTS (SELECT 1 FROM proof_finality_capture h WHERE h.chain=421614 AND h.l1_block=x.l1_block AND h.l1_hash=x.l1_hash AND h.item='header' AND octet_length(h.bytes) BETWEEN 400 AND 2000))
+FROM f;
+SQL
+); then
+  IFS='|' read -r j_n j_bad j_key j_loc j_inv j_wmax j_wide j_nohdr <<EOF
+$out
+EOF
+  if [ "$j_n" -eq 0 ]; then rec WARN J1 "Arbitrum batch records have the ACB1 layout and are the batch their key names" "rows to examine" "no batch rows"
+  else
+    [ "$((j_bad + j_key + j_loc + j_inv))" -eq 0 ] && st=PASS || st=FAIL
+    rec $st J1 "every batch/N row is an ACB1 record whose N, L1 block and L1 hash are its own key's, with a known data location and minTs <= maxTs (the indexer records anything else as index_block_unindexable{batch_row_malformed})" "0 violations in $j_n rows" "bad magic or length $j_bad; N/block/hash differ from the key $j_key; unknown data location $j_loc; minTs > maxTs $j_inv"
+    [ "$j_nohdr" -eq 0 ] && st=PASS || st=FAIL
+    rec $st J2 "the block of every batch has its header row (the indexer takes the L1 timestamp of the batch from it; a block without one is index_block_unindexable{header_row_malformed})" "0 batches without a header row" "$j_nohdr of $j_n"
+    [ "$j_wide" -eq 0 ] && st=PASS || st=WARN
+    rec $st J3 "the time bounds of every batch are no wider than the lookup's normal window assumes (delay 100000 s + future 4000 s; a wider batch is still indexed and served, through a w pointer row keyed by its block hash: the SequencerInbox time variation would have been raised; there is no limit on a window, and more than 4096 pointers is index_inconsistent{coverage_overflow} for a leg only a wide batch can serve)" "max width <= 104000 s" "widest $j_wmax s; wider than the caps allow: $j_wide of $j_n"
+  fi
+else rec FAIL J1 "batch record query" "query answers" "failed: $(errline)"; fi
+
+if out=$(sqlro <<'SQL'
+WITH b AS (SELECT l1_block, l1_hash, split_part(item,'/',2)::bigint AS n, bytes, octet_length(bytes) AS len
+           FROM proof_finality_capture WHERE chain=421614 AND item ~ '^batch/[0-9]+$' AND octet_length(bytes) >= 237),
+v AS (SELECT l1_block, l1_hash, n, get_byte(bytes,148) AS loc,
+        ('x'||encode(substring(bytes from 230 for 4),'hex'))::bit(32)::bigint AS txlen, bytes, len FROM b),
+w AS (SELECT l1_block, l1_hash, n, loc, CASE WHEN 237 + txlen <= len THEN ('x'||encode(substring(bytes from (234 + txlen)::int for 4),'hex'))::bit(32)::bigint END AS nvh FROM v),
+r AS (SELECT l1_block, l1_hash, split_part(item,'/',2)::bigint AS n, split_part(item,'/',3)::int AS j, octet_length(bytes) AS len
+      FROM proof_finality_capture WHERE chain=421614 AND item ~ '^blob/[0-9]+/[0-9]+$'),
+g AS (SELECT l1_block, l1_hash, n, count(*) AS have, min(j) AS mn, max(j) AS mx, count(*) FILTER (WHERE len <> 131168) AS badlen FROM r GROUP BY 1,2,3)
+SELECT (SELECT count(*) FROM w WHERE loc = 3),
+  (SELECT count(*) FROM w WHERE loc = 3 AND nvh IS NULL),
+  (SELECT count(*) FROM w LEFT JOIN g USING (l1_block, l1_hash, n) WHERE w.loc = 3 AND w.nvh IS NOT NULL AND coalesce(g.have,0) < w.nvh),
+  (SELECT count(*) FROM w JOIN g USING (l1_block, l1_hash, n) WHERE w.loc = 3 AND (g.mn <> 0 OR g.mx + 1 <> g.have OR g.have > w.nvh)),
+  (SELECT coalesce(sum(badlen),0) FROM g),
+  (SELECT count(*) FROM g WHERE NOT EXISTS (SELECT 1 FROM w WHERE w.l1_block=g.l1_block AND w.l1_hash=g.l1_hash AND w.n=g.n)),
+  (SELECT count(*) FROM w WHERE loc IN (0,1) AND NOT EXISTS (SELECT 1 FROM proof_finality_capture c WHERE c.chain=421614 AND c.l1_block=w.l1_block AND c.l1_hash=w.l1_hash AND c.item='calldata/'||w.n));
+SQL
+); then
+  IFS='|' read -r k_blob k_nonvh k_open k_gap k_len k_orphan k_nocd <<EOF
+$out
+EOF
+  [ "$k_nonvh" -eq 0 ] && [ "$k_gap" -eq 0 ] && [ "$k_len" -eq 0 ] && [ "$k_orphan" -eq 0 ] && [ "$k_nocd" -eq 0 ] && st=PASS || st=FAIL
+  rec $st J4 "blob rows are 131168 bytes, contiguous from index 0, never more than the record's versioned hashes, and belong to a batch record; calldata batches have their calldata row (the indexer reads exactly this)" "0 violations among $k_blob blob batches" "record whose versioned-hash count cannot be read $k_nonvh; non-contiguous or surplus blob rows $k_gap; blob rows not 131168 bytes $k_len; blob rows of no batch record $k_orphan; calldata batches without their row $k_nocd"
+  [ "$k_open" -eq 0 ] && st=PASS || st=WARN
+  rec $st J5 "every blob batch has all its blob rows (an open batch has no entry, is named l1_blob_unavailable to a leg whose window holds it, and is indexed by the next step once its blobs arrive)" "0 open batches" "$k_open of $k_blob blob batches have fewer blob rows than versioned hashes"
+else rec FAIL J4 "blob rows query" "query answers" "failed: $(errline)"; fi
+
+if out=$(sqlro <<'SQL'
+WITH b AS (SELECT split_part(item,'/',2)::bigint AS n, l1_block FROM proof_finality_capture WHERE chain=421614 AND item ~ '^batch/[0-9]+$'),
+d AS (SELECT DISTINCT n FROM b),
+gaps AS (SELECT n, lead(n) OVER (ORDER BY n) AS nx FROM d)
+SELECT (SELECT count(*) FROM b), (SELECT count(*) FROM d), coalesce((SELECT min(n) FROM d),0), coalesce((SELECT max(n) FROM d),0),
+  (SELECT count(*) FROM gaps WHERE nx IS NOT NULL AND nx > n + 1),
+  (SELECT count(*) FROM (SELECT n FROM b GROUP BY n HAVING count(*) > 1) t),
+  (SELECT count(*) FROM (SELECT n, l1_block, lag(l1_block) OVER (ORDER BY n, l1_block) AS pl FROM b) t WHERE pl IS NOT NULL AND l1_block < pl);
+SQL
+); then
+  IFS='|' read -r n_rows n_dist n_min n_max n_gaps n_twins n_back <<EOF
+$out
+EOF
+  [ "$n_gaps" -eq 0 ] && st=PASS || st=WARN
+  rec $st J6 "batch numbers are dense (a gap between two captured batches is a capture hole a leg may be told of as l1_capture_gap, only when the Bridge holds both neighbours)" "0 gaps" "rows $n_rows, distinct N $n_dist ($n_min..$n_max); gaps $n_gaps"
+  [ "$n_back" -eq 0 ] && st=PASS || st=WARN
+  rec $st J7 "batch numbers rise with the L1 block (the window of a lookup relies on the L1 timestamp rising with N); reorg twins (one N under two blocks) are served in (N, L1 block) order and the one the Bridge does not hold is skipped" "0 decreases of the L1 block along N" "decreases $n_back; N under more than one row (reorg twins) $n_twins"
+else rec FAIL J6 "batch number query" "query answers" "failed: $(errline)"; fi
+
+if out=$(sqlro <<'SQL'
+WITH b AS (SELECT l1_block, split_part(item,'/',2)::bigint AS n FROM proof_finality_capture WHERE chain=421614 AND item ~ '^batch/[0-9]+$')
+SELECT (SELECT count(*) FROM b),
+  (SELECT count(*) FROM b WHERE NOT EXISTS (SELECT 1 FROM proof_finality_capture p WHERE p.chain=421614 AND p.l1_block >= b.l1_block AND p.l1_block <= b.l1_block + 16384 AND p.item = 'proof/'||b.n)),
+  (SELECT count(*) FROM proof_finality_capture p WHERE p.chain=421614 AND p.item ~ '^proof/[0-9]+$' AND EXISTS (SELECT 1 FROM b WHERE b.n = split_part(p.item,'/',2)::bigint AND p.l1_block < b.l1_block)),
+  (SELECT count(*) FROM proof_finality_capture p WHERE p.chain=421614 AND p.item ~ '^proof/[0-9]+$' AND NOT EXISTS (SELECT 1 FROM proof_finality_capture h WHERE h.chain=421614 AND h.l1_block=p.l1_block AND h.l1_hash=p.l1_hash AND h.item='header'));
+SQL
+); then
+  IFS='|' read -r p_n p_none p_below p_nohdr <<EOF
+$out
+EOF
+  [ "$p_none" -eq 0 ] && st=PASS || st=WARN
+  rec $st J8 "every batch has a captured proof within 16384 blocks of its own block (the proof listing widens 64 / 1024 / 16384 / table; a batch with none is UNPROVEN: kept by every reader, l1_proof_window_unavailable to a build)" "0 batches without a nearby proof" "$p_none of $p_n batches have none"
+  [ "$p_below" -eq 0 ] && st=PASS || st=WARN
+  rec $st J9 "no proof row lies BELOW the block of its own batch (the capturer tries the head and the two blocks under it; a proof below the batch shows the slot still empty and is never used: BuildFor starts at the batch's block)" "0 proofs below their batch" "$p_below proof rows lie below the batch they are for"
+  [ "$p_nohdr" -eq 0 ] && st=PASS || st=WARN
+  rec $st J10 "every proof row has the header row of its proof block (AuthorizeBatch takes the state root from it; a proof without one judges nothing)" "0 proofs without a header row" "$p_nohdr proof rows"
+else rec FAIL J8 "proof query" "query answers" "failed: $(errline)"; fi
+
+if out=$(sqlro <<'SQL'
+SELECT count(*), count(*) FILTER (WHERE octet_length(bytes) <> 40),
+  count(*) FILTER (WHERE octet_length(bytes) = 40 AND (('x'||encode(substring(bytes from 1 for 8),'hex'))::bit(64)::bigint <> l1_block OR substring(bytes from 9 for 32) <> l1_hash)),
+  coalesce(min(l1_block),0), coalesce(max(l1_block),0)
+FROM proof_finality_capture WHERE chain=421614 AND item='cursor';
+SQL
+); then
+  IFS='|' read -r c_n c_len c_val c_min c_max <<EOF
+$out
+EOF
+  if [ "$c_n" -eq 0 ]; then rec WARN J11 "Arbitrum capture cursor rows (item cursor) are 40 bytes, block and hash of their own key (the reader and the loop read their bounds with one aggregate query)" "rows to examine" "no cursor rows"
+  else
+    [ "$((c_len + c_val))" -eq 0 ] && st=PASS || st=FAIL
+    rec $st J11 "Arbitrum capture cursor rows are 40 bytes, be64(block) || hash of their own key; the index steps to the highest and starts its search a first-scan slack (512) below the lowest" "0 violations in $c_n rows" "length != 40: $c_len; value differs from the key: $c_val; first cursor block $c_min, latest $c_max"
+  fi
+else rec FAIL J11 "cursor query" "query answers" "failed: $(errline)"; fi
+
+if out=$(sqlro <<'SQL'
+SELECT (SELECT coalesce(min(l1_block),0) FROM proof_finality_capture WHERE chain=421614 AND item ~ '^batch/[0-9]+$'),
+  (SELECT coalesce(min(l1_block),0) FROM proof_finality_capture WHERE chain=421614 AND item='cursor');
+SQL
+); then
+  IFS='|' read -r x_first x_cur <<EOF
+$out
+EOF
+  if [ "$x_first" -eq 0 ] || [ "$x_cur" -eq 0 ]; then rec WARN J12 "no batch lies more than 512 blocks below the first capture cursor row (the time search starts there; a batch captured by a prefix scan below it needs the reader's Floor hook)" "rows to examine" "no batch or cursor rows"
+  else
+    [ "$x_first" -ge "$((x_cur - 512))" ] && st=PASS || st=WARN
+    rec $st J12 "no batch lies more than 512 blocks below the first capture cursor row (the time search starts there; a batch captured by a prefix scan below it needs the reader's Floor hook)" "lowest batch block >= first cursor block - 512" "lowest batch block $x_first, first cursor block $x_cur"
+  fi
+else rec FAIL J12 "first-block query" "query answers" "failed: $(errline)"; fi
+
+if out=$(sqlro <<'SQL'
+SELECT count(*),
+  count(*) FILTER (WHERE item !~ '^idx/g[0-9]+/arb/(f/[0-9]+|e/[0-9]+/[0-9]+/[0-9]+|q/[0-9]+|u|cursor)$'),
+  count(*) FILTER (WHERE item ~ '^idx/g[0-9]+/arb/f/'),
+  count(*) FILTER (WHERE item ~ '^idx/g[0-9]+/arb/e/'),
+  count(*) FILTER (WHERE item ~ '^idx/g[0-9]+/arb/q/'),
+  count(*) FILTER (WHERE item ~ '^idx/g[0-9]+/arb/u$'),
+  count(*) FILTER (WHERE item ~ '^idx/g[0-9]+/arb/cursor$' AND (octet_length(bytes) <> 8 OR l1_hash <> decode(repeat('00',32),'hex'))),
+  count(*) FILTER (WHERE item ~ '^idx/g[0-9]+/arb/(f|e)/' AND NOT EXISTS (SELECT 1 FROM proof_finality_capture s WHERE s.chain=421614 AND s.l1_block=p.l1_block AND s.l1_hash=p.l1_hash AND s.item ~ '^batch/[0-9]+$')),
+  coalesce(sum(octet_length(bytes)),0)
+FROM proof_finality_capture p WHERE chain=421614 AND item LIKE 'idx/%';
+SQL
+); then
+  IFS='|' read -r y_n y_name y_f y_e y_q y_u y_cur y_nobatch y_bytes <<EOF
+$out
+EOF
+  if [ "$y_n" -eq 0 ]; then rec WARN J13 "Arbitrum index rows (idx/g<G>/arb/...) have the documented names, sit at captured batch blocks and are small" "rows to examine" "no index rows yet (expected before the first deploy of the index; run again after the backfill)"
+  else
+    [ "$((y_name + y_cur + y_nobatch))" -eq 0 ] && st=PASS || st=FAIL
+    rec $st J13 "every Arbitrum index row has a documented name, digests and entries sit at blocks that hold a batch record, cursor rows are 8 bytes at the zero hash" "0 violations in $y_n rows" "bad names $y_name; cursor rows malformed $y_cur; digests/entries at a block with no batch record $y_nobatch; digests $y_f; entries $y_e; quarantine records $y_q (a self-check mismatch); unindexable records $y_u; index bytes $y_bytes"
+  fi
+else rec FAIL J13 "index row query" "query answers" "failed: $(errline)"; fi
+
+# the statements a build runs on this table, as plans (EXPLAIN without ANALYZE executes nothing)
+if plan=$(printf '%s\n' "EXPLAIN SELECT l1_block, l1_hash, item FROM proof_finality_capture WHERE chain = 421614 AND l1_block BETWEEN 11958043 AND 11958107 AND starts_with(item, 'proof/884511') ORDER BY l1_block, l1_hash, item;" | sqlro); then
+  case "$plan" in
+    *"Seq Scan"*) rec WARN J14 "the proof listing (chain, l1_block range of 65 blocks, item prefix) is served by the primary key index" "an Index Scan on proof_finality_capture_pkey" "the planner chose a sequential scan: $(printf '%s' "$plan" | head -1 | cut -c1-120) (acceptable only while the table is small)" ;;
+    *Index*) rec PASS J14 "the proof listing (chain, l1_block range of 65 blocks, item prefix) is served by the primary key index" "an Index Scan on proof_finality_capture_pkey" "$(printf '%s' "$plan" | head -1 | cut -c1-120)" ;;
+    *) rec WARN J14 "the proof listing plan" "an Index Scan" "unrecognised plan: $(printf '%s' "$plan" | head -1 | cut -c1-120)" ;;
+  esac
+else rec FAIL J14 "proof listing plan" "EXPLAIN answers" "failed: $(errline)"; fi
+if plan=$(printf '%s\n' "EXPLAIN SELECT l1_block, l1_hash, item FROM proof_finality_capture WHERE chain = 421614 AND l1_block BETWEEN 11958043 AND 11972000 AND starts_with(item, 'idx/g1/arb/e/') ORDER BY l1_block, l1_hash, item;" | sqlro); then
+  case "$plan" in
+    *Index*) rec PASS J15 "the entry name listing of a lookup window (chain, l1_block range, item prefix) is served by the primary key index" "an Index Scan on proof_finality_capture_pkey" "$(printf '%s' "$plan" | head -1 | cut -c1-120)" ;;
+    *) rec WARN J15 "the entry name listing of a lookup window" "an Index Scan on the primary key" "$(printf '%s' "$plan" | head -1 | cut -c1-120) (acceptable only while the table is small)" ;;
+  esac
+else rec FAIL J15 "entry listing plan" "EXPLAIN answers" "failed: $(errline)"; fi
+if plan=$(printf '%s\n' "EXPLAIN SELECT min(l1_block), max(l1_block) FROM proof_finality_capture WHERE chain = 421614 AND item = 'cursor';" | sqlro); then
+  rec PASS J16 "the capture cursor bounds (one aggregate query per build and per tick) are a plan the database can run" "a plan" "$(printf '%s' "$plan" | head -1 | cut -c1-140)"
+else rec FAIL J16 "cursor aggregate plan" "EXPLAIN answers" "failed: $(errline)"; fi
+
+# ==============================================================================================================================
 # (f) container environment hygiene (names only, never values)
 # ==============================================================================================================================
 section "(f) validator containers: finality and provider variables (SET / EMPTY / UNSET only; values are never read out) and /health/detailed"
@@ -925,8 +1356,8 @@ else
   # variable name -> role. Provider lists are read by pkg/ethrpc EndpointsForChain; a chain is DISABLED by name when its list is empty.
   PROVIDER_VARS="BASE_SEPOLIA_RPC_URL BASE_SEPOLIA_URL_FALLBACKS INFURA_BASE_SEPOLIA_URL ALCHEMY_BASE_SEPOLIA_URL ARBITRUM_SEPOLIA_RPC_URL ARBITRUM_SEPOLIA_URL_FALLBACKS INFURA_ARBITRUM_SEPOLIA_URL ALCHEMY_ARBITRUM_SEPOLIA_URL ETHEREUM_SEPOLIA_RPC_URL ETHEREUM_URL ETHEREUM_URL_FALLBACKS INFURA_SEPOLIA_URL ALCHEMY_SEPOLIA_URL TELCOIN_ADIRI_RPC_URL"
   FIN_LISTS="CERTEN_FINALITY_L1_RPC_URLS CERTEN_FINALITY_L1_PROOF_URLS CERTEN_FINALITY_ARCHIVE_URLS CERTEN_FINALITY_LC_URLS CERTEN_FINALITY_BEACON_URLS CERTEN_FINALITY_ADIRI_PUBLIC_URLS CERTEN_FINALITY_PINS_FILE"
-  FIN_NUMS="CERTEN_FINALITY_RATE_LIMIT_RPS CERTEN_FINALITY_RATE_BURST CERTEN_FINALITY_MAX_BATCH CERTEN_FINALITY_BACKOFF_RETRIES CERTEN_FINALITY_BACKOFF_MAX_SECONDS CERTEN_FINALITY_CAPTURE_INTERVAL_SECONDS CERTEN_FINALITY_MAX_CAPTURE_BYTES_PER_LEG CERTEN_FINALITY_CAPTURE_MAX_BLOCKS_PER_TICK CERTEN_FINALITY_UPGRADER_CONCURRENCY CERTEN_FINALITY_UPGRADER_INTERVAL_SECONDS CERTEN_FINALITY_BUILD_TIMEOUT_SECONDS"
-  FIN_SWITCHES="CERTEN_FINALITY_UPGRADER_ENABLED CERTEN_FINALITY_CHAIN_11155111_ENABLED CERTEN_FINALITY_CHAIN_84532_ENABLED CERTEN_FINALITY_CHAIN_421614_ENABLED CERTEN_FINALITY_CHAIN_2017_ENABLED"
+  FIN_NUMS="CERTEN_FINALITY_RATE_LIMIT_RPS CERTEN_FINALITY_RATE_BURST CERTEN_FINALITY_MAX_BATCH CERTEN_FINALITY_BACKOFF_RETRIES CERTEN_FINALITY_BACKOFF_MAX_SECONDS CERTEN_FINALITY_CAPTURE_INTERVAL_SECONDS CERTEN_FINALITY_MAX_CAPTURE_BYTES_PER_LEG CERTEN_FINALITY_CAPTURE_MAX_BLOCKS_PER_TICK CERTEN_FINALITY_UPGRADER_CONCURRENCY CERTEN_FINALITY_UPGRADER_INTERVAL_SECONDS CERTEN_FINALITY_BUILD_TIMEOUT_SECONDS CERTEN_FINALITY_GAPFILL_BLOCKS_PER_TICK CERTEN_FINALITY_GAP_AUDIT_SPACING CERTEN_FINALITY_PREFIX_MAX_BLOCKS CERTEN_FINALITY_PREFIX_FLOOR_L1_BLOCK CERTEN_FINALITY_PREFIX_LEASE_SECONDS CERTEN_FINALITY_PREFIX_CHUNK_BLOCKS CERTEN_FINALITY_PREFIX_REPROBE_SECONDS CERTEN_FINALITY_PREFIX_ARB_SCAN_BLOCKS CERTEN_FINALITY_BASE_INDEX_GENERATION CERTEN_FINALITY_INDEX_BLOCKS_PER_STEP CERTEN_FINALITY_INDEX_STEP_SECONDS CERTEN_FINALITY_ARB_INDEX_GENERATION CERTEN_FINALITY_MEMORY_BUDGET_BYTES"
+  FIN_SWITCHES="CERTEN_FINALITY_BASE_INDEX CERTEN_FINALITY_ARB_INDEX CERTEN_FINALITY_UPGRADER_ENABLED CERTEN_FINALITY_CHAIN_11155111_ENABLED CERTEN_FINALITY_CHAIN_84532_ENABLED CERTEN_FINALITY_CHAIN_421614_ENABLED CERTEN_FINALITY_CHAIN_2017_ENABLED"
   KNOWN_FIN="$FIN_LISTS $FIN_NUMS $FIN_SWITCHES"
   probe_script='for v in "$@"; do
     case "$v" in *[!A-Z0-9_]*|"") continue;; esac
@@ -993,6 +1424,163 @@ else
 fi
 
 # ==============================================================================================================================
+# (b4) RB12-LEGACY-191: the LEGACY bundles (a component 5 written before block_header_rlp was captured): the assumptions
+#      pkg/finality/legacyhdr and database.FinalityAddendaRepository.LegacyLegs make about them, on the OLDEST bundles of settled legs
+# ==============================================================================================================================
+section "(b4) legacy bundles (execution proof WITHOUT block_header_rlp): looking through the oldest bundles of settled legs (at most $LEGACY_SCAN) for $LEGACY_SAMPLE legacy ones to examine"
+FACTSL="$tmp/factsl.txt"; : >"$FACTSL"
+L_EXAMINED=0; L_FOUND=0; L_NOCOMP=0; L_WITHHDR=0; L_BAD=0; L_DISAGREE=0
+
+# SQL boolean: the 32-integer array $1 renders (lower-case hex, 0x-prefixed) as the string in the jsonb text $2
+arrhex_eq() {
+  printf "((SELECT '0x' || string_agg(lpad(to_hex((e.v)::int), 2, '0'), '' ORDER BY e.o) FROM jsonb_array_elements_text(%s) WITH ORDINALITY AS e(v, o)) = lower(%s))" "$1" "$2"
+}
+
+legacy_facts_sql() {  # $1 = settlement_block_number, $2 = settlement_tx_hash, $3 = summary chain_id (all validated), JSON file $4
+  local C="j #> '{$P5}'"
+  printf 'BEGIN TRANSACTION READ ONLY;\nWITH b0 AS (SELECT $%s$' "$TAG"
+  cat "$4"
+  printf '$%s$::jsonb AS j), b AS (SELECT j, (jsonb_typeof(j #> %s)=%s) AS c5 FROM b0), l AS (SELECT j, c5, (c5 AND (j #> %s) <> %s::jsonb AND coalesce(j #>> %s,%s)=%s) AS leg FROM b)\n' "$TAG" "'{$P5}'" "'object'" "'{$P5}'" "'{}'" "'{$P5,block_header_rlp}'" "''" "''"
+  echo "SELECT 'L:legacy', CASE WHEN NOT c5 OR (j #> '{$P5}') = '{}'::jsonb THEN 'no_component' WHEN leg THEN 'legacy' ELSE 'with_header' END FROM l"
+  # key set: every member is one of the 13 the live legacy bundles hold (logs is absent in some); the 8 the code reads are present
+  echo " UNION ALL SELECT 'L:keys.known', CASE WHEN NOT leg THEN 'n/a' WHEN NOT EXISTS (SELECT 1 FROM jsonb_object_keys($C) k WHERE k NOT IN ('block_hash','block_number','chain_id','logs','raw_receipt','receipt_inclusion_proof','receipts_root','status','transactions_root','tx_hash','tx_inclusion_proof','verified_at','verified_by')) THEN 'ok' ELSE 'bad' END FROM l"
+  echo " UNION ALL SELECT 'L:keys.required', CASE WHEN NOT leg THEN 'n/a' WHEN (SELECT count(*) FROM jsonb_object_keys($C) k WHERE k IN ('block_hash','block_number','chain_id','receipt_inclusion_proof','receipts_root','transactions_root','tx_hash','tx_inclusion_proof'))=8 THEN 'ok' ELSE 'bad' END FROM l"
+  local f
+  for f in block_hash tx_hash transactions_root receipts_root; do
+    echo " UNION ALL SELECT 'L:$f.hex', CASE WHEN NOT leg THEN 'n/a' WHEN jsonb_typeof(j #> '{$P5,$f}')='string' AND (j #>> '{$P5,$f}') ~ '^0x[0-9a-fA-F]{64}\$' THEN 'ok' ELSE 'bad' END FROM l"
+  done
+  echo " UNION ALL SELECT 'L:block_number.uint', CASE WHEN NOT leg THEN 'n/a' WHEN jsonb_typeof(j #> '{$P5,block_number}')='number' AND (j #>> '{$P5,block_number}') ~ '^[0-9]{1,18}\$' THEN 'ok' ELSE 'bad' END FROM l"
+  echo " UNION ALL SELECT 'L:chain_id.decimal_in_table', CASE WHEN NOT leg THEN 'n/a' WHEN jsonb_typeof(j #> '{$P5,chain_id}')='string' AND (j #>> '{$P5,chain_id}') ~ '^[0-9]{1,18}\$' AND (j #>> '{$P5,chain_id}')::numeric IN ($CHAINS_SQL) THEN 'ok' ELSE 'bad' END FROM l"
+  echo " UNION ALL SELECT 'L:chain_id.equals_summary', CASE WHEN NOT leg THEN 'n/a' WHEN (j #>> '{$P5,chain_id}') = '$3' THEN 'ok' ELSE 'bad' END FROM l"
+  echo " UNION ALL SELECT 'L:settlement_columns.set', CASE WHEN NOT leg THEN 'n/a' WHEN '$1' <> '' AND '$2' <> '' THEN 'ok' ELSE 'absent' END FROM l"
+  echo " UNION ALL SELECT 'L:block_number.equals_settlement', CASE WHEN NOT leg OR '$1' = '' THEN 'n/a' WHEN (j #>> '{$P5,block_number}') = '$1' THEN 'ok' ELSE 'bad' END FROM l"
+  echo " UNION ALL SELECT 'L:tx_hash.equals_settlement', CASE WHEN NOT leg OR '$2' = '' THEN 'n/a' WHEN lower(j #>> '{$P5,tx_hash}') = lower('$2') THEN 'ok' ELSE 'bad' END FROM l"
+  # the stored proofs: the shapes ethproof.InclusionProof reads (the same facts as the new-shape check), and that the roots are PRESENT and agree
+  local ip X
+  for ip in tx_inclusion_proof receipt_inclusion_proof; do
+    X="(j #> '{$P5,$ip}')"
+    echo " UNION ALL SELECT 'L:$ip.arrays', CASE WHEN NOT leg THEN 'n/a' WHEN jsonb_typeof($X)<>'object' THEN 'bad' WHEN $(arr32 "$X->'leaf_hash'") AND $(arr32 "$X->'expected_root'") AND jsonb_typeof($X->'proof_hashes')='array' AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements($X->'proof_hashes') h WHERE NOT ($(arr32 h))) THEN 'ok' ELSE 'bad' END FROM l"
+    echo " UNION ALL SELECT 'L:$ip.nodes_leaf', CASE WHEN NOT leg THEN 'n/a' WHEN jsonb_typeof($X)<>'object' THEN 'bad' WHEN jsonb_typeof($X->'proof_nodes')='array' AND jsonb_array_length($X->'proof_nodes')>0 AND jsonb_array_length($X->'proof_nodes')=jsonb_array_length($X->'proof_hashes') AND jsonb_typeof($X->'leaf_value')='string' AND ($X->>'leaf_value') ~ '^[A-Za-z0-9+/]+={0,2}\$' AND jsonb_typeof($X->'leaf_index')='number' AND ($X->>'leaf_index') ~ '^[0-9]+\$' THEN 'ok' ELSE 'bad' END FROM l"
+  done
+  echo " UNION ALL SELECT 'L:tx_root.equals_proof_root', CASE WHEN NOT leg OR NOT $(arr32 "(j #> '{$P5,tx_inclusion_proof,expected_root}')") THEN 'n/a' WHEN $(arrhex_eq "(j #> '{$P5,tx_inclusion_proof,expected_root}')" "(j #>> '{$P5,transactions_root}')") THEN 'ok' ELSE 'bad' END FROM l"
+  echo " UNION ALL SELECT 'L:receipts_root.equals_proof_root', CASE WHEN NOT leg OR NOT $(arr32 "(j #> '{$P5,receipt_inclusion_proof,expected_root}')") THEN 'n/a' WHEN $(arrhex_eq "(j #> '{$P5,receipt_inclusion_proof,expected_root}')" "(j #>> '{$P5,receipts_root}')") THEN 'ok' ELSE 'bad' END FROM l"
+  echo " UNION ALL SELECT 'L:tx_leaf_hash.equals_tx_hash', CASE WHEN NOT leg OR NOT $(arr32 "(j #> '{$P5,tx_inclusion_proof,leaf_hash}')") THEN 'n/a' WHEN $(arrhex_eq "(j #> '{$P5,tx_inclusion_proof,leaf_hash}')" "(j #>> '{$P5,tx_hash}')") THEN 'ok' ELSE 'bad' END FROM l"
+  echo " UNION ALL SELECT 'L:tx_leaf_index.equals_receipt_leaf_index', CASE WHEN NOT leg THEN 'n/a' WHEN (j #>> '{$P5,tx_inclusion_proof,leaf_index}') = (j #>> '{$P5,receipt_inclusion_proof,leaf_index}') THEN 'ok' ELSE 'bad' END FROM l"
+  # POST-DEPLOY progress: is the reconstructed header of THIS leg in proof_finality_capture (item legacyleg/header, keyed by the bundle's own
+  # chain, block number and block hash, 1..16384 bytes)? 'absent' is the state before the deploy and during the first ~15 minutes after it.
+  local HR="CASE WHEN NOT leg THEN 'n/a' WHEN NOT (jsonb_typeof(j #> '{$P5,chain_id}')='string' AND (j #>> '{$P5,chain_id}') ~ '^[0-9]{1,18}\$' AND jsonb_typeof(j #> '{$P5,block_number}')='number' AND (j #>> '{$P5,block_number}') ~ '^[0-9]{1,18}\$' AND jsonb_typeof(j #> '{$P5,block_hash}')='string' AND (j #>> '{$P5,block_hash}') ~ '^0x[0-9a-fA-F]{64}\$') THEN 'n/a' WHEN EXISTS (SELECT 1 FROM proof_finality_capture c WHERE c.chain = (j #>> '{$P5,chain_id}')::bigint AND c.l1_block = (j #>> '{$P5,block_number}')::bigint AND c.l1_hash = decode(substr(j #>> '{$P5,block_hash}', 3), 'hex') AND c.item = 'legacyleg/header' AND octet_length(c.bytes) BETWEEN 1 AND 16384) THEN 'ok' ELSE 'absent' END"
+  echo " UNION ALL SELECT 'L:header_row', $HR FROM l"
+  echo " UNION ALL SELECT CASE WHEN leg AND jsonb_typeof(j #> '{$P5,chain_id}')='string' AND (j #>> '{$P5,chain_id}') ~ '^[0-9]{1,18}\$' THEN 'L:header_row@' || (j #>> '{$P5,chain_id}') ELSE 'L:header_row@none' END, $HR FROM l"
+  echo ";"
+  echo "ROLLBACK;"
+}
+
+if [ "$HAVE_TOOLS" -eq 1 ] && llist=$(sqlro <<SQL
+SELECT pb.bundle_id, octet_length(pb.bundle_data), COALESCE(pa.settlement_block_number::text,''), COALESCE(pa.settlement_tx_hash,''), COALESCE(pa.artifact_json->>'chain_id','')
+  FROM proof_artifacts pa JOIN LATERAL (SELECT bundle_id, bundle_data FROM proof_bundles WHERE proof_id = pa.proof_id ORDER BY created_at DESC, bundle_id DESC LIMIT 1) pb ON true
+ ORDER BY pa.created_at ASC, pa.proof_id ASC LIMIT $LEGACY_SCAN;
+SQL
+); then
+  LLIST_N=$(printf '%s\n' "$llist" | grep -c .)
+  while IFS='|' read -r bid size sbn stx sch; do
+    [ -n "$bid" ] || continue
+    [ "$L_FOUND" -lt "$LEGACY_SAMPLE" ] || break
+    printf '%s' "$bid" | grep -Eq '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' || { L_BAD=$((L_BAD + 1)); continue; }
+    printf '%s' "$sbn" | grep -Eq '^[0-9]*$' || sbn=''
+    printf '%s' "$stx" | grep -Eq '^(0x)?[0-9a-fA-F]*$' || stx=''
+    printf '%s' "$sch" | grep -Eq '^[0-9A-Za-z_.:-]*$' || sch='?'
+    L_EXAMINED=$((L_EXAMINED + 1))
+    if [ "${size:-0}" -gt "$MAX_GZ" ]; then L_BAD=$((L_BAD + 1)); continue; fi
+    echo "SELECT replace(encode(bundle_data,'base64'), E'\\n', '') FROM proof_bundles WHERE bundle_id = '$bid';" | sqlro >"$tmp/lb.b64" || { L_BAD=$((L_BAD + 1)); continue; }
+    base64 -d "$tmp/lb.b64" 2>/dev/null | gzip -dc 2>"$tmp/lgz.err" | head -c $((MAX_JSON + 1)) >"$tmp/lb.json"
+    jsz=$(wc -c <"$tmp/lb.json" | tr -d ' ')
+    if [ -s "$tmp/lgz.err" ] || [ "$jsz" -eq 0 ] || [ "$jsz" -gt "$MAX_JSON" ]; then L_BAD=$((L_BAD + 1)); continue; fi
+    # cheap prefilter on the decompressed text (the writer's JSON is compact): a component 5 that is empty or absent, or that holds a
+    # header, is not a candidate. The SQL below classifies the candidates authoritatively (L:legacy), so a miss here can only lose a
+    # candidate, never admit a wrong one; the counts printed say how many bundles each way.
+    if ! grep -Eq '"5_execution_proof"[[:space:]]*:[[:space:]]*{[[:space:]]*"' "$tmp/lb.json"; then L_NOCOMP=$((L_NOCOMP + 1)); rm -f "$tmp/lb.b64" "$tmp/lb.json"; continue; fi
+    if grep -Eq '"block_header_rlp"[[:space:]]*:[[:space:]]*"0x' "$tmp/lb.json"; then L_WITHHDR=$((L_WITHHDR + 1)); rm -f "$tmp/lb.b64" "$tmp/lb.json"; continue; fi
+    legacy_facts_sql "$sbn" "$stx" "$sch" "$tmp/lb.json" >"$tmp/lfacts.sql"
+    if [ -n "$PSQL_LOCAL_URL" ]; then
+      PGOPTIONS='-c default_transaction_read_only=on -c client_min_messages=warning' psql -X -q -At -F '|' -v ON_ERROR_STOP=1 -P pager=off "$PSQL_LOCAL_URL" <"$tmp/lfacts.sql" >"$tmp/lfacts.out" 2>"$ERRF"
+    else
+      docker exec -i -e PGOPTIONS='-c default_transaction_read_only=on -c client_min_messages=warning' "$PGCONTAINER" \
+        sh -c 'db=$1; shift; exec psql -U "$POSTGRES_USER" -d "$db" -X -q -At -F "|" -v ON_ERROR_STOP=1 -P pager=off "$@"' _ "$PGDB" <"$tmp/lfacts.sql" >"$tmp/lfacts.out" 2>"$ERRF"
+    fi
+    if [ $? -ne 0 ]; then L_BAD=$((L_BAD + 1)); echo "        bundle $L_EXAMINED: not examinable as jsonb: $(errline)"; rm -f "$tmp/lb.b64" "$tmp/lb.json" "$tmp/lfacts.sql" "$tmp/lfacts.out"; continue; fi
+    kind=$(awk -F'|' '$1=="L:legacy"{print $2}' "$tmp/lfacts.out" | tr -d '\r')
+    case "$kind" in
+      legacy) L_FOUND=$((L_FOUND + 1)); tr -d '\r' <"$tmp/lfacts.out" >>"$FACTSL" ;;
+      with_header) L_WITHHDR=$((L_WITHHDR + 1)); L_DISAGREE=$((L_DISAGREE + 1)) ;;
+      *) L_NOCOMP=$((L_NOCOMP + 1)); L_DISAGREE=$((L_DISAGREE + 1)) ;;
+    esac
+    rm -f "$tmp/lb.b64" "$tmp/lb.json" "$tmp/lfacts.sql" "$tmp/lfacts.out"
+  done <<EOF
+$llist
+EOF
+  awk -F'|' '{c[$1"|"$2]++} END{for(k in c) print k"|"c[k]}' "$FACTSL" | sort >"$tmp/lagg.txt"
+  lcnt() { awk -F'|' -v k="$1|$2" '($1"|"$2)==k{print $3; f=1} END{if(!f) print 0}' "$tmp/lagg.txt"; }
+  info "looked through $L_EXAMINED of the oldest bundles: $L_FOUND legacy (examined), $L_WITHHDR with a header, $L_NOCOMP without an execution proof, $L_BAD unreadable or too big; the SQL disagreed with the text prefilter on $L_DISAGREE"
+  if [ "$L_FOUND" -eq 0 ]; then
+    rec WARN L1 "legacy bundles (execution proof without block_header_rlp) exist among the oldest settled legs" ">= 1 (Addendum G: 191 of 782)" "none among the $L_EXAMINED oldest looked through (raise LEGACY_SCAN)"
+  else
+    if [ "$L_DISAGREE" -eq 0 ]; then st=PASS; else st=FAIL; fi
+    rec $st L1 "legacy bundles (execution proof without block_header_rlp) exist among the oldest settled legs, and the text prefilter and the SQL classification agree" ">= 1 (Addendum G: 191 of 782); 0 disagreements" "$L_FOUND examined in the $L_EXAMINED oldest looked through; $L_DISAGREE disagreements"
+    n=2
+    for f in keys.known:"every member is one of the 13 live legacy members (the code reads 8 of them)" keys.required:"the 8 members legacyhdr.ParseLeg requires are present (chain_id block_number block_hash tx_hash transactions_root receipts_root and both proofs)" \
+        block_hash.hex:"0x + 64 hex (common.Hash)" tx_hash.hex:"0x + 64 hex" transactions_root.hex:"0x + 64 hex" receipts_root.hex:"0x + 64 hex" \
+        block_number.uint:"JSON number, decimal integer (the header's number must equal it)" chain_id.decimal_in_table:"decimal string, one of $CHAINS_SQL" chain_id.equals_summary:"equals the proof's summary chain_id (LegSettlement refuses a disagreement)" \
+        settlement_columns.set:"proof_artifacts.settlement_block_number and settlement_tx_hash are set (the cross-check LegSettlement makes)" block_number.equals_settlement:"equals proof_artifacts.settlement_block_number" tx_hash.equals_settlement:"equals proof_artifacts.settlement_tx_hash" \
+        tx_inclusion_proof.arrays:"leaf_hash, expected_root, proof_hashes are arrays of 32 integers (ethproof.InclusionProof JSON)" receipt_inclusion_proof.arrays:"leaf_hash, expected_root, proof_hashes are arrays of 32 integers" \
+        tx_inclusion_proof.nodes_leaf:"proof_nodes non-empty and as long as proof_hashes, leaf_value base64, leaf_index a non-negative integer" receipt_inclusion_proof.nodes_leaf:"proof_nodes non-empty and as long as proof_hashes, leaf_value base64, leaf_index a non-negative integer" \
+        tx_root.equals_proof_root:"transactions_root equals the tx proof's expected_root (the roots are present and agree)" receipts_root.equals_proof_root:"receipts_root equals the receipt proof's expected_root" \
+        tx_leaf_hash.equals_tx_hash:"the tx proof's leaf_hash equals tx_hash" tx_leaf_index.equals_receipt_leaf_index:"both proofs are for the same index"; do
+      nm=${f%%:*}; desc=${f#*:}
+      ok=$(lcnt "L:$nm" ok); bad=$(lcnt "L:$nm" bad); ab=$(lcnt "L:$nm" absent); na=$(lcnt "L:$nm" "n/a")
+      if [ "$bad" -gt 0 ] || [ "$ab" -gt 0 ]; then st=FAIL; elif [ "$ok" -eq 0 ]; then st=WARN; elif [ "$na" -gt 0 ]; then st=WARN; else st=PASS; fi
+      rec $st "L$n" "legacy component 5 .$nm: $desc" "$L_FOUND of $L_FOUND ok" "ok $ok, bad $bad, absent $ab, not applicable $na"
+      n=$((n + 1))
+    done
+    # POST-DEPLOY: the reconstructed headers (item legacyleg/header of proof_finality_capture). C7 above covers only the syntax of every row
+    # (chain in the table, item-name pattern, 32-byte hash); these say whether the rows are the RIGHT ones.
+    hr_ok=$(lcnt "L:header_row" ok); hr_ab=$(lcnt "L:header_row" absent); hr_na=$(lcnt "L:header_row" "n/a")
+    if [ "$hr_na" -gt 0 ]; then st=FAIL; elif [ "$hr_ab" -gt 0 ]; then st=WARN; else st=PASS; fi
+    rec $st "L$n" "reconstructed header present for each examined legacy leg (proof_finality_capture item legacyleg/header at the bundle's own chain, block number and block hash, 1..16384 bytes)" "$L_FOUND of $L_FOUND present once reconstruction has finished (WARN before the deploy and during the first ~15 min after it)" "present $hr_ok, absent $hr_ab, not checkable $hr_na"
+    n=$((n + 1))
+    if out=$(echo "SELECT count(*), count(*) FILTER (WHERE octet_length(bytes) NOT BETWEEN 1 AND 16384 OR octet_length(l1_hash) <> 32), count(DISTINCT chain) FROM proof_finality_capture WHERE item = \$\$legacyleg/header\$\$;" | sqlro); then
+      IFS='|' read -r h_n h_bad h_chains <<EOF
+$out
+EOF
+      [ "$h_bad" -eq 0 ] && st=PASS || st=FAIL
+      rec $st "L$n" "every legacyleg/header row is 1..16384 bytes with a 32-byte hash" "0 violations" "$h_bad violations in $h_n rows over $h_chains chains"
+      n=$((n + 1))
+    else rec FAIL "L$n" "legacyleg/header rows query" "query answers" "failed: $(errline)"; n=$((n + 1)); fi
+    # every stored row must belong to a legacy bundle: when ALL legacy bundles were looked at, rows per chain <= present per chain
+    if [ "$L_FOUND" -lt "$LEGACY_SAMPLE" ] && [ "$LLIST_N" -lt "$LEGACY_SCAN" ]; then
+      if rows=$(echo "SELECT chain, count(*) FROM proof_finality_capture WHERE item = \$\$legacyleg/header\$\$ GROUP BY 1 ORDER BY 1;" | sqlro); then
+        orphan=0; total=0
+        while IFS='|' read -r rc rn; do
+          [ -n "$rc" ] || continue
+          total=$((total + rn))
+          have=$(lcnt "L:header_row@$rc" ok)
+          [ "$rn" -le "$have" ] || orphan=$((orphan + rn - have))
+        done <<EOF
+$rows
+EOF
+        [ "$orphan" -eq 0 ] && st=PASS || st=FAIL
+        rec $st "L$n" "no legacyleg/header row exists beyond the legacy bundles of its chain (all $L_FOUND legacy bundles looked at)" "rows per chain <= legacy bundles with a row on that chain" "$total rows in all; rows that match no legacy bundle: $orphan"
+        n=$((n + 1))
+      else rec FAIL "L$n" "legacyleg/header per chain" "query answers" "failed: $(errline)"; n=$((n + 1)); fi
+    else
+      info "rows-that-match-no-legacy-bundle check skipped: only $L_FOUND legacy bundles were examined (LEGACY_SAMPLE=$LEGACY_SAMPLE, LEGACY_SCAN=$LEGACY_SCAN); run with LEGACY_SAMPLE=1000 for the exhaustive form"
+    fi
+    info "what this cannot show (N4): that the header the providers serve hashes to block_hash and that the proofs resolve from it. That is legacyhdr.Leg.Verify; 'finalitylegacyheaders' runs it offline over extracted components."
+  fi
+elif [ "$HAVE_TOOLS" -eq 1 ]; then
+  rec FAIL L1 "list the oldest bundles of settled legs" "query answers" "failed: $(errline)"
+fi
+
+# ==============================================================================================================================
 # what this script CANNOT check read-only
 # ==============================================================================================================================
 section "NOT CHECKABLE read-only from here (assumptions that live elsewhere)"
@@ -1003,6 +1591,7 @@ cat <<'EOF'
  N2  Provider behaviour: public RPC / light-client / beacon availability and rate limits, eth_getProof windows, and whether the
      provider text redaction holds. These are runtime facts of RB11's runtime tests, not data shapes.
  N3  The CONTENT of bundles older than the newest SAMPLE (default and maximum 20): only SQL-level facts (existence, format, size) are known for them.
+     EXCEPT the oldest legacy bundles examined by (b4) (RB12-LEGACY-191).
      Re-run with a different window by editing the ORDER BY of the sampling query in a copy, or sample by proof via proofverify.
  N4  Whether the decoded Settlement VERIFIES (keccak256(header) = block_hash, MPT proofs resolve): PostgreSQL has no keccak256 or
      RLP. Shape (hex lengths, array widths, base64) is examined here; verification is `proofverify --finality` / the Go tests on the
@@ -1012,6 +1601,9 @@ cat <<'EOF'
      proof_artifacts; a role with no grant there and a table-level grant elsewhere is invisible to it.
  N7  The wire format of proofs_service responses (certen-finality-summary/1) as the gateway parses it: that is a code-to-code
      contract tested by the two repos' vectors, not a database shape.
+ N8  That the number of blob rows of a Base transaction equals the number of blob hashes in its RLP (PostgreSQL has no RLP). I13 checks contiguity and the
+     type-3 correspondence; the equality is checked by the indexer itself on every block it digests (blob_rows_inconsistent) and shows as
+     index_block_unindexable in the log, the metric certen_finality_index_unindexable_blocks_total and the state of the legs it blocks.
 EOF
 
 # ==============================================================================================================================

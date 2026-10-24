@@ -218,7 +218,7 @@ func rb12Counter(t *testing.T, name string, labels map[string]string) float64 {
 func TestRB12F17ATerminalCaptureGapBacksOffLikeAFailureAndAnOpenOneDoesNot(t *testing.T) {
 	reg := loadRegistry(t)
 	states := reg.States["l1_capture_gap"].Enums["gap_state"]
-	if len(states) != 3 {
+	if len(states) != 4 { // open, unavailable_proven, retention_expired and (Train 3) unrecorded = the hole the index infers from the L2 timeline
 		t.Fatalf("the registry names the gap states %v", states)
 	}
 	for _, gs := range states {
@@ -232,7 +232,7 @@ func TestRB12F17ATerminalCaptureGapBacksOffLikeAFailureAndAnOpenOneDoesNot(t *te
 			status := newRB12Status()
 			u.cfg.Status = status
 			src.add(leg(1))
-			terminal := gs != "open"
+			terminal := gs == "unavailable_proven" || gs == "retention_expired" // open and unrecorded are holes the backfill can still close
 			wait := 5 * time.Minute
 			var asks int
 			for i := 1; i <= 24; i++ {
