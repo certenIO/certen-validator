@@ -359,11 +359,13 @@ func (c *collector) serve(ctx context.Context) error {
 		codeKeys = append(codeKeys, k)
 	}
 	sort.Slice(codeKeys, func(i, j int) bool { return less(codeKeys[i], codeKeys[j]) })
+	asked := map[common.Address]bool{} // one code per address: it is read at the first station that wants it (the verifier judges the others against it)
 	for _, k := range codeKeys {
 		k := k
-		if _, have := c.codes[k.a]; have {
+		if _, have := c.codes[k.a]; have || asked[k.a] {
 			continue
 		}
+		asked[k.a] = true
 		want := c.accts[k].CodeHash
 		blk := blockParam(c.roots[k.st].Number)
 		what := fmt.Sprintf("eth_getCode %s at block %d", k.a.Hex(), c.roots[k.st].Number)

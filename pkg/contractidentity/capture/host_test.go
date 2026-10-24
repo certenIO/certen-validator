@@ -4,6 +4,9 @@ package capture
 
 import (
 	"bytes"
+	ci "github.com/certen/independant-validator/pkg/contractidentity"
+	"github.com/certen/independant-validator/pkg/contractidentity/world"
+	"github.com/ethereum/go-ethereum/core/types"
 	"strings"
 	"testing"
 
@@ -59,5 +62,43 @@ func TestAbiEncodeStringsEqualsSolidityEncoding(t *testing.T) {
 	got := abiEncodeStrings(long, nil)
 	if len(got) != 32*2+32+32+32 || common.BytesToHash(got[32:64]).Big().Uint64() != 64+32+32 || !bytes.Equal(crypto.Keccak256(got[:32]), crypto.Keccak256(common.LeftPadBytes([]byte{0x40}, 32))) {
 		t.Fatalf("encoding of a 32-byte and an empty string: %x", got)
+	}
+}
+
+func TestDecodeAttestCallRefusesWhatIsNotADirectCall(t *testing.T) {
+	m, err := ci.Embedded()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sp, err := world.Generate(m, 11155111, world.VariantH0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := world.Derive(m, sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tx types.Transaction
+	if err := tx.UnmarshalBinary(w.Container.Attest.Attest.TxLeaf); err != nil {
+		t.Fatal(err)
+	}
+	anchor := *tx.To()
+	id := common.HexToHash(sp.Settlement.AnchorID)
+	if c, err := decodeAttestCall(&tx, anchor, id); err != nil || c.pkc != common.HexToHash(sp.Attestation.Blob[13]) || c.op != common.HexToHash(sp.Context.Batch.OperationID) {
+		t.Fatalf("the world's own attestation: %+v %v", c, err)
+	}
+	if _, err := decodeAttestCall(&tx, common.Address{1}, id); err == nil {
+		t.Fatal("a call to another address was decoded")
+	}
+	if _, err := decodeAttestCall(&tx, anchor, common.Hash{7}); err == nil {
+		t.Fatal("a call naming another anchor id was decoded")
+	}
+	wrapper := types.NewTx(&types.LegacyTx{To: &anchor, Data: tx.Data()[:len(tx.Data())-1]})
+	if _, err := decodeAttestCall(wrapper, anchor, id); err == nil {
+		t.Fatal("truncated calldata was decoded")
+	}
+	create := types.NewTx(&types.LegacyTx{Data: tx.Data()})
+	if _, err := decodeAttestCall(create, anchor, id); err == nil {
+		t.Fatal("a creation was decoded")
 	}
 }

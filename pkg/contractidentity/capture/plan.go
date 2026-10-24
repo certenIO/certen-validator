@@ -80,6 +80,9 @@ type planner struct {
 	f       *Facts
 	err     error
 	pending bool
+	// n counts the pending reads so far: a read that depends on a value compares n before and after reading that value, so it is held back
+	// only by ITS OWN prerequisite and not by an unrelated pending read (which would turn one round of requests into a chain of rounds).
+	n int
 }
 
 func (p *planner) fail(st, reason string, err error) {
@@ -94,6 +97,7 @@ func (p *planner) take(st, what string, err error) bool {
 		return true
 	case errors.Is(err, errPending):
 		p.pending = true
+		p.n++
 	default:
 		p.fail(st, what, err)
 	}
@@ -135,8 +139,9 @@ func (p *planner) code(st string, a common.Address) []byte {
 
 // dyn reads a bytes/string variable by the step 6 rule: the head word, then exactly the data words it implies.
 func (p *planner) dyn(st string, a common.Address, slot common.Hash, max uint64) []byte {
+	n0 := p.n
 	head := p.slot(st, a, slot)
-	if p.err != nil || p.pending {
+	if p.err != nil || p.n != n0 {
 		return nil
 	}
 	h, err := ci.ParseDynHead(head, max)
@@ -148,7 +153,7 @@ func (p *planner) dyn(st string, a common.Address, slot common.Hash, max uint64)
 	for i := uint64(0); i < h.DynWordCount(); i++ {
 		words = append(words, p.slot(st, a, ci.DynDataSlot(slot, i)))
 	}
-	if p.err != nil || p.pending {
+	if p.err != nil || p.n != n0 {
 		return nil
 	}
 	out, err := h.Assemble(words)
@@ -236,8 +241,9 @@ func (p *planner) authSet(st string, flip bool) {
 	}
 	for i := uint64(0); i < n && p.err == nil; i++ { // A10 elements, A09 per validator: words 0-3 and the bytes key data
 		el, _, _ := ci.ArrayElementSlot(13, i, 20)
+		n1 := p.n
 		w := p.slot(st, A, el)
-		if p.err != nil || p.pending {
+		if p.err != nil || p.n != n1 {
 			continue
 		}
 		v := p.addrWord(st, w, "validator_list_element_invalid")
@@ -250,13 +256,14 @@ func (p *planner) authSet(st string, flip bool) {
 	for _, s := range []uint64{14, 15, 16, 17} {
 		p.slot(st, A, ci.SlotIndex(s))
 	}
+	n2 := p.n
 	ownerA := p.slot(st, A, ci.SlotIndex(27))
 	p.slot(st, A, ci.SlotIndex(29))
 	slot30 := p.slot(st, A, ci.SlotIndex(30))
 	if flip {
 		p.slot(st, A, ci.MappingSlotAt(ci.KeyBytes32(f.OperationID), 18))
 	}
-	if p.err != nil || p.pending {
+	if p.err != nil || p.n != n2 {
 		return
 	}
 	V, err := ci.PackedAddress(slot30, 0) // A18: bytes 0-19
@@ -266,12 +273,13 @@ func (p *planner) authSet(st string, flip bool) {
 	}
 	owners := []common.Address{p.addrWord(st, ownerA, "owner_invalid")}
 	if V != (common.Address{}) {
+		n3 := p.n
 		p.account(st, V)
 		for _, s := range []uint64{0, 1, 2} { // V01-V03
 			p.slot(st, V, ci.SlotIndex(s))
 		}
 		ownerV := p.slot(st, V, ci.SlotIndex(2))
-		if p.err == nil && !p.pending {
+		if p.err == nil && p.n == n3 {
 			owners = append(owners, p.addrWord(st, ownerV, "owner_invalid"))
 		}
 		if vc := p.code(st, V); vc != nil {
@@ -309,12 +317,14 @@ func (p *planner) runSettle() {
 	lim := ci.DefaultLimits()
 	acct := f.Account
 	p.account(st, acct)
+	n0 := p.n
 	adi := p.dyn(st, acct, ci.SlotIndex(0), uint64(lim.MaxString))
 	book := p.dyn(st, acct, ci.SlotIndex(11), uint64(lim.MaxString))
+	stringsKnown := p.n == n0
 	F := p.deployment("accountFactory")
 	p.account(st, F)
 	p.slot(st, F, ci.MappingSlotAt(ci.KeyAddress(acct), 2))
-	if p.err == nil && !p.pending {
+	if p.err == nil && stringsKnown {
 		h := common.BytesToHash(crypto.Keccak256(abiEncodeStrings(adi, book)))
 		p.slot(st, F, ci.MappingSlotAt(ci.KeyBytes32(h), 3))
 	}

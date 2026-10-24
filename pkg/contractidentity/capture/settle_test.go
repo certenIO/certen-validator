@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math/big"
 	"runtime"
 	"strings"
 	"sync"
@@ -18,7 +17,7 @@ import (
 
 	ci "github.com/certen/independant-validator/pkg/contractidentity"
 	"github.com/certen/independant-validator/pkg/contractidentity/capture"
-	"github.com/certen/independant-validator/pkg/contractidentity/world"
+	"github.com/certen/independant-validator/pkg/contractidentity/capture/capturetest"
 	"github.com/certen/independant-validator/pkg/ethproof"
 )
 
@@ -59,53 +58,11 @@ func TestE2HonestCaptureEqualsTheWorldContainerByteForByte(t *testing.T) {
 	}
 }
 
-// enrich fills the settlement station with unrelated storage, so that a read of a wrong or missing slot visits other trie nodes than the
-// plan reads (in the minimal world several slots share the one root node and a dropped read is invisible).
-func enrich(sp *world.Spec) {
-	for _, name := range []string{world.StationSettle, world.StationPre, world.StationPost} {
-		enrichStation(sp, sp.Stations[name])
-	}
-}
-
-func enrichStation(sp *world.Spec, st *world.Station) {
-	put := func(addr string, slot, val common.Hash) {
-		for k, a := range st.Accounts {
-			if strings.EqualFold(k, addr) {
-				if a.Storage == nil {
-					a.Storage = map[string]string{}
-				}
-				a.Storage[slot.Hex()] = val.Hex()
-				return
-			}
-		}
-		st.Accounts[addr] = &world.AcctSpec{Storage: map[string]string{slot.Hex(): val.Hex()}}
-	}
-	one := common.BigToHash(big.NewInt(1))
-	for i := byte(1); i <= 7; i++ {
-		noise := common.BytesToHash(bytes.Repeat([]byte{i * 17}, 32))
-		put(sp.Roles.History, ci.SlotIndex(uint64(i)*911), noise)
-		put(sp.Roles.Factory, ci.MappingSlotAt(ci.KeyAddress(common.BytesToAddress(noise[:20])), 2), one)
-		put(sp.Roles.Factory, ci.MappingSlotAt(ci.KeyBytes32(noise), 3), noise)
-		put(sp.Roles.Account, ci.MappingSlotAt(ci.KeyBytes4([4]byte{i, i, i, i}), 8), noise)
-		put(sp.Roles.Account, ci.PageSlot(10, noise, uint64(i)), one)
-		put(sp.Roles.Anchor, ci.MappingSlotAt(ci.KeyBytes32(noise), 4), one)
-		put(sp.Roles.Anchor, ci.MappingSlotAt(ci.KeyBytes32(noise), 1), noise)
-	}
-	book := common.HexToHash(sp.Settlement.AuthorityBook)
-	put(sp.Roles.Account, ci.PageSlot(10, book, sp.Settlement.AuthorityPage), one)
-	put(sp.Roles.Account, ci.PageSlot(9, book, sp.Settlement.AuthorityPage), common.BigToHash(big.NewInt(3)))
-	for _, l := range sp.Settlement.Legs {
-		if d := common.FromHex(l.Data); len(d) >= 4 {
-			put(sp.Roles.Account, ci.MappingSlotAt(ci.KeyBytes4([4]byte(d[:4])), 8), common.BigToHash(big.NewInt(2)))
-		}
-	}
-}
-
 func TestE2RichStorageEveryReadIsInTheEvidence(t *testing.T) {
 	for _, chain := range chains {
 		for _, variant := range []string{"h0", "hops"} {
 			t.Run(fmt.Sprintf("%d/%s", chain, variant), func(t *testing.T) {
-				fc := newFakeChainWith(t, chain, variant, enrich)
+				fc := newFakeChainWith(t, chain, variant, capturetest.Enrich)
 				src, _ := fc.source(honest)
 				res, err := capture.CaptureSettle(context.Background(), fc.config(src), fc.request())
 				if err != nil || res.Stated != nil {

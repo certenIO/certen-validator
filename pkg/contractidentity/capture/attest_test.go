@@ -17,6 +17,7 @@ import (
 
 	ci "github.com/certen/independant-validator/pkg/contractidentity"
 	"github.com/certen/independant-validator/pkg/contractidentity/capture"
+	"github.com/certen/independant-validator/pkg/contractidentity/capture/capturetest"
 	"github.com/certen/independant-validator/pkg/contractidentity/world"
 	"github.com/certen/independant-validator/pkg/ethproof"
 )
@@ -57,7 +58,7 @@ func TestE1AssemblesTheWorldContainerByteForByte(t *testing.T) {
 			t.Run(fmt.Sprintf("%d/rich=%v", chain, rich), func(t *testing.T) {
 				var edit func(*world.Spec)
 				if rich {
-					edit = enrich
+					edit = capturetest.Enrich
 				}
 				fc := newFakeChainWith(t, chain, "h0", edit)
 				src, _ := fc.source(honest)

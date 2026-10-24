@@ -165,8 +165,9 @@ type fakeProvider struct {
 	mode hostile
 	lat  func(slots int) // a latency model: called before a proof answer, with the number of slots asked
 	mu   sync.Mutex
-	// calls counts GetProof and GetCode requests.
+	// calls counts GetProof and GetCode requests; asked counts GetProof requests per contract and block.
 	calls int
+	asked map[string]int
 }
 
 func (p *fakeProvider) Name() string { return p.name }
@@ -238,6 +239,12 @@ func (p *fakeProvider) GetProof(_ context.Context, a common.Address, keys []stri
 	if p.mode == prunedPre && st == world.StationPre {
 		return nil, errors.New("missing trie node: state of the parent block is not available")
 	}
+	p.mu.Lock()
+	if p.asked == nil {
+		p.asked = map[string]int{}
+	}
+	p.asked[a.Hex()+"@"+block]++
+	p.mu.Unlock()
 	if p.lat != nil {
 		p.lat(len(keys))
 	}
