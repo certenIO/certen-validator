@@ -1,9 +1,16 @@
 {
- "id": "VS8-180.rules_not_judged",
+ "id": "VS8-184.unproven",
  "base": "H0",
- "mutations": [],
+ "mutations": [
+  {
+   "op": "set_field",
+   "target": "s7",
+   "path": "unsupported",
+   "value": "finality_chain_unsupported"
+  }
+ ],
  "expected": {
-  "headline": "verified",
+  "headline": "unproven",
   "rules_not_judged": [
    {
     "row": "A21",

@@ -160,14 +160,14 @@ func (a *author2c) controlVectors() []ci.Vector {
 	sp := a.f.spec
 	anchor, owner := hexAddr(sp.Roles.Anchor), hexAddr(sp.Roles.Owner)
 	var out []ci.Vector
-	// VS8-090 (the N-only hole): the pubkey binding is disabled at B_v (both stations) and enabled again at N. Real verifier: step 19b
+	// VS8-220 (the N-only hole; the negative control NaiveSettlementOnly): the pubkey binding is disabled at B_v (both stations) and enabled again at N. Real verifier: step 19b
 	// R authorization_mismatch{field:binding}; headline refused.
-	out = append(out, ci.Vector{ID: "VS8-090.n_only_hole", Base: "H0", Expected: exp(ci.HeadlineRefused, only(ci.JudgedAuthorizationAttest, "refused")),
+	out = append(out, ci.Vector{ID: "VS8-220.n_only_hole", Base: "H0", Expected: exp(ci.HeadlineRefused, only(ci.JudgedAuthorizationAttest, "refused")),
 		Mutations: []ci.Mutation{setWord(world.StationPre, anchor, 6, common.Hash{}), setWord(world.StationPost, anchor, 6, common.Hash{})}})
-	// VS8-100 (the owner acted inside B_v): every AUTH word is equal at pre and post and satisfies every rule, but the owner's nonce moved
+	// VS8-172 (the owner acted inside B_v; the negative control NaivePrePost): every AUTH word is equal at pre and post and satisfies every rule, but the owner's nonce moved
 	// (the owner EOA sent a transaction inside B_v: setBLSZKVerificationEnabled(false) before and (true) after the attestation). Real verifier:
 	// rule IB (step 22) U owner_active_in_block on intra_block_window; no rule is violated, so authorization_attest stays verified (the part carries the IB code only for a violated rule: VS8-138, step 19 precedence (b)); headline unproven.
-	out = append(out, ci.Vector{ID: "VS8-100.owner_active_in_block", Base: "H0", Expected: exp(ci.HeadlineUnproven, map[string]string{ci.JudgedAuthorizationAttest: "verified", ci.JudgedIntraBlockWindow: "unproven"}),
+	out = append(out, ci.Vector{ID: "VS8-172.owner_active_in_block_prepost", Base: "H0", Expected: exp(ci.HeadlineUnproven, map[string]string{ci.JudgedAuthorizationAttest: "verified", ci.JudgedIntraBlockWindow: "unproven"}),
 		Mutations: []ci.Mutation{world.SetNonce(world.StationPost, owner, 7777)}})
 	return out
 }
@@ -211,7 +211,7 @@ func TestNegativeControlsAcceptTheBadWorldsAndTheRealCheckWouldNot(t *testing.T)
 		}
 		nw := newNaive(t, f, in)
 		switch v.ID {
-		case "VS8-090.n_only_hole":
+		case "VS8-220.n_only_hole":
 			if ok, why := nw.settlementOnly(); !ok {
 				t.Errorf("NaiveSettlementOnly refuses %s (%s): the vector does not bite the control", v.ID, why)
 			}
@@ -232,7 +232,7 @@ func TestNegativeControlsAcceptTheBadWorldsAndTheRealCheckWouldNot(t *testing.T)
 				t.Fatalf("%s: the real verifier gives %v (%v), want refused", v.ID, rep.Headline.Kind, err)
 			}
 			b1Want(t, rep, ci.JudgedAuthorizationAttest, "refused", "authorization_mismatch", "field", "binding")
-		case "VS8-100.owner_active_in_block":
+		case "VS8-172.owner_active_in_block_prepost":
 			if ok, why := nw.prePost(); !ok {
 				t.Errorf("NaivePrePost refuses %s (%s): the vector does not bite the control", v.ID, why)
 			}

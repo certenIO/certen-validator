@@ -1,8 +1,8 @@
 {
  "format": "certen-contract-identity-inputs/1",
- "id": "VS8-100.owner_active_in_block",
+ "id": "VS8-172.owner_active_in_block_prepost",
  "container": {
-  "file": "VS8-100.owner_active_in_block.inputs.container.hex",
+  "file": "VS8-172.owner_active_in_block_prepost.inputs.container.hex",
   "sha256": "7f7c13e7268e4c92c935f1c95f64c9b2f47115854bf4f7591906c6131f58e0cb"
  },
  "manifest": {

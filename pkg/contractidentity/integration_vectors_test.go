@@ -3,6 +3,7 @@
 package contractidentity_test
 
 import (
+	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"math/big"
@@ -71,7 +72,7 @@ func (a *authorInt) vectors() []ci.Vector {
 		now := c.to(was)
 		add("VS8-076.drift_"+c.id, vc(drift(c.id, was, now)), world.SetStorage(world.StationSettle, anchor, c.slot, now))
 	}
-	// a key rotation after the attestation: the BLS key bytes of one listed validator change at N (the set root does not commit to keys)
+	// VS8-152: a key rotated between B_v and N is a drift: the BLS key bytes of one listed validator change at N (the set root does not commit to keys)
 	m0 := sp.Context.Registry9.Members[0]
 	v0 := hexAddr(m0.Address)
 	oldKey, err := hex.DecodeString(strings.TrimPrefix(m0.BLSKey, "0x"))
@@ -87,7 +88,7 @@ func (a *authorInt) vectors() []ci.Vector {
 		a.t.Fatalf("the key of validator 0 is not stored at keccak256(slot): %x vs %x", was, oldKey[:32])
 	}
 	key := "A09:" + strings.ToLower(v0.Hex())
-	add("VS8-076.key_rotation", vc(drift(key+":key", crypto.Keccak256Hash(oldKey), crypto.Keccak256Hash(newKey))),
+	add("VS8-152.key_rotated_after_attestation", vc(drift(key+":key", crypto.Keccak256Hash(oldKey), crypto.Keccak256Hash(newKey))),
 		world.SetStorage(world.StationSettle, anchor, dataSlot, common.BytesToHash(newKey[:32])))
 
 	// VS8-190 (step 24, [r3.1:D2]): a state root that S7 did not authenticate for THIS block is pending; an unsupported chain is unproven
@@ -118,17 +119,26 @@ func (a *authorInt) vectors() []ci.Vector {
 	// [r3.3:S1] E-g fixes the form of a Registry9 key (lowercase hex, no 0x): another spelling is not a mismatch of the key (the compare is on the
 	// decoded bytes) but a context that is not a Registry9, context_incomplete{missing:[registry9]}
 	noncanon := exp(ci.HeadlineRefused, nil, est("first", "context_incomplete", map[string]any{"missing": []any{"registry9"}}))
-	add("VS8-162.key_not_canonical_is_not_a_registry9", noncanon, ctxSet("registry9.members.2.bls_key", "0x"+k2))
+	add("VS8-020.registry9_key_0x_prefix", noncanon, ctxSet("registry9.members.2.bls_key", "0x"+strings.ToLower(k2)))
+	add("VS8-020.registry9_key_upper_case", noncanon, ctxSet("registry9.members.2.bls_key", k2))
+	add("VS8-020.s7_absent", exp(ci.HeadlineRefused, nil, est("first", "context_incomplete", map[string]any{"missing": []any{"s7"}})), ci.Mutation{Op: "unset_field", Target: "context", Path: "s7"})
 
-	// VS8-180 (step 23): every outcome prints rules_not_judged, with the reason (the four rows of the "Not judged" paragraph of Policy rules)
-	e180 := exp(ci.HeadlineVerified, nil)
-	e180.RulesNotJudged = []ci.ExpectedRuleNotJudged{
+	// VS8-184 (step 23): every outcome prints rules_not_judged, with the reason (the four rows of the "Not judged" paragraph of Policy rules)
+	rnj := []ci.ExpectedRuleNotJudged{
 		{Row: "A21", Reason: "minimumGovernanceLevelForValueOps is read only by executeWithGovernance (CertenAnchorV8_2.sol:1398), not on the attestation path; reported in registry"},
 		{Row: "A09:3", Reason: "registeredAt is informational; no acceptance decision reads it"},
 		{Row: "slot19:usedNonces", Reason: "restrict-only: its single reader is nonceValid = !usedNonces[...] (CertenAnchorV8_2.sol:2002) and its single writer assigns the literal true (:1352)"},
 		{Row: "slot28:operators", Reason: "not read by the attestation path"},
 	}
-	add("VS8-180.rules_not_judged", e180)
+	outcome := func(headline string, muts ...ci.Mutation) {
+		e := exp(headline, nil)
+		e.RulesNotJudged = rnj
+		add("VS8-184."+headline, e, muts...)
+	}
+	outcome(ci.HeadlineVerified)
+	outcome(ci.HeadlinePending, s7set("finalized_block.hash", "0x"+strings.Repeat("11", 32)))
+	outcome(ci.HeadlineUnproven, s7set("unsupported", "finality_chain_unsupported"))
+	outcome(ci.HeadlineRefused, world.SetStorage(world.StationPre, anchor, ci.SlotIndex(6), common.Hash{}), world.SetStorage(world.StationPost, anchor, ci.SlotIndex(6), common.Hash{}))
 	return out
 }
 
@@ -158,4 +168,88 @@ func TestVectorSetIntIsPublishedRunsAndIsReproducible(t *testing.T) {
 		}
 	}
 	checkPublishedBytes(t, f, vectorSetInt, vectors)
+}
+
+// ---- s8_int_2: the framework rows (steps 0, 1, 1b, 22b) and the headline rows of step 23 that need S7 and a refusal together ----
+
+const vectorSetInt2 = "s8_int_2"
+
+func (a *authorInt) vectors2() []ci.Vector {
+	f := a.f
+	sp := f.spec
+	var out []ci.Vector
+	add := func(id string, e ci.Expected, muts ...ci.Mutation) {
+		out = append(out, ci.Vector{ID: id, Base: "H0", Mutations: muts, Expected: e})
+	}
+	first := func(code string, fields map[string]any) ci.Expected {
+		return exp(ci.HeadlineRefused, nil, est("first", code, fields))
+	}
+	malformed := func(part string, index int, reason string, got, want int) ci.Expected {
+		return first("evidence_malformed", map[string]any{"part": part, "index": uint64(index), "reason": reason, "got_len": uint64(got), "want_len": uint64(want)})
+	}
+	raw := f.built.Inputs.Container
+	// VS8-001: the manifest bytes are not the bytes the pin names (a stale pin)
+	add("VS8-001.stale_pin", first("manifest_corrupt", map[string]any{}), ci.Mutation{Op: "set_pin", Target: "manifest", Value: json.RawMessage(`"` + strings.Repeat("00", 32) + `"`)})
+	// VS8-010 / VS8-012: the magic is CIE1; a trailing byte
+	add("VS8-010.magic_cie2", malformed("magic", 0, "bad_magic", 0, 0), ci.Mutation{Op: "set_byte", Target: "container", Offset: intp(3), Value: json.RawMessage(`"32"`)})
+	add("VS8-012.trailing_byte", malformed("container", len(raw), "trailing_bytes", 1, 0), ci.Mutation{Op: "append_hex", Target: "container", Value: json.RawMessage(`"00"`)})
+	// VS8-013: the lists are ascending (a reversed list is the first offending index 1)
+	add("VS8-013.nodes_descending", malformed("nodes", 1, "nodes_not_ascending", 0, 0), ci.Mutation{Op: "reorder", Target: "container", List: "nodes"})
+	add("VS8-013.codes_descending", malformed("codes", 1, "codes_not_ascending", 0, 0), ci.Mutation{Op: "reorder", Target: "container", List: "codes"})
+	// VS8-018 (step 22b): one more node that no walk visits, sorted and unique: nodes_unreferenced at its index
+	extra := append([]byte{0xf8, 0x44}, make([]byte, 0x44)...)
+	for i := range extra[2:] {
+		extra[2+i] = byte(i*7 + 1)
+	}
+	c, err := ci.Decode(raw, ci.DefaultLimits())
+	if err != nil {
+		a.t.Fatal(err)
+	}
+	idx := 0
+	for _, n := range c.Nodes {
+		if bytes.Compare(crypto.Keccak256(n), crypto.Keccak256(extra)) < 0 {
+			idx++
+		}
+	}
+	add("VS8-018.one_unreferenced_node", malformed("nodes", idx, "nodes_unreferenced", 0, 0), ci.Mutation{Op: "add_node", Target: "container", Value: json.RawMessage(`"` + hex.EncodeToString(extra) + `"`)})
+	// VS8-182 / VS8-183 (step 23, n2): a judgement R is a refusal only when the state root is authenticated; a framework R always is
+	anchor := hexAddr(sp.Roles.Anchor)
+	hole := []ci.Mutation{world.SetStorage(world.StationPre, anchor, ci.SlotIndex(6), common.Hash{}), world.SetStorage(world.StationPost, anchor, ci.SlotIndex(6), common.Hash{})}
+	other := ci.Mutation{Op: "set_field", Target: "s7", Path: "finalized_block.hash", Value: json.RawMessage(`"0x` + strings.Repeat("11", 32) + `"`)}
+	e182 := exp(ci.HeadlinePending, nil)
+	e182.S7FinalizedStatus = "verified_other_block"
+	add("VS8-182.judgement_refusal_not_authenticated", e182, append(append([]ci.Mutation(nil), hole...), other)...)
+	// the framework refusal of step 1 halts the run before step 24: the headline is refused whatever S7 says
+	add("VS8-183.framework_refusal_not_authenticated", malformed("magic", 0, "bad_magic", 0, 0), ci.Mutation{Op: "set_byte", Target: "container", Offset: intp(3), Value: json.RawMessage(`"32"`)}, other)
+	return out
+}
+
+func intp(n int) *int { return &n }
+
+func TestVectorSetInt2IsPublishedRunsAndIsReproducible(t *testing.T) {
+	f := newFixture(t, 11155111, world.VariantH0)
+	a := &authorInt{t, f}
+	vectors := a.vectors2()
+	if _, err := os.Stat(setDir(vectorSetInt2)); err != nil && os.Getenv("CERTEN_WRITE_S8_INT2") == "1" {
+		if err := world.WriteSet(setDir(vectorSetInt2), f.spec, vectors); err != nil {
+			t.Fatal(err)
+		}
+	}
+	set, err := ci.LoadVectorSet(setDir(vectorSetInt2))
+	if err != nil {
+		t.Fatalf("the set %s is not published: %v", vectorSetInt2, err)
+	}
+	if len(set.Vectors) != len(vectors) {
+		t.Fatalf("published %d vectors, the author defines %d", len(set.Vectors), len(vectors))
+	}
+	ver, err := ci.NewDefaultVerifier()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range ci.RunSet(set, nil, ver) {
+		if r.Outcome != ci.OutcomePass {
+			t.Errorf("%s: %s %s", r.ID, r.Outcome, r.Detail)
+		}
+	}
+	checkPublishedBytes(t, f, vectorSetInt2, vectors)
 }

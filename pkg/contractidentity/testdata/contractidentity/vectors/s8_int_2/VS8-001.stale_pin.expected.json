@@ -1,0 +1,10 @@
+{
+ "headline": "refused",
+ "states": [
+  {
+   "part": "first",
+   "code": "contract_identity_manifest_corrupt",
+   "fields": {}
+  }
+ ]
+}

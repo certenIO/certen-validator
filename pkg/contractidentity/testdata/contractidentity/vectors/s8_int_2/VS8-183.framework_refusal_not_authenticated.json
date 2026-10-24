@@ -1,0 +1,34 @@
+{
+ "id": "VS8-183.framework_refusal_not_authenticated",
+ "base": "H0",
+ "mutations": [
+  {
+   "op": "set_byte",
+   "target": "container",
+   "offset": 3,
+   "value": "32"
+  },
+  {
+   "op": "set_field",
+   "target": "s7",
+   "path": "finalized_block.hash",
+   "value": "0x1111111111111111111111111111111111111111111111111111111111111111"
+  }
+ ],
+ "expected": {
+  "headline": "refused",
+  "states": [
+   {
+    "part": "first",
+    "code": "contract_identity_evidence_malformed",
+    "fields": {
+     "got_len": "0",
+     "index": "0",
+     "part": "magic",
+     "reason": "bad_magic",
+     "want_len": "0"
+    }
+   }
+  ]
+ }
+}

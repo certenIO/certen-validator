@@ -1,9 +1,9 @@
 {
  "format": "certen-contract-identity-inputs/1",
- "id": "VS8-180.rules_not_judged",
+ "id": "VS8-010.magic_cie2",
  "container": {
-  "file": "VS8-180.rules_not_judged.inputs.container.hex",
-  "sha256": "f782352f966a28aea2556d0c57f823fbbb21d2c58538bdc25af7908681b98afe"
+  "file": "VS8-010.magic_cie2.inputs.container.hex",
+  "sha256": "f2e61939c87e768962571011f8a83f4985b5b9865e523b3a0ee0acf15c8c60ab"
  },
  "manifest": {
   "file": "manifest.6d0fa8c81f760b23f10cb222a1d19edd756984b94d0106d6940b5ddb13a4fb39.json",
