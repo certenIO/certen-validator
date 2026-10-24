@@ -3,7 +3,10 @@
 package contractidentity_test
 
 import (
+	"errors"
 	"fmt"
+	"math/big"
+	"strings"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -355,7 +358,11 @@ func TestSettleMutations(t *testing.T) {
 		}, want: []want{{"state_at_settlement", "open", "", "", ""}}, open: "alert:binding"},
 		{name: "set root rotated after the attestation", muts: func(f *fixture) []ci.Mutation {
 			return []ci.Mutation{world.SetStorage(world.StationSettle, anchorOf(f), ci.SlotIndex(17), common.HexToHash("0x77"))}
-		}, want: []want{{"state_at_settlement", "open", "", "", ""}}, open: "drift:A14"},
+		}, want: []want{{"state_at_settlement", "open", "", "", ""}}, open: "alert:set_root,drift:A14"},
+		{name: "validator record changed at N: recomputed set root differs from the stored root", muts: func(f *fixture) []ci.Mutation {
+			base := ci.MappingSlotAt(ci.KeyAddress(f.addr(f.spec.Context.Registry9.Members[0].Address)), 12)
+			return []ci.Mutation{world.SetStorage(world.StationSettle, anchorOf(f), ci.MemberSlot(base, 1), common.BigToHash(big.NewInt(123456)))}
+		}, want: []want{{"state_at_settlement", "open", "", "", ""}}, open: "alert:set_root"},
 		{name: "factory does not know the account", muts: func(f *fixture) []ci.Mutation {
 			return []ci.Mutation{world.SetStorage(world.StationSettle, f.addr(f.spec.Roles.Factory), ci.MappingSlotAt(ci.KeyAddress(acctOf(f)), 2), common.Hash{})}
 		}, want: []want{{"account_provenance", "refused", "account_not_canonical", "reason", "deployed_flag"}}},
@@ -495,8 +502,8 @@ func TestSettleMutations(t *testing.T) {
 				f.expect(r, w)
 			}
 			if c.open != "" {
-				if got := f.openCodes(r, ci.JudgedStateAtSettlement); len(got) != 1 || got[0] != c.open {
-					t.Fatalf("open entries %v, want [%s]", got, c.open)
+				if got := strings.Join(f.openCodes(r, ci.JudgedStateAtSettlement), ","); got != c.open {
+					t.Fatalf("open entries %s, want %s", got, c.open)
 				}
 			}
 		})
@@ -615,4 +622,44 @@ func TestHostileContainerAndContextNeverErrorOrPanic(t *testing.T) {
 		r, _ := f.run(nil, mut, true)
 		check(fmt.Sprintf("container mutation %d", i), r)
 	}
+}
+
+// A fake step 18 that records an incomplete set of AUTH rows makes the verifier fail loudly instead of dropping drift entries.
+func TestStep13FailsLoudlyOnIncompleteAttestWords(t *testing.T) {
+	f := newFixture(t, 11155111, world.VariantH0)
+	reg := ci.NewStepRegistry()
+	if err := ci.RegisterSteps2a(reg); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range ci.RegistrableSteps() {
+		if ci.Owner2a == mustSpec(id).Owner {
+			continue
+		}
+		fn := f.fake(id, false)
+		if id == ci.Step18 {
+			inner := fn
+			fn = func(env *ci.Env) (ci.StepOutput, error) {
+				out, err := inner(env)
+				delete(env.Facts.B2.Post.Words, "A14")
+				return out, err
+			}
+		}
+		if err := reg.Register(id, fn); err != nil {
+			t.Fatal(err)
+		}
+	}
+	v, err := ci.NewVerifier(reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = v.VerifyTrace(f.built.Inputs.Ctx, f.built.Inputs.Container, f.m)
+	var fm *ci.FactsMissingError
+	if !errors.As(err, &fm) || fm.Station != "Post" || len(fm.Missing) != 1 || fm.Missing[0] != "A14" {
+		t.Fatalf("expected a FactsMissingError for Post/A14, got %v", err)
+	}
+}
+
+func mustSpec(id ci.StepID) ci.StepSpec {
+	s, _ := ci.Spec(id)
+	return s
 }

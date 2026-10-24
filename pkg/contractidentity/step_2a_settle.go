@@ -3,10 +3,13 @@
 package contractidentity
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"math/big"
+	"sort"
 
+	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 )
 
@@ -237,6 +240,9 @@ func a2Step13(env *Env) (StepOutput, error) {
 	if p, done, err := a2StatedOrRefusal(env, part); done {
 		return a2One(p), err
 	}
+	if err := a2AttestWordsComplete(env.Facts); err != nil {
+		return StepOutput{}, err
+	}
 	if f.AnchorRefusal != nil || f.Verifier == (common.Address{}) || f.AnchorState.StorageRoot == (common.Hash{}) {
 		// the anchor chain is not established (steps 10 and 12 said why): there is no state to compare and nothing to report here
 		return StepOutput{Parts: []PartResult{env.Verified(part)}, ReadPlanIncomplete: "anchor_chain_not_established"}, nil
@@ -265,6 +271,11 @@ func a2Step13(env *Env) (StepOutput, error) {
 		incomplete = "validator_list_too_large"
 		n = 0
 	}
+	type valRow struct {
+		addr  common.Address
+		power common.Hash
+	}
+	var vals []valRow
 	for i := uint64(0); i < n && r.ok(); i++ {
 		el, _, err := ArrayElementSlot(13, i, 20)
 		if err != nil {
@@ -273,7 +284,8 @@ func a2Step13(env *Env) (StepOutput, error) {
 		val := a(fmt.Sprintf("A10:%d", i), el)
 		base := MappingSlotAt(KeyAddress(a2Low20(val)), 12)
 		r.slot(A, acctA, base)
-		r.slot(A, acctA, MemberSlot(base, 1))
+		power := r.slot(A, acctA, MemberSlot(base, 1))
+		vals = append(vals, valRow{a2Low20(val), power})
 		r.bytes(A, acctA, MemberSlot(base, 2), 256)
 		r.slot(A, acctA, MemberSlot(base, 3))
 	}
@@ -305,7 +317,7 @@ func a2Step13(env *Env) (StepOutput, error) {
 	}
 	f.SettleAUTH = words
 	out := StepOutput{Parts: []PartResult{env.Verified(part)}, ReadPlanIncomplete: incomplete,
-		RulesJudged: []string{RulePAUSED, RuleBINDING, RuleENABLED, RuleTHRESHOLDA, RuleTHRESHOLDV, RuleOWNER, RuleGOVVERIFIER, RuleMINGOV}}
+		RulesJudged: []string{RulePAUSED, RuleBINDING, RuleENABLED, RuleTHRESHOLDA, RuleTHRESHOLDV, RuleOWNER, RuleGOVVERIFIER, RuleMINGOV, RuleSETROOT}}
 	alert := func(field string, onchain, want any) error {
 		o, err := env.Open(part, OpenAlert, CodeAlert, "", map[string]any{"field": field, "at": AtSettle, "onchain": onchain, "want": want})
 		out.Open = append(out.Open, o)
@@ -359,8 +371,23 @@ func a2Step13(env *Env) (StepOutput, error) {
 	if s30[10] < pol.MinimumGovernanceLevel {
 		keep(alert("minimum_governance_level", uint64(s30[10]), uint64(pol.MinimumGovernanceLevel)))
 	}
+	// SETROOT [r3.2:F15]: the root recomputed from the validator records at N equals the stored root (a defence in depth: no contract path breaks it)
+	if incomplete == "" {
+		sort.Slice(vals, func(i, j int) bool { return bytes.Compare(vals[i].addr[:], vals[j].addr[:]) < 0 })
+		addrs, powers := make([]common.Address, len(vals)), make([]*big.Int, len(vals))
+		for i, v := range vals {
+			addrs[i], powers[i] = v.addr, new(big.Int).SetBytes(v.power[:])
+		}
+		enc, perr := a2PackRoot(addrs, powers, new(big.Int).SetBytes(num[:]), new(big.Int).SetBytes(den[:]))
+		if perr != nil {
+			return StepOutput{}, perr
+		}
+		if want := a2K(enc); want != root {
+			keep(alert("set_root", root, want))
+		}
+	}
 	// drift: a value that was equal at both attestation stations and differs at N (a legitimate rotation after the attestation)
-	for _, id := range []string{"A05", "A07", "A10", "A11", "A14", "A18"} {
+	for _, id := range a2DriftRows {
 		att, ok := env.Facts.B2.Post.Words[id]
 		if !ok {
 			continue
@@ -371,7 +398,6 @@ func a2Step13(env *Env) (StepOutput, error) {
 			keep(e)
 		}
 	}
-	_ = root
 	return out, err
 }
 
@@ -555,4 +581,59 @@ func a2LoggedLevel(env *Env, call *SettlementCall) (int, bool) {
 type logEntry struct {
 	topics []common.Hash
 	data   []byte
+}
+
+// a2PackRoot is abi.encode(address[] sortedAddrs, uint256[] sortedPowers, uint256 num, uint256 den), the preimage of the validator-set root
+// (CertenAnchorV8_2.sol:1754-1792).
+func a2PackRoot(addrs []common.Address, powers []*big.Int, num, den *big.Int) ([]byte, error) {
+	var args abi.Arguments
+	for _, t := range []string{"address[]", "uint256[]", "uint256", "uint256"} {
+		ty, err := abi.NewType(t, "", nil)
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, abi.Argument{Type: ty})
+	}
+	return args.Pack(addrs, powers, num, den)
+}
+
+// a2DriftRows are the AUTH rows step 13 compares with the attestation stations (bare AUTH row id; A18 is the address right-aligned in a word).
+var a2DriftRows = []string{"A05", "A07", "A10", "A11", "A14", "A18"}
+
+// FactsMissingError is a defect of the package that fills Facts.B2: the words of an attestation station that step 13 compares are
+// incomplete, which would silently drop drift entries. It is an error, never a verdict.
+type FactsMissingError struct {
+	Station string
+	Missing []string
+}
+
+func (e *FactsMissingError) Error() string {
+	return fmt.Sprintf("contractidentity: step 13: Facts.B2.%s.Words lacks the AUTH rows %v although the attestation part is captured", e.Station, e.Missing)
+}
+
+// a2AttestWordsComplete requires, for a captured attestation part whose stations were read (words recorded or a state root set), the six
+// rows of a2DriftRows at both stations. A station that was not read (step 18 refused or could not read it) is a named state of step 18 and
+// leaves no words: then no drift is computed.
+func a2AttestWordsComplete(f *Facts) error {
+	if !f.B1.AttestCaptured {
+		return nil
+	}
+	for _, st := range []struct {
+		name string
+		s    *AuthStation
+	}{{"Pre", &f.B2.Pre}, {"Post", &f.B2.Post}} {
+		if len(st.s.Words) == 0 && st.s.StateRoot == ([32]byte{}) {
+			continue
+		}
+		var missing []string
+		for _, id := range a2DriftRows {
+			if _, ok := st.s.Words[id]; !ok {
+				missing = append(missing, id)
+			}
+		}
+		if len(missing) > 0 {
+			return &FactsMissingError{Station: st.name, Missing: missing}
+		}
+	}
+	return nil
 }

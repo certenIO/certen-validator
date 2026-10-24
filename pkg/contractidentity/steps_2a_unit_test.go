@@ -3,6 +3,7 @@
 package contractidentity
 
 import (
+	"errors"
 	"math/big"
 	"testing"
 
@@ -73,5 +74,57 @@ func TestA2LevelOf(t *testing.T) {
 		if level != c.level || source != c.source || (inv != nil) != c.invalid {
 			t.Errorf("levelOf(page %d, book %s, set %s, stored %s) = %d %s %v", c.page, c.book.Hex()[:6], c.set.Hex()[:6], c.stored.Hex()[:6], level, source, inv)
 		}
+	}
+}
+
+// A package that fills Facts.B2 with an incomplete set of rows must fail loudly, never silently drop drift entries.
+func TestA2AttestWordsCompleteFailsLoudly(t *testing.T) {
+	full := map[string]common.Hash{}
+	for _, id := range a2DriftRows {
+		full[id] = common.Hash{1}
+	}
+	mk := func(captured bool, pre, post map[string]common.Hash, preRoot [32]byte) *Facts {
+		f := &Facts{}
+		f.B1.AttestCaptured = captured
+		f.B2.Pre, f.B2.Post = AuthStation{Words: pre, StateRoot: preRoot}, AuthStation{Words: post}
+		return f
+	}
+	drop := func(id string) map[string]common.Hash {
+		m := map[string]common.Hash{}
+		for k, v := range full {
+			if k != id {
+				m[k] = v
+			}
+		}
+		return m
+	}
+	if err := a2AttestWordsComplete(mk(true, full, full, [32]byte{})); err != nil {
+		t.Fatalf("complete words: %v", err)
+	}
+	if err := a2AttestWordsComplete(mk(false, nil, nil, [32]byte{})); err != nil {
+		t.Fatalf("attest not captured: %v", err)
+	}
+	if err := a2AttestWordsComplete(mk(true, nil, nil, [32]byte{})); err != nil {
+		t.Fatalf("stations not read (step 18 refused): %v", err)
+	}
+	for _, id := range a2DriftRows {
+		for _, post := range []bool{false, true} {
+			pre, po := full, full
+			if post {
+				po = drop(id)
+			} else {
+				pre = drop(id)
+			}
+			err := a2AttestWordsComplete(mk(true, pre, po, [32]byte{}))
+			var fm *FactsMissingError
+			if !errors.As(err, &fm) || len(fm.Missing) != 1 || fm.Missing[0] != id {
+				t.Errorf("row %s missing (post=%v): %v", id, post, err)
+			}
+		}
+	}
+	// a station with a state root and no words was read: an empty set is a defect too
+	var fm *FactsMissingError
+	if err := a2AttestWordsComplete(mk(true, nil, full, [32]byte{9})); !errors.As(err, &fm) || fm.Station != "Pre" || len(fm.Missing) != len(a2DriftRows) {
+		t.Errorf("state root without words: %v", err)
 	}
 }
