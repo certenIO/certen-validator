@@ -228,11 +228,7 @@ func (r *IndexReader) Locate(ctx context.Context, b *Builder, hdr finality.Heade
 	if err != nil {
 		return nil, nil, err
 	}
-	batchKeys, err := r.Store.ListByRange(ctx, chain, from, to, batchKeyPrefix)
-	if err != nil {
-		return nil, nil, err
-	}
-	io.add(len(entryKeys)*100 + len(batchKeys)*60)
+	io.add(len(entryKeys) * 100)
 	var cands []entryName
 	have2 := map[[40]byte]map[uint64]bool{} // the batches that have an entry: (block, hash) -> N
 	for _, k := range entryKeys {
@@ -316,6 +312,12 @@ func (r *IndexReader) Locate(ctx context.Context, b *Builder, hdr finality.Heade
 
 	// no entry holds the block. The reference reader names a captured blob batch whose blobs are not all stored (its content is unknown) before it
 	// says the batch is not posted; so does the index, for the batches of the window that have no entry.
+	// the batch rows of the window are listed only now, when no entry holds the block: they classify the miss
+	batchKeys, err := r.Store.ListByRange(ctx, chain, from, to, batchKeyPrefix)
+	if err != nil {
+		return nil, nil, err
+	}
+	io.add(len(batchKeys) * 60)
 	open := lost
 	unreadable := map[[40]byte]bool{} // blocks the indexer recorded as unreadable: named below, not judged here
 	uk, err := finality.CaptureKeysOfItemIn(ctx, r.Store, chain, from, to, unindexedItem(r.Gen))
