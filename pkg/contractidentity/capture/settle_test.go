@@ -62,7 +62,12 @@ func TestE2HonestCaptureEqualsTheWorldContainerByteForByte(t *testing.T) {
 // enrich fills the settlement station with unrelated storage, so that a read of a wrong or missing slot visits other trie nodes than the
 // plan reads (in the minimal world several slots share the one root node and a dropped read is invisible).
 func enrich(sp *world.Spec) {
-	st := sp.Stations[world.StationSettle]
+	for _, name := range []string{world.StationSettle, world.StationPre, world.StationPost} {
+		enrichStation(sp, sp.Stations[name])
+	}
+}
+
+func enrichStation(sp *world.Spec, st *world.Station) {
 	put := func(addr string, slot, val common.Hash) {
 		for k, a := range st.Accounts {
 			if strings.EqualFold(k, addr) {
@@ -299,7 +304,7 @@ func TestE2GateWaitThatEndsTheBudgetIsStatedNotAttempted(t *testing.T) {
 	defer release()
 	src, _ := fc.source(honest)
 	cfg := fc.config(src)
-	cfg.Gate, cfg.Budget = gate, 50*time.Millisecond
+	cfg.Gate, cfg.Budget, cfg.Clock = gate, 50*time.Millisecond, ethproof.WallClock
 	res, err := capture.CaptureSettle(context.Background(), cfg, fc.request())
 	if err != nil || res.Stated == nil || res.Stated.Reason != ci.StatedCaptureNotAttemptedInWindow {
 		t.Fatalf("%v %+v", err, res)

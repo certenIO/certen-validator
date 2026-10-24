@@ -60,6 +60,7 @@ type Config struct {
 	Budget   time.Duration        // default DefaultBudget: bounds the whole capture (every request carries its deadline)
 	Backoff  time.Duration        // between passes over the providers, on Clock; default DefaultBackoff
 	Passes   int                  // passes over the providers per read; default DefaultPasses
+	Parallel int                  // provider calls of one pass that run at once (default 1: one after the other)
 	Gate     *Gate                // per-chain concurrency (optional)
 	// MaxPoolBytes bounds the verified proof nodes a capture holds (default 2 x the container cap); on top of it comes one provider answer of
 	// at most MaxResponseBytes while it is parsed. Past the pool bound the capture ends with ErrTooLarge and stores nothing.
@@ -105,6 +106,13 @@ func (c *Config) passes() int {
 		return DefaultPasses
 	}
 	return c.Passes
+}
+
+func (c *Config) parallel() int {
+	if c.Parallel < 1 {
+		return 1
+	}
+	return c.Parallel
 }
 
 func (c *Config) poolCap() int {

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -23,6 +24,7 @@ import (
 	ci "github.com/certen/independant-validator/pkg/contractidentity"
 	"github.com/certen/independant-validator/pkg/contractidentity/capture"
 	"github.com/certen/independant-validator/pkg/contractidentity/world"
+	"github.com/certen/independant-validator/pkg/ethproof"
 )
 
 // fakeChain serves a derived H0 world as a chain: headers, the settlement transaction and receipt, and eth_getProof / eth_getCode answers
@@ -36,6 +38,10 @@ type fakeChain struct {
 	tx      *types.Transaction
 	rc      *types.Receipt
 	codes   map[common.Address][]byte
+	byHash  map[common.Hash]*types.Header
+	named   map[common.Hash]string // block hash -> world block name
+	attRc   *types.Receipt         // the attestation receipt
+	attTx   common.Hash
 }
 
 func newFakeChain(t testing.TB, chain uint64, variant string) *fakeChain {
@@ -64,7 +70,8 @@ func newFakeChainWith(t testing.TB, chain uint64, variant string, edit func(*wor
 	if w.PlanErr != nil || w.CheckErr != nil {
 		t.Fatalf("world %d/%s: plan %v check %v", chain, variant, w.PlanErr, w.CheckErr)
 	}
-	fc := &fakeChain{w: w, nodes: w.Container.Nodes, station: map[uint64]string{}, headers: map[uint64]*types.Header{}, codes: map[common.Address][]byte{}}
+	fc := &fakeChain{w: w, nodes: w.Container.Nodes, station: map[uint64]string{}, headers: map[uint64]*types.Header{}, codes: map[common.Address][]byte{},
+		byHash: map[common.Hash]*types.Header{}, named: map[common.Hash]string{}}
 	add := func(name, st string, num uint64) {
 		var h types.Header
 		if err := rlp.DecodeBytes(w.HeaderRLP[name], &h); err != nil {
@@ -74,18 +81,29 @@ func newFakeChainWith(t testing.TB, chain uint64, variant string, edit func(*wor
 			t.Fatalf("header %s does not round-trip", name)
 		}
 		fc.station[num], fc.headers[num] = st, &h
+		fc.byHash[h.Hash()], fc.named[h.Hash()] = &h, name
 	}
 	add(world.BlockSettle, world.StationSettle, sp.Blocks.Settle.Number)
 	add(world.BlockAttest, world.StationPost, sp.Blocks.Attest.Number)
 	add(world.BlockAttestParent, world.StationPre, sp.Blocks.AttestParent.Number)
-	if sp.Link == "hops" {
-		for i, b := range sp.Blocks.Between {
-			add(fmt.Sprintf("between.%d", i), world.HopStation(i+1), b.Number)
+	for i, b := range sp.Blocks.Between {
+		st := world.HopStation(i + 1)
+		if sp.Link != "hops" {
+			st = "spine" // a spine block has a header and no state of its own
 		}
+		add(fmt.Sprintf("between.%d", i), st, b.Number)
 	}
 	for _, c := range w.Container.Codes {
 		fc.codes[common.Address(c.Address)] = c.Runtime
 	}
+	ap := w.Container.Attest.Attest
+	fc.attTx = crypto.Keccak256Hash(ap.TxLeaf)
+	arl, err := ethproof.DecodeReceiptLeaf(ap.ReceiptLeaf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fc.attRc = &types.Receipt{Status: 1, Logs: arl.Logs, TxHash: fc.attTx, BlockHash: w.BlockHashes[world.BlockAttest], TransactionIndex: uint(ap.TxIndex),
+		BlockNumber: new(big.Int).SetUint64(sp.Blocks.Attest.Number)}
 	fc.tx = w.Ctx.Tx
 	rl := w.Ctx.Receipt
 	fc.rc = &types.Receipt{Status: uint64(rl.PostStateOrStatus[0]), Logs: rl.Logs, TxHash: fc.tx.Hash(), BlockHash: w.BlockHashes[world.BlockSettle],
@@ -120,7 +138,8 @@ func (fc *fakeChain) facts(t testing.TB) *capture.Facts {
 }
 
 func (fc *fakeChain) config(src capture.Source) capture.Config {
-	return capture.Config{Chain: fc.w.Spec.Chain, Manifest: fc.w.Manifest, Source: src}
+	// a virtual clock with a 1 ms backoff: retries cost no real time; a test that needs the wall clock sets cfg.Clock itself
+	return capture.Config{Chain: fc.w.Spec.Chain, Manifest: fc.w.Manifest, Source: src, Clock: ethproof.NewVirtualClock(time.Unix(1_700_000_000, 0)), Backoff: time.Millisecond}
 }
 
 type hostile int
@@ -137,12 +156,14 @@ const (
 	hugeReply         // an answer above MaxResponseBytes
 	padNodes          // valid proofs plus nodes nobody reads
 	leakyText         // errors that carry a URL with a key
+	prunedPre         // the state of the attestation parent block is not served (depth 1 on Adiri); everything else is
 )
 
 type fakeProvider struct {
 	name string
 	fc   *fakeChain
 	mode hostile
+	lat  func(slots int) // a latency model: called before a proof answer, with the number of slots asked
 	mu   sync.Mutex
 	// calls counts GetProof and GetCode requests.
 	calls int
@@ -214,6 +235,12 @@ func (p *fakeProvider) GetProof(_ context.Context, a common.Address, keys []stri
 	if !ok {
 		return nil, fmt.Errorf("header not found: block %d", num)
 	}
+	if p.mode == prunedPre && st == world.StationPre {
+		return nil, errors.New("missing trie node: state of the parent block is not available")
+	}
+	if p.lat != nil {
+		p.lat(len(keys))
+	}
 	if p.mode == lieBlock {
 		st = world.StationPre
 		if st == p.fc.station[num] {
@@ -280,9 +307,34 @@ func (p *fakeProvider) GetCode(_ context.Context, a common.Address, block string
 }
 
 type fakeSource struct {
-	fc        *fakeChain
-	providers []capture.Provider
-	panicOn   string
+	fc           *fakeChain
+	providers    []capture.Provider
+	panicOn      string
+	attestLogs   *[]*types.Log // replaces the logs of the attestation receipt
+	attestStatus *uint64
+	oversize     *ethproof.Block // returned by Block for the attestation block (a block over the caps)
+}
+
+func (s *fakeSource) HeaderByHash(_ context.Context, h common.Hash) (*types.Header, error) {
+	if hd, ok := s.fc.byHash[h]; ok {
+		return hd, nil
+	}
+	return nil, errors.New("not found")
+}
+
+func (s *fakeSource) Block(_ context.Context, h common.Hash) (*ethproof.Block, error) {
+	name, ok := s.fc.named[h]
+	if !ok {
+		return nil, errors.New("not found")
+	}
+	if name == world.BlockAttest && s.oversize != nil {
+		return s.oversize, nil
+	}
+	txs, rcs, err := s.fc.w.BlockLists(name)
+	if err != nil {
+		return nil, err
+	}
+	return &ethproof.Block{Header: s.fc.byHash[h], Txs: txs, Receipts: rcs}, nil
 }
 
 func (s *fakeSource) TransactionByHash(_ context.Context, h common.Hash) (*types.Transaction, bool, error) {
@@ -293,6 +345,16 @@ func (s *fakeSource) TransactionByHash(_ context.Context, h common.Hash) (*types
 }
 
 func (s *fakeSource) TransactionReceipt(_ context.Context, h common.Hash) (*types.Receipt, error) {
+	if h == s.fc.attTx {
+		rc := *s.fc.attRc
+		if s.attestLogs != nil {
+			rc.Logs = *s.attestLogs
+		}
+		if s.attestStatus != nil {
+			rc.Status = *s.attestStatus
+		}
+		return &rc, nil
+	}
 	if h != s.fc.tx.Hash() {
 		return nil, errors.New("not found")
 	}
