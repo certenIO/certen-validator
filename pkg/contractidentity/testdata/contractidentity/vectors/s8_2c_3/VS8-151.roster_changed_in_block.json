@@ -1,0 +1,31 @@
+{
+ "id": "VS8-151.roster_changed_in_block",
+ "base": "H0",
+ "mutations": [
+  {
+   "op": "set_field",
+   "target": "world",
+   "path": "stations.attest_post.accounts.0x830cfb484b6e5606687e00f64c40aeb9c7c84e3c.storage.0x5cc8ac9d58b7dc8defaec08a68210600ed73327c102f6b18a0c81f4f8650572f",
+   "value": "0x000000000000000000000000000000000000000000000000000000000000000b"
+  }
+ ],
+ "expected": {
+  "headline": "unproven",
+  "parts": {
+   "registry_link": "unproven"
+  },
+  "states": [
+   {
+    "part": "registry_link",
+    "code": "contract_identity_unproven",
+    "fields": {
+     "block": "11980017",
+     "field": "A09:0x56fdf40843d46330c00d6c3bfd393388d9c2816b:1",
+     "post": "0x000000000000000000000000000000000000000000000000000000000000000b",
+     "pre": "0x000000000000000000000000000000000000000000000000000000000000000a",
+     "reason": "state_changed_in_block"
+    }
+   }
+  ]
+ }
+}

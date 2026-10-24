@@ -1,0 +1,19 @@
+{
+ "headline": "verified_core",
+ "parts": {
+  "registry_link": "open"
+ },
+ "open": [
+  {
+   "part": "registry_link",
+   "kind": "not_checked",
+   "code": "contract_identity_not_checked",
+   "fields": {
+    "got": "2/3",
+    "part": "registry_keys",
+    "reason": "threshold_mismatch",
+    "want": "1/3"
+   }
+  }
+ ]
+}

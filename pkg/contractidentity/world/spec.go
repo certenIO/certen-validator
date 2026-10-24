@@ -160,6 +160,9 @@ type AttestSpec struct {
 	MessageHash         string    `json:"message_hash"` // blsProof.messageHash
 	Blob                []string  `json:"blob"`         // the 18 words of the aggregate signature
 	Logs                []LogSpec `json:"logs"`
+	// PKCList are the commitments of a manifest setRootHistory row (step 21c, manifest_history route) whose flag A06 the attestation stations read;
+	// empty (and absent from world.json) unless a vector sets it.
+	PKCList []string `json:"pkc_list,omitempty"`
 }
 
 // SettleSpec is executeGovernanceProofDirect (one leg) or batchExecuteGovernanceProofDirect (Legs) as made in the settlement block.

@@ -1,0 +1,17 @@
+{
+ "headline": "verified_core",
+ "parts": {
+  "registry_link": "open"
+ },
+ "open": [
+  {
+   "part": "registry_link",
+   "kind": "not_checked",
+   "code": "contract_identity_not_checked",
+   "fields": {
+    "part": "registry_keys",
+    "reason": "row_without_keys_digest"
+   }
+  }
+ ]
+}

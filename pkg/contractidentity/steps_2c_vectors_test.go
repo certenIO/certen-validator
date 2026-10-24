@@ -121,7 +121,11 @@ func TestVectors2cAgainstTheVerifier(t *testing.T) {
 	a := &author2c{t, f}
 	wj := worldJSON(t, f)
 	ver := f.verifier2c()
+	superseded := a.supersededByF17()
 	for _, v := range a.vectors() {
+		if e, ok := superseded[v.ID]; ok {
+			v.Expected = e // the expectation of r3.2 is replaced by F17 (s8_2c_3 carries the same vector)
+		}
 		t.Run(v.ID, func(t *testing.T) {
 			in, err := world.Builder{Manifest: f.m}.Build(wj, v, nil)
 			if err != nil {
@@ -161,6 +165,11 @@ func TestVectorSet2cIsPublishedRunsAndIsReproducible(t *testing.T) {
 	}
 	if len(set.Vectors) != len(vectors) {
 		t.Fatalf("published %d vectors, the author defines %d", len(set.Vectors), len(vectors))
+	}
+	for i, sv := range set.Vectors {
+		if e, ok := a.supersededByF17()[sv.ID]; ok {
+			set.Vectors[i].Expected = e // r3.2 expected R registry_mismatch{message_root}; F17 makes it U state_changed_in_block (see s8_2c_3)
+		}
 	}
 	for _, r := range ci.RunSet(set, nil, f.verifier2c()) {
 		if r.Outcome != ci.OutcomePass {

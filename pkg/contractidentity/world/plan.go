@@ -96,6 +96,7 @@ type planIDs struct {
 	anchorID, opID, pkc, leaf, book common.Hash
 	page                            uint64
 	adiURL                          string
+	pkcList                         []common.Hash // the row.pkcList the attestation stations also read (rows A06), from attestation.pkc_list
 }
 
 func (d *derived) ids() (planIDs, error) {
@@ -129,6 +130,9 @@ func (d *derived) ids() (planIDs, error) {
 		return ids, err
 	}
 	ids.page, ids.adiURL = sp.Settlement.AuthorityPage, sp.Context.ADIURL
+	if ids.pkcList, err = d.pkcListIDs(); err != nil {
+		return ids, err
+	}
 	return ids, nil
 }
 
@@ -167,6 +171,7 @@ func (p *planner) authSet(st string, ids planIDs, flip bool) {
 	for _, s := range []uint64{0, 1, 2} {
 		p.slot(st, ids.V, ci.SlotIndex(s))
 	}
+	p.pkcListReads(st, ids)
 }
 
 func (d *derived) runPlan(rd reader) error {

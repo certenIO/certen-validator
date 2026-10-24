@@ -1,0 +1,29 @@
+{
+ "headline": "verified_core",
+ "parts": {
+  "registry_link": "open"
+ },
+ "open": [
+  {
+   "part": "registry_link",
+   "kind": "not_checked",
+   "code": "contract_identity_not_checked",
+   "fields": {
+    "got": "30",
+    "part": "registry_keys",
+    "reason": "pkc_count_mismatch",
+    "want": "29"
+   }
+  },
+  {
+   "part": "state_at_settlement",
+   "kind": "drift",
+   "code": "contract_identity_drift",
+   "fields": {
+    "attest": "0x000000000000000000000000000000000000000000000000000000000000001e",
+    "field": "A07",
+    "settle": "0x000000000000000000000000000000000000000000000000000000000000001d"
+   }
+  }
+ ]
+}
