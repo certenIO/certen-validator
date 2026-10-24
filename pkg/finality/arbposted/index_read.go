@@ -259,11 +259,34 @@ func (r *IndexReader) Locate(ctx context.Context, b *Builder, hdr finality.Heade
 			cands = append(cands, n)
 		}
 	}
+	// the batches whose bounds are wider than the normal window: pointed at by "w" rows at a fixed key, listed here (none in production)
+	var firstFailure error
+	wide, werr := r.wideCandidates(ctx, hdr.Timestamp, io)
+	if werr != nil {
+		if _, named := finality.AsNamed(werr); !named {
+			return nil, nil, werr
+		}
+		firstFailure = werr // a damaged pointer is a candidate that cannot be judged, never a denial of the others (the D1 rule)
+	}
+	seen := map[finality.CaptureKey]bool{}
+	for _, c := range cands {
+		seen[c.Key] = true
+	}
+	for _, wn := range wide {
+		if !seen[wn.Key] {
+			seen[wn.Key] = true
+			cands = append(cands, wn)
+			id := blockID(wn.Key)
+			if have2[id] == nil {
+				have2[id] = map[uint64]bool{}
+			}
+			have2[id][wn.N] = true
+		}
+	}
 	sort.SliceStable(cands, func(i, j int) bool { return nameLess(cands[i], cands[j]) })
 
 	fp := messageFp(std)
 	var lost []capture.BatchRecord // candidates whose blob rows are not all stored
-	var firstFailure error
 	for _, c := range cands {
 		e, err := r.getEntry(ctx, c, io)
 		if err != nil {
@@ -595,6 +618,49 @@ func (r *IndexReader) batchRecord(ctx context.Context, n entryName, e *arbEntry,
 		return capture.BatchRecord{}, r.inconsistent(finality.IndexRowsDisagree, "item", bk.Item, "l1_block", bk.L1Block)
 	}
 	return rec, nil
+}
+
+// wideCandidates are the batches whose bounds hold ts among those pointed at by "w" rows (batches wider than the normal window).
+func (r *IndexReader) wideCandidates(ctx context.Context, ts uint64, io *ioCount) ([]entryName, error) {
+	keys, err := r.Store.ListByRange(ctx, r.chain(), 0, 0, ixItem(r.Gen, ixWide)+"/")
+	if err != nil {
+		return nil, err
+	}
+	var out []entryName
+	var first error
+	for _, k := range keys {
+		n, ok := parseWideName(r.Gen, k)
+		if !ok {
+			if first == nil {
+				first = r.inconsistent(finality.IndexEntryCorrupt, "item", k.Item, "l1_block", k.L1Block)
+			}
+			continue
+		}
+		if ts < n.MinTs || ts > n.MaxTs {
+			continue
+		}
+		b, found, err := r.Store.Get(ctx, k)
+		if err != nil {
+			return nil, err
+		}
+		if !found {
+			if first == nil {
+				first = r.inconsistent(finality.IndexRowMissing, "item", k.Item, "l1_block", k.L1Block)
+			}
+			continue
+		}
+		io.add(len(b))
+		block, hash, derr := decodeWideBody(b)
+		if derr != nil {
+			if first == nil {
+				first = r.inconsistent(finality.IndexEntryCorrupt, "item", k.Item, "l1_block", k.L1Block)
+			}
+			continue
+		}
+		n.Key = finality.CaptureKey{Chain: r.chain(), L1Block: block, L1Hash: hash, Item: entryItem(r.Gen, n.MinTs, n.MaxTs, n.N)}
+		out = append(out, n)
+	}
+	return out, first
 }
 
 // newestBatch is the highest batch number among the digests nearest below the index cursor (informational: the judged field

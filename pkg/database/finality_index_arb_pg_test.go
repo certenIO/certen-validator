@@ -24,6 +24,7 @@ func TestFinalityCaptureIndexArbRowsFitTheProductionTable(t *testing.T) {
 		"idx/g4294967295/arb/f/" + max,
 		"idx/g4294967295/arb/e/" + max + "/" + max + "/" + max,
 		"idx/g4294967295/arb/q/" + max,
+		"idx/g4294967295/arb/w/" + max + "/" + max + "/" + max,
 		"idx/g4294967295/arb/u",
 		"idx/g4294967295/arb/cursor",
 	}
@@ -62,6 +63,17 @@ func TestFinalityCaptureIndexArbRowsFitTheProductionTable(t *testing.T) {
 	es, err = st.ListByRange(ctx, chain, 605, 606, "idx/g1/arb/e/")
 	if err != nil || len(es) != 2 || es[0].L1Block != 605 || es[1].L1Block != 606 {
 		t.Fatalf("a range listing: %v %v", es, err)
+	}
+	// the pointers of wide batches live at a fixed key (block 0, zero hash): a point range lists them and nothing else
+	for i, it := range []string{"idx/g1/arb/w/5/10/7", "idx/g1/arb/w/5/12/8"} {
+		wk := finality.CaptureKey{Chain: chain, L1Block: 0, Item: it}
+		if err := finality.IndexPut(ctx, st, fam, wk, []byte{byte(i)}); err != nil {
+			t.Fatalf("%s: %v", it, err)
+		}
+	}
+	ws, err := st.ListByRange(ctx, chain, 0, 0, "idx/g1/arb/w/")
+	if err != nil || len(ws) != 2 {
+		t.Fatalf("the point listing of the wide pointers: %v %v", ws, err)
 	}
 	// different bytes under an index key are the named conflict
 	k := finality.CaptureKey{Chain: chain, L1Block: 501, L1Hash: h(2), Item: longest[1]}

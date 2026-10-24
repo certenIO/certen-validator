@@ -44,6 +44,9 @@ type Env struct {
 	Memory *finality.MemoryBudget
 	// Durable is the store without the per-leg capture bound: index rows are not capture bytes.
 	Durable finality.CaptureStore
+	// ArbFloor is the lowest L1 block that holds an Arbitrum batch the capture loop did not scan itself (the archive backfill's prefix scan); the
+	// Arbitrum index reader's time search and the indexer's rotating walk both start there (nil: every batch lies at or above the capture's first scan).
+	ArbFloor func(ctx context.Context) (uint64, bool, error)
 }
 
 // Deps are the process-level collaborators of the wiring.
@@ -52,6 +55,9 @@ type Deps struct {
 	Store    finality.CaptureStore // the durable store (database.FinalityCaptureStore)
 	Status   finality.BuilderStatusStore
 	Logf     func(string, ...any)
+
+	// ArbFloor is Env.ArbFloor: the integration of the archive backfill's Arbitrum prefix scan supplies it.
+	ArbFloor func(ctx context.Context) (uint64, bool, error)
 
 	// Test hooks.
 	HTTP  *http.Client
@@ -188,7 +194,7 @@ func Wire(cfg Config, d Deps) (*Wiring, error) {
 	cache := &lcCache{inner: lcf, now: now}
 	l1Proof := cfg.proofURLs()
 	mem := finality.NewMemoryBudget(cfg.MemoryBudget)
-	env := Env{Pins: pins, Config: cfg, LC: cache, HTTP: hc, Store: store, Logf: logf, L1Block: cfg.L1RPC, L1Proof: l1Proof, Memory: mem, Durable: d.Store}
+	env := Env{Pins: pins, Config: cfg, LC: cache, HTTP: hc, Store: store, Logf: logf, L1Block: cfg.L1RPC, L1Proof: l1Proof, Memory: mem, Durable: d.Store, ArbFloor: d.ArbFloor}
 
 	w := &Wiring{Registry: reg, Pins: pins, PinsSource: source, PinsSHA256: sha, Store: store, Disabled: map[uint64]*finality.StateError{}, Config: cfg}
 
@@ -334,18 +340,21 @@ func wireArb(reg *finality.Registry, env Env, d Deps, clock loopClock, logf func
 	var indexer finality.CaptureIndexer
 	if cfg.ArbIndexDisabled != nil {
 		finality.AnnounceIndexDisabled(logf, cfg.ArbIndexDisabled)
+	} else if !cfg.ArbIndex {
+		logf("[FINALITY] arbitrum batch index OFF by %s: the reference reader serves (it reads every captured batch and decodes every batch of a leg's window)", EnvArbIndex)
 	}
 	if cfg.ArbIndex {
 		r, err := arbposted.NewIndexReader(env.Store, env.Pins, cfg.ArbIndexGeneration)
 		if err != nil {
 			return err
 		}
+		r.Floor = env.ArbFloor
 		builder.Index = r
 		durable := env.Durable
 		if durable == nil {
 			durable = env.Store
 		}
-		ix, err := arbposted.NewIndexer(durable, env.Pins, cfg.ArbIndexGeneration, arbposted.IndexConfig{BlocksPerStep: cfg.IndexBlocks, StepBudget: cfg.IndexStep, Logf: logf})
+		ix, err := arbposted.NewIndexer(durable, env.Pins, cfg.ArbIndexGeneration, arbposted.IndexConfig{BlocksPerStep: cfg.IndexBlocks, StepBudget: cfg.IndexStep, Floor: env.ArbFloor, Logf: logf})
 		if err != nil {
 			return err
 		}
