@@ -107,7 +107,7 @@ func newFakeChainWith(t testing.TB, chain uint64, variant string, edit func(*wor
 	fc.tx = w.Ctx.Tx
 	rl := w.Ctx.Receipt
 	fc.rc = &types.Receipt{Status: uint64(rl.PostStateOrStatus[0]), Logs: rl.Logs, TxHash: fc.tx.Hash(), BlockHash: w.BlockHashes[world.BlockSettle],
-		BlockNumber: new(big.Int).SetUint64(sp.Blocks.Settle.Number)}
+		BlockNumber: new(big.Int).SetUint64(sp.Blocks.Settle.Number), TransactionIndex: uint(w.Ctx.Settlement.Tx.LeafIndex)}
 	return fc
 }
 
