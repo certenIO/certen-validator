@@ -75,10 +75,14 @@ func TestRB12ArbIndexTwoWideTwinsOfOneSlotKeepTheirOwnPointers(t *testing.T) {
 	}
 }
 
-// V-B2-2: the pointer work of a lookup is bounded. A lookup lists the pointers (keys only) and reads only those whose bounds hold its timestamp; more
-// than maxWidePointers pointers is the named index_inconsistent{coverage_overflow} for a leg only a wide batch can serve - before any pointer is read -
-// while a leg a normal batch serves is still served. The count is a gauge. Fail-before @00582def: 4,097 pointers are all listed and read without a bound.
-func TestRB12ArbIndexWidePointerWorkIsBoundedAtTheLimit(t *testing.T) {
+// V-B2-2: the pointer limit. A lookup lists the pointers (keys only) and reads the body of each pointer whose bounds hold its timestamp; more than
+// maxWidePointers pointers (counted over ALL of them) is the named index_inconsistent{coverage_overflow} for a leg no normal batch serves, returned
+// before any pointer is read, while a leg a normal batch serves is still served. The count is a gauge. This test pins exactly: at the limit, with
+// pointers that do NOT hold the leg's timestamp (one real wide batch does), a lookup is served and reads a handful of rows; above it nothing of the
+// pointers is read. It does NOT bound the worst case of 4,096 pointers that all hold the timestamp (about 4,100 reads for a leg a normal batch serves,
+// up to about 12,000 for a leg only a wide batch can serve: the figures of the review, stated in the PR). Fail-before @00582def: 4,097 pointers
+// were served with no overflow and no gauge.
+func TestRB12ArbIndexWidePointerOverflowIsNamedAboveTheLimit(t *testing.T) {
 	metrics.RegisterMetrics()
 	const T = ixT0 + 600_000
 	w := newIxWorld(t)
@@ -104,7 +108,7 @@ func TestRB12ArbIndexWidePointerWorkIsBoundedAtTheLimit(t *testing.T) {
 		}
 	}
 
-	// exactly at the limit: served as the reference serves, with the reads of the one pointer that matters
+	// exactly at the limit: served as the reference serves; only the one pointer that holds the timestamp is read, the other 4,095 are listed and not read
 	fill(ixMaxWide)
 	if w.wideRows() != ixMaxWide {
 		t.Fatalf("%d pointers, want %d", w.wideRows(), ixMaxWide)
@@ -114,7 +118,7 @@ func TestRB12ArbIndexWidePointerWorkIsBoundedAtTheLimit(t *testing.T) {
 		t.Fatalf("at the limit: reference %s, index %s", ref, idx)
 	}
 	if g := m.gets.Load(); g > 200 {
-		t.Fatalf("%d rows read for a lookup with %d pointers of which one matches", g, ixMaxWide)
+		t.Fatalf("%d rows read for a lookup with %d pointers of which ONE holds the timestamp", g, ixMaxWide)
 	}
 	if v, ok := ixMetric(t, "certen_finality_index_wide_pointers"); !ok || v != float64(ixMaxWide) {
 		t.Errorf("the pointer gauge is %v (found %v), want %d", v, ok, ixMaxWide)
@@ -127,7 +131,7 @@ func TestRB12ArbIndexWidePointerWorkIsBoundedAtTheLimit(t *testing.T) {
 		t.Fatalf("above the limit the wide leg is %s", idx)
 	}
 	if g := m.gets.Load(); g > 200 {
-		t.Fatalf("%d rows read above the limit: the work is not bounded by it", g)
+		t.Fatalf("%d rows read above the limit: the pointers' bodies must not be read at all", g)
 	}
 	ref, idx = ask(legNormal, txNormal)
 	if ref.N != 799 || ref != idx {
