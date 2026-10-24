@@ -3,7 +3,7 @@
  "spec": {
   "file": "V2_SPEC_S8.md",
   "revision": "r3.2",
-  "sha256": "ae4dfd1c1624b67ce3cbda22384aec1724746a3d54864799aadc7fb846069a25"
+  "sha256": "ffbb619f6f6fa7d63cb65fa70b6ddb52789d49db95b8493d3d1597f6d3ee2c4e"
  },
  "sets": {
   "account_not_canonical_reason": {
