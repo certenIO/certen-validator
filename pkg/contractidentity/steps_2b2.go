@@ -4,6 +4,7 @@ package contractidentity
 
 import (
 	"bytes"
+	"encoding/hex"
 	"fmt"
 	"math/big"
 	"sort"
@@ -167,6 +168,14 @@ func b2ReadStation(env *Env, name string, root common.Hash, A common.Address, an
 	at("A12", SlotIndex(15))
 	at("A13", SlotIndex(16))
 	at("A14", SlotIndex(17))
+	// rows A06 of the manifest_history route (step 21c): when the manifest holds a setRootHistory row for this root at B_v and its pkcList has the
+	// shape step 21c requires (as many entries as pkcCount, sorted, no duplicate, within the bound), the flag of every listed commitment is
+	// read at this station, under the spelling A06:<0x lowercase commitment>. A list of another shape is judged by step 21 without any read.
+	if row, ok := env.Manifest.SetRootRowFor(env.Ctx.Chain, env.Facts.B1.HeaderV.Number, strings.ToLower(s.w["A14"].Hex())); ok && row.PKCList != nil && row.PKCCount != nil {
+		for _, c := range b2ShapedPKCList(*row.PKCList, *row.PKCCount) {
+			at("A06:"+strings.ToLower(c.Hex()), MappingSlotAt(KeyBytes32(c), 4))
+		}
+	}
 	at("A15", MappingSlotAt(KeyBytes32(opID), 18))
 	at("A16", SlotIndex(27))
 	at("A17", SlotIndex(29))
@@ -205,6 +214,23 @@ func b2ReadStation(env *Env, name string, root common.Hash, A common.Address, an
 		return s, nil
 	}
 	return s, nil
+}
+
+// b2ShapedPKCList is the pkcList of a setRootHistory row when it has the shape step 21c(iii) requires, else nil: len == pkcCount, every entry
+// 0x plus 64 hex digits, strictly ascending (no duplicate), at most Limits.MaxPKCList entries.
+func b2ShapedPKCList(raw []string, count uint64) []common.Hash {
+	if uint64(len(raw)) != count || len(raw) > DefaultLimits().MaxPKCList {
+		return nil
+	}
+	out := make([]common.Hash, len(raw))
+	for i, x := range raw {
+		b, err := hex.DecodeString(strings.TrimPrefix(x, "0x"))
+		if err != nil || len(b) != 32 || !strings.HasPrefix(x, "0x") || (i > 0 && bytes.Compare(out[i-1][:], b) >= 0) {
+			return nil
+		}
+		copy(out[i][:], b)
+	}
+	return out
 }
 
 func (s *b2St) publish(root [32]byte) AuthStation {

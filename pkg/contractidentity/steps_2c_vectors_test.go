@@ -81,7 +81,7 @@ func (a *author2c) vectors() []ci.Vector {
 	add("VS8-151.threshold", mis("threshold"), ctxSet("registry9.num", 1))
 	add("VS8-151.certen_set_root", mis("certen_set_root"), ctxSet("registry9.certen_set_root", "0x"+strings.Repeat("ab", 32)))
 	add("VS8-151.set_root", mis("set_root"), both(anchor, 17, common.HexToHash("0xabc"))...)
-	add("VS8-151.message_root", mis("message_root"), setWord(world.StationPre, anchor, 17, common.HexToHash("0xabc")))
+	add("VS8-151.message_root", a.supersededByF17()["VS8-151.message_root"], setWord(world.StationPre, anchor, 17, common.HexToHash("0xabc")))
 
 	// VS8-153: no Registry9, no setRootHistory row for the proven root
 	e153 := exp(ci.HeadlineVerifiedCore, only(ci.JudgedRegistryLink, "open"))
@@ -121,11 +121,7 @@ func TestVectors2cAgainstTheVerifier(t *testing.T) {
 	a := &author2c{t, f}
 	wj := worldJSON(t, f)
 	ver := f.verifier2c()
-	superseded := a.supersededByF17()
 	for _, v := range a.vectors() {
-		if e, ok := superseded[v.ID]; ok {
-			v.Expected = e // the expectation of r3.2 is replaced by F17 (s8_2c_3 carries the same vector)
-		}
 		t.Run(v.ID, func(t *testing.T) {
 			in, err := world.Builder{Manifest: f.m}.Build(wj, v, nil)
 			if err != nil {
@@ -165,11 +161,6 @@ func TestVectorSet2cIsPublishedRunsAndIsReproducible(t *testing.T) {
 	}
 	if len(set.Vectors) != len(vectors) {
 		t.Fatalf("published %d vectors, the author defines %d", len(set.Vectors), len(vectors))
-	}
-	for i, sv := range set.Vectors {
-		if e, ok := a.supersededByF17()[sv.ID]; ok {
-			set.Vectors[i].Expected = e // r3.2 expected R registry_mismatch{message_root}; F17 makes it U state_changed_in_block (see s8_2c_3)
-		}
 	}
 	for _, r := range ci.RunSet(set, nil, f.verifier2c()) {
 		if r.Outcome != ci.OutcomePass {

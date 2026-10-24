@@ -166,8 +166,8 @@ func (a *author2c) controlVectors() []ci.Vector {
 		Mutations: []ci.Mutation{setWord(world.StationPre, anchor, 6, common.Hash{}), setWord(world.StationPost, anchor, 6, common.Hash{})}})
 	// VS8-100 (the owner acted inside B_v): every AUTH word is equal at pre and post and satisfies every rule, but the owner's nonce moved
 	// (the owner EOA sent a transaction inside B_v: setBLSZKVerificationEnabled(false) before and (true) after the attestation). Real verifier:
-	// rule IB (step 22) U owner_active_in_block on intra_block_window and authorization_attest; headline unproven.
-	out = append(out, ci.Vector{ID: "VS8-100.owner_active_in_block", Base: "H0", Expected: exp(ci.HeadlineUnproven, map[string]string{ci.JudgedAuthorizationAttest: "unproven", ci.JudgedIntraBlockWindow: "unproven"}),
+	// rule IB (step 22) U owner_active_in_block on intra_block_window; no rule is violated, so authorization_attest stays verified (the part carries the IB code only for a violated rule: VS8-138, step 19 precedence (b)); headline unproven.
+	out = append(out, ci.Vector{ID: "VS8-100.owner_active_in_block", Base: "H0", Expected: exp(ci.HeadlineUnproven, map[string]string{ci.JudgedAuthorizationAttest: "verified", ci.JudgedIntraBlockWindow: "unproven"}),
 		Mutations: []ci.Mutation{world.SetNonce(world.StationPost, owner, 7777)}})
 	return out
 }

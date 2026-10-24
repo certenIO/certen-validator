@@ -25,8 +25,8 @@ import (
 // The vector set s8_2c_3 (V2_SPEC_S8 r3.2 + F16/F17, sha256 3c637e4f...): the manifest_history exactness rows VS8-154..159 (step 21c without a
 // Registry9: an extension row of policy.setRootHistory for the world's own set root, the commitments of its pkcList read at both attestation
 // stations through the world member attestation.pkc_list) and the F17 verdict-precedence rows of registry_mismatch / pkc_mismatch. It SUPERSEDES
-// VS8-151.message_root of s8_2c_1, whose expectation (R registry_mismatch) is replaced by F17 (U state_changed_in_block on A14); s8_2c_1 itself is
-// published and untouched, and its test checks that vector against the F17 expectation (supersededByF17). Expectations are derived from the spec
+// VS8-151.message_root of s8_2c_1, whose r3.2 expectation (R registry_mismatch) is replaced by F17 (U state_changed_in_block on A14); before the
+// sets were published s8_2c_1 was regenerated with the F17 expectation (supersededByF17), and the same vector stays here. Expectations are derived from the spec
 // text before the verifier is run; the key digest is computed here independently of the verifier.
 
 const vectorSet2c3 = "s8_2c_3"

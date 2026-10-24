@@ -12,7 +12,7 @@
  "expected": {
   "headline": "unproven",
   "parts": {
-   "authorization_attest": "unproven",
+   "authorization_attest": "verified",
    "intra_block_window": "unproven"
   }
  }

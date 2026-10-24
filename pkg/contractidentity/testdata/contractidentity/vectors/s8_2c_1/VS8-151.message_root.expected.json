@@ -1,14 +1,18 @@
 {
- "headline": "refused",
+ "headline": "unproven",
  "parts": {
-  "registry_link": "refused"
+  "registry_link": "unproven"
  },
  "states": [
   {
    "part": "registry_link",
-   "code": "contract_identity_registry_mismatch",
+   "code": "contract_identity_unproven",
    "fields": {
-    "field": "message_root"
+    "block": "11980017",
+    "field": "A14",
+    "post": "0x26a209425127d950b1fdf7b4c97a634c6a0987f8c7458942812e02cb3ddef1c0",
+    "pre": "0x0000000000000000000000000000000000000000000000000000000000000abc",
+    "reason": "state_changed_in_block"
    }
   }
  ]
