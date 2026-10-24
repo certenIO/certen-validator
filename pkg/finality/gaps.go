@@ -562,3 +562,37 @@ func RecordGapScan(ctx context.Context, s CaptureStore, chain, from, to uint64) 
 	w.U64(to)
 	return s.Put(ctx, CaptureKey{Chain: chain, L1Block: from, Item: fmt.Sprintf("%s%d", GapScanPrefix, to)}, w.Bytes())
 }
+
+// CaptureGapState is THE l1_capture_gap of a leg whose window [origin, end] holds capture-gap pieces (RB12-ARCHIVE-BACKFILL F-ab-9: one
+// builder for every family, so the Base and Arbitrum states cannot diverge): the state names the part of the gap INSIDE the window and the
+// most urgent state among its pieces (an open block outranks a proved-unavailable one, which outranks an expired one: the backfill is still
+// working where it is open), as the first range of that state in block order, the number of its ranges and blocks, the window, and whether
+// an archive provider is configured (archive: "set", "unset", or "n/a" for a family without one). nil when the window holds no piece.
+func CaptureGapState(chain uint64, kind string, pieces []GapRange, origin, end uint64, archive string) *StateError {
+	if len(pieces) == 0 {
+		return nil
+	}
+	ps := append([]GapRange(nil), pieces...)
+	sort.SliceStable(ps, func(i, j int) bool { return ps[i].From < ps[j].From })
+	rank := map[GapState]int{GapOpen: 3, GapUnavailableProven: 2, GapRetentionExpired: 1}
+	best := ps[0].State
+	for _, p := range ps {
+		if rank[p.State] > rank[best] {
+			best = p.State
+		}
+	}
+	var first *GapRange
+	var ranges, blocks uint64
+	for i := range ps {
+		if ps[i].State != best {
+			continue
+		}
+		if first == nil {
+			first = &ps[i]
+		}
+		ranges++
+		blocks += ps[i].Blocks()
+	}
+	return NewState(CodeCaptureGap, "chain", chain, "kind", kind, "from", first.From, "to", first.To, "gap_state", string(best),
+		"ranges", ranges, "blocks", blocks, "epoch_l1_block", origin, "window_end_l1_block", end, "archive_provider", archive)
+}

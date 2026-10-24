@@ -51,6 +51,9 @@ func TestRTTheGapBackfillIsConnectedToTheIndexExactlyWhenTheIndexIsOn(t *testing
 				if (g.OnFilled != nil) != c.want {
 					t.Errorf("BASE_INDEX=%q: OnFilled set %v, want %v", c.setting, g.OnFilled != nil, c.want)
 				}
+				if g.Backfill == nil || (g.Backfill.OnFill != nil) != c.want {
+					t.Errorf("BASE_INDEX=%q: the backfiller (gap and prefix fills) tells the index right after the fill row: %v, want %v", c.setting, g.Backfill != nil && g.Backfill.OnFill != nil, c.want)
+				}
 			}
 		}
 		if !found {

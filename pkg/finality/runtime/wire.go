@@ -329,6 +329,15 @@ func wireBase(reg *finality.Registry, env Env, d Deps, clock loopClock, logf fun
 	pol.ReprobeEvery = cfg.PrefixReprobe
 	bf := &baseposted.Backfiller{Chain: finality.ChainBaseSepolia, Store: env.Store, Capturer: baseposted.CapturerOf(capt), Providers: Hosts(cfg.Beacon),
 		Policy: pol, Lease: lease, Now: d.Now, Logf: logf}
+	// every block the backfill closes (a gap block or a PREFIX block, which arrive out of order and far below the index cursor) is told to the capture
+	// index right after its fill row: the indexer digests it and completes its channels at its next step (duty a of the Train 3 integration)
+	if nt, ok := indexer.(finality.LateBlockNoter); ok {
+		bf.OnFill = func(n uint64, hasInbox bool) {
+			if hasInbox {
+				nt.NoteLate(n)
+			}
+		}
+	}
 	return reg.RegisterCapturer(&GapBackfillLoop{ChainID: finality.ChainBaseSepolia, Store: env.Store, Backfill: bf, Every: cfg.CaptureEvery, PerTick: cfg.GapBlocks,
 		AuditSpacing: uint64(cfg.GapAuditSpacing), Memory: env.Memory, Logf: logf, Clock: clock, OnFilled: lateNoter(indexer)})
 }

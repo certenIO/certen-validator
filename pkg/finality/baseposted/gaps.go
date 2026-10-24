@@ -137,34 +137,11 @@ func CaptureBlockHashOf(ctx context.Context, c *Capturer, n uint64) ([32]byte, b
 // of the gap INSIDE the window and the most urgent state among its pieces: an open block outranks a proved-unavailable one, which
 // outranks an expired one (the backfill is still working where it is open).
 func gapState(pieces []finality.GapRange, origin, end uint64, archive bool) *finality.StateError {
-	if len(pieces) == 0 {
-		return nil
-	}
-	rank := map[finality.GapState]int{finality.GapOpen: 3, finality.GapUnavailableProven: 2, finality.GapRetentionExpired: 1}
-	best := pieces[0].State
-	for _, p := range pieces {
-		if rank[p.State] > rank[best] {
-			best = p.State
-		}
-	}
-	var first *finality.GapRange
-	var ranges, blocks uint64
-	for i := range pieces {
-		if pieces[i].State != best {
-			continue
-		}
-		if first == nil {
-			first = &pieces[i]
-		}
-		ranges++
-		blocks += pieces[i].Blocks()
-	}
 	arch := "unset"
 	if archive {
 		arch = "set"
 	}
-	return finality.NewState(CodeCaptureGap, "chain", uint64(Chain), "kind", KindName, "from", first.From, "to", first.To, "gap_state", string(best),
-		"ranges", ranges, "blocks", blocks, "epoch_l1_block", origin, "window_end_l1_block", end, "archive_provider", arch)
+	return finality.CaptureGapState(uint64(Chain), KindName, pieces, origin, end, arch) // the one builder, shared with Arbitrum
 }
 
 // goneEvidence is the extra fields of an l1_capture_gap whose worst piece is terminal (the providers proved the blobs unavailable, or their

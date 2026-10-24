@@ -4,7 +4,6 @@ package arbposted
 
 import (
 	"context"
-	"sort"
 
 	"github.com/ethereum/go-ethereum/rlp"
 
@@ -130,29 +129,5 @@ func (b *Builder) coverage(ctx context.Context, ref finality.BlockRef, hdr final
 
 // gapState is the l1_capture_gap of the window: the most urgent state among the unfilled pieces inside it (open outranks the terminal ones).
 func gapState(pieces []finality.GapRange, origin, end uint64) *finality.StateError {
-	if len(pieces) == 0 {
-		return nil
-	}
-	rank := map[finality.GapState]int{finality.GapOpen: 3, finality.GapUnavailableProven: 2, finality.GapRetentionExpired: 1}
-	sort.SliceStable(pieces, func(i, j int) bool { return pieces[i].From < pieces[j].From })
-	best := pieces[0].State
-	for _, p := range pieces {
-		if rank[p.State] > rank[best] {
-			best = p.State
-		}
-	}
-	var first *finality.GapRange
-	var ranges, blocks uint64
-	for i := range pieces {
-		if pieces[i].State != best {
-			continue
-		}
-		if first == nil {
-			first = &pieces[i]
-		}
-		ranges++
-		blocks += pieces[i].Blocks()
-	}
-	return finality.NewState(CodeCaptureGap, "chain", finality.ChainArbitrumSepolia, "kind", KindName, "from", first.From, "to", first.To, "gap_state", string(best),
-		"ranges", ranges, "blocks", blocks, "epoch_l1_block", origin, "window_end_l1_block", end, "archive_provider", "n/a")
+	return finality.CaptureGapState(finality.ChainArbitrumSepolia, KindName, pieces, origin, end, "n/a") // the one builder, shared with Base
 }

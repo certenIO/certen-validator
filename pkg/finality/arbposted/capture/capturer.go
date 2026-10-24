@@ -18,6 +18,7 @@ import (
 	"github.com/certen/independant-validator/pkg/ethproof"
 	"github.com/certen/independant-validator/pkg/ethrpc"
 	"github.com/certen/independant-validator/pkg/finality"
+	"github.com/certen/independant-validator/pkg/metrics"
 )
 
 // The rollup deployment the capture serves (V2_SPEC_S7 4.2; the verifier reads the same addresses from the pins).
@@ -139,6 +140,11 @@ type Capturer struct {
 	// Prefix, when set, scans the batches posted before the first block this capturer scanned, for the legs that asked for them
 	// (RB12-ARCHIVE-BACKFILL; nil: none).
 	Prefix *PrefixScan
+	// Authorize, when set, decides for EVERY batch the capturer is about to store (the live capture and the prefix scan both go through
+	// captureBatch) whether the transaction that delivered it is one the sequencer inbox's batch poster sent: the Arbitrum counterpart of
+	// the Base rule (baseposted/authorize.go: the one function the capture and the readers share). nil: no check, as before this hook
+	// existed (RB12-ARCHIVE-BACKFILL F-ab-8). The INDEX-B authorization (arbposted/capture/authorize.go) is what plugs in here.
+	Authorize BatchAuthorizer
 
 	mu          sync.Mutex
 	started     bool
@@ -148,6 +154,11 @@ type Capturer struct {
 	ticks       int
 	gaps        map[uint64]BatchRecord // batches recorded as an incomplete-capture gap and not yet closed
 }
+
+// BatchAuthorizer says whether the transaction tx, which delivered the batch rec, was sent by the batch poster the chain's own state
+// authorizes. A false answer skips the batch (counted: certen_finality_capture_foreign_inbox_txs_total) and an error stops its capture
+// for this tick (retried), so nothing is stored on an answer that could not be given.
+type BatchAuthorizer func(ctx context.Context, rec BatchRecord, tx Tx) (bool, error)
 
 type pendBlob struct {
 	rec    BatchRecord
@@ -507,6 +518,16 @@ func (c *Capturer) captureBatch(ctx context.Context, lg Log, rep *Report) (*uint
 		return nil, errors.New("the batch transaction is not in the event's block")
 	}
 	rec.TxRaw, rec.TxIndex = tx.Raw, tx.Index
+	if c.Authorize != nil {
+		ok, err := c.Authorize(ctx, rec, tx)
+		if err != nil {
+			return nil, fmt.Errorf("authorizing the poster of batch %d: %w", rec.N, ethrpc.RedactError(err))
+		}
+		if !ok {
+			metrics.IncFinalityCaptureForeignInboxTx(c.Cfg.Chain)
+			return nil, nil
+		}
+	}
 	var data []byte
 	switch rec.DataLocation {
 	case LocBlob:
