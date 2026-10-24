@@ -20,6 +20,7 @@ import (
 	"github.com/ethereum/go-ethereum/rpc"
 
 	ci "github.com/certen/independant-validator/pkg/contractidentity"
+	"github.com/certen/independant-validator/pkg/ethproof"
 	"github.com/certen/independant-validator/pkg/metrics"
 )
 
@@ -382,7 +383,7 @@ func (t *Ticker) poll() time.Duration {
 // Run is the loop: Step, wait one poll, until ctx ends. A step error is logged and the loop goes on (the next step re-derives everything
 // from the store).
 func (t *Ticker) Run(ctx context.Context) {
-	clock := t.cfg.clock()
+	clock := ethproof.WallClock // the poll is real time: a replay clock shared with the other captures must not be spun forward by this loop
 	for ctx.Err() == nil {
 		if _, err := t.Step(ctx); err != nil && ctx.Err() == nil {
 			t.cfg.logf("⚠️ [CONTRACT-IDENTITY] chain %d tick: %v", t.cfg.Chain, err)
