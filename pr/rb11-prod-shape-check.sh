@@ -717,7 +717,7 @@ if out=$(sqlro <<SQL
 WITH s AS (SELECT * FROM proof_finality_status),
  k AS (SELECT s.*, (SELECT array_agg(x ORDER BY x) FROM jsonb_object_keys(s.state) x) AS keys FROM s)
 SELECT count(*),
-  count(*) FILTER (WHERE keys IS NOT NULL AND NOT (keys <@ ARRAY['class','eta','format','levelReached','nextLevel','seq','state'])),
+  count(*) FILTER (WHERE keys IS NOT NULL AND NOT (keys <@ ARRAY['class','eta','format','levelReached','nextLevel','pinsSha256','seq','state'])),
   count(*) FILTER (WHERE state->>'format' IS DISTINCT FROM 'certen-finality-status/1'),
   count(*) FILTER (WHERE state->>'class' IS NULL OR state->>'class' NOT IN ('pending','unavailable','refused','not_applicable','verified')),
   count(*) FILTER (WHERE COALESCE(state->>'levelReached','') NOT IN ('none','included','l1_posted','finalized') OR COALESCE(state->>'nextLevel','') NOT IN ('none','included','l1_posted','finalized')),
