@@ -19,6 +19,14 @@ type FactsA struct {
 	LeafKey    [32]byte
 	Selector   [4]byte
 	Generation string
+	// GenerationState is the `U account_generation_unpinned` of step 3(e) when the account code is a pinned:false generation row (nil otherwise);
+	// AccountRefusal is the judgement refusal of step 5 (account_absent, code_unproven_bytes, code_not_published, proof_invalid) while the account is
+	// not established. The steps that depend on the account (6-9, 14) decide their part with these states and read nothing from it.
+	GenerationState *StateError
+	// PathFailure is the unproven state step 3 decided settlement_path with (settlement_not_executed, settlement_event_missing, settlement_path_unsupported)
+	// while the account is not selected or its settlement selector is not pinned: the steps that need the account or the calldata decide their part with it.
+	PathFailure    *StateError
+	AccountRefusal *StateError
 	// StateRootN is item 3 of the settlement header: the root every settle-station read is judged against.
 	StateRootN [32]byte
 	// AccountState and AccountCode are the proven account of step 5 and its carried runtime code.
@@ -37,6 +45,8 @@ type FactsA struct {
 	// AnchorState and AnchorCode are the proven anchor account and its carried code (step 10).
 	AnchorState AccountState
 	AnchorCode  []byte
+	// AnchorRefusal is the refusal of step 10 while the anchor account is not established (steps 11 and 12 read nothing from it then).
+	AnchorRefusal *StateError
 	// Record is the anchors[anchorId] record at stateRoot_N (step 11).
 	Record AnchorRecord
 	// Verifier chain (step 12): V (slot 30 low 20 bytes), its proven state and code, and G (the generated Groth16 verifier) with its build.
@@ -74,6 +84,10 @@ type AnchorRecord struct {
 }
 
 var factSpecsA = []FactSpec{
+	{"A.PathFailure", Step3, []StepID{Step5, Step6, Step7, Step8, Step9, Step11, Step14}, "the unproven state of step 3 while no account is selected or the selector is not pinned"},
+	{"A.GenerationState", Step3, []StepID{Step5, Step6, Step7, Step8, Step9, Step14}, "U account_generation_unpinned of step 3(e); the account-dependent steps decide their part with it"},
+	{"A.AccountRefusal", Step5, []StepID{Step6, Step7, Step8, Step9, Step14}, "the refusal of step 5 while the account is not established"},
+	{"A.AnchorRefusal", Step10, []StepID{Step11, Step12}, "the refusal of step 10 while the anchor account is not established"},
 	{"A.SettleHeader", Step2, []StepID{Step4, Step24}, "positional header of Settlement.Header; hash equals Leg.blockHash"},
 	{"A.Account", Step3, []StepID{Step4, Step5, Step6, Step7, Step8, Step9, Step14}, "emitter of the selected LeafConsumed log; the account is identified by emitter and code"},
 	{"A.AnchorID", Step3, []StepID{Step11, Step13, Step14, Step17, Step18, Step18b, Step20}, "topic1 of the selected LeafConsumed log; not an input"},
