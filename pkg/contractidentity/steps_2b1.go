@@ -4,6 +4,7 @@ package contractidentity
 
 import (
 	"bytes"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math/big"
@@ -13,6 +14,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/rlp"
 
 	"github.com/certen/independant-validator/pkg/ethproof"
 	"github.com/certen/independant-validator/pkg/finality"
@@ -51,10 +53,13 @@ func b1Mismatch(field string) *StateError {
 }
 
 func b1LinkName(link uint8) string {
-	if link == LinkHops {
-		return "hops"
+	switch link {
+	case LinkHops:
+		return HopLinkHops
+	case LinkSameBlock:
+		return HopLinkSameBlock // [r3.2:F16]
 	}
-	return "spine" // link 0 has no vocabulary value: it is the degenerate (empty) spine; spine is the closest the closed set offers
+	return HopLinkSpine
 }
 
 func b1Unlinked(link uint8, index int, reason string) *StateError {
@@ -63,6 +68,16 @@ func b1Unlinked(link uint8, index int, reason string) *StateError {
 
 func b1ProofInvalid(root string, a common.Address, slot common.Hash) *StateError {
 	return Must(CodeProofInvalid, "", map[string]any{"root": root, "address": a, "slot": slot})
+}
+
+// b1ProofInvalidLeaf is the proof_invalid of the transaction and receipt proofs [r3.2:F16]: root attest_tx or attest_receipt, address A and
+// slot rlp(txIndex) as 0x hex (the key of the trie walk).
+func b1ProofInvalidLeaf(root string, a common.Address, txIndex uint64) *StateError {
+	key, err := rlp.EncodeToBytes(txIndex)
+	if err != nil {
+		panic(err) // rlp of a uint64 cannot fail
+	}
+	return Must(CodeProofInvalid, "", map[string]any{"root": root, "address": a, "slot": "0x" + hex.EncodeToString(key)})
 }
 
 // b1ReadFailure classifies a read error: a ReadError is a proof that does not verify (returned as the state), anything else is a defect.
@@ -373,15 +388,6 @@ func b1ExecSelector(env *Env) ([4]byte, error) {
 	return [4]byte(b), nil
 }
 
-// AttestCalldataError is returned (as an error, never as a verdict) when the transaction input of a proven, successful attestation is not
-// the canonical encoding the strict decoder accepts: the specification names no state for it (FINDING in the check-in).
-type AttestCalldataError struct{ Cause error }
-
-func (e *AttestCalldataError) Error() string {
-	return "contractidentity: step 17: the attestation calldata is not canonical ABI: " + e.Cause.Error()
-}
-func (e *AttestCalldataError) Unwrap() error { return e.Cause }
-
 // b1Step17: inclusion of the transaction and the receipt at txIndex under the roots of headerV, the transaction type, the receipt status and
 // the ProofExecuted log, the direct call of A, the strict ABI decode of executeComprehensiveProof and the blob layout.
 //
@@ -407,21 +413,21 @@ func b1Step17(env *Env) (StepOutput, error) {
 	}
 	one := func(r PartResult) (StepOutput, error) { return StepOutput{Parts: []PartResult{r}}, nil }
 	// inclusion of the leaves under the roots of B_v
-	idxSlot := b1Word(uint64(a.TxIndex))
 	for _, rd := range []struct {
+		name string
 		root common.Hash
 		want []byte
-	}{{common.Hash(hv.TransactionRoot), a.TxLeaf}, {common.Hash(hv.ReceiptsRoot), a.ReceiptLeaf}} {
+	}{{RootAttestTx, common.Hash(hv.TransactionRoot), a.TxLeaf}, {RootAttestReceipt, common.Hash(hv.ReceiptsRoot), a.ReceiptLeaf}} {
 		leaf, err := ReadIndexedLeaf(rd.root, env.Nodes, uint64(a.TxIndex), env.Limits.MaxNodeBytes)
 		if err != nil {
-			st, derr := b1ReadFailure(err, AtAttestPost, A, idxSlot)
-			if derr != nil {
-				return StepOutput{}, derr
+			var re *ReadError
+			if !errors.As(err, &re) {
+				return StepOutput{}, err
 			}
-			return StepOutput{Parts: []PartResult{b1R(part, st)}, ReadPlanIncomplete: "attest_inclusion_read"}, nil
+			return StepOutput{Parts: []PartResult{b1R(part, b1ProofInvalidLeaf(rd.name, A, uint64(a.TxIndex)))}, ReadPlanIncomplete: "attest_inclusion_read"}, nil
 		}
 		if !bytes.Equal(leaf, rd.want) {
-			return StepOutput{Parts: []PartResult{b1R(part, b1ProofInvalid(AtAttestPost, A, idxSlot))}, ReadPlanIncomplete: "attest_inclusion_leaf"}, nil
+			return StepOutput{Parts: []PartResult{b1R(part, b1ProofInvalidLeaf(rd.name, A, uint64(a.TxIndex)))}, ReadPlanIncomplete: "attest_inclusion_leaf"}, nil
 		}
 	}
 	// the transaction
@@ -496,7 +502,15 @@ func b1Step17(env *Env) (StepOutput, error) {
 	if err != nil {
 		var ae *ABIError
 		if errors.As(err, &ae) {
-			return StepOutput{}, &AttestCalldataError{Cause: err}
+			// a proven, successful attestation whose calldata the strict decoder refuses: U, never R and never a pass [r3.2:F16]
+			field := ae.Field
+			if field == "" {
+				field = "input"
+			}
+			if len(field) > 64 {
+				field = field[:64]
+			}
+			return one(b1U(part, Must(CodeUnproven, RowUnprovenAttestCalldataUndecodable, map[string]any{"reason": string(ae.Kind), "field": field})))
 		}
 		return StepOutput{}, err
 	}
@@ -513,7 +527,7 @@ func b1Step17(env *Env) (StepOutput, error) {
 		opID = env.Ctx.Batch.OperationID
 	}
 	if call.Commitments.OperationCommitment != opID {
-		return one(b1R(part, b1Mismatch("flip")))
+		return one(b1R(part, b1Mismatch(AttestFieldOperationCommitment))) // [r3.2:F16]
 	}
 	// the aggregate-signature blob
 	blob, err := DecodeZKBlob(call.BLS.AggregateSignature)

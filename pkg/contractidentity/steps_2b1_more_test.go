@@ -3,6 +3,7 @@
 package contractidentity_test
 
 import (
+	"encoding/hex"
 	"math/big"
 	"strconv"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/rlp"
 
 	ci "github.com/certen/independant-validator/pkg/contractidentity"
 	"github.com/certen/independant-validator/pkg/contractidentity/world"
@@ -84,6 +86,39 @@ func TestB1Step16Hops(t *testing.T) {
 		"refused", "attest_mismatch", "field", "order")
 }
 
+// b1RlpIndex is the slot field of the proof_invalid of the transaction and receipt proofs [r3.2:F16]: rlp(txIndex) as 0x hex.
+func b1RlpIndexOf(n uint64) string {
+	b, err := rlp.EncodeToBytes(n)
+	if err != nil {
+		panic(err)
+	}
+	return "0x" + hex.EncodeToString(b)
+}
+
+func b1RlpIndex(f *b1fx) string { return b1RlpIndexOf(uint64(b1AttestTxIndex(f))) }
+
+func b1ExecSel(t *testing.T) []byte {
+	m, err := ci.Embedded()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, ok := m.Selector("CertenAnchorV8_2/executeComprehensiveProof")
+	if !ok {
+		t.Fatal("no executeComprehensiveProof selector row")
+	}
+	return common.FromHex(s.Selector)
+}
+
+// b1Direct is a transaction of the attestation block that calls to with data.
+func b1Direct(t *testing.T, to common.Address, data []byte) string {
+	tx := types.NewTx(&types.DynamicFeeTx{ChainID: big.NewInt(11155111), Nonce: 1, GasTipCap: big.NewInt(1), GasFeeCap: big.NewInt(1), Gas: 21000, To: &to, Data: data})
+	raw, err := tx.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b1Hex(raw)
+}
+
 func b1Wrapper(t *testing.T, data []byte) string {
 	to := common.HexToAddress("0x2222222222222222222222222222222222222222")
 	tx := types.NewTx(&types.DynamicFeeTx{ChainID: big.NewInt(11155111), Nonce: 1, GasTipCap: big.NewInt(1), GasFeeCap: big.NewInt(1), Gas: 21000, To: &to, Data: data})
@@ -117,7 +152,7 @@ func TestB1Step17And20(t *testing.T) {
 			[]string{"to", "0x2222222222222222222222222222222222222222", "selector", "[1 2 3 4]"}},
 		{"type-3 transaction", []ci.Mutation{world.Set(txp("wire"), "0x03c0")}, "unproven", "attest_tx_type_unsupported", []string{"type", "0x03"}},
 		{"anchorId in the calldata differs from the log topic", []ci.Mutation{world.Set("attestation.anchor_id", other)}, "refused", "attest_mismatch", []string{"field", "anchor_id"}},
-		{"operationCommitment differs from the record operationID", []ci.Mutation{world.Set("attestation.operation_commitment", other)}, "refused", "attest_mismatch", []string{"field", "flip"}},
+		{"operationCommitment differs from the record operationID", []ci.Mutation{world.Set("attestation.operation_commitment", other)}, "refused", "attest_mismatch", []string{"field", "operation_commitment"}},
 		{"blob word 12 differs from M", []ci.Mutation{world.Set("attestation.blob.12", other)}, "refused", "attest_mismatch", []string{"field", "blob_layout"}},
 		{"pkc zero", []ci.Mutation{world.Set("attestation.blob.13", common.Hash{}.Hex())}, "refused", "attest_mismatch", []string{"field", "blob_layout"}},
 		// step 20: M changed consistently in the blob and the outer proof, so that the ties of step 17 hold and only the binding fails
@@ -130,24 +165,35 @@ func TestB1Step17And20(t *testing.T) {
 			b1Want(t, r, ci.JudgedAuthorizationAttest, c.status, c.code, c.kv...)
 		})
 	}
+	// [r3.2:F16] the calldata the strict decoder refuses: U attest_calldata_undecodable{reason: the ABI error kind, field: the ABI path}; the row is told
+	// from the other unproven rows by its fields (its reason is not the row name)
+	t.Run("calldata the strict decoder refuses (a direct call of A with a truncated input)", func(t *testing.T) {
+		f := b1New(t, 11155111, world.VariantH0, world.Set(txp("wire"), b1Direct(t, base.addr(base.spec.Roles.Anchor), append(b1ExecSel(t), make([]byte, 31)...))))
+		r, _ := f.run(b1All, nil, nil)
+		p := b1Part(t, r, ci.JudgedAuthorizationAttest)
+		if p.Status != ci.StatusUnproven || p.State == nil || p.State.Code != ci.Prefix+"unproven" ||
+			p.State.Fields["reason"] != ci.CalldataReasonTruncated || p.State.Fields["field"] != "anchorId" {
+			t.Fatalf("calldata the strict decoder refuses: %s %v", p.Status, p.State)
+		}
+	})
 	t.Run("transaction leaf altered", func(t *testing.T) {
 		raw := base.edit(func(c *ci.Container) {
 			c.Attest.Attest.TxLeaf = append(append([]byte(nil), c.Attest.Attest.TxLeaf...), 0)
 		})
 		r, _ := base.run(b1All, raw, nil)
-		b1Want(t, r, ci.JudgedAuthorizationAttest, "refused", "proof_invalid", "root", "attest_post")
+		b1Want(t, r, ci.JudgedAuthorizationAttest, "refused", "proof_invalid", "root", "attest_tx", "slot", b1RlpIndex(base))
 	})
 	t.Run("receipt leaf altered", func(t *testing.T) {
 		raw := base.edit(func(c *ci.Container) {
 			c.Attest.Attest.ReceiptLeaf = append(append([]byte(nil), c.Attest.Attest.ReceiptLeaf...), 0)
 		})
 		r, _ := base.run(b1All, raw, nil)
-		b1Want(t, r, ci.JudgedAuthorizationAttest, "refused", "proof_invalid", "root", "attest_post")
+		b1Want(t, r, ci.JudgedAuthorizationAttest, "refused", "proof_invalid", "root", "attest_receipt", "slot", b1RlpIndex(base))
 	})
 	t.Run("txIndex points at another entry", func(t *testing.T) {
 		raw := base.edit(func(c *ci.Container) { c.Attest.Attest.TxIndex++ })
 		r, _ := base.run(b1All, raw, nil)
-		b1Want(t, r, ci.JudgedAuthorizationAttest, "refused", "proof_invalid", "root", "attest_post")
+		b1Want(t, r, ci.JudgedAuthorizationAttest, "refused", "proof_invalid", "root", "attest_tx", "slot", b1RlpIndexOf(uint64(b1AttestTxIndex(base)+1)))
 	})
 }
 

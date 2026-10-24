@@ -3,7 +3,7 @@
  "spec": {
   "file": "V2_SPEC_S8.md",
   "revision": "r3.2",
-  "sha256": "19709a5eb7aff7e26e8d577015321155042bad90ca7850bb58417403eba0083e"
+  "sha256": "b1c429437079e5a57fcab87a53287d1cf036b634508c7f8067a3d3ed43eba173"
  },
  "note": "one entry per row of Freeze inventory item 5; set is null and status spec_only until a published set (see FORMAT.md) contains the vector; expected entries with code null are tokens that are not registry rows (a headline word, a generator verdict)",
  "vectors": [
@@ -20,8 +20,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_int_2",
+   "status": "published"
   },
   {
    "id": "VS8-002",
@@ -99,8 +99,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_int_2",
+   "status": "published"
   },
   {
    "id": "VS8-011",
@@ -136,8 +136,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_int_2",
+   "status": "published"
   },
   {
    "id": "VS8-013",
@@ -151,8 +151,8 @@
     "codes_not_ascending",
     "codes_duplicate"
    ],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_int_2",
+   "status": "published"
   },
   {
    "id": "VS8-014",
@@ -231,8 +231,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_int_2",
+   "status": "published"
   },
   {
    "id": "VS8-019",
@@ -252,8 +252,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2a_1",
+   "status": "published"
   },
   {
    "id": "VS8-020",
@@ -268,8 +268,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_int_1",
+   "status": "published"
   },
   {
    "id": "VS8-021",
@@ -299,8 +299,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2a_1",
+   "status": "published"
   },
   {
    "id": "VS8-023",
@@ -317,8 +317,8 @@
    "other_tokens": [
     "s6_link"
    ],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2a_1",
+   "status": "published"
   },
   {
    "id": "VS8-024",
@@ -338,8 +338,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2a_1",
+   "status": "published"
   },
   {
    "id": "VS8-030",
@@ -354,8 +354,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2a_1",
+   "status": "published"
   },
   {
    "id": "VS8-040",
@@ -364,8 +364,8 @@
    "expectedText": "`unproven settlement_not_executed`",
    "expected": [],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2a_1",
+   "status": "published"
   },
   {
    "id": "VS8-041",
@@ -374,8 +374,8 @@
    "expectedText": "continues",
    "expected": [],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2a_1",
+   "status": "published"
   },
   {
    "id": "VS8-042",
@@ -390,8 +390,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2a_1",
+   "status": "published"
   },
   {
    "id": "VS8-043",
@@ -406,8 +406,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2a_1",
+   "status": "published"
   },
   {
    "id": "VS8-044",
@@ -422,8 +422,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2a_1",
+   "status": "published"
   },
   {
    "id": "VS8-045",
@@ -432,8 +432,8 @@
    "expectedText": "the candidate selected by emitter and `S6.Slot.Key`",
    "expected": [],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2a_1",
+   "status": "published"
   },
   {
    "id": "VS8-046",
@@ -448,8 +448,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2a_1",
+   "status": "published"
   },
   {
    "id": "VS8-047",
@@ -464,8 +464,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2a_1",
+   "status": "published"
   },
   {
    "id": "VS8-048",
@@ -480,8 +480,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2a_1",
+   "status": "published"
   },
   {
    "id": "VS8-049",
@@ -524,8 +524,8 @@
     "s6_silent",
     "s6_link"
    ],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2a_1",
+   "status": "published"
   },
   {
    "id": "VS8-050",
@@ -540,8 +540,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2a_1",
+   "status": "published"
   },
   {
    "id": "VS8-051",
@@ -556,8 +556,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2a_1",
+   "status": "published"
   },
   {
    "id": "VS8-052",
@@ -572,8 +572,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2a_1",
+   "status": "published"
   },
   {
    "id": "VS8-053",
@@ -588,8 +588,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2a_1",
+   "status": "published"
   },
   {
    "id": "VS8-054",
@@ -604,8 +604,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2a_1",
+   "status": "published"
   },
   {
    "id": "VS8-055",
@@ -620,8 +620,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2a_1",
+   "status": "published"
   },
   {
    "id": "VS8-056",
@@ -636,8 +636,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2a_1",
+   "status": "published"
   },
   {
    "id": "VS8-057",
@@ -657,8 +657,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2a_1",
+   "status": "published"
   },
   {
    "id": "VS8-060",
@@ -673,8 +673,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2a_1",
+   "status": "published"
   },
   {
    "id": "VS8-061",
@@ -689,8 +689,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2a_1",
+   "status": "published"
   },
   {
    "id": "VS8-062",
@@ -710,8 +710,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2a_1",
+   "status": "published"
   },
   {
    "id": "VS8-063",
@@ -726,8 +726,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2a_1",
+   "status": "published"
   },
   {
    "id": "VS8-064",
@@ -742,8 +742,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2a_1",
+   "status": "published"
   },
   {
    "id": "VS8-065",
@@ -758,8 +758,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2a_1",
+   "status": "published"
   },
   {
    "id": "VS8-066",
@@ -774,8 +774,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2a_1",
+   "status": "published"
   },
   {
    "id": "VS8-067",
@@ -795,8 +795,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2a_1",
+   "status": "published"
   },
   {
    "id": "VS8-070",
@@ -821,8 +821,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2a_1",
+   "status": "published"
   },
   {
    "id": "VS8-071",
@@ -842,8 +842,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2a_1",
+   "status": "published"
   },
   {
    "id": "VS8-072",
@@ -858,8 +858,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2a_1",
+   "status": "published"
   },
   {
    "id": "VS8-073",
@@ -874,8 +874,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2a_1",
+   "status": "published"
   },
   {
    "id": "VS8-074",
@@ -890,8 +890,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2a_2",
+   "status": "published"
   },
   {
    "id": "VS8-075",
@@ -916,8 +916,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2a_1",
+   "status": "published"
   },
   {
    "id": "VS8-076",
@@ -942,8 +942,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_int_1",
+   "status": "published"
   },
   {
    "id": "VS8-080",
@@ -955,8 +955,8 @@
     "authority_level",
     "governing_default"
    ],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2a_1",
+   "status": "published"
   },
   {
    "id": "VS8-081",
@@ -967,8 +967,8 @@
    "other_tokens": [
     "stored"
    ],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2a_1",
+   "status": "published"
   },
   {
    "id": "VS8-082",
@@ -983,8 +983,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2a_1",
+   "status": "published"
   },
   {
    "id": "VS8-083",
@@ -995,8 +995,8 @@
    "other_tokens": [
     "stored"
    ],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2a_1",
+   "status": "published"
   },
   {
    "id": "VS8-084",
@@ -1011,8 +1011,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2a_1",
+   "status": "published"
   },
   {
    "id": "VS8-085",
@@ -1027,8 +1027,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2a_1",
+   "status": "published"
   },
   {
    "id": "VS8-086",
@@ -1043,8 +1043,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2a_1",
+   "status": "published"
   },
   {
    "id": "VS8-087",
@@ -1064,8 +1064,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2a_2",
+   "status": "published"
   },
   {
    "id": "VS8-088",
@@ -1080,8 +1080,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2a_1",
+   "status": "published"
   },
   {
    "id": "VS8-089",
@@ -1096,8 +1096,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2a_1",
+   "status": "published"
   },
   {
    "id": "VS8-100",
@@ -1115,8 +1115,8 @@
     "authorization_attest",
     "intra_block_window"
    ],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2b1_1",
+   "status": "published"
   },
   {
    "id": "VS8-101",
@@ -1131,8 +1131,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2b1_1",
+   "status": "published"
   },
   {
    "id": "VS8-102",
@@ -1147,8 +1147,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2b1_1",
+   "status": "published"
   },
   {
    "id": "VS8-103",
@@ -1163,8 +1163,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2b1_1",
+   "status": "published"
   },
   {
    "id": "VS8-104",
@@ -1179,8 +1179,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2b1_1",
+   "status": "published"
   },
   {
    "id": "VS8-110",
@@ -1195,8 +1195,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2b1_1",
+   "status": "published"
   },
   {
    "id": "VS8-111",
@@ -1216,8 +1216,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2b1_1",
+   "status": "published"
   },
   {
    "id": "VS8-112",
@@ -1232,8 +1232,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2b1_1",
+   "status": "published"
   },
   {
    "id": "VS8-113",
@@ -1248,8 +1248,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2b1_1",
+   "status": "published"
   },
   {
    "id": "VS8-120",
@@ -1264,8 +1264,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2b2_1",
+   "status": "published"
   },
   {
    "id": "VS8-121",
@@ -1280,8 +1280,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2b2_1",
+   "status": "published"
   },
   {
    "id": "VS8-122",
@@ -1296,8 +1296,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2b2_1",
+   "status": "published"
   },
   {
    "id": "VS8-123",
@@ -1312,8 +1312,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2b2_1",
+   "status": "published"
   },
   {
    "id": "VS8-124",
@@ -1322,8 +1322,8 @@
    "expectedText": "`unproven record_created_in_block{block}`",
    "expected": [],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2b2_1",
+   "status": "published"
   },
   {
    "id": "VS8-125",
@@ -1338,8 +1338,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2b2_1",
+   "status": "published"
   },
   {
    "id": "VS8-130",
@@ -1359,8 +1359,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2b2_1",
+   "status": "published"
   },
   {
    "id": "VS8-131",
@@ -1375,8 +1375,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2b2_1",
+   "status": "published"
   },
   {
    "id": "VS8-132",
@@ -1401,8 +1401,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2b2_1",
+   "status": "published"
   },
   {
    "id": "VS8-134",
@@ -1417,8 +1417,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2b2_1",
+   "status": "published"
   },
   {
    "id": "VS8-135",
@@ -1438,8 +1438,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2b2_1",
+   "status": "published"
   },
   {
    "id": "VS8-136",
@@ -1459,8 +1459,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2b2_1",
+   "status": "published"
   },
   {
    "id": "VS8-137",
@@ -1475,8 +1475,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2b2_1",
+   "status": "published"
   },
   {
    "id": "VS8-138",
@@ -1499,8 +1499,8 @@
     "intra_block_window",
     "authorization_attest"
    ],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2b2_1",
+   "status": "published"
   },
   {
    "id": "VS8-139",
@@ -1520,8 +1520,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2b2_1",
+   "status": "published"
   },
   {
    "id": "VS8-140",
@@ -1536,8 +1536,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2b1_1",
+   "status": "published"
   },
   {
    "id": "VS8-150",
@@ -1552,8 +1552,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2c_1",
+   "status": "published"
   },
   {
    "id": "VS8-151",
@@ -1568,8 +1568,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2c_3",
+   "status": "published"
   },
   {
    "id": "VS8-152",
@@ -1589,8 +1589,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_int_1",
+   "status": "published"
   },
   {
    "id": "VS8-153",
@@ -1605,8 +1605,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2c_1",
+   "status": "published"
   },
   {
    "id": "VS8-154",
@@ -1621,8 +1621,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2c_3",
+   "status": "published"
   },
   {
    "id": "VS8-155",
@@ -1642,8 +1642,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2c_3",
+   "status": "published"
   },
   {
    "id": "VS8-156",
@@ -1658,8 +1658,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2c_3",
+   "status": "published"
   },
   {
    "id": "VS8-157",
@@ -1674,8 +1674,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2c_3",
+   "status": "published"
   },
   {
    "id": "VS8-158",
@@ -1710,8 +1710,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2c_3",
+   "status": "published"
   },
   {
    "id": "VS8-159",
@@ -1731,8 +1731,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2c_3",
+   "status": "published"
   },
   {
    "id": "VS8-160",
@@ -1747,8 +1747,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2c_3",
+   "status": "published"
   },
   {
    "id": "VS8-161",
@@ -1763,18 +1763,18 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2c_1",
+   "status": "published"
   },
   {
    "id": "VS8-162",
    "step": "21a",
-   "mutation": "registry object complete and equal pre / post; key compare insensitive to case and `0x`; `expected_subset_count` 29 for n = 7, equal powers, 2/3",
+   "mutation": "registry object complete and equal pre / post; `expected_subset_count` 29 for n = 7, equal powers, 2/3",
    "expectedText": "passes; 29",
    "expected": [],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_int_1",
+   "status": "published"
   },
   {
    "id": "VS8-170",
@@ -1785,8 +1785,8 @@
    "other_tokens": [
     "intra_block_window"
    ],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2b2_1",
+   "status": "published"
   },
   {
    "id": "VS8-171",
@@ -1811,8 +1811,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2b2_1",
+   "status": "published"
   },
   {
    "id": "VS8-172",
@@ -1827,8 +1827,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2c_2",
+   "status": "published"
   },
   {
    "id": "VS8-173",
@@ -1848,8 +1848,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2b2_1",
+   "status": "published"
   },
   {
    "id": "VS8-174",
@@ -1864,8 +1864,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2b2_1",
+   "status": "published"
   },
   {
    "id": "VS8-175",
@@ -1896,8 +1896,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2b2_1",
+   "status": "published"
   },
   {
    "id": "VS8-177",
@@ -1912,8 +1912,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2b2_1",
+   "status": "published"
   },
   {
    "id": "VS8-178",
@@ -1928,8 +1928,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2b2_1",
+   "status": "published"
   },
   {
    "id": "VS8-179",
@@ -1954,8 +1954,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2c_1",
+   "status": "published"
   },
   {
    "id": "VS8-181",
@@ -1987,8 +1987,8 @@
    "other_tokens": [
     "findings"
    ],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_int_2",
+   "status": "published"
   },
   {
    "id": "VS8-183",
@@ -2003,8 +2003,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_int_2",
+   "status": "published"
   },
   {
    "id": "VS8-184",
@@ -2013,8 +2013,8 @@
    "expectedText": "present and identical in content",
    "expected": [],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_int_1",
+   "status": "published"
   },
   {
    "id": "VS8-190",
@@ -2041,8 +2041,8 @@
    "other_tokens": [
     "s7_finalized_status"
    ],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_int_1",
+   "status": "published"
   },
   {
    "id": "VS8-200",
@@ -2081,8 +2081,8 @@
    "expectedText": "naive accepts, S8 refuses",
    "expected": [],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_2c_2",
+   "status": "published"
   },
   {
    "id": "VS8-230",

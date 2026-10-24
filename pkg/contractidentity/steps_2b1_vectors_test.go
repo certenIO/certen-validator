@@ -227,15 +227,21 @@ func (a *b1author) vectors() []ci.Vector {
 	a.add("VS8-110.tx_of_another_transaction", mm("tx_to"), world.Set(txp("role"), ""), world.Set(txp("seed"), 4242))
 	a.add("VS8-110.receipt_without_proof_executed", mm("log"), world.Set("attestation.logs", []world.LogSpec{}))
 	a.add("VS8-110.status_zero", mm("status"), world.Set(txp("receipt"), b1Hex(failedReceipt)))
-	proofInvalid := ref("proof_invalid", map[string]any{"root": "attest_post", "address": f.addr(f.spec.Roles.Anchor), "slot": common.BigToHash(new(big.Int).SetUint64(uint64(att.TxIndex)))})
-	a.add("VS8-110.tx_leaf_not_under_the_root", proofInvalid, b1cont("attest.attest.tx_leaf", b1hexNo(att.TxLeaf)+"00"))
+	// [r3.2:F16] the transaction and receipt proofs are proof_invalid{root:attest_tx|attest_receipt, address:A, slot:rlp(txIndex) as 0x hex}
+	proofInvalid := func(root string) ci.Expected {
+		return ref("proof_invalid", map[string]any{"root": root, "address": f.addr(f.spec.Roles.Anchor), "slot": b1RlpIndexOf(uint64(att.TxIndex))})
+	}
+	a.add("VS8-110.tx_leaf_not_under_the_root", proofInvalid("attest_tx"), b1cont("attest.attest.tx_leaf", b1hexNo(att.TxLeaf)+"00"))
+	a.add("VS8-110.receipt_leaf_not_under_the_root", proofInvalid("attest_receipt"), b1cont("attest.attest.receipt_leaf", b1hexNo(att.ReceiptLeaf)+"00"))
 	a.add("VS8-111.wrapper_with_the_log", unp(map[string]any{"reason": "attest_indirect_call", "to": common.HexToAddress("0x2222222222222222222222222222222222222222"), "selector": [4]byte{1, 2, 3, 4}}),
 		world.Set(txp("wire"), wrapper([]byte{1, 2, 3, 4})))
 	a.add("VS8-111.type_3_transaction", unp(map[string]any{"reason": "attest_tx_type_unsupported", "type": "0x03"}), world.Set(txp("wire"), "0x03c0"))
 	a.add("VS8-112.blob_word_12_not_M", mm("blob_layout"), world.Set("attestation.blob.12", other))
 	a.add("VS8-112.pkc_zero", mm("blob_layout"), world.Set("attestation.blob.13", common.Hash{}.Hex()))
 	a.add("VS8-113.anchor_id_in_calldata", mm("anchor_id"), world.Set("attestation.anchor_id", other))
-	a.add("VS8-113.operation_commitment", mm("flip"), world.Set("attestation.operation_commitment", other))
+	a.add("VS8-113.operation_commitment", mm("operation_commitment"), world.Set("attestation.operation_commitment", other))
+	// [r3.2:F16] a proven, successful direct call whose calldata the strict decoder refuses is U attest_calldata_undecodable, never R and never a pass
+	a.add("VS8-113.calldata_undecodable", unp(map[string]any{"reason": "truncated", "field": "anchorId"}), world.Set(txp("wire"), b1Direct(a.t, f.addr(f.spec.Roles.Anchor), append(b1ExecSel(a.t), make([]byte, 31)...))))
 	a.add("VS8-140.message_hash", mm("message_hash"), world.Set("attestation.blob.12", other), world.Set("attestation.message_hash", other))
 	return a.out
 }

@@ -345,7 +345,7 @@ func TestB1Step16SameBlock(t *testing.T) {
 	b1Want(t, r, ci.JudgedAuthorizationAttest, "refused", "attest_mismatch", "field", "order")
 	// headerV is not the settlement block
 	r, _ = f.run(step16, same(0, func(c *ci.Container) []byte { return c.Attest.Attest.HeaderVParent }), nil)
-	b1Want(t, r, ci.JudgedAuthorizationAttest, "refused", "header_unlinked", "link", "spine", "index", "0", "reason", "hash_chain_broken")
+	b1Want(t, r, ci.JudgedAuthorizationAttest, "refused", "header_unlinked", "link", "same_block", "index", "0", "reason", "hash_chain_broken")
 }
 
 // readAuth is the stand-in of step 18: it makes exactly the reads of the world's plan for the AUTH slot set at both attestation stations

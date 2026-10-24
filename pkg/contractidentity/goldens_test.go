@@ -19,14 +19,14 @@ import (
 )
 
 // specLive is where the orchestrator keeps the specification file. The tests never depend on it: the frozen revision is committed as
-// testdata/contractidentity/spec/V2_SPEC_S8.r3.2.md (sha256 SpecSHA256; the r3.1 copy stays beside it as history) and every table comparison below reads that copy, so they run
+// testdata/contractidentity/spec/V2_SPEC_S8.r3.3.md (sha256 SpecSHA256; the r3.1 copy stays beside it as history) and every table comparison below reads that copy, so they run
 // identically on a developer machine and in CI.
 const specLive = `C:\Accumulate_Stuff\certen\runbooks\2026-10-proof-v2-completion\design\V2_SPEC_S8.md`
 
 // specText returns the committed copy of the frozen specification revision after checking its bytes against the pinned hash.
 func specText(t *testing.T) string {
 	t.Helper()
-	b := readTestdata(t, "spec/V2_SPEC_S8.r3.2.md")
+	b := readTestdata(t, "spec/V2_SPEC_S8.r3.3.md")
 	if sum := sha256.Sum256(b); hex.EncodeToString(sum[:]) != SpecSHA256 {
 		t.Fatalf("the committed specification copy hashes to %x, the frozen revision is %s", sum, SpecSHA256)
 	}

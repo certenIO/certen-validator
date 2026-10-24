@@ -3,7 +3,7 @@
  "spec": {
   "file": "V2_SPEC_S8.md",
   "revision": "r3.2",
-  "sha256": "19709a5eb7aff7e26e8d577015321155042bad90ca7850bb58417403eba0083e"
+  "sha256": "b1c429437079e5a57fcab87a53287d1cf036b634508c7f8067a3d3ed43eba173"
  },
  "sets": {
   "account_not_canonical_reason": {
@@ -39,6 +39,20 @@
     "attest_post"
    ]
   },
+  "attest_calldata_undecodable_reason": {
+   "title": "attest_calldata_undecodable reason",
+   "values": [
+    "selector",
+    "truncated",
+    "offset",
+    "length",
+    "cap",
+    "padding",
+    "word",
+    "trailing",
+    "shape"
+   ]
+  },
   "attest_mismatch_field": {
    "title": "attest_mismatch field",
    "values": [
@@ -52,7 +66,8 @@
     "order",
     "blob_layout",
     "authority_level",
-    "block_txs"
+    "block_txs",
+    "operation_commitment"
    ]
   },
   "auth_row_field": {
@@ -153,6 +168,7 @@
   "header_unlinked_link": {
    "title": "header_unlinked link",
    "values": [
+    "same_block",
     "hops",
     "spine"
    ]
@@ -253,7 +269,9 @@
    "values": [
     "settle",
     "attest_pre",
-    "attest_post"
+    "attest_post",
+    "attest_tx",
+    "attest_receipt"
    ],
    "patterns": [
     "^hop:[0-9]+$"
@@ -427,6 +445,7 @@
   "unproven.field@state_changed_in_block": "auth_row_field",
   "unproven.kind": "generation_kind",
   "unproven.part": "unproven_part",
+  "unproven.reason@attest_calldata_undecodable": "attest_calldata_undecodable_reason",
   "unproven.reason@authority_level_unproven": "authority_level_unproven_reason",
   "unproven.reason@settlement_path_unsupported": "settlement_path_unsupported_reason",
   "unproven.type": "tx_type_text"

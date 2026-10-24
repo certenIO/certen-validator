@@ -8,7 +8,7 @@
    "part": "authorization_attest",
    "code": "contract_identity_attest_mismatch",
    "fields": {
-    "field": "flip"
+    "field": "operation_commitment"
    }
   }
  ]
