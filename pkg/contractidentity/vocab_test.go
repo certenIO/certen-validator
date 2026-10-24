@@ -22,8 +22,8 @@ func mustVocab(t *testing.T) *Vocabulary {
 
 func TestVocabularyEmbedLoads(t *testing.T) {
 	v := mustVocab(t)
-	if len(v.Sets) != 37 {
-		t.Fatalf("vocab has %d sets, the frozen Item 4 (r3.3) yields 37", len(v.Sets))
+	if len(v.Sets) != 38 {
+		t.Fatalf("vocab has %d sets, the frozen Item 4 (r3.3) yields 38", len(v.Sets))
 	}
 	if Check("part_malformed", PartNodes) != true || Check("no_such_set", "x") {
 		t.Fatal("package Check misbehaves")
@@ -108,6 +108,7 @@ func TestVocabularyEqualsSpecItem4(t *testing.T) {
 		"open kind":                            "open_kind",
 		"alert field":                          "alert_field",
 		"rule id":                              "rule_id",
+		"settlement rule id":                   "settlement_rule_id",
 		"residual id":                          "residual_id",
 		"headline":                             "headline",
 		"Stated reason (builders)":             "stated_reason_builders",
@@ -232,8 +233,8 @@ func TestVocabularyEqualsSpecItem4(t *testing.T) {
 	if len(unseen) > 0 {
 		t.Fatalf("Item 4 rows with no test: %v", unseen)
 	}
-	if len(cells) != 34 {
-		t.Fatalf("Item 4 has %d rows, the frozen spec (r3.3) has 34", len(cells))
+	if len(cells) != 35 {
+		t.Fatalf("Item 4 has %d rows, the frozen spec (r3.3) has 35", len(cells))
 	}
 }
 

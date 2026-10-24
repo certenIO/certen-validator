@@ -75,8 +75,8 @@ func TestVectorIndexEqualsSpecItem5(t *testing.T) {
 			rows = append(rows, [4]string{m[1], c(m[2]), c(m[3]), c(m[4])})
 		}
 	}
-	if len(rows) != 123 || len(idx.Vectors) != 123 {
-		t.Fatalf("spec item 5 has %d rows, the index %d, the frozen count is 123", len(rows), len(idx.Vectors))
+	if len(rows) != 124 || len(idx.Vectors) != 124 {
+		t.Fatalf("spec item 5 has %d rows, the index %d, the frozen count is 124", len(rows), len(idx.Vectors))
 	}
 	steps := specSteps(t)
 	letters := map[string]bool{"M": true, "G": true, "N": true, "P": true}

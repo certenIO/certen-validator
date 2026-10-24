@@ -1,0 +1,29 @@
+{
+ "id": "VS8-017.length_prefix_longer_than_content",
+ "base": "H0",
+ "mutations": [
+  {
+   "op": "replace_hex",
+   "target": "container",
+   "offset": 100582,
+   "old": "00000024",
+   "new": "00000025"
+  }
+ ],
+ "expected": {
+  "headline": "refused",
+  "states": [
+   {
+    "part": "first",
+    "code": "contract_identity_evidence_malformed",
+    "fields": {
+     "got_len": "36",
+     "index": "100586",
+     "part": "nodes",
+     "reason": "truncated",
+     "want_len": "37"
+    }
+   }
+  ]
+ }
+}

@@ -1,0 +1,16 @@
+{
+ "headline": "refused",
+ "states": [
+  {
+   "part": "first",
+   "code": "contract_identity_evidence_malformed",
+   "fields": {
+    "got_len": "0",
+    "index": "73238",
+    "part": "settle",
+    "reason": "bad_stated_state",
+    "want_len": "0"
+   }
+  }
+ ]
+}

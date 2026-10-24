@@ -1,0 +1,29 @@
+{
+ "id": "VS8-017.count_prefix_with_extra_bytes",
+ "base": "H0",
+ "mutations": [
+  {
+   "op": "replace_hex",
+   "target": "container",
+   "offset": 82768,
+   "old": "00000098",
+   "new": "00000097"
+  }
+ ],
+ "expected": {
+  "headline": "refused",
+  "states": [
+   {
+    "part": "first",
+    "code": "contract_identity_evidence_malformed",
+    "fields": {
+     "got_len": "40",
+     "index": "100582",
+     "part": "container",
+     "reason": "trailing_bytes",
+     "want_len": "0"
+    }
+   }
+  ]
+ }
+}

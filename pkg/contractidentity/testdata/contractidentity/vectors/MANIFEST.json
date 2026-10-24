@@ -3,7 +3,7 @@
  "spec": {
   "file": "V2_SPEC_S8.md",
   "revision": "r3.2",
-  "sha256": "ae96a8452657447339677da4fb38f93ba66ce7dff40f8bbed015212d0b33007d"
+  "sha256": "7a87e8d635623b482226a41b8bce612a45a81dc133e95bdf9232f16072cf683e"
  },
  "note": "one entry per row of Freeze inventory item 5; set is null and status spec_only until a published set (see FORMAT.md) contains the vector; expected entries with code null are tokens that are not registry rows (a headline word, a generator verdict)",
  "vectors": [
@@ -120,8 +120,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_int_3",
+   "status": "published"
   },
   {
    "id": "VS8-012",
@@ -167,8 +167,8 @@
     "bad_stated_reason",
     "string_not_ascii"
    ],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_int_3",
+   "status": "published"
   },
   {
    "id": "VS8-015",
@@ -215,8 +215,8 @@
     }
    ],
    "other_tokens": [],
-   "set": null,
-   "status": "spec_only"
+   "set": "s8_int_3",
+   "status": "published"
   },
   {
    "id": "VS8-018",
@@ -1347,6 +1347,35 @@
    ],
    "other_tokens": [],
    "set": "s8_2b2_1",
+   "status": "published"
+  },
+  {
+   "id": "VS8-126",
+   "step": "18",
+   "mutation": "the container has no section in `codes` for `A` (an address that row C01 compares at the attest stations) [r3.5:H11]",
+   "expectedText": "`unproven{code_not_carried}` on `authorization_attest`, `code_unproven_bytes` on `code_identity`; headline `refused`",
+   "expected": [
+    {
+     "code": "contract_identity_unproven",
+     "reason": null,
+     "fields": "code_not_carried"
+    },
+    {
+     "code": "contract_identity_code_unproven_bytes",
+     "reason": null,
+     "fields": null
+    },
+    {
+     "code": "contract_identity_refused",
+     "reason": null,
+     "fields": null
+    }
+   ],
+   "other_tokens": [
+    "authorization_attest",
+    "code_identity"
+   ],
+   "set": "s8_int_3",
    "status": "published"
   },
   {

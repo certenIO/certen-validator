@@ -185,7 +185,7 @@ func (r Report) Validate() error {
 		return fmt.Errorf("contractidentity: report: residuals %v, the fixed set is %v", r.Residuals, want)
 	}
 	for _, id := range r.RulesJudged {
-		if !Check("rule_id", id) {
+		if !Check("rule_id", id) && !Check("settlement_rule_id", id) {
 			return fmt.Errorf("contractidentity: report: rules_judged id %q outside the vocabulary", id)
 		}
 	}

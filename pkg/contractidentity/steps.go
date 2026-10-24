@@ -198,7 +198,7 @@ type StepOutput struct {
 	Open []OpenEntry
 	// Findings are additional states the step judged on a part beside the one it decides (diagnostics for reviewers; never in the Report).
 	Findings []Finding
-	// RulesJudged are the rule ids (vocabulary rule_id) this step executed (steps 13, 19, 21).
+	// RulesJudged are the rule ids (vocabulary rule_id, or settlement_rule_id for the step 13 consistency rules [r3.5:H10]) this step executed (steps 13, 19, 21).
 	RulesJudged []string
 	// ReadPlanIncomplete, when non-empty, says that a proof read of this step could not be derived because a prerequisite value was absent
 	// or invalid: step 22b then reports nodes_check not_evaluated{reason} (spec step 22b).

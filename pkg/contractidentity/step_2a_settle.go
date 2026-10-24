@@ -324,6 +324,9 @@ func a2Step13(env *Env) (StepOutput, error) {
 	f.SettleAUTH = words
 	out := StepOutput{Parts: []PartResult{env.Verified(part)}, ReadPlanIncomplete: incomplete,
 		RulesJudged: []string{RulePAUSED, RuleBINDING, RuleENABLED, RuleTHRESHOLDA, RuleTHRESHOLDV, RuleOWNER, RuleGOVVERIFIER, RuleMINGOV, RuleSETROOT}}
+	if incomplete == "" {
+		out.RulesJudged = append(out.RulesJudged, RuleREGISTERED, RulePOWER, RuleTOTALPOWER) // [r3.5:H10]
+	}
 	alert := func(field string, onchain, want any) error {
 		o, err := env.Open(part, OpenAlert, CodeAlert, "", map[string]any{"field": field, "at": AtSettle, "onchain": onchain, "want": want})
 		out.Open = append(out.Open, o)
