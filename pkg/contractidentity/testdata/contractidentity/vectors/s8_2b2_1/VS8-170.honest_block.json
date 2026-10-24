@@ -1,0 +1,13 @@
+{
+ "id": "VS8-170.honest_block",
+ "base": "H0",
+ "mutations": [],
+ "expected": {
+  "headline": "verified",
+  "parts": {
+   "authorization_attest": "verified",
+   "code_identity": "verified",
+   "intra_block_window": "verified"
+  }
+ }
+}

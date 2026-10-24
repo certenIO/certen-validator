@@ -1,0 +1,32 @@
+{
+ "id": "VS8-171.owner_code_pre",
+ "base": "H0",
+ "mutations": [
+  {
+   "op": "set_field",
+   "target": "world",
+   "path": "stations.attest_pre.accounts.0x91c798aa0ad11d2670029b3b0572d154bd42c059.code",
+   "value": {
+    "hex": "0x6000"
+   }
+  }
+ ],
+ "expected": {
+  "headline": "unproven",
+  "parts": {
+   "authorization_attest": "verified",
+   "intra_block_window": "unproven"
+  },
+  "states": [
+   {
+    "part": "intra_block_window",
+    "code": "contract_identity_unproven",
+    "fields": {
+     "address": "0x91c798aa0ad11d2670029b3b0572d154bd42c059",
+     "part": "intra_block_window",
+     "reason": "owner_not_eoa"
+    }
+   }
+  ]
+ }
+}

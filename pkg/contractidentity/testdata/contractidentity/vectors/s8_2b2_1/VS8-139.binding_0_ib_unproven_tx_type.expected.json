@@ -1,0 +1,29 @@
+{
+ "headline": "unproven",
+ "parts": {
+  "authorization_attest": "unproven",
+  "intra_block_window": "unproven"
+ },
+ "states": [
+  {
+   "part": "authorization_attest",
+   "code": "contract_identity_unproven",
+   "fields": {
+    "index": "2",
+    "part": "authorization_attest",
+    "reason": "tx_type_unsupported",
+    "type": "0x05"
+   }
+  },
+  {
+   "part": "intra_block_window",
+   "code": "contract_identity_unproven",
+   "fields": {
+    "index": "2",
+    "part": "intra_block_window",
+    "reason": "tx_type_unsupported",
+    "type": "0x05"
+   }
+  }
+ ]
+}

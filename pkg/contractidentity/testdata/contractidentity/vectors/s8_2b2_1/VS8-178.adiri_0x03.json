@@ -1,0 +1,37 @@
+{
+ "id": "VS8-178.adiri_0x03",
+ "base": "H0",
+ "mutations": [
+  {
+   "op": "set_field",
+   "target": "world",
+   "path": "chain",
+   "value": 2017
+  },
+  {
+   "op": "set_field",
+   "target": "world",
+   "path": "blocks.attest.txs.1.wire",
+   "value": "0x03c0"
+  }
+ ],
+ "expected": {
+  "headline": "unproven",
+  "parts": {
+   "authorization_attest": "verified",
+   "intra_block_window": "unproven"
+  },
+  "states": [
+   {
+    "part": "intra_block_window",
+    "code": "contract_identity_unproven",
+    "fields": {
+     "index": "1",
+     "part": "intra_block_window",
+     "reason": "tx_type_unsupported",
+     "type": "0x03"
+    }
+   }
+  ]
+ }
+}

@@ -1,0 +1,34 @@
+{
+ "id": "VS8-130.commitment_not_authorized",
+ "base": "H0",
+ "mutations": [
+  {
+   "op": "set_field",
+   "target": "world",
+   "path": "stations.attest_pre.accounts.0x830cfb484b6e5606687e00f64c40aeb9c7c84e3c.storage.0xfb02b19ce323ab6705bc9ae54f2e035965787dfd64ecca6415ac32415c08541f",
+   "value": "0x0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+   "op": "set_field",
+   "target": "world",
+   "path": "stations.attest_post.accounts.0x830cfb484b6e5606687e00f64c40aeb9c7c84e3c.storage.0xfb02b19ce323ab6705bc9ae54f2e035965787dfd64ecca6415ac32415c08541f",
+   "value": "0x0000000000000000000000000000000000000000000000000000000000000000"
+  }
+ ],
+ "expected": {
+  "headline": "refused",
+  "parts": {
+   "authorization_attest": "refused"
+  },
+  "states": [
+   {
+    "part": "authorization_attest",
+    "code": "contract_identity_commitment_not_authorized",
+    "fields": {
+     "at": "attest_pre",
+     "pkc": "0xc0908bd3536f019607e0dcd3d3553263ca3fd9b8882dd5dc4a43024d82389eac"
+    }
+   }
+  ]
+ }
+}

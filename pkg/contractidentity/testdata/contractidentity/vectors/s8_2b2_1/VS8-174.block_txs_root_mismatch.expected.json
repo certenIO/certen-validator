@@ -1,0 +1,15 @@
+{
+ "headline": "refused",
+ "parts": {
+  "intra_block_window": "refused"
+ },
+ "states": [
+  {
+   "part": "intra_block_window",
+   "code": "contract_identity_attest_mismatch",
+   "fields": {
+    "field": "block_txs"
+   }
+  }
+ ]
+}

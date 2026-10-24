@@ -1,0 +1,16 @@
+{
+ "headline": "refused",
+ "parts": {
+  "authorization_attest": "refused"
+ },
+ "states": [
+  {
+   "part": "authorization_attest",
+   "code": "contract_identity_commitment_not_authorized",
+   "fields": {
+    "at": "attest_pre",
+    "pkc": "0x0000000000000000000000000000000000000000000000000000000000abcdef"
+   }
+  }
+ ]
+}
