@@ -689,21 +689,34 @@ func TestC2RegistryAndPkcObeyTheVerdictPrecedence(t *testing.T) {
 		hook          c2Hook
 		reason, field string
 		status        string
+		code          string // refused: the code that must decide the part
 	}{
 		{"pre-only root change: message_root can only be a changed word", func(sp *world.Spec) []ci.Mutation {
 			return []ci.Mutation{setWord(world.StationPre, hexAddr(sp.Roles.Anchor), 17, common.HexToHash("0xabc"))}
-		}, nil, nil, "state_changed_in_block", "A14", "unproven"},
+		}, nil, nil, "state_changed_in_block", "A14", "unproven", ""},
 		{"roster record changed inside B_v", func(sp *world.Spec) []ci.Mutation {
 			return []ci.Mutation{world.SetStorage(world.StationPost, hexAddr(sp.Roles.Anchor), powerSlot(sp), common.BigToHash(big.NewInt(11)))}
-		}, badPower, nil, "state_changed_in_block", "A09:", "unproven"},
-		{"equal words, mismatch, the owner was active in B_v", nil, badPower, ownerActive, "owner_active_in_block", "", "unproven"},
-		{"equal words, mismatch, rule IB has no verdict", nil, badPower, noVerdict, "attest_absent", "", "unproven"},
-		{"equal words, mismatch, rule IB verified", nil, badPower, nil, "", "", "refused"},
+		}, badPower, nil, "state_changed_in_block", "A09:", "unproven", ""},
+		{"equal words, mismatch, the owner was active in B_v", nil, badPower, ownerActive, "owner_active_in_block", "", "unproven", ""},
+		{"equal words, mismatch, rule IB has no verdict", nil, badPower, noVerdict, "attest_absent", "", "unproven", ""},
+		{"equal words, mismatch, rule IB verified", nil, badPower, nil, "", "member_power", "refused", "registry_mismatch"},
 		{"pkc: A05 changed inside B_v", func(sp *world.Spec) []ci.Mutation {
 			return []ci.Mutation{world.SetStorage(world.StationPost, hexAddr(sp.Roles.Anchor), ci.MappingSlotAt(ci.KeyBytes32(common.HexToHash(sp.Attestation.Blob[13])), 4), common.Hash{})}
-		}, badPkc, nil, "state_changed_in_block", "A05", "unproven"},
-		{"pkc: equal words, the owner was active in B_v", nil, badPkc, ownerActive, "owner_active_in_block", "", "unproven"},
-		{"pkc: equal words, rule IB verified", nil, badPkc, nil, "", "", "refused"},
+		}, badPkc, nil, "state_changed_in_block", "A05", "unproven", ""},
+		{"pkc: equal words, the owner was active in B_v", nil, badPkc, ownerActive, "owner_active_in_block", "", "unproven", ""},
+		{"pkc: equal words, rule IB verified", nil, badPkc, nil, "", "", "refused", "pkc_mismatch"},
+		{"threshold denominator changed before the attestation (pre only)", func(sp *world.Spec) []ci.Mutation {
+			return []ci.Mutation{world.SetStorage(world.StationPre, hexAddr(sp.Roles.Anchor), ci.SlotIndex(16), common.BigToHash(big.NewInt(4)))}
+		}, nil, nil, "state_changed_in_block", "A13", "unproven", ""},
+		{"registeredAt changed in block is informational: the mismatch stays R", func(sp *world.Spec) []ci.Mutation {
+			return []ci.Mutation{world.SetStorage(world.StationPost, hexAddr(sp.Roles.Anchor), ci.MemberSlot(ci.MappingSlotAt(ci.KeyAddress(hexAddr(sp.Context.Registry9.Members[1].Address)), 12), 3), common.BigToHash(big.NewInt(12345)))}
+		}, badPower, nil, "", "member_power", "refused", "registry_mismatch"},
+		{"a validator that is not registered on chain is not a member", func(sp *world.Spec) []ci.Mutation {
+			slot := ci.MappingSlotAt(ci.KeyAddress(hexAddr(sp.Context.Registry9.Members[1].Address)), 12)
+			a := hexAddr(sp.Roles.Anchor)
+			return []ci.Mutation{world.SetStorage(world.StationPre, a, slot, common.Hash{}), world.SetStorage(world.StationPost, a, slot, common.Hash{})}
+		}, nil, nil, "", "member_address", "refused", "registry_mismatch"},
+		{"both a roster and a pkc mismatch: the registry link decides first", nil, func(c *ci.LegContext) { badPower(c); badPkc(c) }, nil, "", "member_power", "refused", "registry_mismatch"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -715,12 +728,18 @@ func TestC2RegistryAndPkcObeyTheVerdictPrecedence(t *testing.T) {
 			}
 			switch {
 			case c.status == "refused":
-				if r.Headline.Kind != ci.HeadlineRefused || (p.State.Code != ci.Prefix+"registry_mismatch" && p.State.Code != ci.Prefix+"pkc_mismatch") {
-					t.Fatalf("headline %s state %v", r.Headline.Kind, p.State)
+				if r.Headline.Kind != ci.HeadlineRefused || p.State.Code != ci.Prefix+c.code || (c.field != "" && p.State.Fields["field"] != c.field) {
+					t.Fatalf("headline %s state %v, want %s %s", r.Headline.Kind, p.State, c.code, c.field)
+				}
+				if r.Registry == nil {
+					t.Fatal("equal words: the registry object is emitted")
 				}
 				return
 			case p.State.Fields["reason"] != c.reason || r.Headline.Kind != ci.HeadlineUnproven:
 				t.Fatalf("state %v headline %s, want reason %s", p.State, r.Headline.Kind, c.reason)
+			}
+			if (r.Registry == nil) != (c.reason == "state_changed_in_block") {
+				t.Fatalf("registry object %v with reason %s: emitted iff every registry word is equal at pre and post", r.Registry, c.reason)
 			}
 			if p.State.Fields["part"] != nil && p.State.Fields["part"] != ci.JudgedRegistryLink {
 				t.Fatalf("the carried state names part %v", p.State.Fields["part"])

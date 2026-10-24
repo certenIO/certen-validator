@@ -3,6 +3,7 @@
 package contractidentity
 
 import (
+	"math/big"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -92,5 +93,26 @@ func TestC2FinalizedStatus(t *testing.T) {
 		if got != c.want || auth != c.auth {
 			t.Errorf("%s: %q auth=%v, want %q auth=%v", c.name, got, auth, c.want, c.auth)
 		}
+	}
+}
+
+func TestC2LoadBoundsTheValidatorList(t *testing.T) {
+	words := map[string]common.Hash{}
+	for _, k := range c2BaseKeys {
+		words[k] = common.Hash{}
+	}
+	n := func(v int64) common.Hash { return common.BigToHash(big.NewInt(v)) }
+	words["A10"] = n(int64(DefaultLimits().MaxValidators)) // the bound itself is read (its elements are then required)
+	if _, err := c2Load("Post", AtAttestPost, AuthStation{Words: words}); err == nil {
+		t.Fatal("a list at the bound whose elements are absent was accepted")
+	}
+	words["A10"] = n(int64(DefaultLimits().MaxValidators) + 1) // one above the bound is not read at all
+	s, err := c2Load("Post", AtAttestPost, AuthStation{Words: words})
+	if err != nil || !s.TooLarge || len(s.Vals) != 0 {
+		t.Fatalf("a list above the bound: %+v %v", s, err)
+	}
+	words["A10"] = common.BigToHash(new(big.Int).Lsh(big.NewInt(1), 70)) // does not fit 64 bits
+	if s, err = c2Load("Post", AtAttestPost, AuthStation{Words: words}); err != nil || !s.TooLarge {
+		t.Fatalf("a length above 2^64: %+v %v", s, err)
 	}
 }
