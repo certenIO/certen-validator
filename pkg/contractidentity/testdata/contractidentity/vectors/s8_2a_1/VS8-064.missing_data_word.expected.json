@@ -1,0 +1,17 @@
+{
+ "headline": "refused",
+ "parts": {
+  "account_provenance": "refused"
+ },
+ "states": [
+  {
+   "part": "account_provenance",
+   "code": "contract_identity_proof_invalid",
+   "fields": {
+    "address": "0x2ec2d261a4770e42dbe43826489d299d596bc5f7",
+    "root": "settle",
+    "slot": "0x0175b7a638427703f0dbe7bb9bbf987a2551717b34e79f33b5b1008d1fa01db9"
+   }
+  }
+ ]
+}

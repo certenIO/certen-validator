@@ -1,0 +1,28 @@
+{
+ "id": "VS8-063.account_leaf",
+ "base": "H0",
+ "mutations": [
+  {
+   "op": "drop_node",
+   "target": "container",
+   "index": 138
+  }
+ ],
+ "expected": {
+  "headline": "refused",
+  "parts": {
+   "code_identity": "refused"
+  },
+  "states": [
+   {
+    "part": "code_identity",
+    "code": "contract_identity_proof_invalid",
+    "fields": {
+     "address": "0x2ec2d261a4770e42dbe43826489d299d596bc5f7",
+     "root": "settle",
+     "slot": "0x0000000000000000000000000000000000000000000000000000000000000000"
+    }
+   }
+  ]
+ }
+}

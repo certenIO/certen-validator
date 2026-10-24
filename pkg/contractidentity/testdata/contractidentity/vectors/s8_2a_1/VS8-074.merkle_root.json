@@ -1,0 +1,27 @@
+{
+ "id": "VS8-074.merkle_root",
+ "base": "H0",
+ "mutations": [
+  {
+   "op": "set_field",
+   "target": "context",
+   "path": "batch.batchRoot",
+   "value": "0x5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a"
+  }
+ ],
+ "expected": {
+  "headline": "refused",
+  "parts": {
+   "record": "refused"
+  },
+  "states": [
+   {
+    "part": "record",
+    "code": "contract_identity_record_inconsistent",
+    "fields": {
+     "field": "merkle_root"
+    }
+   }
+  ]
+ }
+}

@@ -142,6 +142,15 @@ func (f *fixture) fake(id ci.StepID, skip bool) ci.StepFunc {
 			out.Parts = append(out.Parts, env.Verified(p))
 		}
 		att := env.Container.Attest
+		// a read of the attestation side that does not verify is a refusal of the foreign step (as the real steps 17 and 18 raise), never an error
+		unread := func() (ci.StepOutput, error) {
+			st := ci.Must(ci.CodeProofInvalid, "", map[string]any{"root": ci.AtAttestPre, "address": common.Address{}, "slot": common.Hash{}})
+			o := ci.StepOutput{ReadPlanIncomplete: "test: attestation read failed"}
+			for _, p := range sp.Parts {
+				o.Parts = append(o.Parts, ci.PartResult{Part: p, Status: ci.StatusRefused, State: st})
+			}
+			return o, nil
+		}
 		switch id {
 		case ci.Step15:
 			env.Facts.B1.AttestCaptured = att.Tag == ci.TagCaptured
@@ -149,11 +158,11 @@ func (f *fixture) fake(id ci.StepID, skip bool) ci.StepFunc {
 			if att.Tag == ci.TagCaptured {
 				hv, err := env.Header(att.Attest.HeaderV)
 				if err != nil {
-					return out, err
+					return unread()
 				}
 				hp, err := env.Header(att.Attest.HeaderVParent)
 				if err != nil {
-					return out, err
+					return unread()
 				}
 				env.Facts.B1.StateRootPre, env.Facts.B1.StateRootPost = hp.StateRoot, hv.StateRoot
 			}
@@ -165,7 +174,7 @@ func (f *fixture) fake(id ci.StepID, skip bool) ci.StepFunc {
 				hv, _ := env.Header(att.Attest.HeaderV)
 				for _, root := range [][32]byte{hv.TransactionRoot, hv.ReceiptsRoot} {
 					if _, err := ci.ReadIndexedLeaf(common.Hash(root), env.Nodes, uint64(att.Attest.TxIndex), env.Limits.MaxNodeBytes); err != nil {
-						return out, err
+						return unread()
 					}
 				}
 				env.Facts.B1.PKC = common.HexToHash(f.spec.Attestation.Blob[13])
@@ -174,11 +183,11 @@ func (f *fixture) fake(id ci.StepID, skip bool) ci.StepFunc {
 			if att.Tag == ci.TagCaptured {
 				pre, err := f.authWords(env, common.Hash(env.Facts.B1.StateRootPre), true)
 				if err != nil {
-					return out, err
+					return unread()
 				}
 				post, err := f.authWords(env, common.Hash(env.Facts.B1.StateRootPost), true)
 				if err != nil {
-					return out, err
+					return unread()
 				}
 				env.Facts.B2.Pre.Words, env.Facts.B2.Post.Words = pre, post
 			}
@@ -662,4 +671,46 @@ func TestStep13FailsLoudlyOnIncompleteAttestWords(t *testing.T) {
 func mustSpec(id ci.StepID) ci.StepSpec {
 	s, _ := ci.Spec(id)
 	return s
+}
+
+// Every node of the H0 container dropped in turn, and a byte flipped in every carried code at a grid of positions: only registered states
+// (no error, no panic, a printable report), and the dropped node of a read is never an absence or a pass.
+func TestEveryDroppedNodeAndTamperedCodeYieldsRegisteredStates(t *testing.T) {
+	f := newFixture(t, 11155111, world.VariantH0)
+	base, err := ci.Decode(f.built.Inputs.Container, ci.DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifier := f.verifier()
+	run := func(name string, c *ci.Container) {
+		raw, err := ci.Encode(c, ci.DefaultLimits())
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		rep, err := verifier.Verify(f.built.Inputs.Ctx, raw, f.m)
+		if err != nil {
+			t.Fatalf("%s: verifier error %v", name, err)
+		}
+		if _, err := rep.Map(); err != nil {
+			t.Fatalf("%s: report not printable: %v", name, err)
+		}
+		if rep.Headline.Kind == ci.HeadlineVerified {
+			t.Fatalf("%s: the headline is verified although evidence was removed or tampered with", name)
+		}
+	}
+	for i := range base.Nodes {
+		c := *base
+		c.Nodes = append(append([][]byte(nil), base.Nodes[:i]...), base.Nodes[i+1:]...)
+		run(fmt.Sprintf("drop node %d", i), &c)
+	}
+	for ci_, code := range base.Codes {
+		for _, pos := range []int{0, 1, len(code.Runtime) / 3, len(code.Runtime) / 2, len(code.Runtime) - 2, len(code.Runtime) - 1} {
+			c := *base
+			c.Codes = append([]ci.Code(nil), base.Codes...)
+			rt := append([]byte(nil), code.Runtime...)
+			rt[pos] ^= 0x01
+			c.Codes[ci_].Runtime = rt
+			run(fmt.Sprintf("flip code %d byte %d", ci_, pos), &c)
+		}
+	}
 }

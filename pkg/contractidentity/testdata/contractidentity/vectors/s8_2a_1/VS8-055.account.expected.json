@@ -1,0 +1,15 @@
+{
+ "headline": "refused",
+ "parts": {
+  "s6_link": "refused"
+ },
+ "states": [
+  {
+   "part": "s6_link",
+   "code": "contract_identity_s6_link_mismatch",
+   "fields": {
+    "field": "account"
+   }
+  }
+ ]
+}

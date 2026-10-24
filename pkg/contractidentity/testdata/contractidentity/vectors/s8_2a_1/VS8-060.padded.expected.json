@@ -1,0 +1,19 @@
+{
+ "headline": "refused",
+ "parts": {
+  "code_identity": "refused"
+ },
+ "states": [
+  {
+   "part": "code_identity",
+   "code": "contract_identity_code_not_published",
+   "fields": {
+    "address": "0x2ec2d261a4770e42dbe43826489d299d596bc5f7",
+    "code_hash": "0x9af2aec3940ad124d124b1d4ffd736a2e23478080953ae36faf71e5fbdc1f488",
+    "masked_keccak": "0x3c76cec8c0f0cc1d24b997bf613b053b3aa16506edd7f71d65c477652dc1b424",
+    "role": "account",
+    "want": "0x305e398509246c1ed898744b21ad194a3e2ef59d322c60ac9c77077f71645f20"
+   }
+  }
+ ]
+}

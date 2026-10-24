@@ -1,0 +1,16 @@
+{
+ "headline": "unproven",
+ "parts": {
+  "authority_level": "unproven"
+ },
+ "states": [
+  {
+   "part": "authority_level",
+   "code": "contract_identity_unproven",
+   "fields": {
+    "leg": "0",
+    "reason": "self_call_leg"
+   }
+  }
+ ]
+}

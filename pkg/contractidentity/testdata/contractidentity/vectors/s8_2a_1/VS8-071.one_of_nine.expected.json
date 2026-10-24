@@ -1,0 +1,19 @@
+{
+ "headline": "refused",
+ "parts": {
+  "code_identity": "refused"
+ },
+ "states": [
+  {
+   "part": "code_identity",
+   "code": "contract_identity_immutable_mismatch",
+   "fields": {
+    "got": "0x0000000000000000000000000000000000000000000000000000000000aa36a6",
+    "name": "DEPLOYMENT_CHAIN_ID",
+    "offset": "10268",
+    "role": "anchor",
+    "want": "0x0000000000000000000000000000000000000000000000000000000000aa36a7"
+   }
+  }
+ ]
+}

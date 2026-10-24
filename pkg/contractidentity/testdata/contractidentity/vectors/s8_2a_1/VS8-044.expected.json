@@ -1,0 +1,17 @@
+{
+ "headline": "unproven",
+ "parts": {
+  "settlement_path": "unproven"
+ },
+ "states": [
+  {
+   "part": "settlement_path",
+   "code": "contract_identity_unproven",
+   "fields": {
+    "reason": "multiple_leaf_consumed",
+    "selector": "0x606f2c8d",
+    "to": "0x2ec2d261a4770e42dbe43826489d299d596bc5f7"
+   }
+  }
+ ]
+}

@@ -1,0 +1,29 @@
+{
+ "id": "VS8-056.later_right_code_hash",
+ "base": "H0",
+ "mutations": [
+  {
+   "op": "set_field",
+   "target": "context",
+   "path": "s6.proven_at.number",
+   "value": "11980025"
+  },
+  {
+   "op": "set_field",
+   "target": "context",
+   "path": "s6.proven_at.hash",
+   "value": "0x0909090909090909090909090909090909090909090909090909090909090909"
+  }
+ ],
+ "expected": {
+  "headline": "verified",
+  "parts": {
+   "account_provenance": "verified",
+   "authority_level": "verified",
+   "code_identity": "verified",
+   "pointer": "verified",
+   "record": "verified",
+   "settlement_path": "verified"
+  }
+ }
+}

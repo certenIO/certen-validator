@@ -16,3 +16,11 @@ builds[].creation rows. A manifest re-sync that changes a build row needs these 
 | CertenAccountFactoryV11.r5.template.hex | CertenAccountFactoryV11/r5 | runtime | 11155111 0x8387D061830E10Eb42BC25C2A047631164803F25 | 24306 | 0x03468f871a3de23ffaf14d83ccd0aaea0f81d9ac387ae6a515b780e8f84bf22f | 70307f83b27ab8eaa129409af85c8484b593435c90a5e189219c4cb94ea1d840 |
 | CertenAccountV7_3.r5.template.hex | CertenAccountV7_3/r5 | runtime | 11155111 0x2ec2d261a4770e42dbe43826489d299d596bc5f7 | 14562 | 0x305e398509246c1ed898744b21ad194a3e2ef59d322c60ac9c77077f71645f20 | 676ac10e9f73bd6e1d30672bbacce81bdb3399f2c6cda45ecac3ec695ab77bdf |
 | CertenAccountV7_3.r5.creation.hex | CertenAccountV7_3/r5 | creation | certen-contracts origin/pv2/rb12-manifest-1-1 @991de99 evm/deployments/identity-bytecode/CertenAccountV7_3.creation.bin | 15757 | 0x3a6434305c261de2d978732e0de33d654a94723e67ffa399847e931c4c89cfd0 | aa2f5ea22cc47e96c8f885b9d020d2ae65fc6be067d3c2e6aa4adf35dd2a460f |
+
+**Unpinned generations (RB12-GOVERIFY-2a WORLD-FIX; live runtime bytes, UNMASKED, `eth_getCode`; used by VS8-046, VS8-047, VS8-070):** keccak256 of the bytes equals the codeHash of the generations evidence row and the masked keccak256 (the row references) equals the row maskedKeccak, tested by `generations_test.go`.
+
+| file | generation row (role, kind) | source | bytes | file sha256 |
+|---|---|---|---|---|
+| v7_catalogued_base.runtime.hex | account CertenAccountV7 catalogued | 84532 0x0497513411524c4109f5cac62cd599002c2d689b @ 49391270 | 12975 | c23953162c0f45744b404b45b29a3f42c40a035469a6b8befa2194421da119b2 |
+| v7_observed_sepolia.runtime.hex | account CertenAccountV7 observed | 11155111 0x0bbfc288b997736365fb22ad46c95044e128ff40 (code is immutable; read at latest, evidence block 11980120) | 12975 | 51a43d1e9704f7e660a9935948eb33d8ca1eab61cd085fa181c534d0311241a4 |
+| anchor_v8_1_sepolia.runtime.hex | anchor CertenAnchorV8_1 catalogued | 11155111 0xb39b707D50089C9Eb92818f9B2870eba6DA5C2a0 @ 11980120 | 22431 | c26b98508b4ccdd300a222a9d89cbc25bb0e2031534ea666ce39a7de18b4fefa |

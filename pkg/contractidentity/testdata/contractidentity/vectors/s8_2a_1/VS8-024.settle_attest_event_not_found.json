@@ -1,0 +1,38 @@
+{
+ "id": "VS8-024.settle_attest_event_not_found",
+ "base": "H0",
+ "mutations": [
+  {
+   "op": "set_field",
+   "target": "container",
+   "path": "settle",
+   "value": {
+    "stated": {
+     "detail": "",
+     "failures": [],
+     "judged_block": "1",
+     "judged_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+     "reason": "attest_event_not_found",
+     "state": "contract_identity_unproven"
+    },
+    "tag": "2"
+   }
+  }
+ ],
+ "expected": {
+  "headline": "refused",
+  "states": [
+   {
+    "part": "first",
+    "code": "contract_identity_evidence_malformed",
+    "fields": {
+     "got_len": "0",
+     "index": "0",
+     "part": "settle",
+     "reason": "unknown_stated_reason",
+     "want_len": "0"
+    }
+   }
+  ]
+ }
+}

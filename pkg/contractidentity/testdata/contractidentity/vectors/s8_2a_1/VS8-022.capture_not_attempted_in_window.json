@@ -1,0 +1,228 @@
+{
+ "id": "VS8-022.capture_not_attempted_in_window",
+ "base": "H0",
+ "mutations": [
+  {
+   "op": "set_field",
+   "target": "container",
+   "path": "settle",
+   "value": {
+    "stated": {
+     "detail": "",
+     "failures": [
+      {
+       "error": "pruned",
+       "host": "rpc.example"
+      }
+     ],
+     "judged_block": "11980020",
+     "judged_hash": "bd1475f5251e46fca0ff916a8600bc3894ef1759d47b76911cbd5953a9410a91",
+     "reason": "capture_not_attempted_in_window",
+     "state": "contract_identity_unproven"
+    },
+    "tag": "2"
+   }
+  },
+  {
+   "op": "drop_node",
+   "target": "container",
+   "index": 138
+  },
+  {
+   "op": "drop_node",
+   "target": "container",
+   "index": 120
+  },
+  {
+   "op": "drop_node",
+   "target": "container",
+   "index": 115
+  },
+  {
+   "op": "drop_node",
+   "target": "container",
+   "index": 104
+  },
+  {
+   "op": "drop_node",
+   "target": "container",
+   "index": 95
+  },
+  {
+   "op": "drop_node",
+   "target": "container",
+   "index": 84
+  },
+  {
+   "op": "drop_node",
+   "target": "container",
+   "index": 82
+  },
+  {
+   "op": "drop_node",
+   "target": "container",
+   "index": 81
+  },
+  {
+   "op": "drop_node",
+   "target": "container",
+   "index": 73
+  },
+  {
+   "op": "drop_node",
+   "target": "container",
+   "index": 63
+  },
+  {
+   "op": "drop_node",
+   "target": "container",
+   "index": 30
+  },
+  {
+   "op": "drop_node",
+   "target": "container",
+   "index": 28
+  },
+  {
+   "op": "drop_node",
+   "target": "container",
+   "index": 17
+  },
+  {
+   "op": "drop_node",
+   "target": "container",
+   "index": 10
+  },
+  {
+   "op": "drop_node",
+   "target": "container",
+   "index": 3
+  }
+ ],
+ "expected": {
+  "headline": "unproven",
+  "parts": {
+   "account_provenance": "unproven",
+   "authority_level": "unproven",
+   "code_identity": "unproven",
+   "pointer": "unproven",
+   "record": "unproven",
+   "settlement_path": "unproven",
+   "state_at_settlement": "unproven"
+  },
+  "states": [
+   {
+    "part": "settlement_path",
+    "code": "contract_identity_unproven",
+    "fields": {
+     "failures": [
+      {
+       "error": "pruned",
+       "host": "rpc.example"
+      }
+     ],
+     "judgedBlock": "11980020",
+     "judgedHash": "0xbd1475f5251e46fca0ff916a8600bc3894ef1759d47b76911cbd5953a9410a91",
+     "part": "settlement_path",
+     "reason": "capture_not_attempted_in_window"
+    }
+   },
+   {
+    "part": "code_identity",
+    "code": "contract_identity_unproven",
+    "fields": {
+     "failures": [
+      {
+       "error": "pruned",
+       "host": "rpc.example"
+      }
+     ],
+     "judgedBlock": "11980020",
+     "judgedHash": "0xbd1475f5251e46fca0ff916a8600bc3894ef1759d47b76911cbd5953a9410a91",
+     "part": "code_identity",
+     "reason": "capture_not_attempted_in_window"
+    }
+   },
+   {
+    "part": "account_provenance",
+    "code": "contract_identity_unproven",
+    "fields": {
+     "failures": [
+      {
+       "error": "pruned",
+       "host": "rpc.example"
+      }
+     ],
+     "judgedBlock": "11980020",
+     "judgedHash": "0xbd1475f5251e46fca0ff916a8600bc3894ef1759d47b76911cbd5953a9410a91",
+     "part": "account_provenance",
+     "reason": "capture_not_attempted_in_window"
+    }
+   },
+   {
+    "part": "pointer",
+    "code": "contract_identity_unproven",
+    "fields": {
+     "failures": [
+      {
+       "error": "pruned",
+       "host": "rpc.example"
+      }
+     ],
+     "judgedBlock": "11980020",
+     "judgedHash": "0xbd1475f5251e46fca0ff916a8600bc3894ef1759d47b76911cbd5953a9410a91",
+     "part": "pointer",
+     "reason": "capture_not_attempted_in_window"
+    }
+   },
+   {
+    "part": "record",
+    "code": "contract_identity_unproven",
+    "fields": {
+     "failures": [
+      {
+       "error": "pruned",
+       "host": "rpc.example"
+      }
+     ],
+     "judgedBlock": "11980020",
+     "judgedHash": "0xbd1475f5251e46fca0ff916a8600bc3894ef1759d47b76911cbd5953a9410a91",
+     "part": "record",
+     "reason": "capture_not_attempted_in_window"
+    }
+   },
+   {
+    "part": "authority_level",
+    "code": "contract_identity_unproven",
+    "fields": {
+     "failures": [
+      {
+       "error": "pruned",
+       "host": "rpc.example"
+      }
+     ],
+     "judgedBlock": "11980020",
+     "judgedHash": "0xbd1475f5251e46fca0ff916a8600bc3894ef1759d47b76911cbd5953a9410a91",
+     "part": "authority_level",
+     "reason": "capture_not_attempted_in_window"
+    }
+   },
+   {
+    "part": "state_at_settlement",
+    "code": "contract_identity_unproven",
+    "fields": {
+     "failures": [
+      {
+       "error": "pruned",
+       "host": "rpc.example"
+      }
+     ],
+     "judgedBlock": "11980020",
+     "judgedHash": "0xbd1475f5251e46fca0ff916a8600bc3894ef1759d47b76911cbd5953a9410a91",
+     "part": "state_at_settlement",
+     "reason": "capture_not_attempted_in_window"
+    }
+   }
+  ]
+ }
+}

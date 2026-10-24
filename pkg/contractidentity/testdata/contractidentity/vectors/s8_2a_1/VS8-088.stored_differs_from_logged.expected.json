@@ -1,0 +1,17 @@
+{
+ "headline": "unproven",
+ "parts": {
+  "authority_level": "unproven"
+ },
+ "states": [
+  {
+   "part": "authority_level",
+   "code": "contract_identity_unproven",
+   "fields": {
+    "computed": "OPERATOR",
+    "logged": "ROOT",
+    "reason": "level_differs_from_logged"
+   }
+  }
+ ]
+}

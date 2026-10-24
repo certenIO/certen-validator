@@ -1,0 +1,69 @@
+{
+ "id": "VS8-057.no_log_unknown_target_not_proven",
+ "base": "H0",
+ "mutations": [
+  {
+   "op": "set_field",
+   "target": "world",
+   "path": "variant",
+   "value": "s6silent"
+  },
+  {
+   "op": "set_field",
+   "target": "context",
+   "path": "s6_status",
+   "value": "s6_not_proven"
+  },
+  {
+   "op": "set_field",
+   "target": "context",
+   "path": "s6_state",
+   "value": "replay_slot_unproven"
+  },
+  {
+   "op": "set_field",
+   "target": "world",
+   "path": "settlement.logs",
+   "value": []
+  },
+  {
+   "op": "set_field",
+   "target": "world",
+   "path": "blocks.settle.txs.2",
+   "value": {
+    "role": "settlement",
+    "type": 2,
+    "wire": "0x02e983aa36a7010101825208941111111111111111111111111111111111111111808401020304c0808080"
+   }
+  }
+ ],
+ "expected": {
+  "headline": "unproven",
+  "parts": {
+   "s6_link": "not_applicable",
+   "settlement_path": "unproven"
+  },
+  "states": [
+   {
+    "part": "settlement_path",
+    "code": "contract_identity_unproven",
+    "fields": {
+     "count": "0",
+     "reason": "settlement_event_missing"
+    }
+   }
+  ],
+  "open": [
+   {
+    "part": "s6_link",
+    "kind": "not_checked",
+    "code": "contract_identity_not_checked",
+    "fields": {
+     "part": "s6_link",
+     "reason": "s6_not_proven",
+     "state": "replay_slot_unproven"
+    }
+   }
+  ]
+ }
+}

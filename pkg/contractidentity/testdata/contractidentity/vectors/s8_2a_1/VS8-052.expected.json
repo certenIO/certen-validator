@@ -1,0 +1,16 @@
+{
+ "headline": "unproven",
+ "parts": {
+  "settlement_path": "unproven"
+ },
+ "states": [
+  {
+   "part": "settlement_path",
+   "code": "contract_identity_unproven",
+   "fields": {
+    "count": "0",
+    "reason": "settlement_event_missing"
+   }
+  }
+ ]
+}

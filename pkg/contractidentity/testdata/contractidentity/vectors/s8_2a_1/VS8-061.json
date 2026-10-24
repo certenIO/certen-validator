@@ -1,0 +1,29 @@
+{
+ "id": "VS8-061",
+ "base": "H0",
+ "mutations": [
+  {
+   "op": "set_field",
+   "target": "world",
+   "path": "stations.settle.accounts.0x2ec2d261a4770e42dbe43826489d299d596bc5f7.code",
+   "value": {
+    "code_hash": "0x5dc0c64f4c4d92444b7a478efd6962eb22e9cf1b2a2258dd1dda96c2974d2a64"
+   }
+  }
+ ],
+ "expected": {
+  "headline": "refused",
+  "parts": {
+   "code_identity": "refused"
+  },
+  "states": [
+   {
+    "part": "code_identity",
+    "code": "contract_identity_code_unproven_bytes",
+    "fields": {
+     "address": "0x2ec2d261a4770e42dbe43826489d299d596bc5f7"
+    }
+   }
+  ]
+ }
+}
