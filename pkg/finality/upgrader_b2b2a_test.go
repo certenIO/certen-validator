@@ -299,9 +299,14 @@ func TestPerChainSwitchesDefaultOnAndRefuseAValueThatIsNotASwitch(t *testing.T) 
 type hungStore struct {
 	*memStore
 	release chan struct{}
+	entered chan struct{} // closed when the first Append is inside the hang (nil: nobody waits for it)
+	once    sync.Once
 }
 
 func (h *hungStore) Append(ctx context.Context, req AppendRequest) (Addendum, error) {
+	if h.entered != nil {
+		h.once.Do(func() { close(h.entered) })
+	}
 	<-h.release // a database that ignores the context entirely
 	return h.memStore.Append(ctx, req)
 }
@@ -309,8 +314,12 @@ func (h *hungStore) Append(ctx context.Context, req AppendRequest) (Addendum, er
 func TestAHungKindOrDatabaseDoesNotStallASettlementWorkerOrShutdown(t *testing.T) {
 	release := make(chan struct{})
 	defer close(release)
-	f := newFixture(t, allLevels(t), UpgraderConfig{BuildTimeout: 200 * time.Millisecond, StoreTimeout: 200 * time.Millisecond, Interval: MinPoll}, nil)
-	f.u.store = &hungStore{memStore: f.store, release: release}
+	// RB12 OPS-A2 item 4: no clock decides this test. The hang lasts the whole test (the timeouts are far beyond it), the settlement worker is
+	// started only once the upgrader is inside the hang, and it must finish all its jobs while the upgrader is still stuck: independence is
+	// shown by order, not by a stopwatch that a loaded machine can overrun.
+	f := newFixture(t, allLevels(t), UpgraderConfig{BuildTimeout: 10 * time.Minute, StoreTimeout: 10 * time.Minute, Interval: MinPoll}, nil)
+	entered := make(chan struct{})
+	f.u.store = &hungStore{memStore: f.store, release: release, entered: entered}
 
 	// a stand-in for the settlement worker: it shares nothing with the upgrader and must finish its jobs on time
 	var settled atomic.Int64
@@ -325,25 +334,44 @@ func TestAHungKindOrDatabaseDoesNotStallASettlementWorkerOrShutdown(t *testing.T
 	ctx, cancel := context.WithCancel(context.Background())
 	runDone := make(chan struct{})
 	go func() { f.u.Run(ctx); close(runDone) }()
-	start := time.Now()
+	select {
+	case <-entered:
+	case <-time.After(45 * time.Second): // a hang detector only: it never decides a passing run
+		t.Fatal("the upgrader never reached its hung store")
+	}
 	for i := 0; i < 1000; i++ {
 		jobs <- i
 	}
 	close(jobs)
 	<-workerDone
-	if settled.Load() != 1000 || time.Since(start) > 2*time.Second {
-		t.Fatalf("the settlement worker was delayed: %d jobs in %s", settled.Load(), time.Since(start))
+	if settled.Load() != 1000 {
+		t.Fatalf("the settlement worker settled %d of 1000 jobs", settled.Load())
 	}
-	// the upgrader is inside its hung Append and abandons it at BuildTimeout (200 ms): wait for that to be logged, up to 5 s, instead of a fixed
-	// sleep that a loaded machine can overrun (the 300 ms sleep against the 200 ms timeout was a timing flake since RB11)
-	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline) && !strings.Contains(f.logs.Joined(), CodeBuildTimeout); {
-		time.Sleep(20 * time.Millisecond)
+	if strings.Contains(f.logs.Joined(), CodeBuildTimeout) {
+		t.Fatalf("the upgrader gave up its call before the worker was done: the worker was not shown to be independent of a stuck upgrader:\n%s", f.logs.Joined())
 	}
+	// shutdown: the upgrader is still inside its hung Append, which ignores its context; the cancel makes it abandon the call (a named state)
 	cancel()
 	select {
 	case <-runDone:
-	case <-time.After(5 * time.Second):
+	case <-time.After(45 * time.Second): // a hang detector only
 		t.Fatal("shutdown is blocked by a database call that ignores its context")
+	}
+}
+
+// The hung store is abandoned at the deadline as a named state in the log (a cancelled run leaves its schedule alone and logs nothing, so this
+// is a pass of its own: it ends when the call is abandoned, whatever the machine's load).
+func TestAHungStoreIsAbandonedAtTheDeadlineAsANamedStateInTheLog(t *testing.T) {
+	release := make(chan struct{})
+	defer close(release)
+	f := newFixture(t, allLevels(t), UpgraderConfig{BuildTimeout: 200 * time.Millisecond, StoreTimeout: 200 * time.Millisecond, Interval: MinPoll}, nil)
+	f.u.store = &hungStore{memStore: f.store, release: release}
+	done := make(chan PassReport, 1)
+	go func() { done <- f.u.RunOnce(context.Background()) }()
+	select {
+	case <-done:
+	case <-time.After(45 * time.Second): // a hang detector only
+		t.Fatal("a store that ignores its context stalled the pass")
 	}
 	if !strings.Contains(f.logs.Joined(), CodeBuildTimeout) {
 		t.Fatalf("the abandoned call is a named state in the log:\n%s", f.logs.Joined())
