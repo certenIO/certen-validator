@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/certen/independant-validator/pkg/finality"
 )
 
 const (
@@ -14,17 +16,28 @@ const (
 	set3Dir = "../../pkg/finality/ethsepolia/testdata/finality_eth_sepolia3"
 )
 
+// committedPins is the pins/embedded.json the set was published with: the set is reproduced from its own committed input, so growing the
+// live embedded pins never turns this test red (RB12 OPS-A2 item 19).
+func committedPins(t *testing.T) []byte {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(set3Dir, "pins", "embedded.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
 // The committed set regenerates byte-identically from set 1 and the embedded pins (the generator refuses any case whose production
 // verdict differs from its hand-written one). With PV2_SET3_WRITE=<dir> the test writes the set there instead (how the set is made).
 func TestSet3RegeneratesByteIdentically(t *testing.T) {
 	if dir := os.Getenv("PV2_SET3_WRITE"); dir != "" {
-		if err := run(set1Dir, dir); err != nil {
+		if err := run(set1Dir, dir, finality.EmbeddedPinsBytes()); err != nil {
 			t.Fatal(err)
 		}
 		return
 	}
 	tmp := t.TempDir()
-	if err := run(set1Dir, tmp); err != nil {
+	if err := run(set1Dir, tmp, committedPins(t)); err != nil {
 		t.Fatal(err)
 	}
 	n := 0

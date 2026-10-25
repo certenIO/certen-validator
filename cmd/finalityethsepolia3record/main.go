@@ -93,12 +93,17 @@ type lcsszCase struct {
 func main() {
 	set1 := flag.String("set1", "", "finality_eth_sepolia1 directory")
 	out := flag.String("out", "", "output directory")
+	pins := flag.String("pins", "", "pins/embedded.json of the committed set (a published set is reproduced from its own committed pins, never from the live embedded ones); empty: the live embedded pins (how a NEW set is made)")
 	flag.Parse()
 	if *set1 == "" || *out == "" {
 		fmt.Fprintln(os.Stderr, "usage: finalityethsepolia3record -set1 <dir> -out <dir>")
 		os.Exit(2)
 	}
-	if err := run(*set1, *out); err != nil {
+	embedded := finality.EmbeddedPinsBytes()
+	if *pins != "" {
+		embedded = rd(filepath.Dir(*pins), filepath.Base(*pins))
+	}
+	if err := run(*set1, *out, embedded); err != nil {
 		fmt.Fprintln(os.Stderr, "FAILED:", err)
 		os.Exit(1)
 	}
@@ -113,9 +118,9 @@ func rd(dir, rel string) []byte {
 	return b
 }
 
-func run(set1, out string) error {
+func run(set1, out string, embedded []byte) error {
 	files := map[string][]byte{}
-	files["pins/embedded.json"] = finality.EmbeddedPinsBytes()
+	files["pins/embedded.json"] = embedded
 	files["pins/vector_main.json"] = rd(set1, "pins/main.json")
 	files["pins/base_1386.json"] = rd(set1, "extend/base_1386.json")
 	files["pins/extend_valid.pins.json"] = rd(set1, "extend/extend_valid.pins.json")
