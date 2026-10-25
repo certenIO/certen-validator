@@ -169,7 +169,7 @@ func TestMutKill5SlotRefAndAllowedWrites(t *testing.T) {
 	for _, c := range []struct {
 		in   string
 		want SlotRef
-	}{{`17`, SlotRef{"17", 17, true}}, {`"17"`, SlotRef{"17", 17, true}}, {`"account"`, SlotRef{Text: "account"}}} {
+	}{{`17`, SlotRef{"17", 17, true}}, {`"17"`, SlotRef{"17", 17, true}}, {`"017"`, SlotRef{"017", 17, true}}, {`"account"`, SlotRef{Text: "account"}}} {
 		s = SlotRef{}
 		if err := json.Unmarshal([]byte(c.in), &s); err != nil || s != c.want {
 			t.Errorf("%s: %+v, %v", c.in, s, err)
@@ -243,7 +243,7 @@ func TestMutKill5ManifestLookupsAndSpans(t *testing.T) {
 		to, next *uint64
 		end      uint64
 		open     bool
-	}{{to(10), to(8), 7, false}, {to(5), to(8), 5, false}, {to(10), nil, 10, false}, {nil, to(8), 7, false}, {nil, nil, 0, true}} {
+	}{{to(10), to(8), 7, false}, {to(8), to(8), 7, false}, {to(5), to(8), 5, false}, {to(10), nil, 10, false}, {nil, to(8), 7, false}, {nil, nil, 0, true}} {
 		if e, o := effectiveEnd(1, c.to, c.next); e != c.end || o != c.open {
 			t.Errorf("effectiveEnd = %d,%v", e, o)
 		}
@@ -326,16 +326,22 @@ func TestMutKill5WithExtensionRefusals(t *testing.T) {
 		t.Errorf("schema+description extension: %v", err)
 	}
 	k := "0x" + strings.Repeat("cd", 32)
-	mk5Cause(t, ext(`{"generations":"x"}`), CodeManifestCorrupt)
+	if got := mk5Cause(t, ext(`{"generations":"x"}`), CodeManifestCorrupt); !strings.Contains(got, "contractidentity.Generation") {
+		t.Errorf("generations cause %q", got)
+	}
 	mk5Cause(t, ext(`{"generations":[{"role":"anchor","maskedKeccak":"0x12"}]}`), CodeManifestCorrupt)
 	if _, err := m.WithExtension([]byte(`{"generations":[{"role":"anchor","maskedKeccak":"` + k + `"}]}`)); err != nil {
 		t.Errorf("good generation: %v", err)
 	}
 	mk5Cause(t, ext(`{"policy":5}`), CodeManifestCorrupt)
 	mk5Cause(t, ext(`{"policy":{"owner":5}}`), CodeManifestCorrupt)
-	mk5Cause(t, ext(`{"policy":{"owner":{"1":["x"]}}}`), CodeManifestCorrupt)
+	if got := mk5Cause(t, ext(`{"policy":{"owner":{"1":["x"]}}}`), CodeManifestCorrupt); !strings.Contains(got, "contractidentity.OwnerRow") {
+		t.Errorf("owner row cause %q", got)
+	}
 	mk5Cause(t, ext(`{"policy":{"setRootHistory":5}}`), CodeManifestCorrupt)
-	mk5Cause(t, ext(`{"policy":{"setRootHistory":["x"]}}`), CodeManifestCorrupt)
+	if got := mk5Cause(t, ext(`{"policy":{"setRootHistory":["x"]}}`), CodeManifestCorrupt); !strings.Contains(got, "contractidentity.SetRootRow") {
+		t.Errorf("setRoot row cause %q", got)
+	}
 }
 
 func TestMutKill5WithExtensionRowOrder(t *testing.T) {

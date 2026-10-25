@@ -107,7 +107,7 @@ func TestMutKill5CheckTrieRef(t *testing.T) {
 		t.Errorf("invalid embedded node: rest=%x empty=%v err=%v", rest, empty, err)
 	}
 	rest, empty, err = checkTrieRef([]byte{0x82, 0x01})
-	if err == nil || empty || rest != nil {
+	if err == nil || empty || rest != nil || strings.Contains(err.Error(), "reference of") {
 		t.Errorf("truncated reference: rest=%x empty=%v err=%v", rest, empty, err)
 	}
 	rest, empty, err = checkTrieRef([]byte{0x85, 1, 2, 3, 4, 5})

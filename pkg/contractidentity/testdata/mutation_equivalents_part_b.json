@@ -1,0 +1,194 @@
+[
+  {
+    "file": "manifest.go",
+    "function": "Embedded",
+    "operator": "guard_off",
+    "original": "if err != nil || len(b) != 32",
+    "mutated": "if false",
+    "reason": "WEAK: ManifestSHA256 is the generated 64-hex constant of manifest_pin_gen.go and embeddedOnce runs once per process, so the malformed-pin branch cannot be reached in any build; defensive only."
+  },
+  {
+    "file": "manifest.go",
+    "function": "Embedded",
+    "operator": "logic_swap",
+    "original": "err != nil || len(b) != 32",
+    "mutated": "err != nil && len(b) != 32",
+    "reason": "WEAK: same unreachable defensive branch as 1047 (|| versus && differ only when the generated pin constant is malformed)."
+  },
+  {
+    "file": "manifest.go",
+    "function": "Manifest.decode",
+    "operator": "bool_lit",
+    "original": "err := get(\"generations\", &m.gens, false)",
+    "mutated": "err := get(\"generations\", &m.gens, true)",
+    "reason": "get(...) is only called when the generations key is present (the surrounding if), and required only matters for an absent key, so true and false behave identically."
+  },
+  {
+    "file": "manifest.go",
+    "function": "effectiveEnd",
+    "operator": "cmp_boundary",
+    "original": "*nextFrom-1 < e",
+    "mutated": "*nextFrom-1 <= e",
+    "reason": "cmp_boundary on *nextFrom-1 < e: at equality e is assigned *nextFrom-1 which equals e, so < and <= return the same value."
+  },
+  {
+    "file": "manifest.go",
+    "function": "Manifest.EmbeddedCreationArtifactBytes",
+    "operator": "guard_off",
+    "original": "if err != nil",
+    "mutated": "if false",
+    "reason": "WEAK: fs.Sub fails only for an invalid path and the path is the constant testdata/contractidentity/manifest, which is valid; defensive only."
+  },
+  {
+    "file": "manifest.go",
+    "function": "Manifest.WithExtension",
+    "operator": "cmp_boundary",
+    "original": "er.ValidFromBlock > last",
+    "mutated": "er.ValidFromBlock >= last",
+    "reason": "cmp_boundary on er.ValidFromBlock > last: at equality last is re-assigned its own value, so > and >= leave last unchanged."
+  },
+  {
+    "file": "manifest.go",
+    "function": "Manifest.WithExtension",
+    "operator": "cmp_boundary",
+    "original": "er.ValidFromBlock > last",
+    "mutated": "er.ValidFromBlock >= last",
+    "reason": "cmp_boundary on er.ValidFromBlock > last: at equality last is re-assigned its own value, so > and >= leave last unchanged."
+  },
+  {
+    "file": "manifest.go",
+    "function": "Manifest.checkChains",
+    "operator": "cmp_boundary",
+    "original": "foreign[i] < foreign[j]",
+    "mutated": "foreign[i] <= foreign[j]",
+    "reason": "cmp_boundary on a sort of chain ids: ids are integers, equal elements are indistinguishable, so < and <= give the same sorted slice."
+  },
+  {
+    "file": "reads.go",
+    "function": "checkTrieNode",
+    "operator": "guard_off",
+    "original": "if len(extra) != 0",
+    "mutated": "if false",
+    "reason": "rlp.CountValues returned 2, so the tail after the first element is exactly one RLP value; SplitString on a string leaves no extra bytes, hence len(extra) is always 0."
+  },
+  {
+    "file": "reads.go",
+    "function": "checkTrieNode",
+    "operator": "int_literal",
+    "original": "2*(len(key)-1) + int(flag&1)",
+    "mutated": "1*(len(key)-1) + int(flag&1)",
+    "reason": "nibbles is only compared with 0; 2*(len-1)+bit, 1*(len-1)+bit and 3*(len-1)+bit are zero in exactly the same case (len(key)==1 and bit==0)."
+  },
+  {
+    "file": "reads.go",
+    "function": "checkTrieNode",
+    "operator": "int_literal",
+    "original": "2*(len(key)-1) + int(flag&1)",
+    "mutated": "3*(len(key)-1) + int(flag&1)",
+    "reason": "nibbles is only compared with 0; 2*(len-1)+bit, 1*(len-1)+bit and 3*(len-1)+bit are zero in exactly the same case (len(key)==1 and bit==0)."
+  },
+  {
+    "file": "reads.go",
+    "function": "checkTrieNode",
+    "operator": "arith",
+    "original": "2*(len(key)-1) + int(flag&1)",
+    "mutated": "2*(len(key)-1) - int(flag&1)",
+    "reason": "nibbles is only compared with 0; 2*(len-1)+bit and 2*(len-1)-bit are zero in exactly the same case (len(key)==1 and bit==0; bit==1 gives 1 versus -1, both non-zero)."
+  },
+  {
+    "file": "reads.go",
+    "function": "checkTrieNode",
+    "operator": "guard_off",
+    "original": "if len(after) != 0",
+    "mutated": "if false",
+    "reason": "rlp.CountValues returned 2, so the extension child is the whole tail and checkTrieRef consumes it entirely: len(after) is always 0."
+  },
+  {
+    "file": "reads.go",
+    "function": "checkTrieNode",
+    "operator": "guard_off",
+    "original": "if len(extra) != 0",
+    "mutated": "if false",
+    "reason": "rlp.CountValues returned 17, so after sixteen references exactly one value remains and SplitString leaves no extra bytes: len(extra) is always 0."
+  },
+  {
+    "file": "reads.go",
+    "function": "ReadIndexedLeaf",
+    "operator": "guard_off",
+    "original": "if err != nil",
+    "mutated": "if false",
+    "reason": "rlp.EncodeToBytes of a uint64 cannot fail, so the error branch is unreachable; defensive only (WEAK)."
+  },
+  {
+    "file": "slots.go",
+    "function": "MappingSlot",
+    "operator": "int_literal",
+    "original": "buf[:32]",
+    "mutated": "buf[:33]",
+    "reason": "copy(buf[:33], key[:]) copies min(33,32)=32 bytes, the same bytes as copy(buf[:32], key[:])."
+  },
+  {
+    "file": "slots.go",
+    "function": "WordUint64",
+    "operator": "int_literal",
+    "original": "word[24:]",
+    "mutated": "word[23:]",
+    "reason": "word[:24] is checked to be all zero above, so word[23] is 0 and SetBytes(word[23:]) has the same value as SetBytes(word[24:])."
+  },
+  {
+    "file": "slots.go",
+    "function": "WordAddress",
+    "operator": "int_literal",
+    "original": "word[12:]",
+    "mutated": "word[11:]",
+    "reason": "word[:12] is checked to be all zero above, so word[11] is 0 and BytesToAddress keeps the same last 20 bytes."
+  },
+  {
+    "file": "manifest.go",
+    "function": "findDuplicateKey",
+    "operator": "guard_off",
+    "original": "if err != nil",
+    "mutated": "if false",
+    "reason": "WEAK: on a malformed object key the decoder keeps its error state, so the next Token call inside the recursive walk returns the same error; the guard only returns it one call earlier."
+  },
+  {
+    "file": "manifest.go",
+    "function": "effectiveEnd",
+    "operator": "int_literal",
+    "original": "*nextFrom-1 < e",
+    "mutated": "*nextFrom-2 < e",
+    "reason": "The mutated test nextFrom-2 < e is true for e == nextFrom-1 as well, where the body assigns e = nextFrom-1, the value e already has; for every other e it agrees with nextFrom-1 < e."
+  },
+  {
+    "file": "manifest.go",
+    "function": "Manifest.checkChains",
+    "operator": "cmp_boundary",
+    "original": "added[i] < added[j]",
+    "mutated": "added[i] <= added[j]",
+    "reason": "cmp_boundary on a sort of chain ids: ids are integers, equal elements are indistinguishable, so < and <= give the same sorted slice."
+  },
+  {
+    "file": "manifest.go",
+    "function": "Manifest.WithExtension",
+    "operator": "guard_off",
+    "original": "…rr := checkGenerationKey(g.Role, g.MaskedKeccak); err != nil",
+    "mutated": "…rr := checkGenerationKey(g.Role, g.MaskedKeccak); false",
+    "reason": "The malformed maskedKeccak is refused with the same ManifestCorrupt message by checkGenerationKey in decode when the merged manifest is re-parsed, so skipping the earlier check yields the same refusal."
+  },
+  {
+    "file": "manifest.go",
+    "function": "Manifest.WithExtension",
+    "operator": "guard_off",
+    "original": "if err := json.Unmarshal(rawRow, &row); err != nil",
+    "mutated": "if err := json.Unmarshal(rawRow, &row); false",
+    "reason": "WEAK: the unreadable row is appended unchanged and the merged manifest is re-parsed, where the same row fails the same json.Unmarshal into the same row type: the verdict (manifest_corrupt) is identical and only the cause wording differs."
+  },
+  {
+    "file": "manifest.go",
+    "function": "Manifest.WithExtension",
+    "operator": "guard_off",
+    "original": "if err := json.Unmarshal(rawRow, &row); err != nil",
+    "mutated": "if err := json.Unmarshal(rawRow, &row); false",
+    "reason": "WEAK: the unreadable row is appended unchanged and the merged manifest is re-parsed, where the same row fails the same json.Unmarshal into the same row type: the verdict (manifest_corrupt) is identical and only the cause wording differs."
+  }
+]
