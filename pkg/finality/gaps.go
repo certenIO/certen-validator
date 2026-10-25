@@ -313,7 +313,7 @@ type gapScanResult struct {
 }
 
 // gapScan is the one reading of the gap rows: the pieces of [from, to] that lie in a gap and are not filled, in ascending order.
-func gapScan(ctx context.Context, s CaptureStore, chain, from, to uint64) (gapScanResult, error) {
+func gapScan(ctx context.Context, s CaptureStore, chain, from, to uint64, skip GapClass) (gapScanResult, error) {
 	var res gapScanResult
 	if to < from {
 		return res, nil
@@ -331,7 +331,7 @@ func gapScan(ctx context.Context, s CaptureStore, chain, from, to uint64) (gapSc
 		if gt < k.L1Block {
 			return res, fmt.Errorf("finality: malformed gap row %s: it ends before it starts", k)
 		}
-		if gt < from {
+		if gt < from || class == skip { // skip: a class the caller does not want in the union ("" skips none)
 			continue
 		}
 		f := k.L1Block
@@ -486,7 +486,15 @@ func gapScan(ctx context.Context, s CaptureStore, chain, from, to uint64) (gapSc
 // GapsIn returns the runs of blocks of [from, to] that lie in a recorded gap and have no fill, ascending, clipped to the window. An empty
 // answer means "no gap" only for a store that could be read: a failing store is an error.
 func GapsIn(ctx context.Context, s CaptureStore, chain, from, to uint64) ([]GapRange, error) {
-	r, err := gapScan(ctx, s, chain, from, to)
+	r, err := gapScan(ctx, s, chain, from, to, "")
+	return r.pieces, err
+}
+
+// GapsInWithout is GapsIn over the recorded rows of every class but skip: overlapping and abutting rows of the other classes merge, rows of
+// skip take no part in the union. A block is in a piece only if a row that is not of class skip covers it (RB12 OPS-A2: the per-block rule of
+// the backfill with the prefix switched off).
+func GapsInWithout(ctx context.Context, s CaptureStore, chain, from, to uint64, skip GapClass) ([]GapRange, error) {
+	r, err := gapScan(ctx, s, chain, from, to, skip)
 	return r.pieces, err
 }
 
@@ -497,7 +505,7 @@ type GapTotals struct {
 
 // GapTotalsOf counts every gap block of the chain.
 func GapTotalsOf(ctx context.Context, s CaptureStore, chain uint64) (GapTotals, error) {
-	r, err := gapScan(ctx, s, chain, 0, MaxCaptureBlock)
+	r, err := gapScan(ctx, s, chain, 0, MaxCaptureBlock, "")
 	t := GapTotals{Filled: r.filled}
 	for _, p := range r.pieces {
 		switch p.State {
