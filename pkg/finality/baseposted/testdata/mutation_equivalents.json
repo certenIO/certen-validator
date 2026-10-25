@@ -366,5 +366,61 @@
     "original": "!ok || len(k) != 32",
     "mutated": "*",
     "reason": "unhex returns ok only when the decoded length is n, and returns a shorter or different length with ok == false, so `!ok` alone is the condition and `len(k) != 32` adds nothing: `!ok && len(k) != 32` is the same."
+  },
+  {
+    "file": "verify.go",
+    "function": "nodeDB.account",
+    "operator": "guard_off",
+    "original": "if !ok || len(v) == 0",
+    "mutated": "if false",
+    "reason": "an absent account (a proof of absence) gives ok true with an empty value, which would skip this refusal and reach rlp.DecodeBytes; decoding an empty input into types.StateAccount fails (EOF), returning the identical l1_state_proof_invalid{which:account}, so the guard only fixes which statement refuses."
+  },
+  {
+    "file": "verify.go",
+    "function": "nodeDB.account",
+    "operator": "logic_swap",
+    "original": "!ok || len(v) == 0",
+    "mutated": "!ok && len(v) == 0",
+    "reason": "with && an unverifiable proof (ok false, value non-empty or empty) or an absent account (ok true, empty value) falls through to rlp.DecodeBytes of the value, which fails on an empty or absent value and returns the identical l1_state_proof_invalid{which:account}; a non-empty value after ok false cannot occur (value returns the zero value with ok false)."
+  },
+  {
+    "file": "verify.go",
+    "function": "nodeDB.account",
+    "operator": "int_literal",
+    "original": "len(v) == 0",
+    "mutated": "len(v) == -1",
+    "reason": "len(v) == -1 is never true, so the guard reduces to !ok; an absent account (ok true, empty value) then reaches rlp.DecodeBytes, which fails on empty input and returns the identical l1_state_proof_invalid{which:account}."
+  },
+  {
+    "file": "verify.go",
+    "function": "nodeDB.account",
+    "operator": "int_literal",
+    "original": "len(v) == 0",
+    "mutated": "len(v) == 1",
+    "reason": "len(v) == 1 is true only for a one-byte value, which rlp.DecodeBytes into types.StateAccount also refuses; an empty value (the real case) is refused by the decode with the identical l1_state_proof_invalid{which:account}."
+  },
+  {
+    "file": "verify.go",
+    "function": "Kind.Verify",
+    "operator": "cmp_boundary",
+    "original": "maxBlobs > lim.MaxBlobsBase",
+    "mutated": "maxBlobs >= lim.MaxBlobsBase",
+    "reason": "maxBlobs is clamped to lim.MaxBlobsBase; with >= the equal case assigns the same value."
+  },
+  {
+    "file": "channel.go",
+    "function": "parseFrames",
+    "operator": "int_literal",
+    "original": "buf[:16]",
+    "mutated": "buf[:17]",
+    "reason": "f.ID is a [16]byte and copy moves at most 16 bytes, so buf[:17] (in range: the length check above guarantees 22 bytes) copies the same 16 bytes."
+  },
+  {
+    "file": "channel.go",
+    "function": "decompress",
+    "operator": "cmp_boundary",
+    "original": "max < uint64(math.MaxInt)",
+    "mutated": "max <= uint64(math.MaxInt)",
+    "reason": "when max equals math.MaxInt, int(max) is math.MaxInt, the value capInt already holds."
   }
 ]

@@ -34,6 +34,13 @@ func TestCarriedLegRefBoundsTheHeaderAtExactlySixteenKiB(t *testing.T) {
 	if MaxLegHeaderBytes != 16384 {
 		t.Fatalf("the carried header bound is %d", MaxLegHeaderBytes)
 	}
+	// a header member that is not lower-case even-length hex is refused for exactly that reason, not as an empty or oversize header
+	for _, bad := range []string{"zz", "abc", "AB"} {
+		withBad := leg(0)
+		withBad.HeaderRLP = bad
+		_, err := withBad.Ref()
+		wantNamed(t, err, CodeAddendumMalformed, "field", "leg.headerRlp", "reason", AddendumNotLowerHex)
+	}
 	_, err := leg(16385).Ref()
 	wantNamed(t, err, CodeAddendumMalformed, "field", "leg.headerRlp", "reason", AddendumBadValue)
 	// exactly the bound is not refused by the size rule; the bytes are not a header, so ReadHeader refuses them for its own reason

@@ -382,5 +382,13 @@
     "original": "make([]string, 0, len(top))",
     "mutated": "make([]string, 1, len(top))",
     "reason": "the extra empty key at index 0 of the sorted key list is compared with every member name and is EqualFold to none of them (all non-empty), so no refusal is added or removed."
+  },
+  {
+    "file": "addendum.go",
+    "function": "ParseSection",
+    "operator": "guard_off",
+    "original": "if err != nil",
+    "mutated": "if false",
+    "reason": "strictString fails with AddendumMalformed(leg.headerRlp, bad_value); with the guard off hs stays empty and strictHex of it yields a zero-length slice that the length rule right after refuses with the identical AddendumMalformed(leg.headerRlp, bad_value), so the verdict and the state are the same."
   }
 ]
