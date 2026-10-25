@@ -110,3 +110,13 @@ func TestRepositoryAppenderRunsTheRealVerifyOnTheComposedContext(t *testing.T) {
 		t.Fatalf("an identical container must not add a row, seq %d", row2.Seq)
 	}
 }
+
+// The exported bound equals the codec's container bound and the octet_length check of migration 00031 (4194304).
+func TestMaxContractIdentityBytesEqualsTheContainerLimitAndTheMigration(t *testing.T) {
+	if ci.MaxContractIdentityBytes != ci.DefaultLimits().MaxContainerBytes || ci.MaxContractIdentityBytes != 4194304 {
+		t.Fatalf("MaxContractIdentityBytes %d, MaxContainerBytes %d", ci.MaxContractIdentityBytes, ci.DefaultLimits().MaxContainerBytes)
+	}
+	if capture.MaxItemBytes() != ci.MaxContractIdentityBytes {
+		t.Fatalf("capture item bound %d", capture.MaxItemBytes())
+	}
+}
