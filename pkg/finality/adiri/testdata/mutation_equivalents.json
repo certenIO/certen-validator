@@ -182,5 +182,21 @@
     "original": "i < 0",
     "mutated": "i < -1",
     "reason": "Reached only if every signature verifies one by one while the random linear combination rejects them, which cannot happen: a linear combination of valid pairing equations holds for every non-zero scalar."
+  },
+  {
+    "file": "sigs.go",
+    "function": "firstFailure",
+    "operator": "guard_off",
+    "original": "if len(items) == 0",
+    "mutated": "if false",
+    "reason": "For an empty batch the early return (-1, '', nil) is what the fall-through computes: firstOneByOne of no items returns -1 and batchedAccepts of no items pairs the identity with the generator and accepts, so the batched pass returns -1 as well (TestAnEmptyBatchHasNoFailureInEitherMode pins both modes and passes under the mutant)."
+  },
+  {
+    "file": "sigs.go",
+    "function": "firstFailure",
+    "operator": "int_literal",
+    "original": "len(items) == 0",
+    "mutated": "len(items) == -1",
+    "reason": "len(items) == -1 is never true, so the guard is off; see the guard-off site: an empty batch yields (-1, '', nil) in both modes without it."
   }
 ]
