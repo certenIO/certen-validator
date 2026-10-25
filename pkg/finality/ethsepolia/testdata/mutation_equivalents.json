@@ -1,18 +1,34 @@
 [
- {
-  "file": "kind.go",
-  "function": "DecodeBody",
-  "operator": "cmp_boundary",
-  "original": "maxSpine < limit",
-  "mutated": "maxSpine <= limit",
-  "reason": "when maxSpine equals limit the guarded assignment limit = maxSpine assigns the value limit already has"
- },
- {
-  "file": "verify.go",
-  "function": "Verifier.Verify",
-  "operator": "guard_off",
-  "original": "if at.Number != leg.Number",
-  "mutated": "if false",
-  "reason": "at comes from ethl1.BlockAt(covered, leg.Number), which returns covered[top-number]; Covers has already required every spine header to be numbered exactly one below its child, so that element is numbered leg.Number whenever Covers succeeded: the guard is unreachable"
- }
+  {
+    "file": "kind.go",
+    "function": "DecodeBody",
+    "operator": "cmp_boundary",
+    "original": "maxSpine < limit",
+    "mutated": "maxSpine <= limit",
+    "reason": "when maxSpine equals limit the guarded assignment limit = maxSpine assigns the value limit already has"
+  },
+  {
+    "file": "verify.go",
+    "function": "Verifier.Verify",
+    "operator": "guard_off",
+    "original": "if at.Number != leg.Number",
+    "mutated": "if false",
+    "reason": "at comes from ethl1.BlockAt(covered, leg.Number), which returns covered[top-number]; Covers has already required every spine header to be numbered exactly one below its child, so that element is numbered leg.Number whenever Covers succeeded: the guard is unreachable"
+  },
+  {
+    "file": "spine.go",
+    "function": "spineRun.callContext",
+    "operator": "int_literal",
+    "original": "left < 0",
+    "mutated": "left < -1",
+    "reason": "WEAK: left is -1 ns instead of 0 in the timeout left+reserve/2 of a real-time context deadline, a one nanosecond shorter budget for the call; no test can observe it without an injectable context clock (context.WithTimeout reads the real clock), and the call is bounded by the same attempt budget either way."
+  },
+  {
+    "file": "spine.go",
+    "function": "spineRun.fetch",
+    "operator": "int_literal",
+    "original": "left < 0",
+    "mutated": "left < -1",
+    "reason": "left of -1 ns or 0 gives context.WithTimeout a timeout that is not positive; both return a context that is already expired with DeadlineExceeded, so the lock wait behaves identically."
+  }
 ]
