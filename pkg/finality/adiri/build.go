@@ -122,9 +122,15 @@ func (p *Prover) post(ctx context.Context, url string, reqs []rpcReq) ([]rpcResp
 		return nil, err
 	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 256<<20))
+	// the answer is bounded by the evidence bound (a batch of headers and epoch records is part of one evidence container), not by 256 MiB;
+	// one byte more is read so that an answer above the bound is refused by name, never cut (RB12 OPS-A2 item 9)
+	limit := int64(finality.DefaultLimits().MaxEvidenceBytes)
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil {
 		return nil, err
+	}
+	if int64(len(raw)) > limit {
+		return nil, finality.EvidenceTooLarge("adiri_batch_answer", uint64(len(raw)), uint64(limit))
 	}
 	if resp.StatusCode != http.StatusOK {
 		// the body is the provider's text: it is never echoed into a state, only its status
@@ -404,7 +410,9 @@ type tableIndex struct {
 	idx    map[string]int
 }
 
-func (t *tableIndex) of(keys [][]byte) uint8 {
+// of returns the index of a committee's table, adding it when new. The index is one byte of the evidence: a 257th distinct committee is
+// refused by name (finality_evidence_too_large{part: committee_tables}), never wrapped (RB12 OPS-A2 item 9).
+func (t *tableIndex) of(keys [][]byte) (uint8, error) {
 	var k strings.Builder
 	for _, key := range keys {
 		k.Write(key)
@@ -413,11 +421,14 @@ func (t *tableIndex) of(keys [][]byte) uint8 {
 		t.idx = map[string]int{}
 	}
 	if i, ok := t.idx[k.String()]; ok {
-		return uint8(i)
+		return uint8(i), nil
+	}
+	if len(t.tables) >= 256 {
+		return 0, finality.EvidenceTooLarge("committee_tables", uint64(len(t.tables))+1, 256)
 	}
 	t.idx[k.String()] = len(t.tables)
 	t.tables = append(t.tables, keys)
-	return uint8(len(t.tables) - 1)
+	return uint8(len(t.tables) - 1), nil
 }
 
 // headerRLP rebuilds the raw consensus RLP of a header from eth_getBlockByNumber's JSON and requires it to hash to the hash
@@ -513,8 +524,13 @@ func (p *Prover) BuildLeg(ctx context.Context, leg finality.BlockRef) (*finality
 			if rj.Epoch != e {
 				return nil, nil, SourceUnavailable(SourceEpochRecordsFail, []string{fmt.Sprintf("tn_epochRecord(%d) answered epoch %d", e, rj.Epoch)}, "epoch", e)
 			}
-			rec.CommitteeIdx = tables.of(committee)
-			rec.NextIdx = tables.of(next)
+			var terr error
+			if rec.CommitteeIdx, terr = tables.of(committee); terr != nil {
+				return nil, nil, terr
+			}
+			if rec.NextIdx, terr = tables.of(next); terr != nil {
+				return nil, nil, terr
+			}
 			recs = append(recs, rec)
 			lastRec = rj
 			if rec.FinalState.Number >= leg.Number {
