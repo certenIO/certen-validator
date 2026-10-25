@@ -342,5 +342,45 @@
     "original": "if err != nil",
     "mutated": "if false",
     "reason": "json.Marshal(d) cannot fail here: d holds strings, a uint64 and one json.RawMessage, and that RawMessage is the Canonical rendering of a StateError, which is always valid JSON. The error branch is unreachable."
+  },
+  {
+    "file": "addendum.go",
+    "function": "CarriedLeg.Ref",
+    "operator": "int_literal",
+    "original": "len(hdr) == 0",
+    "mutated": "len(hdr) == -1",
+    "reason": "hdr is the decoding of a non-empty string (the empty string returned two statements earlier), so it holds at least one byte: len(hdr) == 0 and len(hdr) == -1 are both never true."
+  },
+  {
+    "file": "addendum.go",
+    "function": "CarriedLegWithHeaderOf",
+    "operator": "cmp_boundary",
+    "original": "len(b.HeaderRLP) > 0",
+    "mutated": "len(b.HeaderRLP) >= 0",
+    "reason": "for a block with an empty header hex.EncodeToString returns the empty string, the value HeaderRLP already holds, so assigning it changes nothing."
+  },
+  {
+    "file": "status.go",
+    "function": "var:statusMembers",
+    "operator": "int_literal",
+    "original": "make([]string, 0, t.NumField())",
+    "mutated": "make([]string, 1, t.NumField())",
+    "reason": "the extra empty member name added at index 0 is compared as k != m && EqualFold(k, m): for the empty name that is false for every key (a non-empty key is not EqualFold to it; an empty key equals it and is skipped), so the refusal set is unchanged."
+  },
+  {
+    "file": "status.go",
+    "function": "var:statusMembers",
+    "operator": "logic_swap",
+    "original": "name != \"\" && name != \"-\"",
+    "mutated": "name != \"\" || name != \"-\"",
+    "reason": "with || the names '' and '-' join statusMembers; k != m && EqualFold(k, m) is false for them for every key k (the same reasoning as the empty prefix element), so the refusal set is unchanged."
+  },
+  {
+    "file": "status.go",
+    "function": "checkStatusMemberNames",
+    "operator": "int_literal",
+    "original": "make([]string, 0, len(top))",
+    "mutated": "make([]string, 1, len(top))",
+    "reason": "the extra empty key at index 0 of the sorted key list is compared with every member name and is EqualFold to none of them (all non-empty), so no refusal is added or removed."
   }
 ]
