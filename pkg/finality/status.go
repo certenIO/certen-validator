@@ -9,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/certen/independant-validator/pkg/ethrpc"
@@ -133,9 +135,49 @@ func (s BuilderStatus) Document() ([]byte, error) {
 	return raw, nil
 }
 
+// statusMembers are the member names of the status document, read from the struct tags of statusDoc.
+var statusMembers = func() []string {
+	t := reflect.TypeOf(statusDoc{})
+	out := make([]string, 0, t.NumField())
+	for i := 0; i < t.NumField(); i++ {
+		if name, _, _ := strings.Cut(t.Field(i).Tag.Get("json"), ","); name != "" && name != "-" {
+			out = append(out, name)
+		}
+	}
+	return out
+}()
+
+// checkStatusMemberNames refuses a stored document that spells a member of its format in another case. encoding/json matches member names
+// case-insensitively, so without this a stored "PINSSHA256" or "CLASS" would be read as the member and a reader that matches exactly
+// (proofs_service) would read another document than the validator: both readers answer the same on every spelling (RB12 OPS-A2 item 15).
+// The state carries the canonical member, never the stored spelling. A document that is not a JSON object, or a member that is not any
+// member of the format in any case, is left to the strict decode that follows.
+func checkStatusMemberNames(raw []byte) error {
+	var top map[string]json.RawMessage
+	if json.Unmarshal(raw, &top) != nil {
+		return nil
+	}
+	keys := make([]string, 0, len(top))
+	for k := range top {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		for _, m := range statusMembers {
+			if k != m && strings.EqualFold(k, m) {
+				return NewState(CodeStatusMemberNameCase, "member", m)
+			}
+		}
+	}
+	return nil
+}
+
 // ParseBuilderStatusDocument is the inverse of Document for the fields a reader shows. The state is returned as the stored canonical
 // JSON (code and fields), not re-materialised into a StateError.
 func ParseBuilderStatusDocument(raw []byte) (BuilderStatusView, error) {
+	if err := checkStatusMemberNames(raw); err != nil {
+		return BuilderStatusView{}, err
+	}
 	var d statusDoc
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()

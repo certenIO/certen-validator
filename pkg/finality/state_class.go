@@ -68,6 +68,7 @@ var stateClasses = map[string]StateClass{
 	"finality_block_not_covered":       ClassFailure,
 	"finality_bootstrap_invalid":       ClassFailure,
 	"finality_build_timeout":           ClassFailure,
+	"finality_status_member_name_case": ClassFailure,
 	// finality_randomness_unavailable is a fact about THIS process (its randomness source failed), not a verdict on the leg: held, never counted.
 	"finality_randomness_unavailable":      ClassEnvironment,
 	"finality_builder_error":               ClassFailure,
