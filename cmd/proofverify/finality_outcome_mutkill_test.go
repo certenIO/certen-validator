@@ -131,8 +131,8 @@ func TestPinsSelfcheckReportsTheLedgerItRederivedFromTheRootPin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e, ok := pins.Sepolia()
-	if !ok || len(e.Anchors) < 2 {
+	e, serr := pins.Sepolia()
+	if serr != nil || len(e.Anchors) < 2 {
 		t.Fatalf("the embedded Sepolia ledger has %d anchors", len(e.Anchors))
 	}
 	hash, src := pins.Identity()
