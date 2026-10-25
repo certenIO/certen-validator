@@ -244,3 +244,20 @@ func (s proofSink) AppendContainer(ctx context.Context, chain uint64, leg ci.Blo
 	_, _, err := s.repo.Append(ctx, s.proofID, chain, leg, container, digest)
 	return err
 }
+
+// Appender is the production wiring of the S8 write path for one proof: the capture.Appender whose verifier is the REAL composed one
+// (ci.NewDefaultVerifier, steps 1c-24; there is no other default and no fallback) and whose sink is this repository's SinkFor(proofID). A
+// container the real Verify refuses at level included is never appended; unproven and pending parts are stored.
+func (r *ContractIdentityRepository) Appender(proofID string, m *ci.Manifest) (*capture.Appender, error) {
+	if r == nil || r.client == nil {
+		return nil, errors.New("contract identity: appender needs a repository")
+	}
+	if m == nil {
+		return nil, errors.New("contract identity: appender needs a manifest")
+	}
+	v, err := ci.NewDefaultVerifier()
+	if err != nil {
+		return nil, fmt.Errorf("contract identity: the real verifier cannot be built: %w", err)
+	}
+	return capture.NewAppender(r.SinkFor(proofID), v, m)
+}
