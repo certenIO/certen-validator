@@ -98,8 +98,9 @@ const (
 	windowCompleteMargin = 96
 )
 
-// The window of L1 blocks that can hold a leg's frames is [E, E+SeqWindowSize] with E the L1 origin of its L2 block (the verifier
-// refuses a frame outside it: batch_outside_sequencing_window). A leg is searched in widening parts of that window.
+// The window of L1 blocks the builder searches for a leg's frames is [E, E+SeqWindowSize] with E the L1 origin of its L2 block. The verifier no
+// longer refuses a frame BELOW E (it judges the completing frame against E+SeqWindowSize alone, R12-SPEC-Q1), so a streamed channel whose
+// early frames lie below E is verifiable but not yet found by this search (RB12 finding in the ledger). A leg is searched in widening parts of it.
 var searchSteps = []uint64{96, 384, 1536}
 
 // memoryPerStoredByte is the heap a loaded row costs per stored byte (measured 1.43 on blob rows: the row, the decoded frame data and

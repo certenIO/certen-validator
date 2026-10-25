@@ -180,11 +180,10 @@ func TestFrameTransactionsOrderTheChannelAndAreDecodedBeforeTheyAreUsed(t *testi
 	dup.body.Frames[1].TxIndex = dup.body.Frames[0].TxIndex
 	_, err = dup.verify()
 	wantCode(t, err, CodeChannelIncomplete, nil)
-	// the first frame is not compared with a predecessor: a frame in L1 block 0 at index 0 is judged on its other merits (its batch
-	// is outside the sequencing window of its epoch)
+	// the first frame is not compared with a predecessor: a frame in L1 block 0 at index 0 is judged on its other merits (the
+	// sequencing window has no lower bound, so only a completing frame after epoch + window refuses it)
 	zero := synth(synthOpts{frameBlocks: []uint64{0}})
-	_, err = zero.verify()
-	wantCode(t, err, CodeBatchOutsideWindow, nil)
+	mustOK(t, zero)
 	// a spine entry that is not a header
 	junk := synth(synthOpts{})
 	junk.body.L1Spine[0] = []byte{1, 2}
