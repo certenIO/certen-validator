@@ -4,6 +4,10 @@ package contractidentity
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
+	"math/big"
+	"strings"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -125,5 +129,25 @@ func TestMutKill5A2LoggedLevelWithoutAMatch(t *testing.T) {
 	}
 	if lv, ok := a2LoggedLevel(env(bare, wrongTarget), &SettlementCall{}); ok || lv != 0 {
 		t.Errorf("a manifest without the governance events: %d %v", lv, ok)
+	}
+}
+
+func TestMutKill5C2HistoryNamesTheStationMissingAnA06Word(t *testing.T) {
+	root := common.Hash{0xaa}
+	c := common.Hash{0xcc}
+	digest := c2KeysDigest([]common.Address{}, nil)
+	row := fmt.Sprintf(`[{"chainId":777,"root":%q,"validFromBlock":1,"thresholdNumerator":2,"thresholdDenominator":3,"keysDigest":%q,"pkcCount":1,"pkcList":[%q]}]`,
+		strings.ToLower(root.Hex()), strings.ToLower(digest.Hex()), strings.ToLower(c.Hex()))
+	m := mk5Min(t, `{}`, row)
+	station := func(name string) *c2Station {
+		return &c2Station{Name: name, W: map[string]common.Hash{
+			"A14": root, "A12": common.BigToHash(big.NewInt(2)), "A13": common.BigToHash(big.NewInt(3)), "A07": common.BigToHash(big.NewInt(1)),
+		}}
+	}
+	env := &Env{Manifest: m, Ctx: LegContext{Chain: 777}}
+	ok, open, err := c2History(env, station("pre"), station("post"), 5, nil)
+	var miss *RegistryWordsMissingError
+	if ok || open != nil || !errors.As(err, &miss) || miss.Station != "post" || len(miss.Missing) != 1 || miss.Missing[0] != "A06:"+strings.ToLower(c.Hex()) {
+		t.Errorf("a station without the A06 word of a listed key: ok=%v open=%v err=%v", ok, open, err)
 	}
 }
