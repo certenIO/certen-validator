@@ -4,9 +4,11 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 
 	"github.com/certen/independant-validator/pkg/contractidentity/capture"
+	"github.com/certen/independant-validator/pkg/database"
 	"github.com/certen/independant-validator/pkg/metrics"
 )
 
@@ -85,4 +87,28 @@ func TestContractIdentityCaptureStartsWhenSwitchedOnWithAStoreAndForwardsTrigger
 	}
 	// no agreed reader exists for this chain in the test: the trigger is refused by name inside the capture, the process lives on
 	contractIdentityAttested(909, [32]byte{3}, [32]byte{4}, 0)
+}
+
+// WP-S8-7: with the validator's database client the default store is the Postgres insert-only store (it no longer stays no_durable_store), and
+// without one it is the named absence.
+func TestContractIdentityDefaultStoreIsThePostgresStoreWhenTheValidatorHasADatabase(t *testing.T) {
+	old := contractIdentityDB
+	t.Cleanup(func() { contractIdentityDB = old })
+	contractIdentityDB = nil
+	if s, err := contractIdentityStore(); err == nil || s != nil {
+		t.Fatalf("without a database client there is no store: %v %v", s, err)
+	}
+	db, err := sql.Open("postgres", "postgres://nobody@127.0.0.1:1/none?sslmode=disable") // sql.Open does not connect
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	contractIdentityDB = database.NewClientFromDB(db)
+	s, err := contractIdentityStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s.(*database.IdentityCaptureStore); !ok {
+		t.Fatalf("the default store is %T, want *database.IdentityCaptureStore", s)
+	}
 }

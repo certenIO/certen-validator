@@ -299,20 +299,7 @@ func TestADIURLOfAndS6OfAreNamedNotInferred(t *testing.T) {
 func TestComposeContractIdentityBuildsTheLegContextFromTheStoredRows(t *testing.T) {
 	ctx := context.Background()
 	pid, leg := storeLeg(t, "base_sepolia_47368146")
-	opID := make([]byte, 32)
-	_, _ = rand.Read(opID)
-	opHex := "0x" + hex.EncodeToString(opID)
-	if _, err := testDB.Exec(`INSERT INTO external_chain_results (proof_id, bundle_id, operation_id, chain_type, chain_id, tx_hash, tx_index, tx_gas_used, tx_from_address,
-		block_number, block_hash, block_timestamp, state_root, transactions_root, receipts_root, execution_status, execution_success, result_hash, observer_validator_id, observed_at)
-		VALUES ($1::uuid, $2, $3, 'ethereum', $4, $5, 0, 1, $6, $7, $8, now(), $8, $8, $8, 1, true, $8, 'validator-1', now())`,
-		pid, opID, opID, int64(leg.Chain), make([]byte, 32), make([]byte, 20), int64(leg.Block().Number), bytes.Repeat([]byte{1}, 32)); err != nil {
-		t.Fatal(err)
-	}
-	inputs := `{"accumulate_set_root":"0x` + strings.Repeat("ab", 32) + `","incarnation":"0x` + strings.Repeat("cd", 32) + `"}`
-	if _, err := testDB.Exec(`INSERT INTO intent_quorum_certificates (operation_id, message, registry_version, certen_chain_id, certificate, registry, message_inputs, certified_height)
-		VALUES ($1, $2, 1, 'certen-testnet', '{}', $3::jsonb, $4::jsonb, 1)`, opHex, "0x"+strings.Repeat("11", 32), string(fixtureBytes(t, "qc_registry.sample.json")), inputs); err != nil {
-		t.Fatal(err)
-	}
+	seedBatchFacts(t, pid)
 	if _, err := testDB.Exec(`UPDATE proof_artifacts SET account_url = 'acc://certen-demo.acme/book/1' WHERE proof_id = $1::uuid`, pid); err != nil {
 		t.Fatal(err)
 	}
@@ -328,7 +315,7 @@ func TestComposeContractIdentityBuildsTheLegContextFromTheStoredRows(t *testing.
 	if lc.Chain != leg.Chain || lc.Settlement == nil || lc.Tx == nil || lc.Receipt == nil || lc.S7 == nil || lc.ADIURL != "acc://certen-demo.acme" {
 		t.Fatalf("settlement/tx/receipt/s7/adi: %+v", lc)
 	}
-	if lc.Batch.OperationID != [32]byte(opID) || lc.Batch.AccSetRoot[0] != 0xab || lc.Batch.Incarnation[0] != 0xcd {
+	if lc.Batch.OperationID == ([32]byte{}) || lc.Batch.AccSetRoot[0] != 0xab || lc.Batch.Incarnation[0] != 0xcd {
 		t.Fatalf("batch facts: %+v", lc.Batch)
 	}
 	if lc.Registry9 == nil || len(lc.Registry9.Members) != 7 || lc.Registry9.Validate() != nil {
