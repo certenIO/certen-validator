@@ -78,3 +78,37 @@ func TestMutKill5B2Unchanged(t *testing.T) {
 		}
 	}
 }
+
+// TestMutKill5ABIFieldPathsStayWithinSixtyFourCharacters pins the argument for b1Step17's truncation of ae.Field to 64 characters: no field path of
+// the comprehensive-proof call schema, with an array index of up to ten digits at every array on the path, is longer than 64 characters, so the
+// truncation can never remove a character (the mutants field[:63] and field[:65] are equivalent).
+func TestMutKill5ABIFieldPathsStayWithinSixtyFourCharacters(t *testing.T) {
+	longest, at := 0, ""
+	var walk func(p string, ty *abiT, extra, depth int)
+	walk = func(p string, ty *abiT, extra, depth int) {
+		if n := len(p) + extra; n > longest {
+			longest, at = n, p
+		}
+		if depth > 12 {
+			t.Fatalf("schema deeper than 12 at %s", p)
+		}
+		switch ty.k {
+		case 'd', 'f':
+			walk(p+"[0]", ty.elem, extra+9, depth+1)
+		case 't':
+			for _, f := range ty.fields {
+				name := f.name
+				if p != "" {
+					name = p + "." + f.name
+				}
+				walk(name, f.t, extra, depth+1)
+			}
+		}
+	}
+	for _, f := range []abiF{fd("anchorId", tB32()), fd("proof", certenProofType(DefaultABILimits()))} {
+		walk(f.name, f.t, 0, 0)
+	}
+	if longest > 64 {
+		t.Errorf("a field path of %d characters (%s) would be truncated", longest, at)
+	}
+}

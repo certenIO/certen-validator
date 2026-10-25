@@ -454,5 +454,45 @@
     "original": "judged[r] = true",
     "mutated": "judged[r] = false",
     "reason": "judged is used as a set: only its keys are ranged (for r := range judged), never its values, so storing false instead of true changes nothing."
+  },
+  {
+    "file": "steps_2b1.go",
+    "function": "b1Step17",
+    "operator": "int_literal",
+    "original": "field[:64]",
+    "mutated": "field[:63]",
+    "reason": "b1Step17 truncates ae.Field to 64 characters, and TestMutKill5ABIFieldPathsStayWithinSixtyFourCharacters pins that no field path of the comprehensive-proof call schema (even with ten-digit array indices) exceeds 64, so [:63], [:64] and [:65] all keep the whole string."
+  },
+  {
+    "file": "steps_2b1.go",
+    "function": "b1Step17",
+    "operator": "int_literal",
+    "original": "field[:64]",
+    "mutated": "field[:65]",
+    "reason": "b1Step17 truncates ae.Field to 64 characters, and TestMutKill5ABIFieldPathsStayWithinSixtyFourCharacters pins that no field path of the comprehensive-proof call schema (even with ten-digit array indices) exceeds 64, so [:63], [:64] and [:65] all keep the whole string."
+  },
+  {
+    "file": "steps_2b2.go",
+    "function": "b2Step18",
+    "operator": "bool_call",
+    "original": "return b2KeyLess(changed[i].Row, changed[j].Row)",
+    "mutated": "return false",
+    "reason": "The sort at line 434 is followed, before the slice is read again, by the sort at line 452 with the same comparator over rows with distinct keys, so the final order does not depend on the order the first sort leaves; nothing reads changed in between (only p and q, and the call)."
+  },
+  {
+    "file": "steps_2b2.go",
+    "function": "b2Step18",
+    "operator": "bool_call",
+    "original": "return b2KeyLess(changed[i].Row, changed[j].Row)",
+    "mutated": "return true",
+    "reason": "The sort at line 434 is followed, before the slice is read again, by the sort at line 452 with the same comparator over rows with distinct keys, so the final order does not depend on the order the first sort leaves; nothing reads changed in between (only p and q, and the call)."
+  },
+  {
+    "file": "steps_2b2.go",
+    "function": "b2Step19",
+    "operator": "cmp_flip",
+    "original": "firstErr == nil",
+    "mutated": "firstErr != nil",
+    "reason": "WEAK: b2SetRoot fails only if abi.Arguments.Pack of (address[], uint256[], uint256, uint256) fails, which needs a negative or over-256-bit integer; the numbers come from 32-byte words (b2Num), so the error branch (and firstErr) is never taken."
   }
 ]
