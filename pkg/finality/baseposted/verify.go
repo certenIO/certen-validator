@@ -384,10 +384,14 @@ func verifyChannel(bp *Pins, body Body, covered []ethl1.L1Block, l2 finality.Hea
 	if !prefixEq(bt.EpochHash, bt.EpochLen, hash) {
 		return finality.Verdict{}, st(CodeBatchBindingMismatch, "field", "epoch_hash")
 	}
-	for _, l := range frameL1 {
-		if l < bt.EpochNum || l-bt.EpochNum > bp.SeqWindowSize {
-			return finality.Verdict{}, st(CodeBatchOutsideWindow)
-		}
+	// OP derivation drops a batch when `batch.epoch_num + sequence_window_size < inclusion_block_number`, the inclusion block being the one
+	// whose frame COMPLETES the channel (derivation.md: "the L1 block number when batch was first fully derived"); it has no lower bound.
+	// op-batcher streams the ready frames of an OPEN channel while L2 blocks are still being added (channel_builder.go outputReadyFrames:
+	// "already generate frames and send them off as txs while still collecting blocks in the channel builder"; channel_manager.go
+	// getReadyChannel runs outputFrames on the not-yet-full current channel), so an early frame may lie below the epoch of a later block
+	// of its channel. frameL1 is non-decreasing, so its last element is the completing frame's block. See research/R12-SPEC-Q1.md.
+	if last := frameL1[len(frameL1)-1]; last > bt.EpochNum && last-bt.EpochNum > bp.SeqWindowSize {
+		return finality.Verdict{}, st(CodeBatchOutsideWindow)
 	}
 	all := make([][]byte, 0, len(body.Deposits)+len(bt.Txs))
 	all = append(all, body.Deposits...)

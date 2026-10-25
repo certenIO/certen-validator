@@ -1,0 +1,26 @@
+{
+  "cases": [
+    "single_frame_one_past_the_window",
+    "streamed_all_frames_below_epoch",
+    "streamed_bedrock_early_frame_completing_frame_one_past",
+    "streamed_bedrock_early_frame_window_edge",
+    "streamed_completing_frame_at_the_window_edge",
+    "streamed_completing_frame_one_past_the_window",
+    "streamed_first_frame_290_below_epoch_bedrock",
+    "streamed_first_frame_below_epoch"
+  ],
+  "files": {
+    "README.md": "520755d3397829c644b00ccdb89a2ee721cf44cb6d81f0bd82d4c79e3c842eeb",
+    "cases/single_frame_one_past_the_window.json": "21cd8f58e2daebe188da96fc97c39afd1dbc5b13c0bb8b40840b8959a88b7a21",
+    "cases/streamed_all_frames_below_epoch.json": "fb8d866ec9ec7200338b7c85533d49d0d31022e04e9979b108486fbd428db2a5",
+    "cases/streamed_bedrock_early_frame_completing_frame_one_past.json": "ac76baa49a37a7a0f1d29269bb6e7a90efe9fb07d29de0def8c44f56953bfb65",
+    "cases/streamed_bedrock_early_frame_window_edge.json": "bb34f65ae22bf2409f7cd06bd12ebfe2c910f245570045dadb31bded9021aa00",
+    "cases/streamed_completing_frame_at_the_window_edge.json": "28efa92280048bbcf164ace9913a3dac0cc580d496df4a650a0bc266c9e9c1c1",
+    "cases/streamed_completing_frame_one_past_the_window.json": "83440457ed0b18a284a6d0d58c088cb8b1733f983618f900ab51519166824325",
+    "cases/streamed_first_frame_290_below_epoch_bedrock.json": "24f7734dba96634f6f9f60d248e50800a78dcbddc409d835763e3940265a8c80",
+    "cases/streamed_first_frame_below_epoch.json": "1b089ec6b66bec2f4aa7dfa43b7e3cdd2b2af86bd7250747392d6019d31a4d15",
+    "generator/gen4.py": "0ddee69b3ab5e80c86979f25c949b93619d006d328aed168dce317e444601e75"
+  },
+  "format": "certen-base-posted-binding-set/1",
+  "set": "finality_base_posted4"
+}

@@ -211,9 +211,8 @@ func TestSynthBatchOutsideTheSequencingWindow(t *testing.T) {
 	late := makeSynth(t, synthOpts{compression: "zlib", calldata: true, epochNum: 990, frameBlocks: []uint64{4591}})
 	_, err := late.verify()
 	wantCode(t, err, CodeBatchOutsideWindow, nil)
-	early := makeSynth(t, synthOpts{compression: "zlib", calldata: true, epochNum: 1001, frameBlocks: []uint64{1000}})
-	_, err = early.verify()
-	wantCode(t, err, CodeBatchOutsideWindow, nil)
+	// OP derivation has no lower bound (a frame below the epoch is a streamed channel, R12-SPEC-Q1); the window is judged on the completing frame
+	mustOK(t, makeSynth(t, synthOpts{compression: "zlib", calldata: true, epochNum: 1001, frameBlocks: []uint64{1000}}))
 }
 
 func TestSynthStateProofsAndImplementationIdentity(t *testing.T) {
