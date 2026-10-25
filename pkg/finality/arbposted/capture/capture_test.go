@@ -11,6 +11,7 @@ import (
 	"math/big"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -280,8 +281,11 @@ func eventLog(r BatchRecord) Log {
 		BlockNumber: r.L1Block, BlockHash: r.L1Hash, TxHash: r.TxHash, TxIndex: r.TxIndex}
 }
 
+// testNow is the clock of the capturers the tests build; a test that needs time to pass moves it.
+var testNow = time.Unix(1_800_000_000, 0)
+
 func newCapturer(sc *scenario, store CaptureStore) *Capturer {
-	return NewCapturer(store, sc.l1, sc.beacon, Config{StartBack: 20, BlobGiveUpTicks: 2, UnavailableEvery: 2})
+	return NewCapturer(store, sc.l1, sc.beacon, Config{StartBack: 20, UnavailableEvery: 2, GoneObservations: 2, GoneSpan: time.Minute, BlobBackoffMaxTicks: 1, Now: func() time.Time { return testNow }})
 }
 
 func allRows(t *testing.T, s CaptureStore, from, to uint64) []Row {
@@ -519,13 +523,15 @@ func assertNoSecret(t *testing.T, s CaptureStore, rep Report) {
 	}
 }
 
-func TestABlobFailureNeverLeaksAndIsRecordedOnceAfterTheGiveUpCount(t *testing.T) {
+// A transient failure (a 503) says nothing about the blobs: it is never recorded as unavailability, however often it repeats (RB12 OPS-A2
+// item 2: the capture gives up only on proof, see blob_proof_rb12_test.go), nothing leaks, and the blobs are stored once the beacon answers.
+func TestABlobFailureNeverLeaksIsNeverRecordedWithoutProofAndIsStoredOnceTheBeaconAnswers(t *testing.T) {
 	store := NewMemStore()
 	sc := newScenario(t, LocBlob, 1)
 	sc.beacon.err = &BeaconError{Slot: 9, Status: 503, Err: "upstream " + secretURL}
-	c := newCapturer(sc, store) // BlobGiveUpTicks 2
+	c := newCapturer(sc, store)
 	var last Report
-	for i := 0; i < 4; i++ {
+	for i := 0; i < 6; i++ {
 		var err error
 		if last, err = c.Tick(context.Background()); err != nil {
 			t.Fatal(err)
@@ -533,18 +539,15 @@ func TestABlobFailureNeverLeaksAndIsRecordedOnceAfterTheGiveUpCount(t *testing.T
 		assertNoSecret(t, store, last)
 	}
 	ks, _ := store.ListByRange(context.Background(), ChainArbitrumSepolia, 0, finality.MaxCaptureBlock, "blobunavailable/")
-	if len(ks) != 1 {
-		t.Fatalf("blob unavailability rows: %d, want exactly 1", len(ks))
-	}
-	b, _, _ := store.Get(context.Background(), ks[0])
-	u, err := DecodeBlobUnavailableRecord(b)
-	if err != nil || u.N != 77 || u.HTTPStatus != 503 || u.BeaconSlot != (1700000000+995*12-BeaconGenesisTime)/12 || len(u.VersionedHashes) != 1 {
-		t.Fatalf("%+v %v", u, err)
+	if len(ks) != 0 {
+		t.Fatalf("blob unavailability rows: %d, want none: a 503 proves nothing", len(ks))
 	}
 	sc.beacon.err = nil
-	rep, _ := c.Tick(context.Background())
-	if rep.BlobsStored != 1 {
-		t.Fatalf("the blobs were not stored once the beacon answered: %+v", rep)
+	for i := 0; i < 4 && last.BlobsStored == 0; i++ { // at most the bounded back-off (one tick here) away
+		last, _ = c.Tick(context.Background())
+	}
+	if last.BlobsStored != 1 {
+		t.Fatalf("the blobs were not stored once the beacon answered: %+v", last)
 	}
 }
 
