@@ -1,10 +1,15 @@
 [
-  {
-    "file": "finality.go",
-    "function": "reportFinalityFile",
-    "operator": "guard_off",
-    "original": "if err != nil",
-    "mutated": "if false",
-    "reason": "The survivor is the check of section.Leg.Ref(), which re-validates the carried leg block hash as 32 bytes of hex. finality.ParseSection has already refused a leg whose blockHash is not exactly that (strictHex32), a few lines earlier, so Ref cannot fail on a parsed section. The other guards of the same text in this function (reading the file, parsing the section) are killed by TestReportFinalityFileRefusesAFileItCannotReadOrParse."
-  }
+  {"file":"finality.go","function":"reportFinalityFile","operator":"guard_off","original":"if err != nil","mutated":"if false","reason":"The survivor is the check of section.Leg.Ref(), which re-validates the carried leg block hash as 32 bytes of hex. finality.ParseSection has already refused a leg whose blockHash is not exactly that (strictHex32), a few lines earlier, so Ref cannot fail on a parsed section. The other guards of the same text in this function (reading the file, parsing the section) are killed by TestReportFinalityFileRefusesAFileItCannotReadOrParse."},
+  {"file":"contract_identity.go","function":"strictObject","operator":"guard_off","original":"if err := dec.Decode(\u0026v); err != nil","mutated":"if err := dec.Decode(\u0026v); false","reason":null},
+  {"file":"contract_identity.go","function":"parseCIMember","operator":"cmp_boundary","original":"len(ctx.Settlement.Header) \u003e 0","mutated":"len(ctx.Settlement.Header) \u003e= 0","reason":null},
+  {"file":"contract_identity.go","function":"parseCIMember","operator":"int_literal","original":"len(ctx.Settlement.Header) \u003e 0","mutated":"len(ctx.Settlement.Header) \u003e 1","reason":null},
+  {"file":"contract_identity.go","function":"judgeContractIdentity","operator":"guard_off","original":"if rerr != nil","mutated":"if false","reason":null},
+  {"file":"contract_identity.go","function":"legContextFromOutcome","operator":"guard_off","original":"if leg.s.Tx == nil","mutated":"if false","reason":null},
+  {"file":"contract_identity.go","function":"legContextFromOutcome","operator":"guard_off","original":"if err := tx.UnmarshalBinary(leg.s.Tx.LeafValue); err != nil","mutated":"if err := tx.UnmarshalBinary(leg.s.Tx.LeafValue); false","reason":null},
+  {"file":"contract_identity.go","function":"reportContractIdentityFile","operator":"guard_off","original":"if err != nil","mutated":"if false","reason":null},
+  {"file":"main.go","function":"main","operator":"bool_lit","original":"verbose = flag.Bool(\"v\", false, \"print the reassembled proof\u0027s layer summary\")","mutated":"verbose = flag.Bool(\"v\", true, \"print the reassembled proof\u0027s layer summary\")","reason":null},
+  {"file":"main.go","function":"main","operator":"cmp_flip","original":"pinsErr != nil","mutated":"pinsErr == nil","reason":null},
+  {"file":"main.go","function":"main","operator":"cmp_flip","original":"linkErr != nil","mutated":"linkErr == nil","reason":null},
+  {"file":"main.go","function":"main","operator":"cmp_flip","original":"err != nil","mutated":"err == nil","reason":null},
+  {"file":"main.go","function":"main","operator":"if_negate","original":"if *offline","mutated":"if !(*offline)","reason":null}
 ]
