@@ -4,11 +4,13 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/certen/independant-validator/pkg/execution"
 	"github.com/certen/independant-validator/pkg/finality"
@@ -173,5 +175,56 @@ func TestShortKeepsTheFirstSixteenCharactersOfALongerHex(t *testing.T) {
 		if got := short(in); got != want {
 			t.Errorf("short(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+type fakeStatusStore struct {
+	rows map[finality.Level]finality.BuilderStatusView
+	errs map[finality.Level]error
+}
+
+func (fakeStatusStore) UpsertStatus(context.Context, finality.BuilderStatus) error { return nil }
+
+func (f fakeStatusStore) GetStatus(_ context.Context, _ string, l finality.Level) (finality.BuilderStatusView, bool, error) {
+	if err := f.errs[l]; err != nil {
+		return finality.BuilderStatusView{}, false, err
+	}
+	v, ok := f.rows[l]
+	return v, ok, nil
+}
+
+func TestBuilderPinsNotesSaysPerLevelWhichPinsTheBuilderJudgedUnder(t *testing.T) {
+	at := time.Date(2026, 10, 1, 2, 3, 4, 0, time.UTC)
+	row := func(pins string) finality.BuilderStatusView {
+		var v finality.BuilderStatusView
+		v.PinsSHA256, v.JudgedAt = pins, at
+		return v
+	}
+	store := fakeStatusStore{
+		rows: map[finality.Level]finality.BuilderStatusView{finality.LevelL1Posted: row(""), finality.LevelFinalized: row("aa")},
+		errs: map[finality.Level]error{},
+	}
+	got := builderPinsNotes(context.Background(), store, "p", "here")
+	want := []string{
+		"  S7  builder pins  l1_posted  not recorded (the status row judged at 2026-10-01T02:03:04Z was written before the pins hash was recorded)",
+		"  S7  builder pins  finalized  aa  DIFFERENT from the pins used here (here): the levels above are judged under the pins used here (status row judged at 2026-10-01T02:03:04Z)",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("notes:\n%q\nwant\n%q", got, want)
+	}
+	store.rows[finality.LevelFinalized] = row("here")
+	delete(store.rows, finality.LevelL1Posted)
+	store.errs[finality.LevelL1Posted] = errors.New("boom")
+	got = builderPinsNotes(context.Background(), store, "p", "here")
+	want = []string{
+		"  S7  builder pins  l1_posted  the status row was not read: boom",
+		"  S7  builder pins  finalized  here  the pins used here (status row judged at 2026-10-01T02:03:04Z)",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("notes:\n%q\nwant\n%q", got, want)
+	}
+	// a level the builder judged nothing for is not mentioned
+	if got = builderPinsNotes(context.Background(), fakeStatusStore{}, "p", "here"); len(got) != 0 {
+		t.Errorf("an empty store mentioned %q", got)
 	}
 }
