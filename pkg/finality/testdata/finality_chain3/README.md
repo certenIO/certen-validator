@@ -1,0 +1,9 @@
+# finality_chain3 - the optional `leg.headerRlp` of the portable finality member (R12-OUTCOME-TX)
+
+Spec: V2_SPEC_S7 2.5 / 2.6 / 5.1 item 8, amended by R12-OUTCOME-TX (owner authorization 2026-10-25). `finality_chain1` and `finality_chain2` are never edited and stay valid: a leg without `headerRlp` is read exactly as before.
+
+The member `finality.leg` is `{chain, blockNumber, blockHash}` plus the OPTIONAL `headerRlp`: the lower-case hex (no `0x`) of the settlement block's header RLP. It is bound by `keccak256(headerRlp) == blockHash` and by the block number read positionally from the header (item 8) `== blockNumber`; a mismatch is `finality_chain_broken{seq: 0, check: leg_binding, want, got}` where `want` and `got` name only the differing member (`blockHash` or `blockNumber`). With the header a holder of the exported file alone recomputes D0 and judges the addenda against that block; the header proves the block, not the settlement transaction, so level 1 (`included`) is not claimed (`finality_included_unavailable{reason: no_settlement}`).
+
+`legs.json` (`kind: leg`): every vector's `input` is a whole `finality` member; the runner is `ParseSection(input)` and, when that succeeds, `section.leg.Ref()` (Go) / `carriedLegRef(section.leg)` (TypeScript). `expect` is `ok` (then `headerBytes` is the length of the header the reference holds, 0 when absent) or the canonical state. The two headers are real (`generator/headers.json`: Base Sepolia 47368146 and Adiri 498759, dumped from the repo's fixtures); every expectation is written by hand in `generator/gen_chain3.mjs`.
+
+`MANIFEST.json` lists the SHA-256 of every other file (this README included); `MANIFEST.json.sha256` is the SHA-256 of the manifest. Regenerate: `node generator/gen_chain3.mjs <set directory>` (rewrites `legs.json` and the manifest; regenerate after editing the README). A TypeScript verifier consumes a byte-identical copy. `states.json` is unchanged: no state was added.

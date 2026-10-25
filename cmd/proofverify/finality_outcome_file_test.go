@@ -45,13 +45,13 @@ func TestSettlementFromOutcomeFileRefusesEachDefectOfTheFileByName(t *testing.T)
 	}
 	// a header that is not RLP
 	junk := loadFixture(t, 84532)
-	junk.Record.Inclusion.Header = []byte{0x01}
+	junk.Member.Transaction.Header = []byte{0x01}
 	if _, err := settlementFromOutcomeFile(writeEvidence(t, junk)); err == nil || !strings.Contains(err.Error(), "header does not decode") {
 		t.Errorf("a header that is not RLP: %v", err)
 	}
 	// the record names another block number than the header holds
 	other := loadFixture(t, 84532)
-	other.Record.BlockNumber++
+	other.Member.Leaf.BlockNumber++
 	if _, err := settlementFromOutcomeFile(writeEvidence(t, other)); err == nil || !strings.Contains(err.Error(), "is not block") {
 		t.Errorf("a record that names another block number: %v", err)
 	}
@@ -61,8 +61,8 @@ func TestSettlementFromOutcomeFileRefusesEachDefectOfTheFileByName(t *testing.T)
 		t.Fatal(err)
 	}
 	ev := loadFixture(t, 84532)
-	if good.outcome == nil || good.outcome.chain != 84532 || good.outcome.blockNumber != ev.Record.BlockNumber || !strings.EqualFold(good.outcome.tx.Hex(), ev.Record.Tx) ||
-		!strings.EqualFold(good.outcome.blockHash.Hex(), ev.Record.BlockHash) {
+	if good.outcome == nil || good.outcome.chain != 84532 || good.outcome.blockNumber != ev.Member.Leaf.BlockNumber || !strings.EqualFold(good.outcome.tx.Hex(), ev.Member.Leaf.Tx) ||
+		!strings.EqualFold(good.outcome.blockHash.Hex(), ev.Member.Leaf.BlockHash) {
 		t.Errorf("%+v", good.outcome)
 	}
 }

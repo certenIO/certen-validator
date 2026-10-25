@@ -1,0 +1,10 @@
+{
+  "format": "certen-finality-vectors-manifest/1",
+  "set": "finality_chain3",
+  "files": {
+    "legs.json": "86a3292f99d290ee89982ebba5ff0b90ea3b0fa6c5e3696ee5fe95603051f1ec",
+    "README.md": "60b8157855f8e5b650a6915a584b679bc6aaa13213560d1212f298bef7954c18",
+    "generator/gen_chain3.mjs": "7671b447bc7540ae530c413b57a5692547f55359f7c7ff4be9c8272b05ce0bca",
+    "generator/headers.json": "54f4986f4ccf3f0182cb4ab2660d9c8d70d6c08ca57f6cccc381845154b65cbe"
+  }
+}

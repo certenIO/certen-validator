@@ -48,6 +48,10 @@ type Portable struct {
 	// content (PROOF_V2 section 10.3): Export, ExportDocument, Import and Verify neither write nor read it, so a document
 	// without it is byte-for-byte what it always was, and a document with it differs only by this last member. A verifier
 	// judges the object with finality.ParseSection and finality.Registry.VerifyDocumentSection; its shape is theirs to judge.
+	// The leg member is {chain, blockNumber, blockHash[, headerRlp]}: the OPTIONAL headerRlp (hex) is the RLP of the settlement
+	// block's header, bound by keccak256(headerRlp) == blockHash and by its block number read positionally == blockNumber, so a
+	// holder of this file alone can recompute the leg binding D0 and judge the addenda against that block (R12-OUTCOME-TX; owner
+	// authorization 2026-10-25, V2_SPEC_S7 2.5). It proves the block, not the settlement transaction: level 1 stays unproven.
 	Finality json.RawMessage `json:"finality,omitempty"`
 }
 

@@ -362,8 +362,8 @@ func TestFinalityFileSettlementFromAnExportedOutcomeEvidenceFile(t *testing.T) {
 		t.Fatalf("the outcome evidence's block does not verify as the included level: %v", err)
 	}
 	ev := loadFixture(t, 84532)
-	if leg.chain != 84532 || block.Number != ev.Record.BlockNumber || "0x"+fmt.Sprintf("%x", block.Hash) != strings.ToLower(ev.Record.BlockHash) {
-		t.Fatalf("%+v vs the record's block %d %s", block, ev.Record.BlockNumber, ev.Record.BlockHash)
+	if leg.chain != 84532 || block.Number != ev.Member.Leaf.BlockNumber || "0x"+fmt.Sprintf("%x", block.Hash) != strings.ToLower(ev.Member.Leaf.BlockHash) {
+		t.Fatalf("%+v vs the record's block %d %s", block, ev.Member.Leaf.BlockNumber, ev.Member.Leaf.BlockHash)
 	}
 	pid := uuid.New()
 	s := finality.Settlement{Chain: leg.chain, Included: leg.s}
@@ -376,12 +376,12 @@ func TestFinalityFileSettlementFromAnExportedOutcomeEvidenceFile(t *testing.T) {
 	}
 	// a header other than the one the record names, and a transaction other than the recorded one, are not a Settlement
 	tampered := loadFixture(t, 84532)
-	tampered.Record.Inclusion.Header[len(tampered.Record.Inclusion.Header)-1] ^= 1
+	tampered.Member.Transaction.Header[len(tampered.Member.Transaction.Header)-1] ^= 1
 	if _, err := settlementFromOutcomeFile(writeEvidence(t, tampered)); err == nil || !strings.Contains(err.Error(), "header hashes to") {
 		t.Fatalf("a tampered outcome header was accepted as a Settlement: %v", err)
 	}
 	swapped := loadFixture(t, 84532)
-	swapped.Record.Tx = swapped.Record.BlockHash
+	swapped.Member.Leaf.Tx = swapped.Member.Leaf.BlockHash
 	if _, err := settlementFromOutcomeFile(writeEvidence(t, swapped)); err == nil || !strings.Contains(err.Error(), "transaction hashes to") {
 		t.Fatalf("a transaction other than the recorded one was accepted: %v", err)
 	}
