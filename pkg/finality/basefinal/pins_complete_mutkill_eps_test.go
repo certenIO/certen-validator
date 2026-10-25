@@ -44,6 +44,7 @@ func TestImplRowCompleteJudgesTheCWIALayoutHalfOneConditionAtATime(t *testing.T)
 		{"a zero base length is a layout", &GameLayout{ArgsBaseLen: 0, ArgsPerRoot: 32}, 3, 96, true},
 		{"a zero per-root length is a layout", &GameLayout{ArgsBaseLen: 50, ArgsPerRoot: 0}, 3, 50, true},
 		{"a negative base length is no layout", &GameLayout{ArgsBaseLen: -1, ArgsPerRoot: 1}, 2, 1, false},
+		{"a base length of -1 with no per-root length (the equation -1 holds)", &GameLayout{ArgsBaseLen: -1, ArgsPerRoot: 0}, 2, -1, false},
 		{"a very negative base length is no layout", &GameLayout{ArgsBaseLen: -100, ArgsPerRoot: 100}, 2, 100, false},
 		{"a negative per-root length is no layout", &GameLayout{ArgsBaseLen: 100, ArgsPerRoot: -1}, 2, 98, false},
 		{"a very negative per-root length is no layout", &GameLayout{ArgsBaseLen: 1000, ArgsPerRoot: -100}, 2, 800, false},
