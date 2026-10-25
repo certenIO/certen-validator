@@ -3,6 +3,7 @@
 package finality
 
 import (
+	"reflect"
 	"sort"
 	"testing"
 )
@@ -44,8 +45,8 @@ func TestRB12F17TheEnvironmentClassIsExactlyTheProcessAndStoreStates(t *testing.
 		}
 	}
 	sort.Strings(got)
-	want := []string{"finality_index_disabled", "finality_memory_budget_exceeded", "finality_prefix_disabled", "index_inconsistent", "l1_capture_gap"}
-	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] || got[3] != want[3] || got[4] != want[4] {
+	want := []string{"finality_index_disabled", "finality_memory_budget_exceeded", "finality_prefix_disabled", "finality_randomness_unavailable", "index_inconsistent", "l1_capture_gap"}
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("environment states: %v, want %v", got, want)
 	}
 	for _, code := range want {

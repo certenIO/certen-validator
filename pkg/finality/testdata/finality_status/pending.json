@@ -1,0 +1,1 @@
+{"format":"certen-finality-status/1","class":"pending","levelReached":"l1_posted","nextLevel":"finalized","eta":"2026-10-25T23:06:00Z","state":{"code":"finality_pending","fields":{"chain":"84532","reason":"within_finality_delay"}}}

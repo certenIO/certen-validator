@@ -27,8 +27,9 @@ var ProductionItems = []string{
 	"tx/", "txnodes/", "blob/", "batch/", "proof/", // baseposted and arbposted families
 	"calldata/", "delayedproof/", "unavailable/", "blobunavailable/", // arbposted/capture/records.go ItemCalldata, ItemDelayedProof, ItemUnavailable, ItemBlobUnavailable
 	"gap/", "gapend/", "gapnote/", "gapfill/", "gapslot/", "gapclaim/", // capture-gap / archive-backfill
-	"gapscan/", // archive-backfill: the Arbitrum scan bookkeeping (gaps.go)
-	"idx/",     // capture index (idx/g<gen>/<family>/...)
+	"gapscan/",   // archive-backfill: the Arbitrum scan bookkeeping (gaps.go)
+	"gaporphan/", // F18: the mark of an orphan block, which a gap fill of that hash no longer closes (gaps.go)
+	"idx/",       // capture index (idx/g<gen>/<family>/...)
 	// the parts of the Base index item names (baseposted/index.go itemDigest, itemMarker, itemQuarantine: idx/g<gen>/bi/f, /x/<id>, /q/<id>),
 	// which the scanner meets as bare constants; the rows themselves are under "idx/" above
 	"f", "x", "q",
@@ -75,7 +76,7 @@ func seedProduction(ctx context.Context, store finality.CaptureStore, c Chains) 
 		return store.Put(ctx, finality.CaptureKey{Chain: chain, L1Block: block, L1Hash: hash(seed, block), Item: item}, []byte{seed, byte(block)})
 	}
 	items := []string{"hdr", "header", "inbox", "syscfg", "tx/0", "tx/3", "txnodes/0", "blob/0/1", "batch/1", "proof/1", "calldata/1", "delayedproof/2", "unavailable/3", "blobunavailable/4", "gap/105/outage_unscanned",
-		"gapend/105/unavailable_proven", "gapnote/7", "gapfill/x", "gapslot/70", "gapclaim/9", "gapscan/421614", "idx/g1/bi/c/1/2/00", "idx/g1/bi/cursor", "idx/g1/bi/f", "idx/g1/bi/x/00", "idx/g1/bi/q/00", "idx/g1/bi/u", "spine/n3",
+		"gapend/105/unavailable_proven", "gapnote/7", "gapfill/x", "gapslot/70", "gapclaim/9", "gapscan/421614", "gaporphan/105", "idx/g1/bi/c/1/2/00", "idx/g1/bi/cursor", "idx/g1/bi/f", "idx/g1/bi/x/00", "idx/g1/bi/q/00", "idx/g1/bi/u", "spine/n3",
 		"basefinal/game/00ff", "arbfinal/state/aa", "arbfinal/conf/aa", "arbfinal/wallet/aa", "runtime/cursor", "cursor"}
 	for _, chain := range []uint64{c.L2A, c.L2B, c.L1} {
 		for i, item := range items {

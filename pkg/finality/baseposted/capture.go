@@ -193,6 +193,16 @@ func (c *Capturer) CaptureBlock(ctx context.Context, number uint64) (bool, error
 		return false, nil
 	}
 	var kz *kzgsetup.Context
+	// RB12 OPS-A2 item 1 (ledger CG-1): the blobs of the slot are fetched once for the block, and only the blobs the kept transactions name are
+	// committed (a slot holds up to six and a commitment costs milliseconds), each at its sidecar position: the index of a blob is its place
+	// among the blob hashes of the WHOLE block. Every kept blob is still accepted only if the commitment of its bytes hashes to the versioned
+	// hash the transaction names, and is proved; a beacon that serves another order or a subset is read by the complete scan, as before.
+	var slotRaws [][]byte
+	slotFetched := false
+	blobOffset := make([]int, len(blk.TxBlobHash)+1)
+	for j, hs := range blk.TxBlobHash {
+		blobOffset[j+1] = blobOffset[j] + len(hs)
+	}
 	type blobRow struct {
 		tx uint32
 		j  int
@@ -205,38 +215,65 @@ func (c *Capturer) CaptureBlock(ctx context.Context, number uint64) (bool, error
 			continue
 		}
 		slot := (blk.Timestamp - c.GenesisTime) / c.SlotSeconds
-		raws, err := c.Beacon.Blobs(ctx, slot)
-		if err != nil {
-			s := finality.NewState("l1_blob_unavailable", "l1_block", blk.Number, "versioned_hashes", hashesOf(hashes), "beacon_slot", slot, "http_status", uint64(0))
-			if c.Record != nil {
-				c.Record(blk.Number, s)
+		if !slotFetched {
+			raws, err := c.Beacon.Blobs(ctx, slot)
+			if err != nil {
+				s := finality.NewState("l1_blob_unavailable", "l1_block", blk.Number, "versioned_hashes", hashesOf(hashes), "beacon_slot", slot, "http_status", uint64(0))
+				if c.Record != nil {
+					c.Record(blk.Number, s)
+				}
+				return false, fmt.Errorf("%s: %w", s.Error(), err)
 			}
-			return false, fmt.Errorf("%s: %w", s.Error(), err)
+			slotRaws, slotFetched = raws, true
 		}
+		raws := slotRaws
+		var err error
 		if kz == nil {
 			if kz, err = kzgsetup.Load(c.Pins.KZGSetupSHA256); err != nil {
 				return false, err
 			}
 		}
 		byHash := map[[32]byte]Blob{}
-		for _, raw := range raws {
+		wanted := hashesSet(hashes)
+		take := func(raw []byte) error { // commits raw and keeps it only if its versioned hash is one the transaction names
 			if len(raw) != BlobSize {
-				continue
+				return nil
+			}
+			if kzgCommitHook != nil {
+				kzgCommitHook()
 			}
 			com, err := kz.Commit(raw)
 			if err != nil {
-				return false, err
+				return err
 			}
 			vh := sha256Sum(com[:])
 			vh[0] = 0x01
-			if _, want := hashesSet(hashes)[vh]; !want {
-				continue
+			if !wanted[vh] {
+				return nil
+			}
+			if _, have := byHash[vh]; have {
+				return nil
 			}
 			pr, err := kz.Prove(raw, com)
 			if err != nil {
-				return false, err
+				return err
 			}
 			byHash[vh] = Blob{Raw: raw, Commitment: com, Proof: pr}
+			return nil
+		}
+		for j := range hashes { // the wanted sidecar positions first
+			if pos := blobOffset[i] + j; pos < len(raws) {
+				if err := take(raws[pos]); err != nil {
+					return false, err
+				}
+			}
+		}
+		if len(byHash) < len(wanted) { // another order or a subset was served: the complete scan
+			for _, raw := range raws {
+				if err := take(raw); err != nil {
+					return false, err
+				}
+			}
 		}
 		for j, h := range hashes {
 			bl, ok := byHash[h]
@@ -310,6 +347,9 @@ func (c *Capturer) CaptureRange(ctx context.Context, from, to uint64) (captured 
 	}
 	return captured, errs
 }
+
+// kzgCommitHook is called before every blob commitment of a capture (nil in production): the tests count the commitments.
+var kzgCommitHook func()
 
 func hashesSet(h [][32]byte) map[[32]byte]bool {
 	m := map[[32]byte]bool{}

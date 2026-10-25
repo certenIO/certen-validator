@@ -55,3 +55,9 @@ pkg/finality/ethsepolia/testdata/finality_eth_sepolia3/** -text
 # Scripts the Linux validator host runs (piped to bash over ssh, executed in containers): LF on every platform, so a Windows checkout cannot commit CRLF into them.
 pr/*.sh text eol=lf
 deploy/*.sh text eol=lf
+
+# The pins as they were when finality_arb_posted2-4 were published: embedded and compared byte for byte, so LF on every platform.
+cmd/finalityarbpostedrecord/testdata/main_pins_at_sets_2_3_4.json text eol=lf
+
+# The golden status documents shared byte for byte with proofs_service (pkg/server/testdata/finality_status): LF on every platform.
+pkg/finality/testdata/finality_status/*.json text eol=lf

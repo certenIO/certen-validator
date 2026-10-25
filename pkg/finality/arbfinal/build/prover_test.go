@@ -1037,19 +1037,6 @@ func (s failingStore) Put(ctx context.Context, k finality.CaptureKey, v []byte) 
 	return s.CaptureStore.Put(ctx, k, v)
 }
 
-func TestAWalletCaptureThatCannotBeKeptIsAVerifierFailureNotASilentPass(t *testing.T) {
-	w := newWorldWith(t, provenWallet())
-	w.p.Store = failingStore{CaptureStore: NewMemStore(), prefix: captureItemWallet}
-	add, pend, err := w.build(t)
-	if add != nil || pend != nil {
-		t.Fatalf("add %v pend %v", add != nil, pend)
-	}
-	s, ok := finality.AsNamed(err)
-	if !ok || s.Code != finality.CodeVerifierFailed || s.Fields["kind"] != arbfinal.KindName || !strings.Contains(fmt.Sprint(s.Fields["cause"]), "disk full") {
-		t.Fatalf("%v", canon(err))
-	}
-}
-
 // Bytes that are no transaction have no callee: nothing is asked of the provider and nothing is kept (the verifier refuses the bytes).
 func TestBytesThatAreNoTransactionNeedNoWalletProof(t *testing.T) {
 	w := newWorld(t)

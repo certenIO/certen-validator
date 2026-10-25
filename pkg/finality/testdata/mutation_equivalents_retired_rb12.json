@@ -1,0 +1,65 @@
+[
+  {
+    "file": "upgrader.go",
+    "function": "Upgrader.upgradeLeg",
+    "operator": "guard_off",
+    "original": "if err != nil",
+    "mutated": "if false",
+    "reason": "NewAddendum can only fail on a non-row, a present level, an undecodable container or a header disagreeing with the addendum, and JudgeAddendum has just required each of those not to be the case for the same addendum, so after a successful judgement NewAddendum cannot fail.",
+    "retired_because": "NewAddendum no longer exists in upgradeLeg: the append goes through AppendRequest and bounded(); the guarded branch is new code, re-derived by the EPSILON sweep"
+  },
+  {
+    "file": "upgrader.go",
+    "function": "Upgrader.upgradeLeg",
+    "operator": "bool_lit",
+    "original": "res.failed = true",
+    "mutated": "res.failed = false",
+    "reason": "Only on the branch where NewAddendum fails after JudgeAddendum succeeded, which cannot happen (see the guard entry).",
+    "retired_because": "same: the NewAddendum branch it described was replaced by the bounded append path (RB12 rewrite)"
+  },
+  {
+    "file": "upgrader.go",
+    "function": "Upgrader.upgradeLeg",
+    "operator": "cmp_boundary",
+    "original": "w < wait",
+    "mutated": "w <= wait",
+    "reason": "When w equals wait the assignment wait = w leaves it unchanged.",
+    "retired_because": "NOT equivalent in the current code: the comparison now selects which prover pending status the row keeps (a tie keeps the first); killed by TestRB12EqualWaitsKeepTheFirstProversPendingStatusAndAShorterWaitReplacesIt"
+  },
+  {
+    "file": "upgrader.go",
+    "function": "Upgrader.upgradeLeg",
+    "operator": "logic_swap",
+    "original": "held && !nextAt.IsZero()",
+    "mutated": "held || !nextAt.IsZero()",
+    "reason": "held is implied by the rest of the condition: a status of class pending whose state code is finality_memory_budget_exceeded is built only by the hold branch, which sets held, so with held false the last two operands are already false and the || adds nothing.",
+    "retired_because": "the condition was rewritten by F17 (it now reads `held && !nextAt.IsZero() && status.State != nil && IsEnvironment(status.State)`); its mutants are re-derived by the EPSILON sweep. The held-then-pending case is pinned by TestRB12ALaterPendingAnswerReplacingAHoldCarriesNoRetryNote"
+  },
+  {
+    "file": "upgrader.go",
+    "function": "Upgrader.upgradeLeg",
+    "operator": "bool_call",
+    "original": "if held && !nextAt.IsZero() && status.Class == BuilderPending && status.State…",
+    "mutated": "if held && !false && status.Class == BuilderPending && status.State…",
+    "reason": "nextAt is never zero when held is true: the hold branch sets wait = minWait(wait, PendingRetry), which is not negative, so scheduleLevel runs and returns a non-zero time (a verified status, the only path with wait < 0, fails the class test anyway).",
+    "retired_because": "the condition was rewritten by F17 (it now reads `held && !nextAt.IsZero() && status.State != nil && IsEnvironment(status.State)`); its mutants are re-derived by the EPSILON sweep. The held-then-pending case is pinned by TestRB12ALaterPendingAnswerReplacingAHoldCarriesNoRetryNote"
+  },
+  {
+    "file": "upgrader.go",
+    "function": "Upgrader.upgradeLeg",
+    "operator": "logic_swap",
+    "original": "held && !nextAt.IsZero() && status.Class == BuilderPending",
+    "mutated": "held && !nextAt.IsZero() || status.Class == BuilderPending",
+    "reason": "The else-branch is reached only when the failure branch before it was not taken, and a status of class unavailable or refused exists only together with failed, so every status that can carry the state finality_memory_budget_exceeded here is the pending hold row; for it the last two operands (State != nil, Code == CodeMemoryBudget) already decide, and the class operand the mutant turns into an alternative is true for it.",
+    "retired_because": "the condition was rewritten by F17 (it now reads `held && !nextAt.IsZero() && status.State != nil && IsEnvironment(status.State)`); its mutants are re-derived by the EPSILON sweep. The held-then-pending case is pinned by TestRB12ALaterPendingAnswerReplacingAHoldCarriesNoRetryNote"
+  },
+  {
+    "file": "upgrader.go",
+    "function": "Upgrader.upgradeLeg",
+    "operator": "logic_swap",
+    "original": "…nextAt.IsZero() && status.Class == BuilderPending && status.State != nil",
+    "mutated": "…nextAt.IsZero() && status.Class == BuilderPending || status.State != nil",
+    "reason": "A status of class pending always carries its state (Document refuses a pending status without one), so State != nil is true wherever the first operands are, and the mutant's alternative is never evaluated on a nil state: the Code operand decides in both forms.",
+    "retired_because": "the condition was rewritten by F17 (it now reads `held && !nextAt.IsZero() && status.State != nil && IsEnvironment(status.State)`); its mutants are re-derived by the EPSILON sweep. The held-then-pending case is pinned by TestRB12ALaterPendingAnswerReplacingAHoldCarriesNoRetryNote"
+  }
+]

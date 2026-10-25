@@ -152,6 +152,9 @@ func TestEveryBoundOfSection82IsTheSpecValueAndRefusesWithTheNumber(t *testing.T
 		"MaxTxLeafBytes": l.MaxTxLeafBytes, "MaxCodeBytes": l.MaxCodeBytes, "MaxCFA1Tables": l.MaxCFA1Tables, "MaxCFA1Records": l.MaxCFA1Records,
 		"MaxSigners": l.MaxSigners, "MaxSegments": l.MaxSegments, "MaxUncompressedBatch": l.MaxUncompressedBatch,
 	}
+	// MaxEvidenceBytes (64 MiB) is the validator end of three linked figures: proofs_service MaxFinalityEvidenceBytes (134217728, two 64 MiB
+	// containers) and the gateway PROOF_V2_MAX_BYTES (285212672, two of those plus the rest-of-document allowance); spec V2_SPEC_S7 8.2 (line 299).
+	// Change them together.
 	for k, v := range map[string]int{
 		"MaxEvidenceBytes": 64 << 20, "MaxLinks": 64, "MaxSpineHeaders": 16384, "MaxHeaderChain": 32768, "MaxL2Headers": 1024,
 		"MaxBlobsBase": 32, "MaxBlobsArbitrum": 16, "MaxFrameTxs": 256, "MaxDepositTxs": 4096, "MaxBlockTxs": 65536,

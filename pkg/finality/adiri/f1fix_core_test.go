@@ -169,7 +169,10 @@ func TestAZeroVerifierVerifiesBatchedAsItsDocumentationSays(t *testing.T) {
 		t.Fatalf("one-by-one reads no randomness: %v", err)
 	}
 	_, err := (&adiri.Verifier{Rand: f1NoRandomness{}}).Verify(pins, leg, ev)
-	gateNamed(t, err, finality.CodeVerifierFailed, "kind", adiri.Name)
+	gateNamed(t, err, finality.CodeRandomnessUnavailable, "kind", adiri.Name)
+	if st, ok := finality.AsNamed(err); !ok || !finality.IsEnvironment(st) {
+		t.Fatalf("a randomness failure is a fact about the process (environment), not a verdict: %v", err)
+	}
 	if _, err := (&adiri.Verifier{}).Verify(pins, leg, ev); err != nil {
 		t.Fatalf("the zero Verifier with crypto/rand: %v", err)
 	}

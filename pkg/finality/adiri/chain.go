@@ -126,7 +126,8 @@ func VerifyCommitteeChain(par *Params, c *CFA1, mode Mode, rnd io.Reader) (*Chai
 
 	idx, reason, err := firstFailure(items, mode, rnd)
 	if err != nil {
-		return nil, finality.NewState(finality.CodeVerifierFailed, "chain", par.ChainID, "kind", Name, "cause", err.Error())
+		// firstFailure fails only when the batch scalars cannot be read: a fact about the process, not a verdict of the verifier (RB12 OPS-A2 item 12)
+		return nil, finality.NewState(finality.CodeRandomnessUnavailable, "chain", par.ChainID, "kind", Name, "cause", err.Error())
 	}
 	if idx >= 0 {
 		return nil, ChainBroken(uint64(items[idx].epoch), CheckSignatureInvalid, "reason", reason)

@@ -531,6 +531,7 @@ func (b *HTTPBeacon) fetchBlobs(ctx context.Context, base string, slot uint64) (
 
 func (b *HTTPBeacon) Sidecars(ctx context.Context, slot uint64, wanted [][32]byte) (map[[32]byte]Sidecar, error) {
 	var fails []ProviderFailure
+	var hosts []BeaconHost
 	var last *BeaconError
 	for _, base := range b.Bases {
 		if ctx.Err() != nil {
@@ -539,6 +540,7 @@ func (b *HTTPBeacon) Sidecars(ctx context.Context, slot uint64, wanted [][32]byt
 		blobs, berr := b.fetchBlobs(ctx, base, slot)
 		if berr != nil {
 			fails = append(fails, ProviderFailure{Provider: label(base), Err: berr.Error()})
+			hosts = append(hosts, BeaconHost{Host: label(base), Status: berr.Status, Gone: berr.Status == 404 || berr.Status == 410})
 			last = berr
 			continue
 		}
@@ -572,6 +574,7 @@ func (b *HTTPBeacon) Sidecars(ctx context.Context, slot uint64, wanted [][32]byt
 		}
 		e := &BeaconError{Slot: slot, Status: 200, Err: fmt.Sprintf("the block's blobs hold %d of the %d wanted versioned hashes", len(out), len(want))}
 		fails = append(fails, ProviderFailure{Provider: label(base), Err: e.Error()})
+		hosts = append(hosts, BeaconHost{Host: label(base), Status: 200, Gone: true}) // the block was served without the wanted blobs
 		last = e
 	}
 	if last == nil {
@@ -581,5 +584,5 @@ func (b *HTTPBeacon) Sidecars(ctx context.Context, slot uint64, wanted [][32]byt
 	for i, f := range fails {
 		parts[i] = f.String()
 	}
-	return nil, &BeaconError{Slot: slot, Status: last.Status, Err: ethrpc.RedactText(strings.Join(parts, "; "))}
+	return nil, &BeaconError{Slot: slot, Status: last.Status, Err: ethrpc.RedactText(strings.Join(parts, "; ")), Hosts: hosts}
 }

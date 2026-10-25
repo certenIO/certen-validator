@@ -84,7 +84,7 @@ func TestDeployCheckIsReadOnlyAndItsSelftestSaysSoBothWays(t *testing.T) {
 	// and each way of making it write is caught by the selftest
 	for name, mutate := range map[string]func(string) string{
 		"an INSERT statement": func(s string) string {
-			return strings.Replace(s, "sql <<'SQL'\nSELECT chain, count(*) AS rows", "sql <<'SQL'\nINSERT INTO proof_finality_capture(chain) VALUES (1);\nSELECT chain, count(*) AS rows", 1)
+			return strings.Replace(s, "sql <<'SQL'\n-- the LIVE capture loops' rows", "sql <<'SQL'\nINSERT INTO proof_finality_capture(chain) VALUES (1);\n-- the LIVE capture loops' rows", 1)
 		},
 		"a DELETE in a statement that starts with SELECT": func(s string) string {
 			return strings.Replace(s, "GROUP BY 1 ORDER BY 1;\nSELECT chain, max(l1_block) AS cursor_block", "GROUP BY 1 ORDER BY 1;\nSELECT 1; DELETE FROM proof_finality_capture;\nSELECT chain, max(l1_block) AS cursor_block", 1)

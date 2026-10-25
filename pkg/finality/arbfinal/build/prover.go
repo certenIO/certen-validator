@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math/big"
 
@@ -163,6 +164,11 @@ func (p *Prover) BuildLeg(ctx context.Context, leg finality.BlockRef, have final
 	// 4. L1 finality of S and K
 	lc, err := p.LC.LC(ctx)
 	if err != nil {
+		if pd := finality.PendingOf(err); pd != nil { // the ledger is too far behind the head: its own pending state with the periods and the eta (RB12 OPS-A2 item 6)
+			out := p.pending(have, pd.Reason, pd.JudgedPairs()...)
+			out.ETA = pd.ETA
+			return nil, out, nil
+		}
 		return nil, p.pending(have, PendingL1State, "block", K, "providers", []string{"beacon"}), nil
 	}
 	fh, err := ethl1.VerifyFinalizedHead(l1p, lc)
@@ -257,7 +263,7 @@ func (p *Prover) findCovering(ctx context.Context, arb *arbfinal.Pins, leg final
 			}
 			a, err := DecodeCreated(l)
 			if err != nil {
-				return nil, nil, finality.NewState(finality.CodeVerifierFailed, "chain", finality.ChainArbitrumSepolia, "kind", arbfinal.KindName, "cause", ethrpc.RedactText(err.Error()))
+				return nil, nil, finality.AtStage(finality.StageBuild, errors.New(ethrpc.RedactText(err.Error())))
 			}
 			raw, err := p.L2.HeaderByHash(ctx, a.After.BlockHash)
 			if err != nil {
@@ -336,7 +342,7 @@ func (p *Prover) capture(ctx context.Context, arb *arbfinal.Pins, a *Assertion, 
 			return nil, nil, nil, 0, nil, nil, p.pending(have, PendingProofWindow, "l1_block", x, "providers", p.L1.Providers()), nil
 		}
 		if serr := p.Store.Put(ctx, finality.CaptureKey{Chain: finality.ChainSepolia, L1Block: x, L1Hash: hf.Hash, Item: item}, encodeNodes(ns)); serr != nil {
-			return nil, nil, nil, 0, nil, nil, nil, finality.NewState(finality.CodeVerifierFailed, "chain", finality.ChainArbitrumSepolia, "kind", arbfinal.KindName, "cause", ethrpc.RedactText(serr.Error()))
+			return nil, nil, nil, 0, nil, nil, nil, finality.AtStage(finality.StageBuild, errors.New(ethrpc.RedactText(serr.Error())))
 		}
 		set = append(set, ns...)
 	}
@@ -366,14 +372,16 @@ func (p *Prover) capture(ctx context.Context, arb *arbfinal.Pins, a *Assertion, 
 	}
 	tp, terr := ethproof.Prove(blk.Txs, conf.TxIndex, common.Hash(kf.TransactionRoot))
 	rp, rerr := ethproof.Prove(blk.Receipts, conf.TxIndex, common.Hash(kf.ReceiptsRoot))
+	// Not reachable by a test double: both roots were checked against the block just above, so Prove cannot fail here; the guard stays for a
+	// future change of either function. It is a fault of the builder (RB12 OPS-A2 item 11), not a verdict of the verifier.
 	if terr != nil || rerr != nil {
-		return nil, nil, nil, 0, nil, nil, nil, finality.NewState(finality.CodeVerifierFailed, "chain", finality.ChainArbitrumSepolia, "kind", arbfinal.KindName, "cause", "confirmation trie proof could not be built")
+		return nil, nil, nil, 0, nil, nil, nil, finality.AtStage(finality.StageBuild, errors.New("confirmation trie proof could not be built"))
 	}
 	ns := append(append([][]byte(nil), tp.ProofNodes...), rp.ProofNodes...)
 	idx = uint32(conf.TxIndex)
 	tx, rcpt = blk.Txs[conf.TxIndex], blk.Receipts[conf.TxIndex]
 	if serr := p.Store.Put(ctx, finality.CaptureKey{Chain: finality.ChainSepolia, L1Block: K, L1Hash: kf.Hash, Item: item}, encodeConf(tx, rcpt, idx, ns)); serr != nil {
-		return nil, nil, nil, 0, nil, nil, nil, finality.NewState(finality.CodeVerifierFailed, "chain", finality.ChainArbitrumSepolia, "kind", arbfinal.KindName, "cause", ethrpc.RedactText(serr.Error()))
+		return nil, nil, nil, 0, nil, nil, nil, finality.AtStage(finality.StageBuild, errors.New(ethrpc.RedactText(serr.Error())))
 	}
 	wns, wpend, werr := p.walletProofs(ctx, arb, a, K, kf, tx, have)
 	if wpend != nil || werr != nil {
@@ -430,7 +438,7 @@ func (p *Prover) walletProofs(ctx context.Context, arb *arbfinal.Pins, a *Assert
 		}
 	}
 	if serr := p.Store.Put(ctx, key, encodeNodes(all)); serr != nil {
-		return nil, nil, finality.NewState(finality.CodeVerifierFailed, "chain", finality.ChainArbitrumSepolia, "kind", arbfinal.KindName, "cause", ethrpc.RedactText(serr.Error()))
+		return nil, nil, finality.AtStage(finality.StageBuild, errors.New(ethrpc.RedactText(serr.Error())))
 	}
 	return all, nil, nil
 }

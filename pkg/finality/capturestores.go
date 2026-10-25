@@ -286,9 +286,22 @@ func (d DirCaptureStore) Put(_ context.Context, k CaptureKey, data []byte) error
 	return os.Remove(name)
 }
 
+// readRow reads one stored row, refusing by name (finality_evidence_too_large{part: capture_row}) a file larger than the evidence bound before
+// it is read: a row of this store is never larger than one evidence container (RB12 OPS-A2 item 9).
+func readRow(path string) ([]byte, error) {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	if lim := int64(DefaultLimits().MaxEvidenceBytes); fi.Size() > lim {
+		return nil, EvidenceTooLarge("capture_row", uint64(fi.Size()), uint64(lim))
+	}
+	return os.ReadFile(path)
+}
+
 // Get implements CaptureStore.
 func (d DirCaptureStore) Get(_ context.Context, k CaptureKey) ([]byte, bool, error) {
-	b, err := os.ReadFile(d.path(k))
+	b, err := readRow(d.path(k))
 	if os.IsNotExist(err) {
 		return nil, false, nil
 	}
@@ -358,7 +371,7 @@ func (d DirCaptureStore) ListByBlock(_ context.Context, chain, l1Block uint64) (
 	}
 	var out []CaptureRow
 	for _, k := range ks {
-		b, err := os.ReadFile(d.path(k))
+		b, err := readRow(d.path(k))
 		if err != nil {
 			return nil, err
 		}

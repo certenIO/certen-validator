@@ -126,6 +126,42 @@ type BeaconError struct {
 	Slot   uint64
 	Status int
 	Err    string // redacted
+	// Hosts is what each configured beacon host answered (RB12 OPS-A2 item 2): the proof of unavailability needs every host's answer.
+	Hosts []BeaconHost
+}
+
+// BeaconHost is one beacon host's answer to a blob ask: its label (never a path or credentials), the HTTP status (0: no answer) and whether
+// the answer says the blobs are gone (404 or 410, or a block served without the wanted blobs), as against a failure that says nothing about them
+// (a timeout, a 429, a 5xx).
+type BeaconHost struct {
+	Host   string
+	Status int
+	Gone   bool
+}
+
+// GoneHosts is the number of distinct hosts that answered that the blobs are gone.
+func (e *BeaconError) GoneHosts() int {
+	seen := map[string]bool{}
+	for _, h := range e.Hosts {
+		if h.Gone {
+			seen[h.Host] = true
+		}
+	}
+	return len(seen)
+}
+
+// AllGone reports whether every host asked answered that the blobs are gone (and at least one was asked): a single transient answer
+// leaves the question open.
+func (e *BeaconError) AllGone() bool {
+	if len(e.Hosts) == 0 {
+		return false
+	}
+	for _, h := range e.Hosts {
+		if !h.Gone {
+			return false
+		}
+	}
+	return true
 }
 
 func (e *BeaconError) Error() string {

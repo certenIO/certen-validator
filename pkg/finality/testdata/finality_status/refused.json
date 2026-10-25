@@ -1,0 +1,1 @@
+{"format":"certen-finality-status/1","class":"refused","levelReached":"l1_posted","nextLevel":"finalized","state":{"code":"finality_chain_broken","fields":{"check":"prev_hash","seq":"2"}}}

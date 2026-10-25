@@ -11,6 +11,7 @@ import (
 	"math/big"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -76,9 +77,15 @@ type Config struct {
 	ProofTries int
 	// SlotsPerProof bounds the storage slots of one eth_getProof call (default 32).
 	SlotsPerProof int
-	// BlobGiveUpTicks: after this many failed blob fetches of one batch a BlobUnavailableRecord is written once (default 30);
-	// the fetch is still retried afterwards.
-	BlobGiveUpTicks int
+	// The proof of unavailability of a batch's blobs (blobFailed; RB12 OPS-A2 item 2): a BlobUnavailableRecord is written ONLY when
+	// GoneObservations asks in a row (default 3), spread over at least GoneSpan (default 30 minutes), were each answered "gone" by every beacon
+	// host, at least MinGoneHosts (default 2) distinct ones. Until then the batch is asked again at a doubling back-off of at most
+	// BlobBackoffMaxTicks ticks (default 150) and each ask again is counted. Now is the clock of the span (default time.Now).
+	GoneObservations    int
+	GoneSpan            time.Duration
+	MinGoneHosts        int
+	BlobBackoffMaxTicks int
+	Now                 func() time.Time
 	// UnavailableEvery: a batch without a proof gets an UnavailableRecord every this many ticks (default 20).
 	UnavailableEvery int
 	// RebuildBlocks: on the first tick, batches captured within this many L1 blocks of the head are re-examined with their blob rows read
@@ -115,8 +122,20 @@ func (c Config) withDefaults() Config {
 	if c.SlotsPerProof == 0 {
 		c.SlotsPerProof = 32
 	}
-	if c.BlobGiveUpTicks == 0 {
-		c.BlobGiveUpTicks = 30
+	if c.GoneObservations == 0 {
+		c.GoneObservations = 3
+	}
+	if c.GoneSpan == 0 {
+		c.GoneSpan = 30 * time.Minute
+	}
+	if c.MinGoneHosts == 0 {
+		c.MinGoneHosts = 2
+	}
+	if c.BlobBackoffMaxTicks == 0 {
+		c.BlobBackoffMaxTicks = 150 // about 30 minutes at a 12 second tick
+	}
+	if c.Now == nil {
+		c.Now = time.Now
 	}
 	if c.UnavailableEvery == 0 {
 		c.UnavailableEvery = 20
@@ -159,9 +178,14 @@ type pendBlob struct {
 	rec    BatchRecord
 	ts     uint64
 	tries  int
-	gaveUp bool
-	old    bool // found incomplete beyond RebuildBlocks: retried at the bounded cadence
-	prefix bool // registered by a prefix scan: retried every tick, PrefixBlobsPerTick at a time
+	gaveUp bool // the blobs are PROVEN unavailable and the record is written (see blobFailed)
+	// the run of asks that every host answered "gone" (a transient answer resets it) and the first of them; nextTick is the tick before which the
+	// batch is not asked again (the bounded back-off of an ask that is not proven)
+	goneObs   int
+	goneFirst time.Time
+	nextTick  int
+	old       bool // found incomplete beyond RebuildBlocks: retried at the bounded cadence
+	prefix    bool // registered by a prefix scan: retried every tick, PrefixBlobsPerTick at a time
 }
 type pendProof struct {
 	rec    BatchRecord
@@ -617,6 +641,9 @@ func (c *Capturer) fetchBlobs(ctx context.Context, rep *Report) {
 		if p.old && !c.dueOld() && !p.prefix {
 			continue
 		}
+		if p.nextTick > c.ticks || p.gaveUp && !c.dueOld() {
+			continue // backing off after an ask that is not proven, or proven gone and asked again only on the old cadence
+		}
 		if p.prefix {
 			// a prefix window holds hundreds of batches: a bounded few per tick, and once the beacon has given up on one only on the old cadence
 			if prefixBlobs >= PrefixBlobsPerTick || p.gaveUp && !c.dueOld() {
@@ -629,17 +656,7 @@ func (c *Capturer) fetchBlobs(ctx context.Context, rep *Report) {
 		if err != nil {
 			p.tries++
 			rep.fail(c, "blobs of batch %d: %v", n, ethrpc.RedactError(err))
-			if p.tries >= c.Cfg.BlobGiveUpTicks && !p.gaveUp {
-				p.gaveUp = true
-				u := BlobUnavailableRecord{N: n, L1Block: p.rec.L1Block, BeaconSlot: slot, VersionedHashes: p.rec.VersionedHashes, Err: ethrpc.RedactText(err.Error())}
-				var be *BeaconError
-				if errors.As(err, &be) {
-					u.HTTPStatus = uint32(be.Status)
-				}
-				if perr := putRow(ctx, c.Store, Key{Chain: c.Cfg.Chain, L1Block: p.rec.L1Block, L1Hash: p.rec.L1Hash, Item: ItemBlobUnavailable(n)}, u.Encode()); perr != nil {
-					rep.fail(c, "record blob unavailability of batch %d: %v", n, perr)
-				}
-			}
+			c.blobFailed(ctx, rep, n, p, slot, err)
 			continue
 		}
 		ok := true
@@ -668,6 +685,45 @@ func (c *Capturer) fetchBlobs(ctx context.Context, rep *Report) {
 			rep.BlobBlocks = append(rep.BlobBlocks, p.rec.L1Block)
 		}
 	}
+}
+
+// blobFailed applies the rule of the Base backfill (baseposted.BackfillPolicy) to the blobs of one batch the beacon did not serve: they are
+// recorded as unavailable ONLY on proof, which is GoneObservations asks in a row, spread over at least GoneSpan, each of which EVERY host
+// answered "gone" and at least MinGoneHosts distinct hosts did; one transient answer (a timeout, a 429, a 5xx) resets the run. Without proof
+// the batch is asked again at a doubling back-off bounded by BlobBackoffMaxTicks, and each ask again is counted
+// (certen_finality_blob_unproven_retries_total): the capture never gives up without proof (RB12 OPS-A2 item 2, ledger CG-2).
+func (c *Capturer) blobFailed(ctx context.Context, rep *Report, n uint64, p *pendBlob, slot uint64, err error) {
+	var be *BeaconError
+	gone := errors.As(err, &be) && be.AllGone() && be.GoneHosts() >= c.Cfg.MinGoneHosts
+	now := c.Cfg.Now()
+	if gone {
+		if p.goneObs == 0 {
+			p.goneFirst = now
+		}
+		p.goneObs++
+	} else {
+		p.goneObs = 0
+	}
+	if gone && p.goneObs >= c.Cfg.GoneObservations && now.Sub(p.goneFirst) >= c.Cfg.GoneSpan {
+		if !p.gaveUp {
+			p.gaveUp = true
+			u := BlobUnavailableRecord{N: n, L1Block: p.rec.L1Block, BeaconSlot: slot, VersionedHashes: p.rec.VersionedHashes, Err: ethrpc.RedactText(err.Error()), HTTPStatus: uint32(be.Status)}
+			if perr := putRow(ctx, c.Store, Key{Chain: c.Cfg.Chain, L1Block: p.rec.L1Block, L1Hash: p.rec.L1Hash, Item: ItemBlobUnavailable(n)}, u.Encode()); perr != nil {
+				p.gaveUp = false
+				rep.fail(c, "record blob unavailability of batch %d: %v", n, perr)
+			}
+		}
+		return
+	}
+	wait := 1
+	for i := 1; i < p.tries && wait < c.Cfg.BlobBackoffMaxTicks; i++ {
+		wait *= 2
+	}
+	if wait > c.Cfg.BlobBackoffMaxTicks {
+		wait = c.Cfg.BlobBackoffMaxTicks
+	}
+	p.nextTick = c.ticks + wait
+	metrics.IncFinalityBlobUnprovenRetry(c.Cfg.Chain)
 }
 
 // proofAcceptor verifies a Bridge proof answer against the state root of the proof block.

@@ -35,7 +35,7 @@ func build3(rawDir, out string) error {
 	b.baseLeg = legFile{Chain: leg.Chain, Number: leg.Number, Hash: leg.Hash, HeaderRLP: leg.HeaderRLP}
 	b.legHdr = unhexb(leg.HeaderRLP)
 	b.put("raw/leg.json", lj)
-	b.pinsRaw["main"] = finality.EmbeddedPinsBytes()
+	b.pinsRaw["main"] = mainPinsAtSets234 // the pins the set was published with (pins_input.go), never the live embedded ones
 	main, err := finality.ParsePinsOverride(b.pinsRaw["main"])
 	if err != nil {
 		return err

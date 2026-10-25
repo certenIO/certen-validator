@@ -305,6 +305,7 @@ func (b *Builder) Build(ctx context.Context, s *ethproof.Settlement, have finali
 	}
 	for _, f := range frameTxs {
 		if byNumber[f.key.L1Block] != f.key.L1Hash {
+			b.markOrphanFrames(ctx, frameTxs, byNumber)
 			return nil, nil, st("l1_proof_window_unavailable", "l1_block", f.key.L1Block, "providers", "captured block is not on the finalized chain (reorg)")
 		}
 	}
@@ -387,6 +388,13 @@ func (b *Builder) search(ctx context.Context, bp *Pins, l2 finality.HeaderFields
 		if err != nil {
 			return sr, err
 		}
+		twins, err := b.twinHeights(ctx, 0, finality.MaxCaptureBlock)
+		if err != nil {
+			return sr, err
+		}
+		if txs, err = b.dropOrphans(ctx, txs, twins); err != nil {
+			return sr, err
+		}
 		sr.ch, sr.frameTxs, sr.bt, sr.lastScanned = findChannel(txs, bp, l2.Timestamp)
 		return sr, nil
 	}
@@ -458,7 +466,13 @@ func (b *Builder) search(ctx context.Context, bp *Pins, l2 finality.HeaderFields
 			return sr, err
 		}
 	}
-	if b.Index != nil {
+	// F18: a window that holds a reorged height is read by the window reader, which keeps the canonical twin's rows (the index digests are per
+	// hash); both readers then give one answer by construction. Without an L1 provider the twins cannot be told apart and nothing changes.
+	twins, err := b.twinHeights(ctx, origin, end)
+	if err != nil {
+		return sr, err
+	}
+	if b.Index != nil && !(len(twins) > 0 && b.L1 != nil) {
 		err := b.searchIndexed(ctx, bp, l2, hold, &sr, origin, end, cov, known, lower, belowScanned, authentic)
 		return sr, err
 	}
@@ -490,7 +504,11 @@ func (b *Builder) search(ctx context.Context, bp *Pins, l2 finality.HeaderFields
 		}
 		all = append(all, part...)
 		var last uint64
-		sr.ch, sr.frameTxs, sr.bt, last = findChannel(all, bp, l2.Timestamp)
+		cands, derr := b.dropOrphans(ctx, all, twins)
+		if derr != nil {
+			return sr, derr
+		}
+		sr.ch, sr.frameTxs, sr.bt, last = findChannel(cands, bp, l2.Timestamp)
 		if !known && last > sr.lastScanned {
 			sr.lastScanned = last
 		}

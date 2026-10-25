@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -116,15 +117,21 @@ func build2Cmd(args []string) error {
 	fs := flag.NewFlagSet("build2", flag.ExitOnError)
 	set1 := fs.String("set1", "", "directory of finality_eth_sepolia1")
 	out := fs.String("out", "", "directory of finality_eth_sepolia2")
+	pinsFile := fs.String("pins", "", "pins/main.json of the committed set 2: a published set is reproduced from its own committed pins, never from the live embedded ones; empty: the live embedded pins (how a NEW set is made)")
 	_ = fs.Parse(args)
 	if *set1 == "" || *out == "" {
 		return fmt.Errorf("-set1 and -out are required")
 	}
+	embRaw := finality.EmbeddedPinsBytes()
 	emb, err := finality.EmbeddedPins()
+	if *pinsFile != "" {
+		if embRaw, err = os.ReadFile(*pinsFile); err == nil {
+			emb, err = finality.LoadPins(embRaw, sha256.Sum256(embRaw)) // the same source label as the embedded file
+		}
+	}
 	if err != nil {
 		return err
 	}
-	embRaw := finality.EmbeddedPinsBytes()
 	links, err := finality.EmbeddedLedgerLinks()
 	if err != nil {
 		return err

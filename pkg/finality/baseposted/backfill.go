@@ -118,8 +118,8 @@ type Backfiller struct {
 	// NoPrefix switches the prefix extension off for this validator (a refused prefix setting, finality_prefix_disabled): no window of the
 	// capture-store prefix is taken, none is claimed, and no block that only a prefix window holds is reopened or asked again. The windows stay as
 	// recorded (the rows are insert-only) for a validator whose prefix feature is on; the holes of the live range are closed as before.
-	// Exception: GapsIn merges overlapping or abutting rows into one piece with the union of their classes, so a piece that a hole shares with a
-	// window is a hole and its window-only blocks may still be asked (hole 500-509 + window 505-520 is one piece 500-520, blocks 510-520 included).
+	// The rule is per block (GapsInWithout): a block is a hole only if a row that is not a prefix request covers it, so a hole that overlaps or
+	// abuts a window keeps its own blocks and gives the window's blocks no more reach (hole 500-509 + window 505-520: blocks 500-509 only).
 	NoPrefix bool
 	// OnFill is told of every block the backfill closes (after its fill row is stored), so an index of the capture store can digest a block
 	// that arrived out of order (RB12-ARCHIVE-BACKFILL; nil: nobody is told).
@@ -208,14 +208,19 @@ func (b *Backfiller) Step(ctx context.Context, max int) (BackfillReport, error) 
 		b.entries = map[uint64]*bfEntry{}
 	}
 	pol := b.Policy.withDefaults()
-	pieces, err := finality.GapsIn(ctx, b.Store, b.Chain, 0, finality.MaxCaptureBlock)
+	var pieces []finality.GapRange
+	var err error
+	if b.NoPrefix {
+		// per block: a block is a hole only if a row that is not a prefix request covers it. GapsIn merges overlapping and abutting rows into one
+		// piece with the union of their classes, so a hole and a window that touch would keep the window's own blocks in reach of the backfill.
+		pieces, err = finality.GapsInWithout(ctx, b.Store, b.Chain, 0, finality.MaxCaptureBlock, finality.GapCapturePrefix)
+	} else {
+		pieces, err = finality.GapsIn(ctx, b.Store, b.Chain, 0, finality.MaxCaptureBlock)
+	}
 	if err != nil {
 		return rep, err
 	}
 	live := pieces // the pieces the reopen and the re-probe look at
-	if b.NoPrefix {
-		live = withoutPrefixOnly(pieces)
-	}
 	if err := b.reopenTerminal(ctx, live); err != nil {
 		return rep, err
 	}

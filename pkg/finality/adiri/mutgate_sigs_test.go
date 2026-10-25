@@ -15,7 +15,7 @@ import (
 )
 
 // RB11-GATE-A, signatures: every way a record's signature can be refused is named identically in both modes, the batch scalar is
-// never zero, and a failing random source is a named verifier failure. The chain is the small synthetic rotation vector.
+// never zero, and a failing random source is the named randomness_unavailable state. The chain is the small synthetic rotation vector.
 
 // gateNonSubgroupSignature is a compressed G1 point that is on the curve and not in the prime-order subgroup.
 func gateNonSubgroupSignature(t *testing.T) [adiri.SigBytes]byte {
@@ -136,8 +136,8 @@ func TestBatchScalarIsNeverZeroAndARandomSourceFailureIsNamed(t *testing.T) {
 	}
 	err = gateVerify(t, adiri.ModeBatched, gateCopy(cf), failingReader{})
 	st, ok = finality.AsNamed(err)
-	if !ok || st.Code != finality.CodeVerifierFailed || fmt.Sprint(st.Fields["cause"]) != "entropy source failed" {
-		t.Fatalf("a failing random source is a named verifier failure: %v", err)
+	if !ok || st.Code != finality.CodeRandomnessUnavailable || fmt.Sprint(st.Fields["cause"]) != "entropy source failed" {
+		t.Fatalf("a failing random source is the named randomness_unavailable state: %v", err)
 	}
 	// the one-by-one mode never draws a scalar
 	if err := gateVerify(t, adiri.ModeOneByOne, gateCopy(cf), failingReader{}); err != nil {

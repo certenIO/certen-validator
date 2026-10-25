@@ -238,6 +238,8 @@ func (l *BasePostedLoop) Tick(ctx context.Context, tick int) error {
 	}
 	if from > head {
 		metrics.SetFinalityCaptureLag(chain, l.Name(), 0)
+		// a held block is retried on its cadence although the head did not move: the retry does not wait for a new block (RB12 OPS-A2 item 3)
+		l.retryFailed(ctx, tick, head, sink)
 		l.runIndex(ctx, sink, cur)
 		return nil
 	}
