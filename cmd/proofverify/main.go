@@ -49,6 +49,7 @@ import (
 	"time"
 
 	chained_proof "github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/working-proof_do_not_edit"
+	ci "github.com/certen/independant-validator/pkg/contractidentity"
 	"github.com/certen/independant-validator/pkg/database"
 	"github.com/certen/independant-validator/pkg/execution"
 	"github.com/certen/independant-validator/pkg/finality"
@@ -101,6 +102,9 @@ func main() {
 		pinsSelfcheck = flag.Bool("pins-selfcheck", false, "re-derive the whole embedded Sepolia ledger of the finality pins from its root pin: every "+
 			"entry from its predecessor by the light-client link beside the file (pkg/finality/pins-links), judged by the same verifier as a proof; "+
 			"offline, no database (V2_SPEC_S7 4.3, SO3)")
+		contractIdentity = flag.Bool("contract-identity", false, "with --finality-file and --outcome-file: also judge the document's contractIdentity member (S8, "+
+			"certen:contract-identity:v1) against the leg the outcome evidence settles and the S7 report of this run; exit 0 verified, 5 not applicable, 10 verified core "+
+			"(never verified), 20 pending, 30 unproven, 40 refused, 2 usage or internal error; S7 FAILED (1) wins over any of them")
 		incEvidence = flag.String("incarnation-evidence", "", "with --governance: the incarnation's genesis evidence (JSON, "+
 			"cmd/incarnation), from which a v3 intent certificate's proof v2 is verified, walking the Directory's major "+
 			"blocks stored in the database from that genesis")
@@ -128,6 +132,11 @@ func main() {
 		os.Exit(exitFailed)
 	}
 
+	if *contractIdentity && (*finalityFile == "" || *outcomeFile == "" || *proofID != "") {
+		fmt.Fprintln(os.Stderr, "--contract-identity judges the contractIdentity member of a --finality-file document against the leg of an --outcome-file evidence: "+
+			"name both, and no --proof-id (a stored bundle carries no batch facts)")
+		os.Exit(exitUsage)
+	}
 	if *pinsSelfcheck {
 		if *proofID != "" || *outcome || *outcomeFile != "" || *l5 || *govern || *finalityOn || *finalityFile != "" {
 			fmt.Fprintln(os.Stderr, "--pins-selfcheck checks the embedded pins on their own: no --proof-id, --finality, --finality-file, --outcome, --outcome-file, --l5 or --governance")
@@ -171,7 +180,21 @@ func main() {
 			}
 		}
 		cutNetwork()
-		os.Exit(reportFinalityFile(os.Stdout, *finalityFile, finality.Default, pins, leg))
+		var req *ciRequest
+		if *contractIdentity {
+			manifest, merr := ci.Embedded()
+			if merr != nil {
+				fmt.Fprintf(os.Stderr, "proofverify: the embedded contract-identity manifest: %v\n", merr)
+				os.Exit(exitUsage)
+			}
+			verifier, verr := ci.NewDefaultVerifier()
+			if verr != nil {
+				fmt.Fprintf(os.Stderr, "proofverify: the contract-identity verifier: %v\n", verr)
+				os.Exit(exitUsage)
+			}
+			req = &ciRequest{verifier: verifier, manifest: manifest}
+		}
+		os.Exit(reportFinalityFileCI(os.Stdout, *finalityFile, finality.Default, pins, leg, req))
 	}
 	if *outcomeFile != "" {
 		if *proofID != "" || *outcome || *l5 || *govern {
