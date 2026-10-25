@@ -1,0 +1,1 @@
+{"format":"certen-finality-status/1","class":"unavailable","levelReached":"none","nextLevel":"finalized","state":{"code":"finality_builder_error","fields":{"chain":"84532","stage":"build"}}}

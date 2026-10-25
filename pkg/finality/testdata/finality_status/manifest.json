@@ -1,0 +1,164 @@
+{
+ "entries": {
+  "not_applicable": {
+   "sha256": "aa535baa17de06183c92cf13ff080def62934b38afa7be34c8bbffd8f1fe27df",
+   "validatorReads": {
+    "class": "not_applicable",
+    "levelReached": "none",
+    "nextLevel": "l1_posted",
+    "eta": "",
+    "seq": 0,
+    "state": {
+     "code": "level_not_applicable",
+     "fields": {
+      "chain": "11155111",
+      "level": "l1_posted"
+     }
+    },
+    "pinsSha256": ""
+   }
+  },
+  "pending": {
+   "sha256": "12f5e6ca5b54cf69e534e1cd163c481138d15704a8d3fa436e8cc8ec06bed0dc",
+   "validatorReads": {
+    "class": "pending",
+    "levelReached": "l1_posted",
+    "nextLevel": "finalized",
+    "eta": "2026-10-25T23:06:00Z",
+    "seq": 0,
+    "state": {
+     "code": "finality_pending",
+     "fields": {
+      "chain": "84532",
+      "reason": "within_finality_delay"
+     }
+    },
+    "pinsSha256": ""
+   }
+  },
+  "pending_pins": {
+   "sha256": "c78a470c4b41a978b504784fc2231ae79340ce6c307d42a2c1116624caad4782",
+   "validatorReads": {
+    "class": "pending",
+    "levelReached": "l1_posted",
+    "nextLevel": "finalized",
+    "eta": "2026-10-25T23:06:00Z",
+    "seq": 0,
+    "state": {
+     "code": "finality_pending",
+     "fields": {
+      "chain": "84532",
+      "reason": "within_finality_delay"
+     }
+    },
+    "pinsSha256": "9b6832ebb128d9b4cfa0c4da0db04f904259cac868486e8bcce6fd09fd9f5c10"
+   }
+  },
+  "refused": {
+   "sha256": "34a3a21485586e6c02c0d6416761b601c4136a0e8ac17d312df5c57dcc81757a",
+   "validatorReads": {
+    "class": "refused",
+    "levelReached": "l1_posted",
+    "nextLevel": "finalized",
+    "eta": "",
+    "seq": 0,
+    "state": {
+     "code": "finality_chain_broken",
+     "fields": {
+      "check": "prev_hash",
+      "seq": "2"
+     }
+    },
+    "pinsSha256": ""
+   }
+  },
+  "unavailable": {
+   "sha256": "06d06285201691a986867afd8af48b8935376e6337dd5cdb0b6ae330f577e870",
+   "validatorReads": {
+    "class": "unavailable",
+    "levelReached": "none",
+    "nextLevel": "finalized",
+    "eta": "",
+    "seq": 0,
+    "state": {
+     "code": "finality_builder_error",
+     "fields": {
+      "chain": "84532",
+      "stage": "build"
+     }
+    },
+    "pinsSha256": ""
+   }
+  },
+  "unavailable_backoff": {
+   "sha256": "03a5a6b0ac17efa7484a5b6961e2c0e0789d7f3345c70dc75f30172038acf66b",
+   "validatorReads": {
+    "class": "unavailable",
+    "levelReached": "l1_posted",
+    "nextLevel": "finalized",
+    "eta": "",
+    "seq": 0,
+    "state": {
+     "code": "finality_build_timeout",
+     "fields": {
+      "after": "60000000000",
+      "attempt": "3",
+      "cause": "appending the verified addendum: context deadline exceeded",
+      "chain": "84532",
+      "next_attempt_at": "2026-10-23T12:30:00Z"
+     }
+    },
+    "pinsSha256": ""
+   }
+  },
+  "unavailable_backoff_pins": {
+   "sha256": "f66b9eeff24efd953554a6b65a757aa428057ea8adf9ac7a8934cc17e2224106",
+   "validatorReads": {
+    "class": "unavailable",
+    "levelReached": "l1_posted",
+    "nextLevel": "finalized",
+    "eta": "",
+    "seq": 0,
+    "state": {
+     "code": "finality_build_timeout",
+     "fields": {
+      "after": "60000000000",
+      "attempt": "3",
+      "cause": "appending the verified addendum: context deadline exceeded",
+      "chain": "84532",
+      "next_attempt_at": "2026-10-23T12:30:00Z"
+     }
+    },
+    "pinsSha256": "9b6832ebb128d9b4cfa0c4da0db04f904259cac868486e8bcce6fd09fd9f5c10"
+   }
+  },
+  "verified": {
+   "sha256": "f3dfa1aa483d7e0b08bee823c8fe32778969656153c680dd3954fcff6bdb6ed0",
+   "validatorReads": {
+    "class": "verified",
+    "levelReached": "l1_posted",
+    "nextLevel": "l1_posted",
+    "eta": "",
+    "seq": 1,
+    "state": null,
+    "pinsSha256": ""
+   }
+  },
+  "verified_pins": {
+   "sha256": "fe8864481b415f5b25537f9a723969d5e3e5a9a613a5531a7b3a4eb43becaf18",
+   "validatorReads": {
+    "class": "verified",
+    "levelReached": "l1_posted",
+    "nextLevel": "l1_posted",
+    "eta": "",
+    "seq": 1,
+    "state": null,
+    "pinsSha256": "9b6832ebb128d9b4cfa0c4da0db04f904259cac868486e8bcce6fd09fd9f5c10"
+   }
+  }
+ },
+ "reader": "pkg/finality.ParseBuilderStatusDocument",
+ "validatorCommit": "d6a9eef1",
+ "validatorReadsCaseVariantPinsMember": true,
+ "writer": "pkg/finality.BuilderStatus.Document"
+}
