@@ -89,6 +89,14 @@ var (
 		Name: "certen_finality_build_held_total",
 		Help: "Finality asks held by the environment instead of failed (RB12-GO-INT F17): a state that is a fact about this process or its capture store, such as l1_capture_gap, by chain and state code. A held leg is asked again at the bounded poll and is not counted in certen_finality_build_failures_total.",
 	}, []string{"chain", "code"})
+	finalityGapOrphanMarked = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "certen_finality_gap_orphan_fills_marked_total",
+		Help: "Blocks a builder marked as orphans of the finalized chain (RB12 OPS-A2 F18): a gap fill keyed by their hash no longer closes the height, by chain.",
+	}, []string{"chain"})
+	finalityCaptureOrphanRows = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "certen_finality_capture_orphan_twin_rows_ignored_total",
+		Help: "Transactions of a captured L1 block that a builder ignored because the provider names another block at that height (a reorg twin; RB12 OPS-A2 F18), by chain. The rows stay (insert-only); the canonical twin's rows serve the leg.",
+	}, []string{"chain"})
 	finalityBlobUnprovenRetry = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "certen_finality_blob_unproven_retries_total",
 		Help: "Asks again of the blobs of a batch the beacon did not serve and that are NOT proven unavailable (RB12 OPS-A2 item 2): the capture never gives up without proof, it retries at a bounded back-off, by chain.",
@@ -398,6 +406,16 @@ func IncFinalityAppended(chain uint64, level string) {
 	finalityHealth.mu.Unlock()
 }
 
+// IncFinalityGapOrphanMarked counts one orphan mark written.
+func IncFinalityGapOrphanMarked(chain uint64) {
+	finalityGapOrphanMarked.WithLabelValues(chainLabel(chain)).Inc()
+}
+
+// AddFinalityCaptureOrphanRowsIgnored counts transactions of orphan twin blocks a builder left out of a search.
+func AddFinalityCaptureOrphanRowsIgnored(chain uint64, n int) {
+	finalityCaptureOrphanRows.WithLabelValues(chainLabel(chain)).Add(float64(n))
+}
+
 // IncFinalityBlobUnprovenRetry counts one scheduled ask again of the blobs of a batch that is not proven unavailable.
 func IncFinalityBlobUnprovenRetry(chain uint64) {
 	finalityBlobUnprovenRetry.WithLabelValues(chainLabel(chain)).Inc()
@@ -578,6 +596,8 @@ func registerFinalityMetrics() {
 	prometheus.MustRegister(finalityBuildHeld)
 	prometheus.MustRegister(finalityCaptureForeignInboxTx)
 	prometheus.MustRegister(finalityBlobUnprovenRetry)
+	prometheus.MustRegister(finalityCaptureOrphanRows)
+	prometheus.MustRegister(finalityGapOrphanMarked)
 	prometheus.MustRegister(finalityPending)
 	prometheus.MustRegister(finalityChainBroken)
 	prometheus.MustRegister(finalityStatus)

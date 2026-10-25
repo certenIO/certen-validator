@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/certen/independant-validator/pkg/ethrpc"
+	"github.com/certen/independant-validator/pkg/metrics"
 )
 
 // Capture gaps (RB12-CAPTURE-GAP, finding RB12-F13).
@@ -73,6 +74,9 @@ const (
 	GapFillPrefix = "gapfill/"
 	GapEndPrefix  = "gapend/"
 	GapNotePrefix = "gapnote/"
+	// GapOrphanPrefix: gaporphan/<block> under the hash of an ORPHAN block (RB12 OPS-A2 F18): a builder that learned from the finalized chain that the
+	// block it had captured is not the canonical one marks it, and a gap fill of that block no longer closes the height (see RecordGapOrphan).
+	GapOrphanPrefix = "gaporphan/"
 )
 
 const (
@@ -369,6 +373,18 @@ func gapScan(ctx context.Context, s CaptureStore, chain, from, to uint64, skip G
 	if err != nil {
 		return res, err
 	}
+	orphans, err := s.ListByRange(ctx, chain, lo, hi, GapOrphanPrefix)
+	if err != nil {
+		return res, err
+	}
+	orphaned := map[CaptureKey]struct{}{}
+	for _, k := range orphans {
+		b, _, err := blockOfItem(k.Item, GapOrphanPrefix)
+		if err != nil {
+			return res, err
+		}
+		orphaned[CaptureKey{Chain: chain, L1Block: b, L1Hash: k.L1Hash}] = struct{}{}
+	}
 	filled := map[uint64]struct{}{}
 	for _, k := range fills {
 		b, _, err := blockOfItem(k.Item, GapFillPrefix)
@@ -377,6 +393,9 @@ func gapScan(ctx context.Context, s CaptureStore, chain, from, to uint64, skip G
 		}
 		if k.L1Hash == ([32]byte{}) {
 			continue // a fill closes a block for the hash the capture verified; one that names none closes nothing (RB12-GO-INT D7)
+		}
+		if _, orphan := orphaned[CaptureKey{Chain: chain, L1Block: b, L1Hash: k.L1Hash}]; orphan {
+			continue // a fill of a block the finalized chain does not hold closes nothing (RB12 OPS-A2 F18)
 		}
 		filled[b] = struct{}{}
 	}
@@ -481,6 +500,24 @@ func gapScan(ctx context.Context, s CaptureStore, chain, from, to uint64, skip G
 	}
 	res.pieces = pieces
 	return res, nil
+}
+
+// RecordGapOrphan marks the block of hash at height block as an orphan of the finalized chain: a gap fill keyed by that hash is ignored by
+// GapsIn from then on, retroactively and without a migration (fills are keyed by hash), so the height stays open until the CANONICAL block is
+// filled, which the backfill does by asking the provider for the height. Insert-only; a repeat is a no-op and is not counted again.
+func RecordGapOrphan(ctx context.Context, s CaptureStore, chain, block uint64, hash [32]byte) error {
+	if hash == ([32]byte{}) {
+		return fmt.Errorf("finality: an orphan mark names the hash of the orphan block; block %d has none", block)
+	}
+	k := CaptureKey{Chain: chain, L1Block: block, L1Hash: hash, Item: fmt.Sprintf("%s%d", GapOrphanPrefix, block)}
+	if _, ok, err := s.Get(ctx, k); err != nil || ok {
+		return err
+	}
+	if err := s.Put(ctx, k, []byte("orphan")); err != nil {
+		return err
+	}
+	metrics.IncFinalityGapOrphanMarked(chain)
+	return nil
 }
 
 // GapsIn returns the runs of blocks of [from, to] that lie in a recorded gap and have no fill, ascending, clipped to the window. An empty

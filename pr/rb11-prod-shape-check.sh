@@ -1016,6 +1016,22 @@ EOF
   rec $st I7 "no stretch of more than 64 L1 blocks between consecutive Base inbox blocks (an empty block and an uncaptured one leave the same rows; the index derives holes from the L2 timeline and names them l1_capture_gap)" "0 suspect holes" "stretches > 64 blocks: $h_n (longest $h_max, total $h_sum blocks): $h_list"
 else rec FAIL I7 "hole query" "query answers" "failed: $(errline)"; fi
 
+# F18 (RB12 OPS-A2): a height with the header of more than one captured block is a reorg twin. The builders keep the canonical twin's rows (the
+# provider names it, the finalized chain decides), and a fill of an orphan block closes nothing once a builder has marked it (gaporphan/<block>).
+# The count is informational: twins are expected on a chain that reorgs; it says how many heights the rule had to decide.
+if out=$(sqlro <<'SQL'
+SELECT coalesce(sum(1) FILTER (WHERE chain = 84532), 0), coalesce(sum(1) FILTER (WHERE chain = 421614), 0), coalesce(sum(1) FILTER (WHERE chain = 11155111), 0),
+  (SELECT count(*) FROM proof_finality_capture WHERE item LIKE 'gaporphan/%')
+FROM (SELECT chain, l1_block FROM proof_finality_capture WHERE item = 'hdr' GROUP BY chain, l1_block HAVING count(*) > 1) t;
+SQL
+); then
+  IFS='|' read -r tw_b tw_a tw_s tw_marks <<EOF
+$out
+EOF
+  [ "$tw_b$tw_a$tw_s" = "000" ] && st=PASS || st=WARN
+  rec $st F18 "heights with the header of more than one captured block (reorg twins), by chain, and the orphan marks written for them" "none, or every twin decided by the builders (canonical rows kept, orphan fills ignored)" "twin heights: base $tw_b, arbitrum $tw_a, sepolia $tw_s; orphan marks: $tw_marks"
+else rec FAIL F18 "twin query" "query answers" "failed: $(errline)"; fi
+
 if out=$(sqlro <<'SQL'
 SELECT count(*),
   count(*) FILTER (WHERE octet_length(bytes) <> 8),
