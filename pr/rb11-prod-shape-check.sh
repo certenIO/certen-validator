@@ -319,6 +319,7 @@ SQL
 ); then
   printf '%s\n' "$out" | grep . | sort >"$tmp/hist.txt"
   printf '%s\n' "$MIGRATION_SHA" | grep . | sort >"$tmp/want.txt"
+  NWANT=$(wc -l <"$tmp/want.txt" | tr -d ' '); LASTMIG=$(awk '{print $1}' "$tmp/want.txt" | tail -1)
   awk '{print $1}' "$tmp/hist.txt" | sort -u >"$tmp/hist.v"; awk '{print $1}' "$tmp/want.txt" | sort -u >"$tmp/want.v"
   missing=$(comm -13 "$tmp/hist.v" "$tmp/want.v" | tr '\n' ' ')
   wrong=""
@@ -336,9 +337,9 @@ SQL
 ' ' ' | sed 's/^/ /; s/^ $/ none/')"
   fi
   if [ -z "$missing" ] && [ -z "$wrong" ]; then
-    rec PASS E2 "every migration 00000-00029 of the repo is in the history with its file's checksum (proofs_service refuses to start otherwise; 00029 must be staged before the validators with this binary start)" "30 versions, sha256 equal" "30 of 30 equal; versions in the history beyond the repo list: ${extra:-none}"
+    rec PASS E2 "every migration of the repo list (00000-$LASTMIG) is in the history with its file's checksum (a STAGING check: a migration not yet applied is a FAIL by design; proofs_service refuses to start otherwise, and the owner stages it before the validators with this binary start)" "$NWANT versions, sha256 equal" "$NWANT of $NWANT equal; versions in the history beyond the repo list: ${extra:-none}"
   else
-    rec FAIL E2 "every migration 00000-00029 of the repo is in the history with its file's checksum (proofs_service refuses to start otherwise; 00029 must be staged before the validators with this binary start)" "30 versions, sha256 equal" "not applied: ${missing:-none}; checksum differs:${wrong:- none}"
+    rec FAIL E2 "every migration of the repo list (00000-$LASTMIG) is in the history with its file's checksum (a STAGING check: a migration not yet applied is a FAIL by design; proofs_service refuses to start otherwise, and the owner stages it before the validators with this binary start)" "$NWANT versions, sha256 equal" "not applied: ${missing:-none}; checksum differs:${wrong:- none}"
   fi
 else rec FAIL E1 "certen_schema_history readable" "table answers" "query failed: $(errline)"; fi
 
