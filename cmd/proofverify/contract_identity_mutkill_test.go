@@ -443,3 +443,72 @@ func TestCIHash32AndRegistry9FromOutcomeNameWhatIsWrong(t *testing.T) {
 		t.Errorf("a power that is not a number: %v %v", r, err)
 	}
 }
+
+func TestCILegContextFromTheRealOutcomeFixtureNamesEachDefectOfTheEvidence(t *testing.T) {
+	leg, err := settlementFromOutcomeFile(fixturePath(84532))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if leg.ev == nil || leg.s == nil || leg.s.Tx == nil {
+		t.Fatalf("the fixture leg carries no evidence or settlement: %+v", leg)
+	}
+	ctx, err := legContextFromOutcome(leg, nil)
+	if err != nil || ctx.Chain != leg.chain || ctx.Tx == nil || ctx.Receipt == nil || ctx.ADIURL != leg.ev.Member.ADIURL {
+		t.Fatalf("the fixture leg context: %+v %v", ctx, err)
+	}
+	if want, _ := hash32(leg.ev.Anchor.BatchRoot, "x"); ctx.Batch.BatchRoot != want || ctx.Batch.BatchRoot == ([32]byte{}) {
+		t.Errorf("the batch root of the context is %x, the evidence says %s", ctx.Batch.BatchRoot, leg.ev.Anchor.BatchRoot)
+	}
+	if want, _ := hash32(leg.ev.Anchor.Incarnation, "x"); ctx.Batch.Incarnation != want {
+		t.Errorf("the incarnation of the context is %x, the evidence says %s", ctx.Batch.Incarnation, leg.ev.Anchor.Incarnation)
+	}
+
+	// a settlement that carries no transaction does not verify: the transaction proof is required, so the context is never built from block facts alone
+	s2 := *leg.s
+	s2.Tx = nil
+	noTx := *leg
+	noTx.s = &s2
+	if _, err := legContextFromOutcome(&noTx, nil); err == nil || !strings.HasPrefix(err.Error(), "the outcome evidence settlement does not verify: ") {
+		t.Errorf("no transaction: %v", err)
+	}
+
+	// each anchor field that is not 32 bytes of hex is named
+	for _, f := range []struct {
+		name string
+		set  func(e *execution.OutcomeEvidence)
+	}{
+		{"anchor.batchRoot", func(e *execution.OutcomeEvidence) { e.Anchor.BatchRoot = "0x12" }},
+		{"anchor.batchOperationId", func(e *execution.OutcomeEvidence) { e.Anchor.BatchOperationID = "" }},
+		{"anchor.accumulateSetRoot", func(e *execution.OutcomeEvidence) { e.Anchor.AccumulateSetRoot = "zz" }},
+		{"anchor.incarnation", func(e *execution.OutcomeEvidence) { e.Anchor.Incarnation = "0x" + strings.Repeat("ab", 33) }},
+	} {
+		ev2 := *leg.ev
+		f.set(&ev2)
+		l2 := *leg
+		l2.ev = &ev2
+		if _, err := legContextFromOutcome(&l2, nil); err == nil || err.Error() != f.name+" is not 32 bytes of hex" {
+			t.Errorf("%s: %v", f.name, err)
+		}
+	}
+
+	// a registry whose member power is not a number is refused by the registry reader
+	ev3 := *leg.ev
+	ev3.Quorum.Validators = append([]execution.OutcomeQuorumValidator{}, ev3.Quorum.Validators...)
+	ev3.Quorum.Validators = append(ev3.Quorum.Validators, execution.OutcomeQuorumValidator{Address: "0x" + strings.Repeat("11", 20), VotingPower: "x1"})
+	l3 := *leg
+	l3.ev = &ev3
+	if _, err := legContextFromOutcome(&l3, nil); err == nil || !strings.HasPrefix(err.Error(), "quorum validator ") || !strings.HasSuffix(err.Error(), `voting power "x1" is not a uint64`) {
+		t.Errorf("a registry power that is not a number: %v", err)
+	}
+
+	// a transaction leaf that is not the proven one does not verify
+	tx2 := *leg.s.Tx
+	tx2.LeafValue = []byte{0xff, 0xff}
+	s4 := *leg.s
+	s4.Tx = &tx2
+	l4 := *leg
+	l4.s = &s4
+	if _, err = legContextFromOutcome(&l4, nil); err == nil || !strings.HasPrefix(err.Error(), "the outcome evidence settlement does not verify: transaction proof: ") {
+		t.Errorf("a corrupted transaction leaf: %v", err)
+	}
+}
