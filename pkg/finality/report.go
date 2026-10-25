@@ -72,6 +72,29 @@ func Verify(chain uint64, s *ethproof.Settlement, carried BlockRef, adds []Adden
 	return Default.Verify(chain, s, carried, adds, p)
 }
 
+// VerifyCarried judges a section against the block its own leg member carries, for a holder of the exported file alone (no Settlement
+// source): carried must come from CarriedLeg.Ref with a header, which bound keccak256(header) to blockHash and the positional block
+// number to blockNumber. D0 is recomputed from that block and the addenda are judged against it exactly as VerifyLeg judges them. The
+// header proves the BLOCK, not the settlement transaction, so level 1 is not claimed: Levels[included] is pending with
+// finality_included_unavailable{reason: no_settlement}, and the headline is the highest verified addendum level (LevelNone if none).
+// A carried leg without a header judges nothing: pending with no_settlement_to_recompute_d0.
+func (r *Registry) VerifyCarried(carried BlockRef, adds []Addendum, p *Pins) Report {
+	if len(carried.HeaderRLP) == 0 {
+		rep := Report{Block: carried, Levels: map[Level]LevelStatus{LevelIncluded: {Status: StatusPending, State: IncludedUnavailable(IncludedSettlementNotJudged, "chain", carried.Chain)}}}
+		rep.PinsSHA256, rep.PinsSource = p.Identity()
+		return rep
+	}
+	rep := r.VerifyLeg(carried, carried, adds, p)
+	if rep.Unsupported != nil {
+		return rep
+	}
+	rep.Levels[LevelIncluded] = LevelStatus{Status: StatusPending, State: IncludedUnavailable(IncludedNoSettlement, "chain", carried.Chain)}
+	if rep.Headline == LevelIncluded {
+		rep.Headline = LevelNone
+	}
+	return rep
+}
+
 // VerifyLeg judges addenda against an already verified leg block b (the triple of a verified Settlement). Rules:
 //
 //	R1 included is derived, never stored.            R2 levels are independent; the headline is the highest verified.

@@ -90,7 +90,7 @@ func TestOutcomeFileReportNamesTheTransactionItJudgedAndWhatBindsIt(t *testing.T
 		t.Fatalf("exit %d\n%s", code, out)
 	}
 	for _, want := range []string{
-		"outcome transaction " + strings.ToLower(ev.Record.Tx) + " on chain 84532 in block " + fmt.Sprint(ev.Record.BlockNumber),
+		"outcome settlement transaction " + strings.ToLower(ev.Member.Leaf.Tx) + " on chain 84532 in block " + fmt.Sprint(ev.Member.Leaf.BlockNumber),
 		"bound to the document's carried leg by chain, block number and block hash",
 		"outcome_tx_unbound{reason=document_names_no_settlement_tx}",
 	} {

@@ -148,6 +148,10 @@ func main() {
 		case *outcomeFile != "":
 			var lerr error
 			if leg, lerr = settlementFromOutcomeFile(*outcomeFile); lerr != nil {
+				if n, ok := finality.AsNamed(lerr); ok {
+					fmt.Fprintf(os.Stdout, "SUMMARY-ONLY (finality)  %s\n  %v\n  The outcome evidence member holds no settlement transaction (status 3 or 4) to recompute D0 from.\n", *finalityFile, n)
+					os.Exit(exitSummaryOnly)
+				}
 				fmt.Fprintf(os.Stdout, "FAILED (finality)  %s\n  the Settlement source %s does not decode: %v\n", *finalityFile, *outcomeFile, lerr)
 				os.Exit(exitFailed)
 			}

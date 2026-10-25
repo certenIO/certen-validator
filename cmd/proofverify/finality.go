@@ -35,8 +35,8 @@ import (
 // then each addendum's evidence by its registered verifier. The report names every level - verified, pending or not
 // applicable - and the level reached. The file path (--finality-file) reads and strictly parses the carried leg and addenda;
 // the portable document carries no Settlement, so a Settlement SOURCE is named beside it: --outcome-file (an exported outcome
-// evidence file: the block that holds the recorded outcome, proven offline into its header) or --proof-id with --db (the
-// stored bundle's L6 execution proof). With a Settlement the leg is judged exactly as on the database path; without one the
+// evidence file: the settlement block and transaction of its member, status 1 or 2, proven offline into its header) or --proof-id
+// with --db (the stored bundle's L6 execution proof); a document whose finality member carries the settlement header (headerRlp) needs no source. With a Settlement the leg is judged exactly as on the database path; without one the
 // file judges nothing and says so by name (finality_included_unavailable, summary-only).
 // Exit codes are the tool's own:
 //
@@ -132,7 +132,7 @@ func reportFinalityFile(w io.Writer, path string, reg *finality.Registry, pins *
 		fmt.Fprintf(w, "FAILED (finality)  %s\n  %v\n", path, err)
 		return exitFailed
 	}
-	if leg == nil {
+	if leg == nil && section.Leg.HeaderRLP == "" {
 		st := finality.IncludedUnavailable(finality.IncludedSettlementNotJudged, "chain", section.Leg.Chain)
 		fmt.Fprintf(w, "SUMMARY-ONLY (finality)  %s\n  %v\n  S7  carried leg: chain %d block %d %s; %d addenda are not judged "+
 			"(name the Settlement: --outcome-file, or --proof-id with --db)\n", path, st, section.Leg.Chain,
@@ -144,13 +144,20 @@ func reportFinalityFile(w io.Writer, path string, reg *finality.Registry, pins *
 		fmt.Fprintf(w, "FAILED (finality)  %s\n  %v\n", path, err)
 		return exitFailed
 	}
+	if leg == nil {
+		// no Settlement source, but the leg carries its header (bound by Ref to blockHash and blockNumber): D0 is recomputed from that block
+		// and the addenda are judged against it; the header proves the block, not the settlement transaction, so level 1 is not claimed
+		fmt.Fprintf(w, "  S7  Settlement source: none; the leg carries its block header (leg.headerRlp, bound to blockHash and blockNumber): it proves block %d, "+
+			"not the settlement transaction, so level 1 (included) is not judged\n", carried.Number)
+		return printReport(w, reg.VerifyCarried(carried, section.Addenda, pins), path)
+	}
 	fmt.Fprintf(w, "  S7  Settlement source: %s\n", leg.source)
 	if leg.outcome != nil {
 		if field, got, want := leg.outcome.unboundField(carried); field != "" {
 			fmt.Fprintf(w, "FAILED (finality)  %s\n  outcome_not_bound{field=%s, outcome=%s, document=%s}: the outcome evidence is not the Settlement of the leg this document carries; no addendum is judged\n", path, field, got, want)
 			return exitFailed
 		}
-		fmt.Fprintf(w, "  S7  outcome transaction %s on chain %d in block %d %s: bound to the document's carried leg by chain, block number and block hash; "+
+		fmt.Fprintf(w, "  S7  outcome settlement transaction %s on chain %d in block %d %s: bound to the document's carried leg by chain, block number and block hash; "+
 			"outcome_tx_unbound{reason=document_names_no_settlement_tx} - the document names no settlement transaction, so the transaction itself is not bound to it\n",
 			leg.outcome.tx.Hex(), leg.outcome.chain, leg.outcome.blockNumber, leg.outcome.blockHash.Hex())
 	}
@@ -170,7 +177,7 @@ type legSettlement struct {
 	outcome *outcomeTx
 }
 
-// outcomeTx is what an exported outcome evidence file records about the transaction that holds the outcome.
+// outcomeTx is what an exported outcome evidence file records about its member's settlement transaction.
 type outcomeTx struct {
 	chain       uint64
 	tx          common.Hash
@@ -192,9 +199,12 @@ func (o outcomeTx) unboundField(carried finality.BlockRef) (field, outcome, docu
 	return "", "", ""
 }
 
-// settlementFromOutcomeFile reads an exported outcome evidence file (execution.OutcomeEvidence) and returns the Settlement of the
-// block that holds the recorded outcome: its header, the recording transaction and its receipt, each proven into that header by
-// ethproof (the same checks finality level 1 runs). Nothing in the file is trusted: DeriveIncluded verifies the Settlement.
+// settlementFromOutcomeFile reads an exported outcome evidence file (execution.OutcomeEvidence) and returns the Settlement of its
+// MEMBER: the block and transaction that settled the leg (the member's chain inclusion, whose transaction, block number and block
+// hash are the outcome leaf's own, committed under the certified outcome root), its header, transaction and receipt each proven into
+// that header by ethproof (the same checks finality level 1 runs). It is not the outcome RECORD's transaction (the registry write,
+// which lies in another block). A member that holds no settlement (status 3 not settled, 4 consumed elsewhere) is the named state
+// finality_included_unavailable{reason: no_settlement}. Nothing in the file is trusted: DeriveIncluded verifies the Settlement.
 func settlementFromOutcomeFile(path string) (*legSettlement, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -207,7 +217,16 @@ func settlementFromOutcomeFile(path string) (*legSettlement, error) {
 	if ev.ChainID <= 0 {
 		return nil, fmt.Errorf("the outcome evidence names chain %d", ev.ChainID)
 	}
-	inc := ev.Record.Inclusion
+	leaf := ev.Member.Leaf
+	switch execution.OutcomeStatus(leaf.Status) {
+	case execution.OutcomeExecuted, execution.OutcomeEffectsNotProven:
+	default:
+		return nil, finality.IncludedUnavailable(finality.IncludedNoSettlement, "chain", uint64(ev.ChainID))
+	}
+	if ev.Member.Transaction == nil {
+		return nil, fmt.Errorf("the outcome evidence member (status %d) carries no settlement inclusion", leaf.Status)
+	}
+	inc := *ev.Member.Transaction
 	var hdr types.Header
 	if err := rlp.DecodeBytes(inc.Header, &hdr); err != nil {
 		return nil, fmt.Errorf("the outcome evidence header does not decode: %w", err)
@@ -220,16 +239,16 @@ func settlementFromOutcomeFile(path string) (*legSettlement, error) {
 		}
 		return p
 	}
-	// the file STATES which block and transaction hold the recorded outcome: the header and the transaction bytes must be those,
-	// or the Settlement would be the proof of some other block that merely verifies by itself
-	if got, want := crypto.Keccak256Hash(inc.Header), common.HexToHash(ev.Record.BlockHash); got != want {
-		return nil, fmt.Errorf("the outcome evidence header hashes to %s, the record names block %s", got.Hex(), want.Hex())
+	// the outcome LEAF (committed under the certified outcome root) STATES which block and transaction settled the member: the header
+	// and the transaction bytes must be those, or the Settlement would be the proof of some other block that merely verifies by itself
+	if got, want := crypto.Keccak256Hash(inc.Header), common.HexToHash(leaf.BlockHash); got != want {
+		return nil, fmt.Errorf("the outcome evidence header hashes to %s, the leaf names block %s", got.Hex(), want.Hex())
 	}
-	if hdr.Number == nil || hdr.Number.Uint64() != ev.Record.BlockNumber {
-		return nil, fmt.Errorf("the outcome evidence header is not block %d", ev.Record.BlockNumber)
+	if hdr.Number == nil || hdr.Number.Uint64() != leaf.BlockNumber {
+		return nil, fmt.Errorf("the outcome evidence header is not block %d", leaf.BlockNumber)
 	}
-	if got, want := crypto.Keccak256Hash(inc.Transaction), common.HexToHash(ev.Record.Tx); got != want {
-		return nil, fmt.Errorf("the outcome evidence transaction hashes to %s, the record names %s", got.Hex(), want.Hex())
+	if got, want := crypto.Keccak256Hash(inc.Transaction), common.HexToHash(leaf.Tx); got != want {
+		return nil, fmt.Errorf("the outcome evidence transaction hashes to %s, the leaf names %s", got.Hex(), want.Hex())
 	}
 	s := &ethproof.Settlement{
 		BlockHash: crypto.Keccak256Hash(inc.Header), Header: inc.Header, TxHash: crypto.Keccak256Hash(inc.Transaction),

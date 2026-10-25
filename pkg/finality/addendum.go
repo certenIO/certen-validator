@@ -242,7 +242,7 @@ func (a Addendum) MarshalJSON() ([]byte, error) {
 // The state is always finality_addendum_malformed{field, reason[, key][, index]}: field names the member, or the object for a
 // key refusal. Hex is lower case only; an integer is a JSON integer that fits uint64; null is never a value.
 
-func strictObject(raw []byte, field string, keys []string) (map[string]json.RawMessage, error) {
+func strictObject(raw []byte, field string, keys []string, optional ...string) (map[string]json.RawMessage, error) {
 	if !json.Valid(raw) {
 		return nil, AddendumMalformed(field, AddendumNotJSON)
 	}
@@ -253,6 +253,9 @@ func strictObject(raw []byte, field string, keys []string) (map[string]json.RawM
 	}
 	allowed := map[string]bool{}
 	for _, k := range keys {
+		allowed[k] = true
+	}
+	for _, k := range optional {
 		allowed[k] = true
 	}
 	out := map[string]json.RawMessage{}
@@ -392,14 +395,24 @@ func (a *Addendum) UnmarshalJSON(b []byte) error {
 // SectionFormat is the format string of the portable document's `finality` member.
 const SectionFormat = "certen-finality-addenda/1"
 
-// CarriedLeg is the `leg` member of the finality section: the block the addenda claim to be about.
+// MaxLegHeaderBytes bounds the carried settlement header (a few hundred bytes today) before it is hashed.
+const MaxLegHeaderBytes = 16 << 10
+
+// CarriedLeg is the `leg` member of the finality section: the block the addenda claim to be about. HeaderRLP is OPTIONAL: the lower-case
+// hex of the settlement block's header RLP, bound by keccak256(header) == blockHash and by the block number read positionally from the
+// header == blockNumber (V2_SPEC_S7 5.1 item 8), so a holder of the section alone can recompute D0 and judge the addenda against that
+// block. It proves the block, not the settlement transaction (R12-OUTCOME-TX; a composer that has no header omits the member).
 type CarriedLeg struct {
 	Chain       uint64 `json:"chain"`
 	BlockNumber uint64 `json:"blockNumber"`
-	BlockHash   string `json:"blockHash"` // hex32
+	BlockHash   string `json:"blockHash"`           // hex32
+	HeaderRLP   string `json:"headerRlp,omitempty"` // hex, optional
 }
 
-// Ref is the carried leg as a BlockRef (no header). blockHash is 32 bytes of lower-case hex.
+// Ref is the carried leg as a BlockRef. blockHash is 32 bytes of lower-case hex. When the leg carries its header, the header is bound
+// here: keccak256(header) must equal blockHash and its block number (read positionally) must equal blockNumber, else
+// finality_chain_broken{seq: 0, check: leg_binding, want, got} naming the differing member in both maps; the BlockRef then holds the
+// header. A header that is not a readable block header is the named malformed state of ReadHeader. Without a header the BlockRef has none.
 func (c CarriedLeg) Ref() (BlockRef, error) {
 	raw, err := strictHex(c.BlockHash, "leg.blockHash", 32)
 	if err != nil {
@@ -407,12 +420,43 @@ func (c CarriedLeg) Ref() (BlockRef, error) {
 	}
 	var h [32]byte
 	copy(h[:], raw)
-	return BlockRef{Chain: c.Chain, Number: c.BlockNumber, Hash: h}, nil
+	ref := BlockRef{Chain: c.Chain, Number: c.BlockNumber, Hash: h}
+	if c.HeaderRLP == "" {
+		return ref, nil
+	}
+	hdr, err := strictHex(c.HeaderRLP, "leg.headerRlp", -1)
+	if err != nil {
+		return BlockRef{}, err
+	}
+	if len(hdr) == 0 || len(hdr) > MaxLegHeaderBytes {
+		return BlockRef{}, AddendumMalformed("leg.headerRlp", AddendumBadValue)
+	}
+	f, err := ReadHeader(hdr)
+	if err != nil {
+		return BlockRef{}, err
+	}
+	if f.Hash != h {
+		return BlockRef{}, ChainBroken(0, CheckLegBinding, "want", map[string]any{"blockHash": f.Hash}, "got", map[string]any{"blockHash": h})
+	}
+	if f.Number != c.BlockNumber {
+		return BlockRef{}, ChainBroken(0, CheckLegBinding, "want", map[string]any{"blockNumber": f.Number}, "got", map[string]any{"blockNumber": c.BlockNumber})
+	}
+	ref.HeaderRLP = hdr
+	return ref, nil
 }
 
-// CarriedLegOf renders a BlockRef as the carried form.
+// CarriedLegOf renders a BlockRef as the carried form, without its header (the member a composer without the header emits).
 func CarriedLegOf(b BlockRef) CarriedLeg {
 	return CarriedLeg{Chain: b.Chain, BlockNumber: b.Number, BlockHash: hex.EncodeToString(b.Hash[:])}
+}
+
+// CarriedLegWithHeaderOf renders a BlockRef as the carried form WITH its header when it holds one (b.HeaderRLP non-empty).
+func CarriedLegWithHeaderOf(b BlockRef) CarriedLeg {
+	c := CarriedLegOf(b)
+	if len(b.HeaderRLP) > 0 {
+		c.HeaderRLP = hex.EncodeToString(b.HeaderRLP)
+	}
+	return c
 }
 
 // Section is the value of a portable document's `finality` member (V2_SPEC_S7 2.5).
@@ -425,6 +469,13 @@ type Section struct {
 // NewSection builds the member for a leg's chain.
 func NewSection(leg BlockRef, chain []Addendum) Section {
 	return Section{Format: SectionFormat, Leg: CarriedLegOf(leg), Addenda: append([]Addendum{}, chain...)}
+}
+
+// NewSectionWithHeader is NewSection with the leg's header carried when the leg holds one (leg.HeaderRLP non-empty).
+func NewSectionWithHeader(leg BlockRef, chain []Addendum) Section {
+	s := NewSection(leg, chain)
+	s.Leg = CarriedLegWithHeaderOf(leg)
+	return s
 }
 
 var (
@@ -447,7 +498,7 @@ func ParseSection(raw []byte) (Section, error) {
 	if format != SectionFormat {
 		return Section{}, AddendumMalformed("format", AddendumWrongFormat)
 	}
-	lm, err := strictObject(m["leg"], "leg", legKeys)
+	lm, err := strictObject(m["leg"], "leg", legKeys, "headerRlp") // headerRlp is the one optional member
 	if err != nil {
 		return Section{}, err
 	}
@@ -464,6 +515,20 @@ func ParseSection(raw []byte) (Section, error) {
 		return Section{}, err
 	}
 	s.Leg.BlockHash = hex.EncodeToString(hash[:])
+	if rawHeader, has := lm["headerRlp"]; has {
+		hs, err := strictString(rawHeader, "leg.headerRlp")
+		if err != nil {
+			return Section{}, err
+		}
+		hb, err := strictHex(hs, "leg.headerRlp", -1)
+		if err != nil {
+			return Section{}, err
+		}
+		if len(hb) == 0 || len(hb) > MaxLegHeaderBytes {
+			return Section{}, AddendumMalformed("leg.headerRlp", AddendumBadValue)
+		}
+		s.Leg.HeaderRLP = hs
+	}
 	var list []json.RawMessage
 	if string(bytes.TrimSpace(m["addenda"])) == "null" || json.Unmarshal(m["addenda"], &list) != nil {
 		return Section{}, AddendumMalformed("addenda", AddendumBadValue)
