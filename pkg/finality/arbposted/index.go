@@ -23,7 +23,7 @@ import (
 //	e/<minTs>/<maxTs>/<N>    batch entry at the same key: the batch's time bounds, what its payload decoded to (the fingerprints of its
 //	                         messages' standard-transaction lists) and the binding to the batch row it was made from
 //	q/<N>                    self-check quarantine record at the entry's key
-//	w/<minTs>/<maxTs>/<N>    (only for a batch whose time bounds are wider than the lookup window below) pointer at key (0, zero hash) to the batch's entry:
+//	w/<minTs>/<maxTs>/<N>    (only for a batch whose time bounds are wider than the lookup window below) pointer at key (block 0, the batch's OWN block hash; see wideKey) to the batch's entry:
 //	                         its block and hash. A lookup lists this point range (empty in production: every batch has the same bounds) and adds the
 //	                         entries whose bounds hold the timestamp to its candidates, so no batch the reference could serve is outside the lookup
 //	u                        record of a captured block the indexer cannot read (insert-only, the reason as content)
