@@ -83,6 +83,7 @@ MIGRATION_SHA='
 00028 759cfbda9571a7a1063a4034fcf7502ce94210800ed49eb53e4e5992ab8b81c5
 00029 2cc377c51c1b1269c8173e850e011646a16a7adb6a49945451fb199b1a63b533
 00030 15cc06b9b3b25b034b2db8ffccc457b26862ab11cd83b6d035b6a144bd3da9d5
+00031 4e12e8af196bae8f6812c67c193dfffb44b51197c64f0c5a3bc14efc244f4e1a
 '
 
 if [ "${1:-}" = "--selftest-migrations" ]; then
@@ -1635,6 +1636,41 @@ S8ROW
     fi
   done
 fi
+
+# ==============================================================================================================================
+# (s8) S8 contract identity (RB12 EPSILON WP-S8-5): the shapes ComposeContractIdentity (pkg/database/contract_identity_compose.go) reads
+# ==============================================================================================================================
+section "(s8) S8 contract identity: the stored shapes ComposeContractIdentity reads, and the S8 tables (migration 00031)"
+s8chk() {   # $1 id, $2 title, $3 expected, $4 SQL returning one integer = number of rows that CONTRADICT the shape, $5 FAIL|WARN when > 0
+  local n
+  if n=$(scalar "$4;"); then
+    if [ "${n:-x}" = "0" ]; then rec PASS "$1" "$2" "$3" "0 contradicting rows"; else rec "$5" "$1" "$2" "$3" "${n:-?} contradicting rows"; fi
+  else rec NOT-CHECKED "$1" "$2" "$3" "query failed: ${QERR:-?}"; fi
+}
+S8T=$(scalar "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('proof_identity_capture','proof_contract_identity');") || S8T=""
+case "$S8T" in
+  0) rec PASS S8-1 "the S8 tables are absent before migration 00031" "absent before the migration is applied, 2 tables after" "0 of 2 tables (migration 00031 not yet applied)" ;;
+  2) S8R=$(scalar "SELECT (SELECT count(*) FROM proof_identity_capture) + (SELECT count(*) FROM proof_contract_identity);")
+     if [ "${S8R:-x}" = "0" ]; then rec PASS S8-1 "the S8 tables exist and are empty before the capture is deployed" "2 tables, 0 rows" "2 tables, 0 rows"
+     else rec WARN S8-1 "the S8 tables hold rows" "empty until the capture is deployed; rows afterwards are expected" "2 tables, ${S8R:-?} rows (insert-only; read the capture rates, OQ-S8-11)"; fi ;;
+  *) rec NOT-CHECKED S8-1 "the S8 tables" "0 or 2 tables" "observed '${S8T:-unreadable}'" ;;
+esac
+s8chk S8-2 "intent_quorum_certificates.registry: an object whose members each carry bls_pub_key = 192 lowercase hex WITHOUT 0x and evm_address = 42 characters (M17)" \
+  "0 violating rows" "SELECT count(*) FROM intent_quorum_certificates q WHERE jsonb_typeof(q.registry) <> 'object' OR jsonb_typeof(q.registry->'members') <> 'array' OR jsonb_array_length(q.registry->'members') = 0 OR EXISTS (SELECT 1 FROM jsonb_array_elements(q.registry->'members') m WHERE (m->>'bls_pub_key') !~ '^[0-9a-f]{192}\$' OR length(m->>'evm_address') <> 42 OR jsonb_typeof(m->'power') <> 'number')" FAIL
+s8chk S8-3 "intent_quorum_certificates.registry: certen_set_root and threshold_numerator/denominator present" "0 violating rows" \
+  "SELECT count(*) FROM intent_quorum_certificates q WHERE (q.registry->>'certen_set_root') !~ '^0x[0-9a-f]{64}\$' OR jsonb_typeof(q.registry->'threshold_numerator') <> 'number' OR jsonb_typeof(q.registry->'threshold_denominator') <> 'number'" FAIL
+s8chk S8-4 "intent_quorum_certificates.message_inputs: accumulate_set_root and incarnation are 0x + 64 hex" "0 violating rows" \
+  "SELECT count(*) FROM intent_quorum_certificates q WHERE (q.message_inputs->>'accumulate_set_root') !~ '^0x[0-9a-f]{64}\$' OR (q.message_inputs->>'incarnation') !~ '^0x[0-9a-f]{64}\$'" WARN
+s8chk S8-5 "external_chain_results.operation_id is 32 bytes and names an intent_quorum_certificates row (0x + hex)" "0 rows with a bad operation_id" \
+  "SELECT count(*) FROM external_chain_results WHERE octet_length(operation_id) <> 32" FAIL
+s8chk S8-6 "proof_artifacts.account_url of settled legs starts with acc:// (ADIURLOf reads its host)" "0 settled proofs with another form" \
+  "SELECT count(*) FROM proof_artifacts WHERE settlement_tx_hash IS NOT NULL AND account_url !~ '^acc://[^/]+'" WARN
+s8chk S8-7 "external_chain_results.artifact_json holds the S6 replay_guard evidence (S6Of reads artifact_json->'replay_guard')" "0 results WITHOUT replay_guard (every leg would be s6_proven or s6_not_proven)" \
+  "SELECT count(*) FROM external_chain_results WHERE NOT (coalesce(artifact_json,'{}'::jsonb) ? 'replay_guard')" WARN
+s8chk S8-8 "legs with a QC row: anchor_batches.accumulate_set_root populated (87 of 71611 batches on 2026-10-25)" "0 batches without it among the batches of QC operation ids" \
+  "SELECT count(*) FROM anchor_batches b WHERE b.accumulate_set_root IS NULL AND EXISTS (SELECT 1 FROM intent_quorum_certificates q WHERE q.operation_id = b.batch_operation_id)" WARN
+rec NOT-CHECKED S8-9 "proof_bundles.bundle_data component 1_merkle_inclusion.merkle_root is 64 lowercase hex (the batch root, no 0x)" \
+  "str64 in every bundle" "read by hand with jq on the newest settled bundle on 2026-10-25 (str64); the sampled loop (b3) does not read component 1, so this stays NOT-CHECKED here"
 
 # ==============================================================================================================================
 # what this script CANNOT check read-only
