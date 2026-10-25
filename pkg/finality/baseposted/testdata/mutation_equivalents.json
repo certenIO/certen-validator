@@ -422,5 +422,69 @@
     "original": "max < uint64(math.MaxInt)",
     "mutated": "max <= uint64(math.MaxInt)",
     "reason": "when max equals math.MaxInt, int(max) is math.MaxInt, the value capInt already holds."
+  },
+  {
+    "file": "channel.go",
+    "function": "blobToData",
+    "operator": "int_literal",
+    "original": "out[0:27]",
+    "mutated": "out[0:28]",
+    "reason": "copy(out[0:28], b[5:]) also writes out[27]; the first reassemble call (opos 124 decremented to 123) assigns out[opos-96] = out[27] = x, so byte 27 is overwritten before anything reads it."
+  },
+  {
+    "file": "channel.go",
+    "function": "blobToData",
+    "operator": "cmp_boundary",
+    "original": "i < 1024",
+    "mutated": "i <= 1024",
+    "reason": "The loop also requires opos < outLen. outLen <= blobMaxData is checked at the top, and before iteration i = 1024 opos is 123 + 1023*127 = 130044 = blobMaxData, so the opos operand has already ended the loop; the bound 1024 never decides."
+  },
+  {
+    "file": "channel.go",
+    "function": "encodeBlob",
+    "operator": "cmp_boundary",
+    "original": "round < 1024",
+    "mutated": "round <= 1024",
+    "reason": "A 1025th round would also need readOffset < len(data); 1024 rounds consume 1024*127 = 130048 stream bytes (4 header + 130044 data), at least len(data), so readOffset == len(data) and the second operand ends the loop."
+  },
+  {
+    "file": "channel.go",
+    "function": "encodeBlob",
+    "operator": "logic_swap",
+    "original": "round < 1024 && readOffset < len(data)",
+    "mutated": "round < 1024 || readOffset < len(data)",
+    "reason": "With || the loop also runs the rounds after the data is consumed; each writes only zeros (read31 and read1 return zeros past the end, round 0 of empty data writes a zero header) into the zero-initialised blob, so the blob is identical."
+  },
+  {
+    "file": "channel.go",
+    "function": "encodeBlob",
+    "operator": "cmp_boundary",
+    "original": "readOffset < len(data)",
+    "mutated": "readOffset <= len(data)",
+    "reason": "With <= one more round runs when readOffset == len(data) and round < 1024; it writes only zeros into the zero-initialised blob, so the blob is identical."
+  },
+  {
+    "file": "channel.go",
+    "function": "encodeBlob",
+    "operator": "int_literal",
+    "original": "buf31[0]",
+    "mutated": "buf31[1]",
+    "reason": "The statement is a tuple assignment evaluated left to right: with the index changed, buf31[1] is set to 0 and then to byte(ilen>>16), and buf31[0] stays the 0 the buffer was zeroed with, so the final buffer is the same."
+  },
+  {
+    "file": "channel.go",
+    "function": "encodeBlob",
+    "operator": "guard_off",
+    "original": "if readOffset < len(data)",
+    "mutated": "if false",
+    "reason": "len(data) <= blobMaxData is checked at the top and 1024 rounds consume 130048 stream bytes (4 header + 130044 data), so readOffset == len(data) after the loop and the refusal is unreachable."
+  },
+  {
+    "file": "verify.go",
+    "function": "Kind.Verify",
+    "operator": "guard_off",
+    "original": "if !bytes.Equal(EncodeBody(body), c.Body)",
+    "mutated": "if false",
+    "reason": "Every part of the body is decoded by a reader with exactly one encoding per value (u32 counts and lengths, u64/u32 fixed widths, a fixed channel id, trailing bytes refused by End, NODES refused unless strictly ascending and unique by keccak256, the LC part re-encoded from its decoded value); a probe of every byte of the 26,139-byte LC part of the published vector with two bit flips each found no body that decodes but re-encodes differently, so the equality check is a canonicality backstop that no input reaches."
   }
 ]

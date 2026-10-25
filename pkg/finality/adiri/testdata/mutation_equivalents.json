@@ -1,0 +1,186 @@
+[
+  {
+    "file": "cfa1.go",
+    "function": "CFA1.Encode",
+    "operator": "cmp_boundary",
+    "original": "len(c.Records) > 0xffffffff",
+    "mutated": "len(c.Records) >= 0xffffffff",
+    "reason": "The two forms differ only for a Records slice of exactly 4294967295 elements; a Record is at least 130 bytes (two u64, two B32, a B48 and the index bytes), so that slice is over 500 GB and no test or host can build it. The bound is the width guard of the u32 record count."
+  },
+  {
+    "file": "cfa1.go",
+    "function": "CFA1.Encode",
+    "operator": "int_literal",
+    "original": "len(c.Records) > 0xffffffff",
+    "mutated": "len(c.Records) > 0x100000000",
+    "reason": "The two forms differ only for a Records slice of exactly 4294967296 elements; a Record is at least 130 bytes, so that slice is over 500 GB and no test or host can build it. The bound is the width guard of the u32 record count."
+  },
+  {
+    "file": "cfa1.go",
+    "function": "max8",
+    "operator": "cmp_boundary",
+    "original": "a > b",
+    "mutated": "a >= b",
+    "reason": "max8 returns b when a == b under both forms, and the same value as a."
+  },
+  {
+    "file": "chain.go",
+    "function": "VerifyCommitteeChain",
+    "operator": "guard_off",
+    "original": "if err != nil",
+    "mutated": "if false",
+    "reason": "RecordDigests fails only through checkRecordTables, which VerifyCommitteeChain already ran for every record a few statements earlier, so the call cannot fail here."
+  },
+  {
+    "file": "chain.go",
+    "function": "VerifyCommitteeChain",
+    "operator": "cmp_boundary",
+    "original": "dup >= 0",
+    "mutated": "dup > 0",
+    "reason": "firstDuplicate returns the index of the SECOND occurrence of a key (at least 1) or -1; it never returns 0, so dup >= 0 and dup > 0 agree."
+  },
+  {
+    "file": "kind.go",
+    "function": "DecodeBody",
+    "operator": "cmp_boundary",
+    "original": "maxHeaders < limit",
+    "mutated": "maxHeaders <= limit",
+    "reason": "When maxHeaders equals limit the assignment limit = maxHeaders leaves limit unchanged."
+  },
+  {
+    "file": "kind.go",
+    "function": "numberAt",
+    "operator": "cmp_boundary",
+    "original": "uint64(i) > top",
+    "mutated": "uint64(i) >= top",
+    "reason": "numberAt returns top - i, which is 0 when i == top, the value the saturating branch returns, so > and >= agree."
+  },
+  {
+    "file": "kind.go",
+    "function": "consensusRootOf",
+    "operator": "guard_off",
+    "original": "if err != nil",
+    "mutated": "if false",
+    "reason": "rlp.SplitList returns nil content with its error, so with the guard off the loop does not run and the zero hash is returned, as the early return does."
+  },
+  {
+    "file": "kind.go",
+    "function": "consensusRootOf",
+    "operator": "cmp_boundary",
+    "original": "len(content) > 0",
+    "mutated": "len(content) >= 0",
+    "reason": "With >= 0 the loop ends through rlp.Split of the empty remainder (io.ErrUnexpectedEOF), whose error path returns the zero hash, the value the loop exit returns."
+  },
+  {
+    "file": "kind.go",
+    "function": "consensusRootOf",
+    "operator": "int_literal",
+    "original": "len(content) > 0",
+    "mutated": "len(content) > 1",
+    "reason": "A list content of exactly one byte holds one item at index 0, never 19, so skipping the loop and reading it both return the zero hash."
+  },
+  {
+    "file": "record.go",
+    "function": "pinsDecodeError",
+    "operator": "cmp_boundary",
+    "original": "i >= 0",
+    "mutated": "i > 0",
+    "reason": "encoding/json's message begins with the prefix 'json: ', so the index of 'unknown field \"' is never 0 and i >= 0 and i > 0 agree."
+  },
+  {
+    "file": "sigs.go",
+    "function": "decodeSignature",
+    "operator": "guard_off",
+    "original": "if !p.IsOnCurve()",
+    "mutated": "if false",
+    "reason": "The compressed decoder solves y from x on the curve equation, so every point it returns is on the curve; the guard repeats the decoder's own guarantee."
+  },
+  {
+    "file": "sigs.go",
+    "function": "verifyOne",
+    "operator": "guard_off",
+    "original": "if bls.ValidateBLSSignatureSubgroup(it.sig) != nil",
+    "mutated": "if false",
+    "reason": "verifyOne runs decodeSignature first, which already refuses a signature outside the subgroup (ReasonSubgroup), so the later subgroup validation never fails for a signature that got this far."
+  },
+  {
+    "file": "sigs.go",
+    "function": "verifyOne",
+    "operator": "guard_off",
+    "original": "if err != nil",
+    "mutated": "if false",
+    "reason": "SignatureFromBytes fails only on the encoding, identity and subgroup conditions that decodeSignature refused just above, so it cannot fail here."
+  },
+  {
+    "file": "sigs.go",
+    "function": "batchedAccepts",
+    "operator": "guard_off",
+    "original": "if reason != \"\"",
+    "mutated": "if false",
+    "reason": "batchedAccepts is called only by firstFailure after every signature passed decodeSignature, so reason != '' is unreachable here (the contract of the function is that every signature has already decoded)."
+  },
+  {
+    "file": "sigs.go",
+    "function": "batchedAccepts",
+    "operator": "bool_lit",
+    "original": "return false, nil",
+    "mutated": "return true, nil",
+    "reason": "Unreachable: every signature has already passed decodeSignature (see the guard above), so this return is never taken."
+  },
+  {
+    "file": "sigs.go",
+    "function": "batchedAccepts",
+    "operator": "bool_lit",
+    "original": "return false, err",
+    "mutated": "return true, err",
+    "reason": "The caller returns the error before it reads the boolean (firstFailure: if err != nil return -1, '', err), so the boolean returned with an error is never used."
+  },
+  {
+    "file": "sigs.go",
+    "function": "batchedAccepts",
+    "operator": "int_literal",
+    "original": "i == 0",
+    "mutated": "i == -1",
+    "reason": "With i == -1 never true the accumulator starts at the point at infinity and every key is added to it; adding to infinity yields the key, so the sum is identical."
+  },
+  {
+    "file": "sigs.go",
+    "function": "batchedAccepts",
+    "operator": "guard_off",
+    "original": "if err != nil",
+    "mutated": "if false",
+    "reason": "bls12381.HashToG1 fails only for a domain separation tag longer than 255 bytes; bls.SignatureDST is a fixed constant, so the call cannot fail."
+  },
+  {
+    "file": "sigs.go",
+    "function": "firstFailure",
+    "operator": "guard_off",
+    "original": "if _, reason := decodeSignature(it.sig); reason != \"\"",
+    "mutated": "if _, reason := decodeSignature(it.sig); false",
+    "reason": "Without the pre-check a signature that does not decode reaches batchedAccepts, which returns false on it, and the one-by-one pass that follows names the same first failure; only the work saved differs."
+  },
+  {
+    "file": "sigs.go",
+    "function": "firstFailure",
+    "operator": "bool_lit",
+    "original": "decodeFailed = true",
+    "mutated": "decodeFailed = false",
+    "reason": "decodeFailed only skips batchedAccepts, which returns false on a signature that does not decode; the one-by-one pass that follows names the same first failure."
+  },
+  {
+    "file": "sigs.go",
+    "function": "firstFailure",
+    "operator": "guard_off",
+    "original": "if i < 0 && mode == ModeBatched",
+    "mutated": "if false",
+    "reason": "Reached only if every signature verifies one by one while the random linear combination rejects them, which cannot happen: a linear combination of valid pairing equations holds for every non-zero scalar (the branch is the defence against a broken implementation, as its comment says)."
+  },
+  {
+    "file": "sigs.go",
+    "function": "firstFailure",
+    "operator": "int_literal",
+    "original": "i < 0",
+    "mutated": "i < -1",
+    "reason": "Reached only if every signature verifies one by one while the random linear combination rejects them, which cannot happen: a linear combination of valid pairing equations holds for every non-zero scalar."
+  }
+]
