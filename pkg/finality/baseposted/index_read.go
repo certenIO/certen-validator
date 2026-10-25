@@ -120,6 +120,12 @@ func (r *IndexReader) Find(ctx context.Context, t, origin, end uint64, io *ioCou
 // a damaged or quarantined entry, a channel broken by a late frame) never hides another: its failure is remembered and is the answer only
 // when no candidate in any part holds t (RB12-INDEX-FIX D1: one junk channel must not deny every honest leg).
 func (r *IndexReader) FindAll(ctx context.Context, t, origin, end uint64, io *ioCount) (hits []*indexHit, names []entryName, err error) {
+	return r.FindAllFrom(ctx, t, origin, origin, end, io)
+}
+
+// FindAllFrom is FindAll reading the entries that close in [lo, end] (lo <= origin), the widening parts anchored at origin: a channel that
+// streams can close below the epoch of its batch (RB12-F14). The names it returns are those of the whole range read.
+func (r *IndexReader) FindAllFrom(ctx context.Context, t, lo, origin, end uint64, io *ioCount) (hits []*indexHit, names []entryName, err error) {
 	step := r.Pins.L2BlockTime
 	prefix := r.item(itemChannel) + "/"
 	chain := uint64(Chain)
@@ -131,7 +137,7 @@ func (r *IndexReader) FindAll(ctx context.Context, t, origin, end uint64, io *io
 			firstFailure = e
 		}
 	}
-	next := origin
+	next := lo
 	for i := 0; ; i++ {
 		hi := end
 		if i < len(searchSteps) && origin+searchSteps[i] < end {
@@ -349,12 +355,12 @@ func (r *IndexReader) unindexableIn(ctx context.Context, origin, end uint64) (*f
 
 // searchIndexed is search's index path: the same prelude (origin, window, capture cursor) and the same named outcomes, with the window
 // read replaced by a lookup. It fills sr; a nil sr.ch with sr.pending set is a named pending, a nil sr.ch alone is l1_posted_unproven.
-func (b *Builder) searchIndexed(ctx context.Context, bp *Pins, l2 finality.HeaderFields, hold *finality.Hold, sr *searched, origin, end uint64,
+func (b *Builder) searchIndexed(ctx context.Context, bp *Pins, l2 finality.HeaderFields, hold *finality.Hold, sr *searched, origin, lo, end uint64,
 	cov finality.CaptureCoverage, known bool, lower uint64, belowScanned, authentic func() error) error {
 	r := b.Index
 	io := &ioCount{}
 	defer func() { metrics.ObserveFinalityIndexLookupBytes(uint64(Chain), FamilyBaseInbox, io.n) }()
-	hits, names, err := r.FindAll(ctx, l2.Timestamp, origin, end, io)
+	hits, names, err := r.FindAllFrom(ctx, l2.Timestamp, lo, origin, end, io)
 	if err != nil {
 		metrics.IncFinalityIndexLookup(uint64(Chain), FamilyBaseInbox, "inconsistent")
 		return err

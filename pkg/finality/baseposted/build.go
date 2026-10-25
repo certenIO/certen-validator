@@ -98,9 +98,10 @@ const (
 	windowCompleteMargin = 96
 )
 
-// The window of L1 blocks the builder searches for a leg's frames is [E, E+SeqWindowSize] with E the L1 origin of its L2 block. The verifier no
-// longer refuses a frame BELOW E (it judges the completing frame against E+SeqWindowSize alone, R12-SPEC-Q1), so a streamed channel whose
-// early frames lie below E is verifiable but not yet found by this search (RB12 finding in the ledger). A leg is searched in widening parts of it.
+// The window of L1 blocks the builder must COVER for a leg's frames is [E, E+SeqWindowSize] with E the L1 origin of its L2 block; the rows it
+// READS start streamLead blocks lower, because the verifier judges the sequencing window on the completing frame alone (R12-SPEC-Q1) and
+// op-batcher streams the frames of an open channel, so early frames can lie below E (RB12-F14). A leg is searched in widening parts anchored
+// at E (the first part reaches down to the start of the rows read).
 var searchSteps = []uint64{96, 384, 1536}
 
 // memoryPerStoredByte is the heap a loaded row costs per stored byte (measured 1.43 on blob rows: the row, the decoded frame data and
@@ -376,8 +377,9 @@ type searched struct {
 }
 
 // search finds the channel that carries the batch of the leg's L2 block in the captured rows, reading the window of the store the leg
-// can need and no more (RB12-F1/F3). The frames of a batch lie in [E, E+SeqWindowSize], E being the L1 origin that the L2 block's first
-// deposit names (the verifier refuses a frame outside it), and the rows are read in widening parts of that window, so the cost of a
+// can need and no more (RB12-F1/F3). The completing frame of a batch lies in [E, E+SeqWindowSize], E being the L1 origin that the L2 block's first
+// deposit names (the verifier refuses a later one), earlier frames of a streamed channel can lie up to streamLead blocks below E (RB12-F14:
+// the rows from lo = E-streamLead are read, the coverage obligations stay on [E, E+SeqWindowSize]), and the rows are read in widening parts of that window, so the cost of a
 // leg is the rows after its origin and not the whole table. When the capture cursor shows that the window lies wholly below the first
 // block this validator's capture scanned, nothing is read at all: the evidence cannot be built from this store and the state says so
 // (l1_capture_not_covering), instead of a 300 s build that ends in a timeout. A builder without an L2 source has no origin to
@@ -416,6 +418,11 @@ func (b *Builder) search(ctx context.Context, bp *Pins, l2 finality.HeaderFields
 	if end < origin {
 		end = finality.MaxCaptureBlock
 	}
+	// lo is where the rows are READ from. op-batcher streams the ready frames of an open channel (R12-SPEC-Q1), so the first frame of a channel
+	// can lie up to a channel timeout BELOW the epoch of a later block it carries, and the verifier accepts that shape (RB12-F14). The window the
+	// capture must COVER (gaps, prefix, not-covering, the determinate not-found) stays [origin, end]: a leg's coverage is not widened, only the
+	// rows already captured below the epoch are read. A streamed channel whose early frames were never captured stays an incomplete channel.
+	lo := origin - minU64(origin, streamLead(bp, l2.Timestamp))
 	cov, known, err := finality.CaptureCoverageOf(ctx, b.Store, uint64(Chain))
 	if err != nil {
 		return sr, err
@@ -469,20 +476,20 @@ func (b *Builder) search(ctx context.Context, bp *Pins, l2 finality.HeaderFields
 	}
 	// F18: a window that holds a reorged height is read by the window reader, which keeps the canonical twin's rows (the index digests are per
 	// hash); both readers then give one answer by construction. Without an L1 provider the twins cannot be told apart and nothing changes.
-	twins, err := b.twinHeights(ctx, origin, end)
+	twins, err := b.twinHeights(ctx, lo, end)
 	if err != nil {
 		return sr, err
 	}
 	if b.Index != nil && !(len(twins) > 0 && b.L1 != nil) {
-		err := b.searchIndexed(ctx, bp, l2, hold, &sr, origin, end, cov, known, lower, belowScanned, authentic)
+		err := b.searchIndexed(ctx, bp, l2, hold, &sr, origin, lo, end, cov, known, lower, belowScanned, authentic)
 		return sr, err
 	}
 	// A held ask rebuilds no evidence and used to read the whole window (up to ~300 MB of rows) before the gap lookup. The lookups that decide
 	// whether the answer could have changed are key-only (the gap pieces of the window and the number of captured blocks in it); when
 	// they match the last held answer of this window, that answer is returned without reading a row (RB12-GO-INT D4). The fingerprint is
 	// taken BEFORE the read, so a row that arrives during it is seen by the next ask.
-	hk := heldKey{origin: origin, end: end, l2Time: l2.Timestamp}
-	fp, err := b.windowFingerprint(ctx, origin, end)
+	hk := heldKey{origin: lo, end: end, l2Time: l2.Timestamp}
+	fp, err := b.windowFingerprint(ctx, lo, end)
 	if err != nil {
 		return sr, err
 	}
@@ -493,7 +500,7 @@ func (b *Builder) search(ctx context.Context, bp *Pins, l2 finality.HeaderFields
 		return sr, finality.NewState(memo.state.Code, stateKV(memo.state)...)
 	}
 	var all []capturedTx
-	next := origin
+	next := lo
 	for i := 0; ; i++ {
 		hi := end
 		if i < len(searchSteps) && origin+searchSteps[i] < end {
@@ -865,4 +872,19 @@ func (b *Builder) prefixCovers(ctx context.Context, origin, end, lower uint64) (
 	}
 	lowest, _ := finality.PrefixLowest(merged)
 	return false, []any{"prefix_state", string(verdict), "prefix_lowest_l1_block", lowest, "prefix_blocks", finality.PrefixBlocks(merged)}, nil
+}
+
+// streamLead is how many L1 blocks below the epoch of its batch a streamed channel's first frame can lie: the channel timeout in force for
+// the frames. Every frame is within that timeout of the first one (verify.go O4) and the completing frame is not below the epoch in any real
+// posting, so the first frame is at most one timeout below the epoch. A leg whose frames are all after Granite has the Granite value; the
+// L1 block times are not known here, and an L2 block is at most the sequencer drift (1800 s) past its origin and a Granite timeout of 50
+// blocks is 600 s, so a 3600 s margin on the L2 time (or an unset Granite pin) is what lets the smaller value be used; otherwise the larger.
+func streamLead(bp *Pins, l2Time uint64) uint64 {
+	if bp.GraniteTime != 0 && l2Time >= bp.GraniteTime && l2Time-bp.GraniteTime >= 3600 {
+		return bp.ChannelTimeoutGranite
+	}
+	if bp.ChannelTimeoutGranite > bp.ChannelTimeout {
+		return bp.ChannelTimeoutGranite
+	}
+	return bp.ChannelTimeout
 }
