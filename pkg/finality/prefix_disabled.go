@@ -20,6 +20,7 @@ const CodePrefixDisabled = "finality_prefix_disabled"
 const (
 	PrefixRefusedNotInteger = IndexRefusedNotInteger // not an integer at all (text, a fraction, a hex or exponent form)
 	PrefixRefusedOutOfRange = IndexRefusedOutOfRange // an integer below the setting's minimum or above its maximum, including one too large to read
+	PrefixRefusedNotASwitch = "not_a_switch"         // CERTEN_FINALITY_PREFIX_BACKFILL is not true/false, 1/0, yes/no or on/off
 )
 
 // PrefixDisabledState builds finality_prefix_disabled for the setting variable on chain.

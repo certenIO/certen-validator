@@ -68,6 +68,12 @@ const (
 	EnvPrefixChunk   = "CERTEN_FINALITY_PREFIX_CHUNK_BLOCKS"
 	EnvPrefixReprobe = "CERTEN_FINALITY_PREFIX_REPROBE_SECONDS"
 	EnvPrefixArbScan = "CERTEN_FINALITY_PREFIX_ARB_SCAN_BLOCKS"
+	// EnvPrefixBackfill is the operator's switch for the FETCHES of the prefix work (RB12 OPS-A2, finding F-3): on (default) or off. Off: the
+	// Base backfill takes no window block and the Arbitrum capturer scans no range; windows are still requested and recorded, so a leg inside
+	// one is named l1_capture_gap{open}. Unlike MAX_BLOCKS=0 (which only stops NEW requests) it stops the fetches of windows already recorded
+	// by any validator, which is how disk growth (about 85 KB of rows per block) is paused. A value that is not a switch is a refused setting:
+	// finality_prefix_disabled{variable, reason: setting_invalid, refused: not_a_switch} for both chains.
+	EnvPrefixBackfill = "CERTEN_FINALITY_PREFIX_BACKFILL"
 	// EnvArbIndex switches the Arbitrum batch index (RB12-INDEX-B) on (default) or off. Off: the Arbitrum builder reads every captured batch and
 	// decodes every batch of the leg's window as before, and nothing is indexed. EnvArbIndexGeneration starts a new generation.
 	EnvArbIndex           = "CERTEN_FINALITY_ARB_INDEX"
@@ -129,6 +135,7 @@ type Config struct {
 	PrefixChunk        int                    // blocks per claim
 	PrefixReprobe      time.Duration          // how often blocks proven unavailable are asked again
 	PrefixArbScan      int                    // L1 blocks one Arbitrum prefix scan reads (one eth_getLogs answer) and the size of its claim chunk
+	PrefixBackfill     bool                   // the prefix fetches are on (EnvPrefixBackfill); false is the operator's choice and is announced, not an error
 	PrefixDisabled     []*finality.StateError // finality_prefix_disabled{chain, variable, reason, refused}: one per chain and refused prefix setting; that chain's prefix work is off
 	ArbIndex           bool                   // the Arbitrum batch index is built and used (EnvArbIndex)
 	ArbIndexDisabled   *finality.StateError   // set when a bad setting switched the Arbitrum index off: finality_index_disabled{chain=421614, ...}
@@ -651,6 +658,14 @@ type prefixRefusal struct {
 func (c *Config) readPrefixSettings() []prefixRefusal {
 	c.PrefixDisabled = nil
 	var out []prefixRefusal
+	c.PrefixBackfill = true
+	if on, err := envvar.Bool(EnvPrefixBackfill, true); err != nil {
+		out = append(out, prefixRefusal{Refusal: envvar.Refuse(EnvPrefixBackfill, strings.TrimSpace(os.Getenv(EnvPrefixBackfill)), "a switch (true/false, 1/0, yes/no, on/off)").(*envvar.Refusal), Refused: finality.PrefixRefusedNotASwitch})
+		c.PrefixDisabled = append(c.PrefixDisabled, finality.PrefixDisabledState(finality.ChainBaseSepolia, EnvPrefixBackfill, finality.PrefixRefusedNotASwitch),
+			finality.PrefixDisabledState(finality.ChainArbitrumSepolia, EnvPrefixBackfill, finality.PrefixRefusedNotASwitch))
+	} else {
+		c.PrefixBackfill = on
+	}
 	for _, p := range prefixSettings {
 		v, refused := prefixUint(p.env, p.def, p.lo, p.hi)
 		p.set(c, v)
@@ -699,6 +714,12 @@ func prefixUint(key string, def, lo, hi uint64) (uint64, string) {
 // prefixOff reports whether the prefix work of the chain is switched off by a refused prefix setting.
 func (c Config) prefixOff(chain uint64) bool {
 	return len(c.prefixStates(chain)) > 0
+}
+
+// backfillOff reports whether the prefix FETCHES of a chain are off: a refused prefix setting (prefixOff) or the operator's switch
+// CERTEN_FINALITY_PREFIX_BACKFILL=off. Requests are governed by prefixPolicy alone and are not stopped by the switch.
+func (c Config) backfillOff(chain uint64) bool {
+	return c.prefixOff(chain) || !c.PrefixBackfill
 }
 
 // prefixStates returns the finality_prefix_disabled states of one chain.

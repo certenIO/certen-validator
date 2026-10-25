@@ -296,6 +296,7 @@ func wireBase(reg *finality.Registry, env Env, d Deps, clock loopClock, logf fun
 		finality.AnnounceIndexDisabled(logf, cfg.IndexDisabled)
 	}
 	finality.AnnouncePrefixDisabled(logf, cfg.prefixStates(finality.ChainBaseSepolia))
+	announcePrefixBackfillOff(cfg, finality.ChainBaseSepolia, logf)
 	fp, err := basefinal.ParsePins(env.Pins)
 	if err != nil {
 		return err
@@ -342,7 +343,7 @@ func wireBase(reg *finality.Registry, env Env, d Deps, clock loopClock, logf fun
 	pol := baseposted.DefaultBackfillPolicy()
 	pol.ReprobeEvery = cfg.PrefixReprobe
 	bf := &baseposted.Backfiller{Chain: finality.ChainBaseSepolia, Store: env.Store, Capturer: baseposted.CapturerOf(capt), Providers: Hosts(cfg.Beacon),
-		Policy: pol, Lease: lease, Now: d.Now, Logf: logf, NoPrefix: cfg.prefixOff(finality.ChainBaseSepolia)}
+		Policy: pol, Lease: lease, Now: d.Now, Logf: logf, NoPrefix: cfg.backfillOff(finality.ChainBaseSepolia)}
 	// every block the backfill closes (a gap block or a PREFIX block, which arrive out of order and far below the index cursor) is told to the capture
 	// index right after its fill row: the indexer digests it and completes its channels at its next step (duty a of the Train 3 integration)
 	if nt, ok := indexer.(finality.LateBlockNoter); ok {
@@ -386,6 +387,7 @@ func wireArb(reg *finality.Registry, env Env, d Deps, clock loopClock, logf func
 		L1: &ArbL1{LC: lcPlain{cache}, Headers: hdr}, Pins: env.Pins, Now: d.Now,
 		Prefix: cfg.prefixPolicy(finality.ChainArbitrumSepolia)}
 	finality.AnnouncePrefixDisabled(logf, cfg.prefixStates(finality.ChainArbitrumSepolia))
+	announcePrefixBackfillOff(cfg, finality.ChainArbitrumSepolia, logf)
 	// the batch index (RB12-INDEX-B): built as batches are captured, read by the builder; off by CERTEN_FINALITY_ARB_INDEX=off, and named off by a
 	// bad setting (finality_index_disabled), in which case the builder reads every captured batch as before
 	var indexer finality.CaptureIndexer
@@ -432,7 +434,7 @@ func wireArb(reg *finality.Registry, env Env, d Deps, clock loopClock, logf func
 		return err
 	}
 	arbLease.Span, arbLease.Chunk = cfg.PrefixLease, uint64(cfg.PrefixArbScan)
-	if !cfg.prefixOff(finality.ChainArbitrumSepolia) { // a refused prefix setting (finality_prefix_disabled): the capturer scans no window
+	if !cfg.backfillOff(finality.ChainArbitrumSepolia) { // a refused prefix setting (finality_prefix_disabled) or the operator's switch: the capturer scans no window
 		cp.Prefix = &capture.PrefixScan{Lease: arbLease, Blocks: uint64(cfg.PrefixArbScan), Now: d.Now}
 	}
 	// THE authorization of a captured batch (capture/authorize.go): the live capture and the batches the prefix scan stores both judge a batch by it
@@ -549,5 +551,13 @@ func prefixFloorOf(store finality.CaptureStore, chain uint64) func(ctx context.C
 		}
 		lo, ok := finality.PrefixLowest(finality.MergePrefixWindows(ws))
 		return lo, ok, nil
+	}
+}
+
+// announcePrefixBackfillOff logs the operator's choice to stop the prefix fetches of a chain (CERTEN_FINALITY_PREFIX_BACKFILL=off). A refused
+// setting is announced by finality.AnnouncePrefixDisabled instead; an operator mode is not an error and has no gauge.
+func announcePrefixBackfillOff(cfg Config, chain uint64, logf func(string, ...any)) {
+	if !cfg.PrefixBackfill && !cfg.prefixOff(chain) {
+		logf("[FINALITY] prefix backfill OFF by %s on chain %d: windows are still requested and recorded, none is fetched", EnvPrefixBackfill, chain)
 	}
 }
