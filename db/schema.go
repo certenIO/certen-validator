@@ -100,10 +100,20 @@ func parseFingerprint(name, source string) (string, error) {
 // prevents the legacy nested-BEGIN/COMMIT failure mode, and owns the session settings (the timeouts). A function ATTRIBUTE
 // (CREATE FUNCTION ... SET search_path = pg_catalog, pg_temp, which migrations must write to pin name resolution) and the SET clause of an
 // UPDATE are not session settings and are accepted wherever they are written; a SET or RESET that begins a statement is not.
+//
+// Dynamic SQL (RB12 OPS-A2 item 14). ENFORCED: an EXECUTE whose text is a literal (single-quoted, dollar-quoted, or the first argument of
+// format) that begins with SET, RESET, BEGIN, COMMIT, END, ABORT, ROLLBACK or START, and a set_config call that names a runner-owned setting
+// (the timeouts, role, session_authorization), wherever they stand, function and DO bodies included. NOT ENFORCED, because a static scan cannot
+// judge it: an EXECUTE of a text built at run time (a variable, a concatenation, a format template that is not a literal), a set_config of a
+// setting whose name is built at run time, and anything a function does when it is CALLED rather than when the migration runs. Those rest on
+// review of the migration. See schema_lint_dynamic_rb12_test.go.
 func Lint(m Migration) error {
 	approved := false
 	if m.Version != "00000" && hasSessionSetting(string(m.SQL)) {
 		return fmt.Errorf("%s changes session settings; configure timeouts in the runner instead", m.Name)
+	}
+	if m.Version != "00000" && hasDynamicSessionSetting(string(m.SQL)) {
+		return fmt.Errorf("%s changes session settings or controls the transaction through dynamic SQL (EXECUTE of a SET, RESET or transaction-control string, or set_config of a runner-owned setting); configure timeouts in the runner instead", m.Name)
 	}
 	var code strings.Builder
 	for _, line := range strings.Split(string(m.SQL), "\n") {
@@ -269,6 +279,55 @@ func dollarTagEnd(sql string, i int) int {
 		return j + 1
 	}
 	return 0
+}
+
+// runnerSettings are the settings the runner owns: a migration must not change them, by SET or by set_config.
+var runnerSettings = map[string]bool{
+	"STATEMENT_TIMEOUT": true, "LOCK_TIMEOUT": true, "IDLE_IN_TRANSACTION_SESSION_TIMEOUT": true, "TRANSACTION_TIMEOUT": true,
+	"ROLE": true, "SESSION_AUTHORIZATION": true,
+}
+
+// startsSessionStatement reports whether a text handed to EXECUTE begins with a statement the runner owns.
+func startsSessionStatement(text string) bool {
+	f := strings.Fields(strings.ToUpper(text))
+	if len(f) == 0 {
+		return false
+	}
+	switch f[0] {
+	case "SET", "RESET", "BEGIN", "COMMIT", "END", "ABORT", "ROLLBACK", "START":
+		return true
+	}
+	return false
+}
+
+// hasDynamicSessionSetting reports whether sql holds an EXECUTE of a literal SET, RESET or transaction-control string, or a set_config of a
+// runner-owned setting, at any depth: every quoted body is read as SQL of its own, so a function, a DO block, or an EXECUTE text written as
+// $$...$$ is judged too. A text built at run time is not judged (see Lint).
+func hasDynamicSessionSetting(sql string) bool {
+	toks := lexSQL(sql)
+	for i, tok := range toks {
+		if tok.isBody {
+			if hasDynamicSessionSetting(tok.body) {
+				return true
+			}
+			continue
+		}
+		switch tok.word {
+		case "EXECUTE":
+			j := i + 1
+			if j < len(toks) && toks[j].word == "FORMAT" {
+				j++
+			}
+			if j < len(toks) && toks[j].isBody && startsSessionStatement(toks[j].body) {
+				return true
+			}
+		case "SET_CONFIG":
+			if i+1 < len(toks) && toks[i+1].isBody && toks[i+1].isString && runnerSettings[strings.ToUpper(strings.TrimSpace(toks[i+1].body))] {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // hasSessionSetting reports whether sql holds a statement that changes a session or role setting: a statement that BEGINS with SET or
