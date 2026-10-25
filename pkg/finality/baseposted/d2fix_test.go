@@ -146,8 +146,8 @@ func TestIsthmusTimeIsAnInformationalPinOfL1PostedNoVerdictDependsOn(t *testing.
 		var out [3]string
 		for i, s := range []*synth{
 			makeSynth(t, synthOpts{compression: "zlib", calldata: true}),
-			makeSynth(t, synthOpts{compression: "zlib", calldata: true, nFrames: 2, frameBlocks: []uint64{1000, 1100}}), // timed out
-			makeSynth(t, synthOpts{compression: "zlib", calldata: true, epochNum: 1001, frameBlocks: []uint64{1000}}),   // outside the window
+			makeSynth(t, synthOpts{compression: "zlib", calldata: true, nFrames: 2, frameBlocks: []uint64{1000, 1100}}),          // timed out
+			makeSynth(t, synthOpts{compression: "zlib", calldata: true, epochNum: 1001, frameBlocks: []uint64{1001 + 3600 + 1}}), // outside the window: the completing frame is one past epoch + sequence_window_size (R12-SPEC-Q1, no lower bound)
 		} {
 			s.bp.IsthmusTime = isthmus
 			v, err := s.verify()
