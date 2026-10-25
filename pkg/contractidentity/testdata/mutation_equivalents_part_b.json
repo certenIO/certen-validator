@@ -190,5 +190,269 @@
     "original": "if err := json.Unmarshal(rawRow, &row); err != nil",
     "mutated": "if err := json.Unmarshal(rawRow, &row); false",
     "reason": "WEAK: the unreadable row is appended unchanged and the merged manifest is re-parsed, where the same row fails the same json.Unmarshal into the same row type: the verdict (manifest_corrupt) is identical and only the cause wording differs."
+  },
+  {
+    "file": "report.go",
+    "function": "Report.isPreludeRefusal",
+    "operator": "guard_off",
+    "original": "if err != nil",
+    "mutated": "if false",
+    "reason": "WEAK: DefaultRegistry returns an error only if the embedded registry is corrupt, which the package init tests refuse; the error branch is unreachable."
+  },
+  {
+    "file": "report.go",
+    "function": "Report.isPreludeRefusal",
+    "operator": "bool_lit",
+    "original": "return false",
+    "mutated": "return true",
+    "reason": "WEAK: same unreachable DefaultRegistry error branch as 1800."
+  },
+  {
+    "file": "report.go",
+    "function": "Report.Map",
+    "operator": "guard_off",
+    "original": "if err != nil",
+    "mutated": "if false",
+    "reason": "Report.Validate (called first) already evaluates Headline.State() and refuses an error, so the second call cannot fail: the guard is unreachable (WEAK)."
+  },
+  {
+    "file": "report.go",
+    "function": "Report.Map",
+    "operator": "cmp_boundary",
+    "original": "parts[i].Part < parts[j].Part",
+    "mutated": "parts[i].Part <= parts[j].Part",
+    "reason": "cmp_boundary on a sort of parts by name: Validate refuses repeated parts, so no two elements are equal and < and <= sort identically."
+  },
+  {
+    "file": "report.go",
+    "function": "Report.Map",
+    "operator": "cmp_boundary",
+    "original": "rn[i].Row < rn[j].Row",
+    "mutated": "rn[i].Row <= rn[j].Row",
+    "reason": "cmp_boundary on Row inside the branch where the rows differ: for different rows < and <= agree."
+  },
+  {
+    "file": "report.go",
+    "function": "Report.Map",
+    "operator": "cmp_boundary",
+    "original": "rn[i].Reason < rn[j].Reason",
+    "mutated": "rn[i].Reason <= rn[j].Reason",
+    "reason": "cmp_boundary on Reason for equal rows: equal reasons are identical entries, so < and <= give indistinguishable output."
+  },
+  {
+    "file": "runner.go",
+    "function": "RunSteps",
+    "operator": "bool_lit",
+    "original": "executed[id] = true",
+    "mutated": "executed[id] = false",
+    "reason": "Step 22b declares no parts (pinned by TestMutKill5RunStepsAccounting), so mergeParts never consults executed[22b]; true and false behave identically."
+  },
+  {
+    "file": "runner.go",
+    "function": "validateOutput",
+    "operator": "bool_call",
+    "original": "err := validatePartResult(&p, env.Registry9Present())",
+    "mutated": "err := validatePartResult(&p, true)",
+    "reason": "The registry9 argument of validatePartResult only matters for the status open (IsCoreJudgedPart), and validateOutput refuses StatusOpen parts before this call, so true and false are the same."
+  },
+  {
+    "file": "runner.go",
+    "function": "validateOutput",
+    "operator": "bool_call",
+    "original": "…t, Status: StatusVerified, Open: []OpenEntry{o}}, env.Registry9Present())",
+    "mutated": "…t, Status: StatusVerified, Open: []OpenEntry{o}}, false)",
+    "reason": "The Open-entry check builds the part with StatusVerified, for which the registry9 argument of validatePartResult is not consulted, so true and false are the same."
+  },
+  {
+    "file": "runner.go",
+    "function": "validateOutput",
+    "operator": "bool_call",
+    "original": "…t, Status: StatusVerified, Open: []OpenEntry{o}}, env.Registry9Present())",
+    "mutated": "…t, Status: StatusVerified, Open: []OpenEntry{o}}, true)",
+    "reason": "The Open-entry check builds the part with StatusVerified, for which the registry9 argument of validatePartResult is not consulted, so true and false are the same."
+  },
+  {
+    "file": "runner.go",
+    "function": "mergeParts",
+    "operator": "cmp_boundary",
+    "original": "len(entries) > 0",
+    "mutated": "len(entries) >= 0",
+    "reason": "With no entries append(res.Open, entries...) leaves res.Open nil and sortOpen of nil changes nothing, so > 0 and >= 0 behave the same."
+  },
+  {
+    "file": "runner.go",
+    "function": "noEvidenceParts",
+    "operator": "guard_off",
+    "original": "if err != nil",
+    "mutated": "if false",
+    "reason": "WEAK: New(CodeUnproven, RowUnprovenNoEvidenceInFile, {part: UnprovenPartAll}) uses registry constants that are valid by construction, so the error branch is unreachable."
+  },
+  {
+    "file": "step_2a_settle.go",
+    "function": "a2Step14",
+    "operator": "guard_off",
+    "original": "if r.defect != nil",
+    "mutated": "if false",
+    "reason": "WEAK: r.defect is set only by a2rd.fail for an error that is not a *ReadError, and every read function of reads.go (ReadSlot, ReadAccount, ...) returns only *ReadError, so no world makes the branch fire; the guard is defensive."
+  },
+  {
+    "file": "step_2a_settle.go",
+    "function": "a2Step14",
+    "operator": "cmp_flip",
+    "original": "r.defect != nil",
+    "mutated": "r.defect == nil",
+    "reason": "WEAK: r.defect is set only by a2rd.fail for an error that is not a *ReadError, and every read function of reads.go (ReadSlot, ReadAccount, ...) returns only *ReadError, so no world makes the branch fire; the guard is defensive."
+  },
+  {
+    "file": "steps_2a.go",
+    "function": "a2Step4",
+    "operator": "guard_off",
+    "original": "if r.defect != nil",
+    "mutated": "if false",
+    "reason": "WEAK: r.defect is set only by a2rd.fail for an error that is not a *ReadError, and every read function of reads.go (ReadSlot, ReadAccount, ...) returns only *ReadError, so no world makes the branch fire; the guard is defensive."
+  },
+  {
+    "file": "steps_2a.go",
+    "function": "a2Step4",
+    "operator": "cmp_flip",
+    "original": "r.defect != nil",
+    "mutated": "r.defect == nil",
+    "reason": "WEAK: r.defect is set only by a2rd.fail for an error that is not a *ReadError, and every read function of reads.go (ReadSlot, ReadAccount, ...) returns only *ReadError, so no world makes the branch fire; the guard is defensive."
+  },
+  {
+    "file": "steps_2b1.go",
+    "function": "b1Nums",
+    "operator": "bool_lit",
+    "original": "return nil, false",
+    "mutated": "return nil, true",
+    "reason": "The regexes admit at most 19 digits (at most 9999999999999999999, below 2^64), so strconv.ParseUint cannot fail: the error branch is unreachable."
+  },
+  {
+    "file": "steps_2b1.go",
+    "function": "b1HopChain",
+    "operator": "guard_off",
+    "original": "if derr != nil",
+    "mutated": "if false",
+    "reason": "WEAK: b1ReadFailure returns a non-nil second value only for an error that is not a *ReadError, and ReadAccount returns only *ReadError; the branch is unreachable."
+  },
+  {
+    "file": "steps_2b1.go",
+    "function": "b1HopChain",
+    "operator": "cmp_flip",
+    "original": "derr != nil",
+    "mutated": "derr == nil",
+    "reason": "WEAK: b1ReadFailure returns a non-nil second value only for an error that is not a *ReadError, and ReadAccount returns only *ReadError; the branch is unreachable."
+  },
+  {
+    "file": "steps_2b1.go",
+    "function": "b1HopChain",
+    "operator": "guard_off",
+    "original": "if derr != nil",
+    "mutated": "if false",
+    "reason": "WEAK: b1ReadFailure returns a non-nil second value only for an error that is not a *ReadError, and ReadSlot returns only *ReadError; the branch is unreachable."
+  },
+  {
+    "file": "steps_2b1.go",
+    "function": "b1HopChain",
+    "operator": "cmp_flip",
+    "original": "derr != nil",
+    "mutated": "derr == nil",
+    "reason": "WEAK: b1ReadFailure returns a non-nil second value only for an error that is not a *ReadError, and ReadSlot returns only *ReadError; the branch is unreachable."
+  },
+  {
+    "file": "steps_2b2.go",
+    "function": "b2ReadStation",
+    "operator": "guard_off",
+    "original": "if rd.defect != nil",
+    "mutated": "if false",
+    "reason": "WEAK: r.defect is set only by a2rd.fail for an error that is not a *ReadError, and every read function of reads.go (ReadSlot, ReadAccount, ...) returns only *ReadError, so no world makes the branch fire; the guard is defensive."
+  },
+  {
+    "file": "steps_2b2.go",
+    "function": "b2ReadStation",
+    "operator": "cmp_flip",
+    "original": "rd.defect != nil",
+    "mutated": "rd.defect == nil",
+    "reason": "WEAK: r.defect is set only by a2rd.fail for an error that is not a *ReadError, and every read function of reads.go (ReadSlot, ReadAccount, ...) returns only *ReadError, so no world makes the branch fire; the guard is defensive."
+  },
+  {
+    "file": "steps_2b2.go",
+    "function": "b2Step22",
+    "operator": "guard_off",
+    "original": "if r.defect != nil",
+    "mutated": "if false",
+    "reason": "WEAK: r.defect is set only by a2rd.fail for an error that is not a *ReadError, and every read function of reads.go (ReadSlot, ReadAccount, ...) returns only *ReadError, so no world makes the branch fire; the guard is defensive."
+  },
+  {
+    "file": "steps_2b2.go",
+    "function": "b2Step22",
+    "operator": "cmp_flip",
+    "original": "r.defect != nil",
+    "mutated": "r.defect == nil",
+    "reason": "WEAK: r.defect is set only by a2rd.fail for an error that is not a *ReadError, and every read function of reads.go (ReadSlot, ReadAccount, ...) returns only *ReadError, so no world makes the branch fire; the guard is defensive."
+  },
+  {
+    "file": "types.go",
+    "function": "findingObjects",
+    "operator": "cmp_boundary",
+    "original": "cp[i].State.Code < cp[j].State.Code",
+    "mutated": "cp[i].State.Code <= cp[j].State.Code",
+    "reason": "cmp_boundary inside the branch where the codes differ: for different codes < and <= agree."
+  },
+  {
+    "file": "types.go",
+    "function": "findingObjects",
+    "operator": "cmp_boundary",
+    "original": "string(a) < string(b)",
+    "mutated": "string(a) <= string(b)",
+    "reason": "cmp_boundary on the canonical fields of two findings with the same part and code: equal canonical fields give identical output objects, so < and <= are indistinguishable."
+  },
+  {
+    "file": "vectors.go",
+    "function": "Inputs.ResolveManifest",
+    "operator": "guard_off",
+    "original": "if st, ok := AsState(err); ok",
+    "mutated": "if st, ok := AsState(err); false",
+    "reason": "LoadOverride re-runs parseManifest on the bytes LoadManifest has just parsed successfully, so it cannot return an error: the branch is unreachable."
+  },
+  {
+    "file": "vectors.go",
+    "function": "Inputs.ResolveManifest",
+    "operator": "if_negate",
+    "original": "if st, ok := AsState(err); ok",
+    "mutated": "if st, ok := AsState(err); !(ok)",
+    "reason": "LoadOverride re-runs parseManifest on the bytes LoadManifest has just parsed successfully, so it cannot return an error: the branch is unreachable."
+  },
+  {
+    "file": "vocab.go",
+    "function": "Check",
+    "operator": "bool_lit",
+    "original": "return false",
+    "mutated": "return true",
+    "reason": "WEAK: DefaultVocabulary returns an error only if the embedded vocabulary is corrupt; the error branch is unreachable."
+  },
+  {
+    "file": "reads.go",
+    "function": "ReadBytes",
+    "operator": "guard_off",
+    "original": "if !dh.Long",
+    "mutated": "if false",
+    "reason": "WEAK: for a short head DynWordCount is 0, so the long path reads no data word and assembles from an empty word list exactly as Assemble(nil) does; only a failure of Assemble would differ (in the error type), and Assemble of a head ParseDynHead accepted as short cannot fail."
+  },
+  {
+    "file": "runner.go",
+    "function": "RunSteps",
+    "operator": "guard_off",
+    "original": "if err != nil",
+    "mutated": "if false",
+    "reason": "WEAK: noEvidenceParts returns an error only when New(CodeUnproven, ...) with registry constants fails, which cannot happen (same unreachable branch as the guard inside noEvidenceParts)."
+  },
+  {
+    "file": "runner.go",
+    "function": "RunSteps",
+    "operator": "bool_lit",
+    "original": "judged[r] = true",
+    "mutated": "judged[r] = false",
+    "reason": "judged is used as a set: only its keys are ranged (for r := range judged), never its values, so storing false instead of true changes nothing."
   }
 ]
