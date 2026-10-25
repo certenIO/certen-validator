@@ -5,6 +5,7 @@ package basefinal
 import (
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -44,6 +45,7 @@ type JudgeA struct {
 
 func hx(b []byte) string { return "0x" + hex.EncodeToString(b) }
 
+// unhx is the lenient reader JudgeCase.Run used before TSB-2 (it dropped hex errors); Run now loads through loadHex and nothing calls this.
 func unhx(s string) []byte {
 	b, _ := hex.DecodeString(strings.TrimPrefix(s, "0x"))
 	return b
@@ -64,9 +66,137 @@ func NewJudgeCase(id, desc, pins string, o *SynthOut, expect []byte) JudgeCase {
 	return c
 }
 
-// Run judges the case against a set directory and returns the canonical outcome.
+// JudgeLoadError is a world that cannot be loaded: a number that is not a decimal of its width, or a byte string that is not
+// lower-case hex of an even number of digits (and, for the fixed-size fields, of the right length). It names the field and the value;
+// Run returns it instead of judging a different world than the one the file describes.
+type JudgeLoadError struct {
+	Field string
+	Value string
+	Want  string
+}
+
+func (e *JudgeLoadError) Error() string {
+	return fmt.Sprintf("judge case load error: field %s: value %q is not %s", e.Field, e.Value, e.Want)
+}
+
+// loadDecimal reads a decimal of at most bits bits: digits only (no sign, no space, no prefix, no underscore), within range.
+func loadDecimal(field, s string, bits int) (uint64, error) {
+	want := "a decimal uint" + strconv.Itoa(bits)
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return 0, &JudgeLoadError{Field: field, Value: s, Want: want}
+		}
+	}
+	v, err := strconv.ParseUint(s, 10, bits)
+	if err != nil {
+		return 0, &JudgeLoadError{Field: field, Value: s, Want: want}
+	}
+	return v, nil
+}
+
+// loadHex reads lower-case hex with an optional 0x prefix; size >= 0 fixes the byte length.
+func loadHex(field, s string, size int) ([]byte, error) {
+	want := "lower-case hex"
+	if size >= 0 {
+		want += " of " + strconv.Itoa(size) + " bytes"
+	}
+	h := strings.TrimPrefix(s, "0x")
+	for i := 0; i < len(h); i++ {
+		if c := h[i]; (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return nil, &JudgeLoadError{Field: field, Value: s, Want: want}
+		}
+	}
+	b, err := hex.DecodeString(h)
+	if err != nil || (size >= 0 && len(b) != size) {
+		return nil, &JudgeLoadError{Field: field, Value: s, Want: want}
+	}
+	return b, nil
+}
+
+// judgeWorld is the loaded form of a JudgeCase.
+type judgeWorld struct {
+	a    ethl1.L1Block
+	body Body
+	leg  finality.BlockRef
+}
+
+// load reads every number and byte string of the case strictly: nothing is coerced to zero, clamped or cut at a bad digit.
+func (c JudgeCase) load() (*judgeWorld, error) {
+	w := &judgeWorld{}
+	num, err := loadDecimal("a.number", c.A.Number, 64)
+	if err != nil {
+		return nil, err
+	}
+	ts, err := loadDecimal("a.timestamp", c.A.Timestamp, 64)
+	if err != nil {
+		return nil, err
+	}
+	w.a = ethl1.L1Block{Number: num, Timestamp: ts}
+	for _, f := range []struct {
+		field string
+		s     string
+		size  int
+		dst   []byte
+	}{{"a.hash", c.A.Hash, 32, w.a.Hash[:]}, {"a.state_root", c.A.StateRoot, 32, w.a.StateRoot[:]}} {
+		b, err := loadHex(f.field, f.s, f.size)
+		if err != nil {
+			return nil, err
+		}
+		copy(f.dst, b)
+	}
+	idx, err := loadDecimal("output_root_index", c.OutputRootIndex, 32)
+	if err != nil {
+		return nil, err
+	}
+	w.body = Body{StateBlock: num, OutputRootIndex: uint32(idx)}
+	proxy, err := loadHex("game_proxy", c.GameProxy, 20)
+	if err != nil {
+		return nil, err
+	}
+	copy(w.body.GameProxy[:], proxy)
+	if w.body.GameCode, err = loadHex("game_code", c.GameCode, -1); err != nil {
+		return nil, err
+	}
+	for i, h := range c.L2Spine {
+		b, err := loadHex(fmt.Sprintf("l2_spine[%d]", i), h, -1)
+		if err != nil {
+			return nil, err
+		}
+		w.body.L2Spine = append(w.body.L2Spine, b)
+	}
+	for i, n := range c.Nodes {
+		b, err := loadHex(fmt.Sprintf("nodes[%d]", i), n, -1)
+		if err != nil {
+			return nil, err
+		}
+		w.body.Nodes = append(w.body.Nodes, b)
+	}
+	if _, err := loadDecimal("leg.chain", c.Leg.Chain, 64); err != nil {
+		return nil, err
+	}
+	if _, err := loadDecimal("leg.number", c.Leg.Number, 64); err != nil {
+		return nil, err
+	}
+	for _, f := range []struct {
+		field string
+		s     string
+		size  int
+	}{{"leg.hash", c.Leg.Hash, 32}, {"leg.header", c.Leg.Header, -1}} {
+		if _, err := loadHex(f.field, f.s, f.size); err != nil {
+			return nil, err
+		}
+	}
+	w.leg = c.Leg.BlockRef(noopHelper{})
+	return w, nil
+}
+
+// Run judges the case against a set directory and returns the canonical outcome. A world that cannot be loaded is a *JudgeLoadError.
 func (c JudgeCase) Run(dir string) ([]byte, error) {
 	pinsRaw, err := ReadFile(dir, c.Pins)
+	if err != nil {
+		return nil, err
+	}
+	w, err := c.load()
 	if err != nil {
 		return nil, err
 	}
@@ -78,22 +208,7 @@ func (c JudgeCase) Run(dir string) ([]byte, error) {
 	if err != nil {
 		return CanonicalVerdict(finality.Verdict{}, err), nil
 	}
-	num, _ := strconv.ParseUint(c.A.Number, 10, 64)
-	ts, _ := strconv.ParseUint(c.A.Timestamp, 10, 64)
-	a := ethl1.L1Block{Number: num, Timestamp: ts}
-	copy(a.Hash[:], unhx(c.A.Hash))
-	copy(a.StateRoot[:], unhx(c.A.StateRoot))
-	idx, _ := strconv.ParseUint(c.OutputRootIndex, 10, 32)
-	body := Body{StateBlock: num, GameCode: unhx(c.GameCode), OutputRootIndex: uint32(idx)}
-	copy(body.GameProxy[:], unhx(c.GameProxy))
-	for _, h := range c.L2Spine {
-		body.L2Spine = append(body.L2Spine, unhx(h))
-	}
-	for _, n := range c.Nodes {
-		body.Nodes = append(body.Nodes, unhx(n))
-	}
-	leg := c.Leg.BlockRef(noopHelper{})
-	f, jerr := Judge(bp, a, body, leg, ethl1.FinalizedHead{})
+	f, jerr := Judge(bp, w.a, w.body, w.leg, ethl1.FinalizedHead{})
 	return CanonicalVerdict(finality.Verdict{Fields: f}, jerr), nil
 }
 
