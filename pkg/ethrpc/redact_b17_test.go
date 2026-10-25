@@ -45,7 +45,7 @@ func b17Register(n int) func() {
 	}
 }
 
-// Every entry point that redacts a provider's text, each bounded at 250 ms.
+// Every entry point that redacts a provider's text, each bounded in bytes allocated (RB12 OPS-A2 item 13).
 func TestB17_D1_TheAlternatingQuoteShapesAreRedactedInBoundedTimeAtEveryEntryPoint(t *testing.T) {
 	for _, registered := range []int{0, 3000} {
 		for _, size := range []int{70 << 10, 4 << 20} {
@@ -57,26 +57,31 @@ func TestB17_D1_TheAlternatingQuoteShapesAreRedactedInBoundedTimeAtEveryEntryPoi
 						defer b17Register(registered)()
 						_ = RedactText("warm the registry up") // the rebuild is paid once, outside the timed calls
 					}
-					slow := func(entry string, limit time.Duration, f func()) {
-						t0 := time.Now()
-						f()
-						if d := time.Since(t0); d > limit {
-							t.Fatalf("%s took %s for %d bytes", entry, d, len(text))
+					// RB12 OPS-A2 item 13 (as F15): the claim is a cost bounded by the read bound whatever the text, so it is asserted on the bytes a
+					// call allocates (b15Cost), not on a clock that a loaded machine can slow.
+					slow := func(entry string, limit uint64, f func()) {
+						t.Helper()
+						if c := b15Cost(f); c > limit {
+							t.Fatalf("%s allocated %d bytes for %d bytes of text, more than %d", entry, c, len(text), limit)
 						}
 					}
 					var out string
-					slow("RedactText", 250*time.Millisecond, func() { out = RedactText(text) })
+					slow("RedactText", b15CostBound, func() { out = RedactText(text) })
+					head := text[:min(len(text), 70<<10)]
+					if big, small := b15Cost(func() { _ = RedactText(text) }), b15Cost(func() { _ = RedactText(head) }); big > small+4096 {
+						t.Fatalf("RedactText of %d bytes allocated %d, of its first %d bytes %d: the cost depends on the length past the read bound", len(text), big, len(head), small)
+					}
 					if len(out) > b15Cut || !utf8.ValidString(out) || !strings.Contains(out, "(truncated ") {
 						t.Fatalf("RedactText returned %d bytes, valid=%v: %q", len(out), utf8.ValidString(out), tailOf(out))
 					}
-					slow("RedactError and two Error calls", 250*time.Millisecond, func() {
+					slow("RedactError and two Error calls", 2*b15CostBound, func() {
 						e := RedactError(errors.New(text))
 						_, _ = e.Error(), e.Error()
 					})
-					slow("TransientError.Error", 250*time.Millisecond, func() {
+					slow("TransientError.Error", 3*b15CostBound, func() {
 						_ = (&TransientError{Host: "h", Attempts: 1, Err: errors.New(text)}).Error()
 					})
-					slow("BoundRedacted at 1024", 250*time.Millisecond, func() { out = BoundRedacted(text, 1024) })
+					slow("BoundRedacted at 1024", b15CostBound, func() { out = BoundRedacted(text, 1024) })
 					if len(out) > 1024 || !utf8.ValidString(out) {
 						t.Fatalf("BoundRedacted(.., 1024) returned %d bytes, valid=%v", len(out), utf8.ValidString(out))
 					}
@@ -89,9 +94,10 @@ func TestB17_D1_TheAlternatingQuoteShapesAreRedactedInBoundedTimeAtEveryEntryPoi
 	}
 }
 
-// The real pool: endpoint 0 answers 403 with a 3.9 MB body of the shape, endpoint 1 is healthy. Do answers in under a
-// second, and Primary is never blocked while the failure is recorded.
-func TestB17_D1_APoolAnswersInUnderASecondWithAnAlternatingQuoteErrorBody(t *testing.T) {
+// The real pool: endpoint 0 answers 403 with a 3.9 MB body of the shape, endpoint 1 is healthy. Do answers from the healthy endpoint, the
+// failure is recorded at a bounded cost, and the pool's mutex is free while the text is redacted. RB12 OPS-A2 item 13 (as F15): no clock;
+// the cost is the bytes allocated and the lock is probed while the redaction is stopped at a gate.
+func TestB17_D1_APoolAnswersWithAnAlternatingQuoteErrorBody(t *testing.T) {
 	for _, u := range b17AltUnits {
 		u := u
 		t.Run(u.name, func(t *testing.T) {
@@ -115,45 +121,33 @@ func TestB17_D1_APoolAnswersInUnderASecondWithAnAlternatingQuoteErrorBody(t *tes
 				t.Fatal(err)
 			}
 			defer p.Close()
-			done, finished := make(chan struct{}), make(chan int64)
-			go func() {
-				var worst int64
-				for {
-					select {
-					case <-done:
-						finished <- worst
-						return
-					default:
-					}
-					t0 := time.Now()
-					_ = p.Primary()
-					if d := int64(time.Since(t0)); d > worst {
-						worst = d
-					}
-					time.Sleep(time.Millisecond)
-				}
-			}()
 			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 			defer cancel()
-			t0 := time.Now()
-			derr := p.Do(ctx, func(c *ethclient.Client) error { _, e := c.BlockNumber(ctx); return e })
-			total := time.Since(t0)
-			close(done)
-			worst := time.Duration(<-finished)
-			if derr != nil {
+			if derr := p.Do(ctx, func(c *ethclient.Client) error { _, e := c.BlockNumber(ctx); return e }); derr != nil {
 				t.Fatalf("the healthy endpoint did not answer: %v", derr)
-			}
-			if total > time.Second {
-				t.Errorf("Pool.Do took %s with a %d byte error body", total, len(body))
-			}
-			if worst > 50*time.Millisecond {
-				t.Errorf("a concurrent Pool.Primary waited %s", worst)
 			}
 			for _, s := range p.Status() {
 				if strings.Contains(s, b15Key) {
 					t.Fatalf("the status holds the key: %s", s)
 				}
 			}
+			// recording the failure costs a bounded number of bytes whatever the size of the body
+			ep := &endpoint{url: bad.URL + "/v2/" + b15Key}
+			probe := &Pool{endpoints: []*endpoint{ep}, cooldown: time.Minute}
+			if c := b15Cost(func() { probe.markFailure(ep, errors.New(body)) }); c > 3*b15CostBound {
+				t.Fatalf("recording a failure with a %d byte body allocated %d bytes, more than %d", len(body), c, 3*b15CostBound)
+			}
+			// the lock: the failure is recorded while the redaction of its text is stopped at the gate, and the pool must still be usable
+			g := newB15Gated(body)
+			gated := &Pool{endpoints: []*endpoint{ep}, cooldown: time.Minute}
+			recorded := make(chan struct{})
+			go func() { gated.markFailure(ep, g); close(recorded) }()
+			b15Within(t, g.entered, "markFailure never reached the redaction of the error text")
+			free := make(chan struct{})
+			go func() { _ = gated.Primary(); _ = gated.Status(); close(free) }()
+			b15Within(t, free, "Pool.Primary and Status waited on the mutex while a failure was being redacted")
+			close(g.release)
+			b15Within(t, recorded, "markFailure did not finish after the gate opened")
 		})
 	}
 }

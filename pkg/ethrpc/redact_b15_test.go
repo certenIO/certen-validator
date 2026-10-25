@@ -518,37 +518,28 @@ func TestB15_D4a_NoRegisteredLiteralRewritesAHashAChainNameOrAWord(t *testing.T)
 	}
 }
 
-// Registering N URLs costs N, and the first redaction after them costs N.
+// Registering N URLs costs N, and the first redaction after them costs N. RB12 OPS-A2 item 13 (as F15): asserted on the bytes allocated, which a
+// loaded machine cannot change, not on a clock: a registry that rebuilt quadratically would allocate four times as much at 2N as at N.
 func TestB15_D4b_RegisteringThreeThousandURLsIsFast(t *testing.T) {
-	const n = 3000
-	undos := make([]func(), 0, n)
-	defer func() {
-		for _, u := range undos {
-			u()
-		}
-	}()
-	t0 := time.Now()
-	for i := 0; i < n; i++ {
-		undos = append(undos, RegisterProviderURL(fmt.Sprintf("https://host%d.example.org/v2/KEY%dabcdefghij?token=TOK%dxyz", i, i, i)))
-		if d := time.Since(t0); d > time.Second {
-			t.Fatalf("%d registrations took %s and were not done", i+1, d)
-		}
+	cost := func(n int) uint64 {
+		return b15Cost(func() {
+			undo := b17Register(n)
+			_ = RedactText("a KEY1234abcdefghij b") // the first redaction after the registrations pays the rebuild
+			undo()
+			_ = RedactText("a KEY1234abcdefghij b") // and the first after the undo
+		})
 	}
+	small, big := cost(3000), cost(6000)
+	t.Logf("3000 registrations, a redaction, the undo and a redaction: %d bytes; 6000: %d bytes", small, big)
+	if big > 3*small {
+		t.Fatalf("registering twice as many URLs allocated %d bytes against %d: the cost is not linear", big, small)
+	}
+	undo := b17Register(3000)
 	if got := RedactText("a KEY1234abcdefghij b"); strings.Contains(got, "KEY1234abcdefghij") {
 		t.Fatalf("a registered literal is not applied: %s", got)
 	}
-	if d := time.Since(t0); d > time.Second {
-		t.Fatalf("%d registrations and the first redaction took %s", n, d)
-	}
-	t0 = time.Now()
-	for _, u := range undos {
-		u()
-	}
-	undos = nil
+	undo()
 	if got := RedactText("a KEY1234abcdefghij b"); strings.Contains(got, RedactedMarker) {
 		t.Fatalf("undone registrations still apply: %s", got)
-	}
-	if d := time.Since(t0); d > time.Second {
-		t.Fatalf("undoing %d registrations took %s", n, d)
 	}
 }
