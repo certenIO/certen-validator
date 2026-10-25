@@ -28,9 +28,10 @@ PSEUDO='ffffffff-ffff-4fff-8fff-%'      # CaptureStatusProofID(chain): the captu
 if [ "${1:-}" = "--selftest" ]; then
   # Offline. The SQL of this file is what the sql() helper below sends: the bodies of the `sql <<'SQL'` / `sql <<SQL` heredocs. The check is
   # that every statement in them is a SELECT, that none carries a write or DDL keyword, and that the helper wraps them in a READ ONLY
-  # transaction on a read-only session. A statement that is not a SELECT, or a helper that is not read-only, fails the selftest.
+  # transaction on a read-only session. A statement that is not a SELECT, or a helper that is not read-only, fails the selftest. Whole-line SQL
+  # comments are dropped first (a comment before a statement is not part of it, and its words are prose, not SQL).
   bad=0
-  body=$(awk -v q="'" '$0 ~ ("<<" q "?SQL" q "?[[:space:]]*$") { insql = 1; next } /^SQL$/ { insql = 0; next } insql { print }' "$0")
+  body=$(awk -v q="'" '$0 ~ ("<<" q "?SQL" q "?[[:space:]]*$") { insql = 1; next } /^SQL$/ { insql = 0; next } insql && $0 !~ /^[[:space:]]*--/ { print }' "$0")
   nstmt=$(printf '%s\n' "$body" | tr '\n' ' ' | awk -F';' '{ n = 0; for (i = 1; i <= NF; i++) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", $i); if ($i != "") n++ } print n }')
   nsel=$(printf '%s\n' "$body" | tr '\n' ' ' | awk -F';' '{ n = 0; for (i = 1; i <= NF; i++) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", $i); if (toupper(substr($i, 1, 7)) == "SELECT ") n++ } print n }')
   [ "$nstmt" -gt 0 ] && [ "$nstmt" -eq "$nsel" ] || { echo "selftest: $nstmt SQL statements, $nsel of them SELECT"; bad=1; }
