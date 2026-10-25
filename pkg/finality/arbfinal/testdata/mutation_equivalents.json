@@ -134,5 +134,45 @@
   "original": "return finality.HeaderFields{}, false",
   "mutated": "return finality.HeaderFields{}, true",
   "reason": "unreachable return (see the entry for headerNumbered): the number was found on the spine by BlockAt before this lookup, so the loop always returns from inside"
+ },
+ {
+  "file": "nodebounds.go",
+  "function": "proofPathNodes",
+  "operator": "guard_off",
+  "original": "if err := db.Put(crypto.Keccak256(n), n); err != nil",
+  "mutated": "if err := db.Put(crypto.Keccak256(n), n); false",
+  "reason": "memorydb.Put fails only on a closed database; the database is created here and never closed"
+ },
+ {
+  "file": "nodebounds.go",
+  "function": "proofPathNodes",
+  "operator": "guard_off",
+  "original": "if err != nil",
+  "mutated": "if false",
+  "reason": "rlp.EncodeToBytes of a uint64 cannot fail"
+ },
+ {
+  "file": "nodebounds.go",
+  "function": "checkNodeBounds",
+  "operator": "bool_lit",
+  "original": "big := false",
+  "mutated": "big := true",
+  "reason": "big only gates the walk of the proof paths: forced true, the loop below still carries every node of at most max_node_bytes and finds none above it, so a body with no oversized node returns nil exactly as the early return does"
+ },
+ {
+  "file": "nodebounds.go",
+  "function": "checkNodeBounds",
+  "operator": "cmp_boundary",
+  "original": "len(n) > maxNodeBytes",
+  "mutated": "len(n) >= maxNodeBytes",
+  "reason": "a node of exactly max_node_bytes only sets big, which gates the walk of the proof paths; the loop below carries a node of at most max_node_bytes, so the verdict is what the early return gives"
+ },
+ {
+  "file": "nodebounds.go",
+  "function": "checkNodeBounds",
+  "operator": "guard_off",
+  "original": "if !big",
+  "mutated": "if false",
+  "reason": "the guard is the early return for a body with no oversized node; without it the loop below finds no node above max_node_bytes and returns nil, the same verdict"
  }
 ]
