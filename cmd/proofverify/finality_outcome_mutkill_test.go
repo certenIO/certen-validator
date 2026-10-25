@@ -143,3 +143,35 @@ func TestPinsSelfcheckReportsTheLedgerItRederivedFromTheRootPin(t *testing.T) {
 		t.Errorf("exit %d\n  stdout %q\n  want   %q\n  stderr %q", code, out.String(), want, errw.String())
 	}
 }
+
+func TestJudgeFinalityFileReportsAnUnreadableFileByTheOperatingSystemsText(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing.json")
+	var out bytes.Buffer
+	var s7 *finality.Report
+	if code := judgeFinalityFile(&out, missing, nil, nil, nil, &s7); code != exitFailed ||
+		!strings.HasPrefix(out.String(), "FAILED (finality)  "+missing+"\n  open ") || strings.Contains(out.String(), "unexpected end") || s7 != nil {
+		t.Errorf("a missing file: exit %d %q", code, out.String())
+	}
+}
+
+func TestWorseExitRanksVerifiedBelowSummaryOnlyBelowFailedAndKeepsTheFirstOnATie(t *testing.T) {
+	for _, c := range []struct{ a, b, want int }{
+		{exitVerified, exitVerified, exitVerified}, {exitVerified, exitSummaryOnly, exitSummaryOnly}, {exitSummaryOnly, exitVerified, exitSummaryOnly},
+		{exitVerified, exitFailed, exitFailed}, {exitFailed, exitVerified, exitFailed}, {exitSummaryOnly, exitFailed, exitFailed},
+		{exitFailed, exitSummaryOnly, exitFailed}, {exitSummaryOnly, exitSummaryOnly, exitSummaryOnly}, {exitFailed, exitFailed, exitFailed},
+		{exitVerified, exitUsage, exitVerified}, {exitUsage, exitVerified, exitUsage},
+	} {
+		if got := worseExit(c.a, c.b); got != c.want {
+			t.Errorf("worseExit(%d, %d) = %d, want %d", c.a, c.b, got, c.want)
+		}
+	}
+}
+
+func TestShortKeepsTheFirstSixteenCharactersOfALongerHex(t *testing.T) {
+	for in, want := range map[string]string{"": "", "abc": "abc", "0123456789abcde": "0123456789abcde", "0123456789abcdef": "0123456789abcdef",
+		"0123456789abcdef0": "0123456789abcdef", "0123456789abcdefXYZ": "0123456789abcdef"} {
+		if got := short(in); got != want {
+			t.Errorf("short(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
