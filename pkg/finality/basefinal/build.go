@@ -459,6 +459,9 @@ func (b *Builder) pinsLayout() GameLayout {
 func (b *Builder) attest(ctx context.Context, bp *Pins, leg finality.BlockRef, body Body, a HeaderInfo, have finality.LevelSet) (*finality.Addendum, *finality.PendingState, error) {
 	lc, headSlot, err := b.LC.Finalized(ctx)
 	if err != nil {
+		if pd := finality.PendingOf(err); pd != nil { // the ledger is too far behind the head: its own pending state with the periods and the eta (RB12 OPS-A2 item 6)
+			return nil, b.pending(have, pd.Reason, pd.ETA, pd.JudgedPairs()...), nil
+		}
 		return nil, b.pending(have, "finality_lc_unavailable", time.Time{}, "endpoints", b.Providers), nil
 	}
 	es, err := b.Pins.Sepolia()

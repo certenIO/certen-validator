@@ -164,6 +164,11 @@ func (p *Prover) BuildLeg(ctx context.Context, leg finality.BlockRef, have final
 	// 4. L1 finality of S and K
 	lc, err := p.LC.LC(ctx)
 	if err != nil {
+		if pd := finality.PendingOf(err); pd != nil { // the ledger is too far behind the head: its own pending state with the periods and the eta (RB12 OPS-A2 item 6)
+			out := p.pending(have, pd.Reason, pd.JudgedPairs()...)
+			out.ETA = pd.ETA
+			return nil, out, nil
+		}
 		return nil, p.pending(have, PendingL1State, "block", K, "providers", []string{"beacon"}), nil
 	}
 	fh, err := ethl1.VerifyFinalizedHead(l1p, lc)

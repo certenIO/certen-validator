@@ -78,6 +78,9 @@ type LedgerIncompleteError struct{ Pending *finality.PendingState }
 
 func (e *LedgerIncompleteError) Error() string { return e.Pending.Error() }
 
+// PendingState implements finality.PendingCarrier: the builders report this state as their own pending answer.
+func (e *LedgerIncompleteError) PendingState() *finality.PendingState { return e.Pending }
+
 // Unwrap lets finality.AsNamed find the state.
 func (e *LedgerIncompleteError) Unwrap() error { return e.Pending.State() }
 
