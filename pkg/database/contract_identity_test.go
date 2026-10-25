@@ -16,6 +16,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/lib/pq"
 
+	"github.com/certen/independant-validator/pkg/finality"
+
 	ci "github.com/certen/independant-validator/pkg/contractidentity"
 	"github.com/certen/independant-validator/pkg/contractidentity/capture"
 	"github.com/certen/independant-validator/pkg/contractidentity/capture/storetest"
@@ -255,3 +257,91 @@ func fixtureBytes(t *testing.T, name string) []byte {
 }
 
 var _ = sql.ErrNoRows
+
+// ---- ComposeContractIdentity on data SHAPED like the live store (pkg/database/testdata/s8shape; pr/rb11-prod-shape-check.sh section S8) ----
+
+// The registry of the newest live intent_quorum_certificates row (read-only sample, 2026-10-25): an object whose members carry
+// bls_pub_key of 192 lowercase hex characters WITHOUT 0x and an evm_address of 42 characters.
+func TestRegistry9OfParsesTheLiveSampleShape(t *testing.T) {
+	r, err := Registry9Of(fixtureBytes(t, "qc_registry.sample.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.Members) != 7 || r.Num != 2 || r.Den != 3 || r.CertenSetRoot == ([32]byte{}) {
+		t.Fatalf("members %d threshold %d/%d root %x", len(r.Members), r.Num, r.Den, r.CertenSetRoot)
+	}
+	if err := r.Validate(); err != nil {
+		t.Fatalf("the live registry shape must satisfy the verifier's Registry9 shape: %v", err)
+	}
+	// the production-shape rule's negative: a key with 0x (the on-chain form) is NOT the stored form and is named, not repaired
+	r.Members[0].BLSKey = "0x" + r.Members[0].BLSKey[2:]
+	if r.Validate() == nil {
+		t.Fatal("a 0x-prefixed key must not validate as the stored form")
+	}
+}
+
+func TestADIURLOfAndS6OfAreNamedNotInferred(t *testing.T) {
+	for in, want := range map[string]string{"acc://certen-demo.acme/book/1": "acc://certen-demo.acme", "acc://x.acme": "acc://x.acme", "": "", "x.acme/book": ""} {
+		if got := ADIURLOf(in); got != want {
+			t.Fatalf("ADIURLOf(%q) = %q, want %q", in, got, want)
+		}
+	}
+	st, reason, state, link := S6Of(nil, nil)
+	if st != ci.S6Silent || reason != "absent" || state != "" || link != nil {
+		t.Fatalf("no stored replay guard is s6_silent{absent}, got %v %q %q %v", st, reason, state, link)
+	}
+	st, _, state, link = S6Of(nil, []byte(`{"version":"x"}`))
+	if st != ci.S6NotProven || state == "" || link != nil {
+		t.Fatalf("undecodable stored evidence is s6_not_proven with its named state, got %v %q", st, state)
+	}
+}
+
+func TestComposeContractIdentityBuildsTheLegContextFromTheStoredRows(t *testing.T) {
+	ctx := context.Background()
+	pid, leg := storeLeg(t, "base_sepolia_47368146")
+	opID := make([]byte, 32)
+	_, _ = rand.Read(opID)
+	opHex := "0x" + hex.EncodeToString(opID)
+	if _, err := testDB.Exec(`INSERT INTO external_chain_results (proof_id, bundle_id, operation_id, chain_type, chain_id, tx_hash, tx_index, tx_gas_used, tx_from_address,
+		block_number, block_hash, block_timestamp, state_root, transactions_root, receipts_root, execution_status, execution_success, result_hash, observer_validator_id, observed_at)
+		VALUES ($1::uuid, $2, $3, 'ethereum', $4, $5, 0, 1, $6, $7, $8, now(), $8, $8, $8, 1, true, $8, 'validator-1', now())`,
+		pid, opID, opID, int64(leg.Chain), make([]byte, 32), make([]byte, 20), int64(leg.Block().Number), bytes.Repeat([]byte{1}, 32)); err != nil {
+		t.Fatal(err)
+	}
+	inputs := `{"accumulate_set_root":"0x` + strings.Repeat("ab", 32) + `","incarnation":"0x` + strings.Repeat("cd", 32) + `"}`
+	if _, err := testDB.Exec(`INSERT INTO intent_quorum_certificates (operation_id, message, registry_version, certen_chain_id, certificate, registry, message_inputs, certified_height)
+		VALUES ($1, $2, 1, 'certen-testnet', '{}', $3::jsonb, $4::jsonb, 1)`, opHex, "0x"+strings.Repeat("11", 32), string(fixtureBytes(t, "qc_registry.sample.json")), inputs); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testDB.Exec(`UPDATE proof_artifacts SET account_url = 'acc://certen-demo.acme/book/1' WHERE proof_id = $1::uuid`, pid); err != nil {
+		t.Fatal(err)
+	}
+	pins, err := finality.EmbeddedPins()
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := NewContractIdentitySource(NewClientFromDB(testDB), NewFinalityAddendaRepository(NewClientFromDB(testDB)), pins)
+	lc, err := src.ComposeContractIdentity(ctx, pid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lc.Chain != leg.Chain || lc.Settlement == nil || lc.Tx == nil || lc.Receipt == nil || lc.S7 == nil || lc.ADIURL != "acc://certen-demo.acme" {
+		t.Fatalf("settlement/tx/receipt/s7/adi: %+v", lc)
+	}
+	if lc.Batch.OperationID != [32]byte(opID) || lc.Batch.AccSetRoot[0] != 0xab || lc.Batch.Incarnation[0] != 0xcd {
+		t.Fatalf("batch facts: %+v", lc.Batch)
+	}
+	if lc.Registry9 == nil || len(lc.Registry9.Members) != 7 || lc.Registry9.Validate() != nil {
+		t.Fatalf("registry9: %+v", lc.Registry9)
+	}
+	if lc.S6Status != ci.S6Silent || lc.S6Reason != "absent" {
+		t.Fatalf("no replay guard is stored in the live store (0 of 106 results): s6 %v %q", lc.S6Status, lc.S6Reason)
+	}
+	// whatever the stored rows do not hold is named by the verifier's own context check, never defaulted
+	if err := lc.ValidateContext(); err != nil {
+		var se *ci.StateError
+		if !errors.As(err, &se) || se.Code != ci.CodeContextIncomplete {
+			t.Fatalf("an incomplete stored context must be context_incomplete, got %v", err)
+		}
+	}
+}
