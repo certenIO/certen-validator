@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 
 	"github.com/certen/independant-validator/pkg/finality"
 )
@@ -119,6 +120,18 @@ func (s *FinalityCaptureStore) BlockBounds(ctx context.Context, chain uint64, it
 	return uint64(lo.Int64), uint64(hi.Int64), true, nil
 }
 
+// listByRangeSQL is the listing of ListByRange. The prefix is an anchored LIKE (likePrefix escapes it), which migration 00030's index on
+// (chain, item text_pattern_ops, l1_block) serves under every collation: the cost is the rows of the item family in the range, not the rows of the
+// table (RB12 OPS-A2 item 5).
+const listByRangeSQL = `SELECT l1_block, l1_hash, item FROM proof_finality_capture
+	WHERE chain = $1 AND l1_block BETWEEN $2 AND $3 AND item LIKE $4 ESCAPE '\' ORDER BY l1_block, l1_hash, item`
+
+// likePrefix is the LIKE pattern of the items that start with prefix: its backslash, percent and underscore are escaped.
+func likePrefix(prefix string) string {
+	r := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	return r.Replace(prefix) + "%"
+}
+
 // ListByRange returns the keys of a chain whose L1 block is in [from, to] and whose item starts with itemPrefix (empty = all),
 // ascending by (l1Block, l1Hash, item). The bytes are fetched with Get, so a range scan never loads the blobs.
 func (s *FinalityCaptureStore) ListByRange(ctx context.Context, chain, from, to uint64, itemPrefix string) ([]finality.CaptureKey, error) {
@@ -128,9 +141,7 @@ func (s *FinalityCaptureStore) ListByRange(ctx context.Context, chain, from, to 
 	if to > finality.MaxCaptureBlock {
 		to = finality.MaxCaptureBlock // clamped, never wrapped into a negative bigint
 	}
-	rows, err := s.client.DB().QueryContext(ctx, `SELECT l1_block, l1_hash, item FROM proof_finality_capture
-		WHERE chain = $1 AND l1_block BETWEEN $2 AND $3 AND starts_with(item, $4) ORDER BY l1_block, l1_hash, item`,
-		int64(chain), int64(from), int64(to), itemPrefix)
+	rows, err := s.client.DB().QueryContext(ctx, listByRangeSQL, int64(chain), int64(from), int64(to), likePrefix(itemPrefix))
 	if err != nil {
 		return nil, err
 	}
