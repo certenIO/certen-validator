@@ -144,6 +144,7 @@ func TestMutKill4ContextFromFileRefusesEachMalformedMember(t *testing.T) {
 	for name, mut := range map[string]func(f *ContextFile){
 		"tx not hex":                    func(f *ContextFile) { f.Tx = &bad },
 		"tx not a transaction":          func(f *ContextFile) { s := "0x01"; f.Tx = &s },
+		"receipt type":                  func(f *ContextFile) { f.Receipt.Type = lead },
 		"receipt post state":            func(f *ContextFile) { f.Receipt.PostStateOrStatus = bad },
 		"receipt gas":                   func(f *ContextFile) { f.Receipt.CumulativeGasUsed = lead },
 		"receipt bloom short":           func(f *ContextFile) { f.Receipt.Bloom = short },
@@ -185,6 +186,12 @@ func TestMutKill4ContextFromFileRefusesEachMalformedMember(t *testing.T) {
 		if c, err := ContextFromFile(f); err == nil {
 			t.Errorf("%s: accepted (%+v)", name, c)
 		}
+	}
+	// the refusal of a transaction that is not hex is the hex refusal, not the later decode refusal of an empty byte string
+	f := mk4Clone(t, base)
+	f.Tx = &bad
+	if _, err := ContextFromFile(f); err == nil || !strings.Contains(err.Error(), "context.tx") || !strings.Contains(err.Error(), "not 0x-prefixed lowercase hex") {
+		t.Errorf("tx not hex: %v", err)
 	}
 }
 
