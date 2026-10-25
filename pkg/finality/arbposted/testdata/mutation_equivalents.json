@@ -302,5 +302,13 @@
     "original": "implWord[12:]",
     "mutated": "implWord[11:]",
     "reason": "common.BytesToAddress keeps the last 20 bytes of its argument, so implWord[11:] (21 bytes) and implWord[12:] give the same address."
+  },
+  {
+    "file": "verify.go",
+    "function": "Kind.verifyState",
+    "operator": "guard_off",
+    "original": "if err != nil",
+    "mutated": "if false",
+    "reason": "decodeBlobs returns a nil payload on every error path and decodePayload(nil) answers payloadUndecodable, which verifyState turns into the identical contentNotFound(payload_undecodable, batch); so with or without this guard a blob payload that does not decode gives the same state."
   }
 ]

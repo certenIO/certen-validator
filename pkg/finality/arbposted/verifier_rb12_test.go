@@ -3,6 +3,7 @@
 package arbposted
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -163,5 +164,23 @@ func TestVerifyReturnsTheHeaderReadFaultOfAWellFormedBody(t *testing.T) {
 	_, err = New().Verify(p, finality.BlockRef{Chain: finality.ChainArbitrumSepolia, Number: 77, Hash: hash}, enc)
 	if err == nil || canon(err) != canon(wantErr) {
 		t.Fatalf("an unreadable header: %v, want %s", err, canon(wantErr))
+	}
+}
+
+func TestAnImplementationAccountWhoseProofNodesAreMissingIsAStateProofFault(t *testing.T) {
+	a := legacyTx(1)
+	good := calldataEvidence([][]byte{{0x6a, 0xc0}, a}, payloadOf(seg(segL2Message, signedTxMsg(a))), 9, h40, common.Hash{})
+	if _, err := runState(t, good, nil, nil); err != nil {
+		t.Fatalf("control: %s", canon(err))
+	}
+	_, err := runState(t, good, nil, func(s *synthState) {
+		for i, n := range s.nodes { // the node set no longer holds the implementation account's leaf
+			if bytes.Contains(n, testImplCode[:]) {
+				s.nodes[i] = []byte{0xc0}
+			}
+		}
+	})
+	if canon(err) != want(CodeStateProofInvalid, "which", "account") {
+		t.Fatalf("an implementation account without its proof node: %s", canon(err))
 	}
 }

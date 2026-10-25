@@ -694,5 +694,13 @@
     "original": "fs > w.s.finSlot",
     "mutated": "fs >= w.s.finSlot",
     "reason": "fs >= finSlot differs from > only when they are equal, and then finSlot is assigned the same value."
+  },
+  {
+    "file": "verify.go",
+    "function": "walker.update",
+    "operator": "guard_off",
+    "original": "if finalizedPeriod != storePeriod",
+    "mutated": "if false",
+    "reason": "unreachable: the store has no next committee here, so the signature period is the store period (checked earlier); the attested slot lies in (store finalized slot, signature slot] or in the attested period, which is therefore the store period, and the finalized slot is at most the attested slot and above the store finalized slot (or in the attested period), so periodOf(finalized slot) always equals the store period and the finalized_period refusal cannot fire."
   }
 ]
