@@ -126,5 +126,181 @@
     "original": "return false, false",
     "mutated": "return true, false",
     "reason": "nextBit's first result is ignored whenever its second result (ok) is false: readOne returns (0, false) without looking at the bit."
+  },
+  {
+    "file": "delayed.go",
+    "function": "headerNonce",
+    "operator": "bool_lit",
+    "original": "return 0, false",
+    "mutated": "return 0, true",
+    "reason": "headerNonce returns from inside the loop at i == 14 on every path, so the line after the loop is unreachable."
+  },
+  {
+    "file": "derive.go",
+    "function": "parseL2Msg",
+    "operator": "bool_call",
+    "original": "if !n.IsUint64() || n.Uint64() > maxL2MessageSize { return out, tr…",
+    "mutated": "if !true || n.Uint64() > maxL2MessageSize { return out, tr…",
+    "reason": "n is built from exactly eight length bytes, so n.IsUint64() is always true and !n.IsUint64() always false: replacing it by !true changes nothing (the size bound after it is killed by TestParseL2MsgStopsABatchAtAnOversizedNestedMessage)."
+  },
+  {
+    "file": "derive.go",
+    "function": "parseL2Msg",
+    "operator": "bool_lit",
+    "original": "return nil, false",
+    "mutated": "return nil, true",
+    "reason": "tx.MarshalBinary cannot fail for a transaction that has just been decoded by UnmarshalBinary, so the error return after it is unreachable."
+  },
+  {
+    "file": "derive.go",
+    "function": "deriveDelayed",
+    "operator": "bool_lit",
+    "original": "return nil, false",
+    "mutated": "return nil, true",
+    "reason": "rlp.EncodeToBytes of the fixed depositTx struct (big.Int, common types) cannot fail, so the error return after it is unreachable."
+  },
+  {
+    "file": "nitro.go",
+    "function": "var:fieldElements",
+    "operator": "arith",
+    "original": "fieldElements * 31",
+    "mutated": "fieldElements / 31",
+    "reason": "blobDataBytes and blobBitStreamLen are used only to size the initial capacity of rlpData in decodeBlobs; append grows the slice, so the decoded payload and every verdict are identical."
+  },
+  {
+    "file": "nitro.go",
+    "function": "var:fieldElements",
+    "operator": "arith",
+    "original": "fieldElements * 6",
+    "mutated": "fieldElements / 6",
+    "reason": "blobDataBytes and blobBitStreamLen are used only to size the initial capacity of rlpData in decodeBlobs; append grows the slice, so the decoded payload and every verdict are identical."
+  },
+  {
+    "file": "nitro.go",
+    "function": "var:fieldElements",
+    "operator": "arith",
+    "original": "fieldElements * 6 / 8",
+    "mutated": "fieldElements * 6 * 8",
+    "reason": "blobDataBytes and blobBitStreamLen are used only to size the initial capacity of rlpData in decodeBlobs; append grows the slice, so the decoded payload and every verdict are identical."
+  },
+  {
+    "file": "nitro.go",
+    "function": "decodeBlobs",
+    "operator": "arith",
+    "original": "len(blobs)*(blobDataBytes+blobBitStreamLen)",
+    "mutated": "len(blobs)/(blobDataBytes+blobBitStreamLen)",
+    "reason": "blobDataBytes and blobBitStreamLen are used only to size the initial capacity of rlpData in decodeBlobs; append grows the slice, so the decoded payload and every verdict are identical."
+  },
+  {
+    "file": "nitro.go",
+    "function": "decodeBlobs",
+    "operator": "arith",
+    "original": "blobDataBytes+blobBitStreamLen",
+    "mutated": "blobDataBytes-blobBitStreamLen",
+    "reason": "blobDataBytes and blobBitStreamLen are used only to size the initial capacity of rlpData in decodeBlobs; append grows the slice, so the decoded payload and every verdict are identical."
+  },
+  {
+    "file": "nitro.go",
+    "function": "decodeBlobs",
+    "operator": "int_literal",
+    "original": "accBits >= 8",
+    "mutated": "accBits >= 7",
+    "reason": "accBits takes only the values 6, 12, 10, 8 at this test (it grows by 6 and drops by 8), never 7, so >= 7 and >= 8 select the same iterations."
+  },
+  {
+    "file": "nitro.go",
+    "function": "decodeBlobs",
+    "operator": "guard_off",
+    "original": "if err != nil",
+    "mutated": "if false",
+    "reason": "rlp.SplitString returns rest = the whole input on error, and an all-zero input always parses (0x00 is a one-byte string), so on an error the next loop finds a non-zero byte and returns an error as well: the verdict is the same, only the error text differs."
+  },
+  {
+    "file": "nitro.go",
+    "function": "parseL2",
+    "operator": "int_literal",
+    "original": "ethproof.TxType(tx) <= 4",
+    "mutated": "ethproof.TxType(tx) <= 5",
+    "reason": "parseL2Msg with unmarshalSigned false returns only legacy, type 1, 2 and 4 signed transactions and the Arbitrum types 0x65 and above, so ethproof.TxType is never 5 and <= 4 and <= 5 agree."
+  },
+  {
+    "file": "nitro.go",
+    "function": "zeroheavyLimit",
+    "operator": "cmp_boundary",
+    "original": "extra > 0",
+    "mutated": "extra >= 0",
+    "reason": "extra == 0 occurs only for max in -6499..-6400, where max > MaxInt-extra is false, so > and >= agree."
+  },
+  {
+    "file": "nitro.go",
+    "function": "zeroheavyLimit",
+    "operator": "int_literal",
+    "original": "extra > 0",
+    "mutated": "extra > 1",
+    "reason": "extra == 1 occurs only for max near -6300, where max > MaxInt-1 is false, so extra > 0 and extra > 1 agree."
+  },
+  {
+    "file": "nitro.go",
+    "function": "zeroheavyLimit",
+    "operator": "cmp_boundary",
+    "original": "max > math.MaxInt-extra",
+    "mutated": "max >= math.MaxInt-extra",
+    "reason": "at max == MaxInt-extra the sum max+extra is exactly MaxInt without overflow, so returning MaxInt (mutant) and the sum (original) agree."
+  },
+  {
+    "file": "nitro.go",
+    "function": "zeroheavyLimit",
+    "operator": "cmp_boundary",
+    "original": "extra < 0",
+    "mutated": "extra <= 0",
+    "reason": "extra == 0 never satisfies max < MinInt-extra, so < and <= agree."
+  },
+  {
+    "file": "nitro.go",
+    "function": "zeroheavyLimit",
+    "operator": "int_literal",
+    "original": "extra < 0",
+    "mutated": "extra < -1",
+    "reason": "extra == -1 occurs only for max near -6500, where max < MinInt+1 is false, so extra < 0 and extra < -1 agree."
+  },
+  {
+    "file": "nitro.go",
+    "function": "zeroheavyLimit",
+    "operator": "cmp_boundary",
+    "original": "max < math.MinInt-extra",
+    "mutated": "max <= math.MinInt-extra",
+    "reason": "at max == MinInt-extra the sum max+extra is exactly MinInt without overflow, so returning MinInt (mutant) and the sum (original) agree."
+  },
+  {
+    "file": "pins.go",
+    "function": "maxBatchBeyondLimit",
+    "operator": "guard_off",
+    "original": "if err := json.Unmarshal(raw, &probe); err != nil || probe.Max == nil",
+    "mutated": "if err := json.Unmarshal(raw, &probe); false",
+    "reason": "when json.Unmarshal fails probe.Max stays nil, SetString on the empty string fails and the function returns false anyway."
+  },
+  {
+    "file": "pins.go",
+    "function": "maxBatchBeyondLimit",
+    "operator": "logic_swap",
+    "original": "err != nil || probe.Max == nil",
+    "mutated": "err != nil && probe.Max == nil",
+    "reason": "err != nil with probe.Max != nil cannot occur (an invalid document leaves probe untouched) and err == nil with a nil Max falls through to a failing SetString(\"\") that returns false: && and || agree."
+  },
+  {
+    "file": "pins.go",
+    "function": "loadArbPins",
+    "operator": "guard_off",
+    "original": "if err := json.Unmarshal(raw, &present); err != nil",
+    "mutated": "if err := json.Unmarshal(raw, &present); false",
+    "reason": "loadArbPins has already decoded the same raw bytes into the stricter arbPins struct; the subset struct decoded here has identical field types, so this second decode cannot fail."
+  },
+  {
+    "file": "verify.go",
+    "function": "Kind.verifyState",
+    "operator": "int_literal",
+    "original": "implWord[12:]",
+    "mutated": "implWord[11:]",
+    "reason": "common.BytesToAddress keeps the last 20 bytes of its argument, so implWord[11:] (21 bytes) and implWord[12:] give the same address."
   }
 ]
