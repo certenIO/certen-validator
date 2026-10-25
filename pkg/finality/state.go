@@ -72,6 +72,7 @@ const (
 	CodeAppendConflict            = "finality_append_conflict"
 	CodePanic                     = "finality_prover_panicked"
 	CodeBuildTimeout              = "finality_build_timeout"
+	CodeRandomnessUnavailable     = "finality_randomness_unavailable" // the process could not read the randomness a batched check needs (RB12 OPS-A2 item 12)
 	CodeUpgraderDisabled          = "finality_upgrader_disabled"
 	CodeFinalizedBlockUnavailable = "finality_finalized_block_unavailable"
 	CodeGuardRefused              = "finality_guard_refused"
