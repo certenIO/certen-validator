@@ -63,3 +63,7 @@ func DefaultLimits() Limits {
 		MaxPKCList:        256,
 	}
 }
+
+// MaxContractIdentityBytes bounds the stored and served container (the portable `contractIdentity` member's evidence): it equals
+// DefaultLimits().MaxContainerBytes and the octet_length check of migration 00031.
+const MaxContractIdentityBytes = 4194304
