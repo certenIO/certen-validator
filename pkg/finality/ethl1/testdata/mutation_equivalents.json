@@ -1,0 +1,706 @@
+[
+  {
+    "file": "covers.go",
+    "function": "rlpHeaderItems",
+    "operator": "arith",
+    "original": "b0-0x80",
+    "mutated": "b0+0x80",
+    "reason": "n is an int built from the byte b0-0x80 (b0 in 0x80..0xb7); b0 is a byte, so b0+0x80 wraps modulo 256 to the same value as b0-0x80 and the string length is identical."
+  },
+  {
+    "file": "covers.go",
+    "function": "rlpHeaderItems",
+    "operator": "int_literal",
+    "original": "n < 0",
+    "mutated": "n < -1",
+    "reason": "n is built from at most four length bytes (below 2^32) or a one-byte difference, so it is never negative on a 64-bit int and neither n < 0 nor n < -1 can be true; the guard exists for 32-bit builds only."
+  },
+  {
+    "file": "bls.go",
+    "function": "committee.key",
+    "operator": "int_literal",
+    "original": "c.raw[i*48 : i*48+48]",
+    "mutated": "c.raw[i*48 : i*48+49]",
+    "reason": "G1Affine.SetBytes of a compressed point reads only the first 48 bytes of its buffer; a 49-byte slice decodes identically, and an uncompressed (96-byte) point is still refused with a short buffer. The seat start i*48 is unchanged (the i*49 variant is killed by TestCommitteeKeyReadsExactlyTheSeatsBytes)."
+  },
+  {
+    "file": "bls.go",
+    "function": "computeDomain",
+    "operator": "int_literal",
+    "original": "fv[:4]",
+    "mutated": "fv[:5]",
+    "reason": "copy() moves min(len(dst), len(src)) bytes; the fork version has 4 bytes, so copying it into fv[:5] instead of fv[:4] writes the same 4 bytes."
+  },
+  {
+    "file": "bls.go",
+    "function": "computeDomain",
+    "operator": "int_literal",
+    "original": "d[:4]",
+    "mutated": "d[:3]",
+    "reason": "copy() into d[:3] moves the first three bytes of DOMAIN_SYNC_COMMITTEE = 07 00 00 00; byte 3 is zero and d starts zeroed, so d is unchanged."
+  },
+  {
+    "file": "bls.go",
+    "function": "computeDomain",
+    "operator": "int_literal",
+    "original": "d[:4]",
+    "mutated": "d[:5]",
+    "reason": "copy() moves min(len(dst), len(src)) bytes; the domain constant has 4 bytes, so d[:5] receives the same 4 bytes."
+  },
+  {
+    "file": "bls.go",
+    "function": "computeDomain",
+    "operator": "int_literal",
+    "original": "forkDataRoot[:28]",
+    "mutated": "forkDataRoot[:29]",
+    "reason": "d[4:] has 28 bytes, so copy() cuts the 29-byte source forkDataRoot[:29] to 28 bytes: the same domain."
+  },
+  {
+    "file": "bls.go",
+    "function": "fastAggregateVerify",
+    "operator": "guard_off",
+    "original": "if err != nil",
+    "mutated": "if false",
+    "reason": "bls12381.HashToG2 returns an error only for a domain separation tag longer than 255 bytes; blsDST is a 43-byte constant, so the error branch is unreachable."
+  },
+  {
+    "file": "bls.go",
+    "function": "fastAggregateVerify",
+    "operator": "guard_off",
+    "original": "if err != nil",
+    "mutated": "if false",
+    "reason": "bls12381.PairingCheck returns an error only when the two slices differ in length; both are built here with two elements, so the error branch is unreachable."
+  },
+  {
+    "file": "electra.go",
+    "function": "decodeElectraHeader",
+    "operator": "guard_off",
+    "original": "if n := len(exec) - electraExecFixed; n > electraMaxExtraData",
+    "mutated": "if n := len(exec) - electraExecFixed; false",
+    "reason": "the header_length check at the top of decodeElectraHeader already caps len(b) at electraHeaderMax = electraHeaderMin + 32, so len(exec) - 584 is at most 32 and the extra_data_length refusal cannot fire."
+  },
+  {
+    "file": "electra.go",
+    "function": "decodeElectraHeader",
+    "operator": "int_literal",
+    "original": "exec[execOffBlockHash:execOffBlockHash+32]",
+    "mutated": "exec[execOffBlockHash:execOffBlockHash+33]",
+    "reason": "copy() into the 32-byte ExecHash array moves at most 32 bytes, so the 33-byte source slice gives the same hash."
+  },
+  {
+    "file": "electra.go",
+    "function": "executionHeaderRoot",
+    "operator": "int_literal",
+    "original": "e[execOffParentHash:execOffParentHash+32]",
+    "mutated": "e[execOffParentHash:execOffParentHash+33]",
+    "reason": "the slice end is one past the field and the destination of copy() is a fixed array of the field size (32 bytes, or the 8-byte prefix of a leaf), so copy() cuts the extra byte and the leaf is unchanged."
+  },
+  {
+    "file": "electra.go",
+    "function": "executionHeaderRoot",
+    "operator": "int_literal",
+    "original": "e[execOffStateRoot:execOffStateRoot+32]",
+    "mutated": "e[execOffStateRoot:execOffStateRoot+33]",
+    "reason": "the slice end is one past the field and the destination of copy() is a fixed array of the field size (32 bytes, or the 8-byte prefix of a leaf), so copy() cuts the extra byte and the leaf is unchanged."
+  },
+  {
+    "file": "electra.go",
+    "function": "executionHeaderRoot",
+    "operator": "int_literal",
+    "original": "e[execOffReceipts:execOffReceipts+32]",
+    "mutated": "e[execOffReceipts:execOffReceipts+33]",
+    "reason": "the slice end is one past the field and the destination of copy() is a fixed array of the field size (32 bytes, or the 8-byte prefix of a leaf), so copy() cuts the extra byte and the leaf is unchanged."
+  },
+  {
+    "file": "electra.go",
+    "function": "executionHeaderRoot",
+    "operator": "int_literal",
+    "original": "e[execOffLogsBloom+32*i:execOffLogsBloom+32*i+32]",
+    "mutated": "e[execOffLogsBloom+32*i:execOffLogsBloom+33*i+32]",
+    "reason": "the slice end is one past the field and the destination of copy() is a fixed array of the field size (32 bytes, or the 8-byte prefix of a leaf), so copy() cuts the extra byte and the leaf is unchanged."
+  },
+  {
+    "file": "electra.go",
+    "function": "executionHeaderRoot",
+    "operator": "int_literal",
+    "original": "e[execOffLogsBloom+32*i:execOffLogsBloom+32*i+32]",
+    "mutated": "e[execOffLogsBloom+32*i:execOffLogsBloom+32*i+33]",
+    "reason": "the slice end is one past the field and the destination of copy() is a fixed array of the field size (32 bytes, or the 8-byte prefix of a leaf), so copy() cuts the extra byte and the leaf is unchanged."
+  },
+  {
+    "file": "electra.go",
+    "function": "executionHeaderRoot",
+    "operator": "int_literal",
+    "original": "e[execOffPrevRandao:execOffPrevRandao+32]",
+    "mutated": "e[execOffPrevRandao:execOffPrevRandao+33]",
+    "reason": "the slice end is one past the field and the destination of copy() is a fixed array of the field size (32 bytes, or the 8-byte prefix of a leaf), so copy() cuts the extra byte and the leaf is unchanged."
+  },
+  {
+    "file": "electra.go",
+    "function": "executionHeaderRoot",
+    "operator": "int_literal",
+    "original": "leaf[6][:8]",
+    "mutated": "leaf[6][:9]",
+    "reason": "the slice end is one past the field and the destination of copy() is a fixed array of the field size (32 bytes, or the 8-byte prefix of a leaf), so copy() cuts the extra byte and the leaf is unchanged."
+  },
+  {
+    "file": "electra.go",
+    "function": "executionHeaderRoot",
+    "operator": "int_literal",
+    "original": "e[execOffNumber:execOffNumber+8]",
+    "mutated": "e[execOffNumber:execOffNumber+9]",
+    "reason": "the slice end is one past the field and the destination of copy() is a fixed array of the field size (32 bytes, or the 8-byte prefix of a leaf), so copy() cuts the extra byte and the leaf is unchanged."
+  },
+  {
+    "file": "electra.go",
+    "function": "executionHeaderRoot",
+    "operator": "int_literal",
+    "original": "leaf[7][:8]",
+    "mutated": "leaf[7][:9]",
+    "reason": "the slice end is one past the field and the destination of copy() is a fixed array of the field size (32 bytes, or the 8-byte prefix of a leaf), so copy() cuts the extra byte and the leaf is unchanged."
+  },
+  {
+    "file": "electra.go",
+    "function": "executionHeaderRoot",
+    "operator": "int_literal",
+    "original": "e[execOffGasLimit:execOffGasLimit+8]",
+    "mutated": "e[execOffGasLimit:execOffGasLimit+9]",
+    "reason": "the slice end is one past the field and the destination of copy() is a fixed array of the field size (32 bytes, or the 8-byte prefix of a leaf), so copy() cuts the extra byte and the leaf is unchanged."
+  },
+  {
+    "file": "electra.go",
+    "function": "executionHeaderRoot",
+    "operator": "int_literal",
+    "original": "leaf[8][:8]",
+    "mutated": "leaf[8][:9]",
+    "reason": "the slice end is one past the field and the destination of copy() is a fixed array of the field size (32 bytes, or the 8-byte prefix of a leaf), so copy() cuts the extra byte and the leaf is unchanged."
+  },
+  {
+    "file": "electra.go",
+    "function": "executionHeaderRoot",
+    "operator": "int_literal",
+    "original": "e[execOffGasUsed:execOffGasUsed+8]",
+    "mutated": "e[execOffGasUsed:execOffGasUsed+9]",
+    "reason": "the slice end is one past the field and the destination of copy() is a fixed array of the field size (32 bytes, or the 8-byte prefix of a leaf), so copy() cuts the extra byte and the leaf is unchanged."
+  },
+  {
+    "file": "electra.go",
+    "function": "executionHeaderRoot",
+    "operator": "int_literal",
+    "original": "leaf[9][:8]",
+    "mutated": "leaf[9][:9]",
+    "reason": "the slice end is one past the field and the destination of copy() is a fixed array of the field size (32 bytes, or the 8-byte prefix of a leaf), so copy() cuts the extra byte and the leaf is unchanged."
+  },
+  {
+    "file": "electra.go",
+    "function": "executionHeaderRoot",
+    "operator": "int_literal",
+    "original": "e[execOffTimestamp:execOffTimestamp+8]",
+    "mutated": "e[execOffTimestamp:execOffTimestamp+9]",
+    "reason": "the slice end is one past the field and the destination of copy() is a fixed array of the field size (32 bytes, or the 8-byte prefix of a leaf), so copy() cuts the extra byte and the leaf is unchanged."
+  },
+  {
+    "file": "electra.go",
+    "function": "executionHeaderRoot",
+    "operator": "int_literal",
+    "original": "length[:8]",
+    "mutated": "length[:9]",
+    "reason": "PutUint64 writes 8 bytes of length[:9] exactly as of length[:8]: the slice end is one past the field and the destination of copy() is a fixed array of the field size (32 bytes, or the 8-byte prefix of a leaf), so copy() cuts the extra byte and the leaf is unchanged."
+  },
+  {
+    "file": "electra.go",
+    "function": "executionHeaderRoot",
+    "operator": "int_literal",
+    "original": "e[execOffBaseFee:execOffBaseFee+32]",
+    "mutated": "e[execOffBaseFee:execOffBaseFee+33]",
+    "reason": "the slice end is one past the field and the destination of copy() is a fixed array of the field size (32 bytes, or the 8-byte prefix of a leaf), so copy() cuts the extra byte and the leaf is unchanged."
+  },
+  {
+    "file": "electra.go",
+    "function": "executionHeaderRoot",
+    "operator": "int_literal",
+    "original": "e[execOffBlockHash:execOffBlockHash+32]",
+    "mutated": "e[execOffBlockHash:execOffBlockHash+33]",
+    "reason": "the slice end is one past the field and the destination of copy() is a fixed array of the field size (32 bytes, or the 8-byte prefix of a leaf), so copy() cuts the extra byte and the leaf is unchanged."
+  },
+  {
+    "file": "electra.go",
+    "function": "executionHeaderRoot",
+    "operator": "int_literal",
+    "original": "e[execOffTxRoot:execOffTxRoot+32]",
+    "mutated": "e[execOffTxRoot:execOffTxRoot+33]",
+    "reason": "the slice end is one past the field and the destination of copy() is a fixed array of the field size (32 bytes, or the 8-byte prefix of a leaf), so copy() cuts the extra byte and the leaf is unchanged."
+  },
+  {
+    "file": "electra.go",
+    "function": "executionHeaderRoot",
+    "operator": "int_literal",
+    "original": "e[execOffWithdrawal:execOffWithdrawal+32]",
+    "mutated": "e[execOffWithdrawal:execOffWithdrawal+33]",
+    "reason": "the slice end is one past the field and the destination of copy() is a fixed array of the field size (32 bytes, or the 8-byte prefix of a leaf), so copy() cuts the extra byte and the leaf is unchanged."
+  },
+  {
+    "file": "electra.go",
+    "function": "executionHeaderRoot",
+    "operator": "int_literal",
+    "original": "leaf[15][:8]",
+    "mutated": "leaf[15][:9]",
+    "reason": "the slice end is one past the field and the destination of copy() is a fixed array of the field size (32 bytes, or the 8-byte prefix of a leaf), so copy() cuts the extra byte and the leaf is unchanged."
+  },
+  {
+    "file": "electra.go",
+    "function": "executionHeaderRoot",
+    "operator": "int_literal",
+    "original": "e[execOffBlobGas:execOffBlobGas+8]",
+    "mutated": "e[execOffBlobGas:execOffBlobGas+9]",
+    "reason": "the slice end is one past the field and the destination of copy() is a fixed array of the field size (32 bytes, or the 8-byte prefix of a leaf), so copy() cuts the extra byte and the leaf is unchanged."
+  },
+  {
+    "file": "electra.go",
+    "function": "executionHeaderRoot",
+    "operator": "int_literal",
+    "original": "leaf[16][:8]",
+    "mutated": "leaf[16][:9]",
+    "reason": "the slice end is one past the field and the destination of copy() is a fixed array of the field size (32 bytes, or the 8-byte prefix of a leaf), so copy() cuts the extra byte and the leaf is unchanged."
+  },
+  {
+    "file": "lccodec.go",
+    "function": "DecodeLC",
+    "operator": "int_literal",
+    "original": "n < 0",
+    "mutated": "n < -1",
+    "reason": "see 142 family: n is never negative on a 64-bit int."
+  },
+  {
+    "file": "lccodec.go",
+    "function": "DecodeLC",
+    "operator": "int_literal",
+    "original": "b[pos:pos+32]",
+    "mutated": "b[pos:pos+33]",
+    "reason": "copy() into the 32-byte AnchorRoot array moves at most 32 bytes, so the 33-byte source slice gives the same root."
+  },
+  {
+    "file": "lccodec.go",
+    "function": "DecodeLC",
+    "operator": "arith",
+    "original": "len(b) - pos",
+    "mutated": "len(b) + pos",
+    "reason": "the reserve capacity of lc.Links is a hint (make([]LB, 0, room)); every decoded link is appended either way, so the verdict and the links are identical (len(b)+pos only enlarges the hint, which min(n, ...) then bounds by n, itself bounded by max_links)."
+  },
+  {
+    "file": "lccodec.go",
+    "function": "DecodeLC",
+    "operator": "arith",
+    "original": "(len(b) - pos) / 5",
+    "mutated": "(len(b) - pos) * 5",
+    "reason": "capacity hint only; see 655: room = min(n, hint) and the decode loop appends exactly n links or fails the same way."
+  },
+  {
+    "file": "lccodec.go",
+    "function": "DecodeLC",
+    "operator": "int_literal",
+    "original": "(len(b) - pos) / 5",
+    "mutated": "(len(b) - pos) / 4",
+    "reason": "capacity hint only; see 655: a hint of (len-pos)/4 is still at least n for every well-formed container and is bounded by n and max_links otherwise."
+  },
+  {
+    "file": "lccodec.go",
+    "function": "DecodeLC",
+    "operator": "cmp_boundary",
+    "original": "n < room",
+    "mutated": "n <= room",
+    "reason": "n <= room differs from n < room only when n == room, and then room = n is assigned the same value."
+  },
+  {
+    "file": "types.go",
+    "function": "Pins.ledgerHead",
+    "operator": "int_literal",
+    "original": "i == 0",
+    "mutated": "i == -1",
+    "reason": "the clause i == 0 is redundant with a.Period > head: head starts at 0, so a first period of 0 leaves head 0 either way and a larger first period passes a.Period > head; i == -1 is never true, which removes only the redundant clause."
+  },
+  {
+    "file": "types.go",
+    "function": "Pins.ledgerHead",
+    "operator": "cmp_boundary",
+    "original": "a.Period > head",
+    "mutated": "a.Period >= head",
+    "reason": "a.Period >= head differs from > only when the periods are equal, and then head is assigned the same value."
+  },
+  {
+    "file": "electra.go",
+    "function": "decodeElectraUpdate",
+    "operator": "cmp_boundary",
+    "original": "fin > len(b)",
+    "mutated": "fin >= len(b)",
+    "reason": "decodeElectraUpdate/decodeElectraFinalityUpdate refuse len(b) < fixed + 2*electraHeaderMin before this line and fin is at most fixed + electraHeaderMax < len(b), so fin == len(b) cannot occur and > versus >= give the same result."
+  },
+  {
+    "file": "electra.go",
+    "function": "decodeElectraUpdate",
+    "operator": "int_literal",
+    "original": "b[o:o+32*electraCommitteeBranchLen]",
+    "mutated": "b[o:o+31*electraCommitteeBranchLen]",
+    "reason": "decodeBranch reads node i as b[32*i:32*i+32] of the slice it is given, and Go permits reslicing up to the capacity of the underlying evidence array, so a branch slice cut a little shorter or longer than the exact branch length yields the same nodes."
+  },
+  {
+    "file": "electra.go",
+    "function": "decodeElectraUpdate",
+    "operator": "int_literal",
+    "original": "b[o:o+32*electraCommitteeBranchLen]",
+    "mutated": "b[o:o+33*electraCommitteeBranchLen]",
+    "reason": "decodeBranch reads node i as b[32*i:32*i+32] of the slice it is given, and Go permits reslicing up to the capacity of the underlying evidence array, so a branch slice cut a little shorter or longer than the exact branch length yields the same nodes."
+  },
+  {
+    "file": "electra.go",
+    "function": "decodeElectraUpdate",
+    "operator": "arith",
+    "original": "32*electraCommitteeBranchLen",
+    "mutated": "32/electraCommitteeBranchLen",
+    "reason": "decodeBranch reads node i as b[32*i:32*i+32] of the slice it is given, and Go permits reslicing up to the capacity of the underlying evidence array, so a branch slice cut a little shorter or longer than the exact branch length yields the same nodes."
+  },
+  {
+    "file": "electra.go",
+    "function": "decodeElectraUpdate",
+    "operator": "int_literal",
+    "original": "b[o:o+32*electraFinalityBranchLen]",
+    "mutated": "b[o:o+31*electraFinalityBranchLen]",
+    "reason": "decodeBranch reads node i as b[32*i:32*i+32] of the slice it is given, and Go permits reslicing up to the capacity of the underlying evidence array, so a branch slice cut a little shorter or longer than the exact branch length yields the same nodes."
+  },
+  {
+    "file": "electra.go",
+    "function": "decodeElectraUpdate",
+    "operator": "int_literal",
+    "original": "b[o:o+32*electraFinalityBranchLen]",
+    "mutated": "b[o:o+33*electraFinalityBranchLen]",
+    "reason": "decodeBranch reads node i as b[32*i:32*i+32] of the slice it is given, and Go permits reslicing up to the capacity of the underlying evidence array, so a branch slice cut a little shorter or longer than the exact branch length yields the same nodes."
+  },
+  {
+    "file": "electra.go",
+    "function": "decodeElectraUpdate",
+    "operator": "arith",
+    "original": "32*electraFinalityBranchLen",
+    "mutated": "32/electraFinalityBranchLen",
+    "reason": "decodeBranch reads node i as b[32*i:32*i+32] of the slice it is given, and Go permits reslicing up to the capacity of the underlying evidence array, so a branch slice cut a little shorter or longer than the exact branch length yields the same nodes."
+  },
+  {
+    "file": "electra.go",
+    "function": "decodeElectraUpdate",
+    "operator": "int_literal",
+    "original": "b[o : o+8]",
+    "mutated": "b[o : o+9]",
+    "reason": "binary.LittleEndian.Uint64 reads the first 8 bytes of its argument; a slice end one past them changes nothing."
+  },
+  {
+    "file": "electra.go",
+    "function": "decodeElectraFinalityUpdate",
+    "operator": "cmp_boundary",
+    "original": "fin > len(b)",
+    "mutated": "fin >= len(b)",
+    "reason": "decodeElectraUpdate/decodeElectraFinalityUpdate refuse len(b) < fixed + 2*electraHeaderMin before this line and fin is at most fixed + electraHeaderMax < len(b), so fin == len(b) cannot occur and > versus >= give the same result."
+  },
+  {
+    "file": "electra.go",
+    "function": "decodeElectraFinalityUpdate",
+    "operator": "int_literal",
+    "original": "b[o:o+32*electraFinalityBranchLen]",
+    "mutated": "b[o:o+31*electraFinalityBranchLen]",
+    "reason": "decodeBranch reads node i as b[32*i:32*i+32] of the slice it is given, and Go permits reslicing up to the capacity of the underlying evidence array, so a branch slice cut a little shorter or longer than the exact branch length yields the same nodes."
+  },
+  {
+    "file": "electra.go",
+    "function": "decodeElectraFinalityUpdate",
+    "operator": "int_literal",
+    "original": "b[o:o+32*electraFinalityBranchLen]",
+    "mutated": "b[o:o+33*electraFinalityBranchLen]",
+    "reason": "decodeBranch reads node i as b[32*i:32*i+32] of the slice it is given, and Go permits reslicing up to the capacity of the underlying evidence array, so a branch slice cut a little shorter or longer than the exact branch length yields the same nodes."
+  },
+  {
+    "file": "electra.go",
+    "function": "decodeElectraFinalityUpdate",
+    "operator": "arith",
+    "original": "32*electraFinalityBranchLen",
+    "mutated": "32/electraFinalityBranchLen",
+    "reason": "decodeBranch reads node i as b[32*i:32*i+32] of the slice it is given, and Go permits reslicing up to the capacity of the underlying evidence array, so a branch slice cut a little shorter or longer than the exact branch length yields the same nodes."
+  },
+  {
+    "file": "electra.go",
+    "function": "decodeElectraFinalityUpdate",
+    "operator": "int_literal",
+    "original": "b[o : o+8]",
+    "mutated": "b[o : o+9]",
+    "reason": "binary.LittleEndian.Uint64 reads the first 8 bytes of its argument; a slice end one past them changes nothing."
+  },
+  {
+    "file": "ssz.go",
+    "function": "decodeBeaconHeader",
+    "operator": "int_literal",
+    "original": "b[0:8]",
+    "mutated": "b[0:9]",
+    "reason": "decodeBeaconHeader: Uint64 reads 8 bytes and copy() into the 32-byte root arrays moves at most 32, so a slice end one past the field changes nothing."
+  },
+  {
+    "file": "ssz.go",
+    "function": "decodeBeaconHeader",
+    "operator": "int_literal",
+    "original": "b[8:16]",
+    "mutated": "b[8:17]",
+    "reason": "decodeBeaconHeader: Uint64 reads 8 bytes and copy() into the 32-byte root arrays moves at most 32, so a slice end one past the field changes nothing."
+  },
+  {
+    "file": "ssz.go",
+    "function": "decodeBeaconHeader",
+    "operator": "int_literal",
+    "original": "b[16:48]",
+    "mutated": "b[16:49]",
+    "reason": "decodeBeaconHeader: Uint64 reads 8 bytes and copy() into the 32-byte root arrays moves at most 32, so a slice end one past the field changes nothing."
+  },
+  {
+    "file": "ssz.go",
+    "function": "decodeBeaconHeader",
+    "operator": "int_literal",
+    "original": "b[48:80]",
+    "mutated": "b[48:81]",
+    "reason": "decodeBeaconHeader: Uint64 reads 8 bytes and copy() into the 32-byte root arrays moves at most 32, so a slice end one past the field changes nothing."
+  },
+  {
+    "file": "ssz.go",
+    "function": "decodeBeaconHeader",
+    "operator": "int_literal",
+    "original": "b[80:112]",
+    "mutated": "b[80:113]",
+    "reason": "decodeBeaconHeader: Uint64 reads 8 bytes and copy() into the 32-byte root arrays moves at most 32, so a slice end one past the field changes nothing."
+  },
+  {
+    "file": "ssz.go",
+    "function": "sha2",
+    "operator": "int_literal",
+    "original": "buf[:32]",
+    "mutated": "buf[:33]",
+    "reason": "sha2 copies a into buf[:33] but a is always a 32-byte array slice at every call site, so exactly 32 bytes move."
+  },
+  {
+    "file": "ssz.go",
+    "function": "hashTreeRootBeaconHeader",
+    "operator": "int_literal",
+    "original": "l[0][:8]",
+    "mutated": "l[0][:9]",
+    "reason": "PutUint64 writes exactly 8 bytes of the slice it is given, so [:9] changes nothing."
+  },
+  {
+    "file": "ssz.go",
+    "function": "hashTreeRootBeaconHeader",
+    "operator": "int_literal",
+    "original": "l[1][:8]",
+    "mutated": "l[1][:9]",
+    "reason": "PutUint64 writes exactly 8 bytes of the slice it is given, so [:9] changes nothing."
+  },
+  {
+    "file": "ssz.go",
+    "function": "hashTreeRootBeaconHeader",
+    "operator": "int_literal",
+    "original": "l[5]",
+    "mutated": "l[6]",
+    "reason": "leaves 5, 6 and 7 of the BeaconBlockHeader tree are the zero padding chunks, so reading one for another yields the same bytes."
+  },
+  {
+    "file": "ssz.go",
+    "function": "hashTreeRootBeaconHeader",
+    "operator": "int_literal",
+    "original": "l[6]",
+    "mutated": "l[5]",
+    "reason": "leaves 5, 6 and 7 of the BeaconBlockHeader tree are the zero padding chunks, so reading one for another yields the same bytes."
+  },
+  {
+    "file": "ssz.go",
+    "function": "hashTreeRootBeaconHeader",
+    "operator": "int_literal",
+    "original": "l[6]",
+    "mutated": "l[7]",
+    "reason": "leaves 5, 6 and 7 of the BeaconBlockHeader tree are the zero padding chunks, so reading one for another yields the same bytes."
+  },
+  {
+    "file": "ssz.go",
+    "function": "hashTreeRootBeaconHeader",
+    "operator": "int_literal",
+    "original": "l[7]",
+    "mutated": "l[6]",
+    "reason": "leaves 5, 6 and 7 of the BeaconBlockHeader tree are the zero padding chunks, so reading one for another yields the same bytes."
+  },
+  {
+    "file": "ssz.go",
+    "function": "hashTreeRootPubkey",
+    "operator": "int_literal",
+    "original": "second[:16]",
+    "mutated": "second[:17]",
+    "reason": "copy() into a fixed-size array moves at most the array length, so a source slice end one past the field changes nothing."
+  },
+  {
+    "file": "ssz.go",
+    "function": "hashTreeRootPubkey",
+    "operator": "int_literal",
+    "original": "pk[0:32]",
+    "mutated": "pk[0:33]",
+    "reason": "copy() into a fixed-size array moves at most the array length, so a source slice end one past the field changes nothing."
+  },
+  {
+    "file": "ssz.go",
+    "function": "hashTreeRootSyncCommitteeN",
+    "operator": "int_literal",
+    "original": "b[i*48 : i*48+48]",
+    "mutated": "b[i*48 : i*48+47]",
+    "reason": "hashTreeRootPubkey reads pk[0:32] and pk[32:48] by reslicing within the capacity of the committee array, so a seat slice one byte shorter or longer yields the same key root."
+  },
+  {
+    "file": "ssz.go",
+    "function": "hashTreeRootSyncCommitteeN",
+    "operator": "int_literal",
+    "original": "b[i*48 : i*48+48]",
+    "mutated": "b[i*48 : i*48+49]",
+    "reason": "hashTreeRootPubkey reads pk[0:32] and pk[32:48] by reslicing within the capacity of the committee array, so a seat slice one byte shorter or longer yields the same key root."
+  },
+  {
+    "file": "ssz.go",
+    "function": "hashTreeRootSyncCommitteeN",
+    "operator": "int_literal",
+    "original": "b[n*48 : n*48+48]",
+    "mutated": "b[n*48 : n*48+47]",
+    "reason": "hashTreeRootPubkey reads pk[0:32] and pk[32:48] by reslicing within the capacity of the committee array, so a seat slice one byte shorter or longer yields the same key root."
+  },
+  {
+    "file": "ssz.go",
+    "function": "decodeLCHeader",
+    "operator": "int_literal",
+    "original": "b[BeaconBlockHeaderSize:BeaconBlockHeaderSize+32]",
+    "mutated": "b[BeaconBlockHeaderSize:BeaconBlockHeaderSize+33]",
+    "reason": "copy() into a fixed-size array moves at most the array length, so a source slice end one past the field changes nothing."
+  },
+  {
+    "file": "ssz.go",
+    "function": "decodeSyncAggregate",
+    "operator": "int_literal",
+    "original": "b[nb:nb+96]",
+    "mutated": "b[nb:nb+97]",
+    "reason": "copy() into a fixed-size array moves at most the array length, so a source slice end one past the field changes nothing."
+  },
+  {
+    "file": "ssz.go",
+    "function": "decodeUpdate",
+    "operator": "bool_lit",
+    "original": "u.hasNextContainer = true",
+    "mutated": "u.hasNextContainer = false",
+    "reason": "hasNextContainer is written here and in decodeElectraUpdate and read by no non-test code: setting it to false changes no verdict (recorded as a finding in checkins/RB12-EPS-MUTKILL-2.md)."
+  },
+  {
+    "file": "ssz.go",
+    "function": "decodeFinalityUpdate",
+    "operator": "int_literal",
+    "original": "b[o : o+8]",
+    "mutated": "b[o : o+9]",
+    "reason": "binary.LittleEndian.Uint64 reads the first 8 bytes of its argument; a slice end one past them changes nothing."
+  },
+  {
+    "file": "verify.go",
+    "function": "walker.anchorStore",
+    "operator": "cmp_boundary",
+    "original": "lc.AnchorPeriod > head",
+    "mutated": "lc.AnchorPeriod >= head",
+    "reason": "anchorStore reaches this comparison only when anchorFor(period) found nothing; the ledger head is a period that has an anchor, so AnchorPeriod == head cannot reach it and > versus >= agree."
+  },
+  {
+    "file": "verify.go",
+    "function": "walker.anchorStore",
+    "operator": "guard_off",
+    "original": "if ok, f := w.headerValid(boot.Header); f != nil",
+    "mutated": "if ok, f := w.headerValid(boot.Header); false",
+    "reason": "headerValid returns a fault only for a slot without a fork or a fork whose layout is not the bootstrap shape; checkForkOfSlot has already refused exactly those in every caller, so the fault branch is unreachable and the following !ok branch would only restate it."
+  },
+  {
+    "file": "verify.go",
+    "function": "walker.headerValid",
+    "operator": "guard_off",
+    "original": "if !ok",
+    "mutated": "if false",
+    "reason": "without this guard forkAt returns the zero Fork (layout none) and both the Electra shape test and the layout switch return the identical ForkUnsupported(slot, epoch, shape) fault."
+  },
+  {
+    "file": "verify.go",
+    "function": "walker.update",
+    "operator": "cmp_boundary",
+    "original": "n*3 < w.pr.committeeSize*2",
+    "mutated": "n*3 <= w.pr.committeeSize*2",
+    "reason": "3n == 2*committeeSize has no integer solution for the power-of-two committee sizes (512 and 32), so < and <= agree."
+  },
+  {
+    "file": "verify.go",
+    "function": "walker.update",
+    "operator": "bool_call",
+    "original": "if !w.r.skip(chkPeriodRuleNextUnknown) && sigPeriod != storePeriod { if isFinal { return…",
+    "mutated": "if !false && sigPeriod != storePeriod { if isFinal { return…",
+    "reason": "w.r.skip is false for specRules, the production rules; the hook exists only for the mutation tests (mutRules), so !skip(...) is always true and replacing it by !false changes nothing."
+  },
+  {
+    "file": "verify.go",
+    "function": "walker.update",
+    "operator": "bool_call",
+    "original": "if isFinal && !w.r.skip(chkLedgerFinalSigner) { if f := w.enforce(sigPeriod, signing.root); f !…",
+    "mutated": "if isFinal && !false { if f := w.enforce(sigPeriod, signing.root); f !…",
+    "reason": "w.r.skip is false for specRules, the production rules; the hook exists only for the mutation tests (mutRules), so !skip(...) is always true and replacing it by !false changes nothing."
+  },
+  {
+    "file": "verify.go",
+    "function": "walker.update",
+    "operator": "guard_off",
+    "original": "if signing == nil",
+    "mutated": "if false",
+    "reason": "the period rules before it (sigPeriod is the store period or, with a known next committee, the one after) make signing == nil unreachable; the source comment says so and the block is a named-state guard only."
+  },
+  {
+    "file": "verify.go",
+    "function": "walker.update",
+    "operator": "guard_off",
+    "original": "if isFinal",
+    "mutated": "if false",
+    "reason": "inside the unreachable signing == nil block (see 1204): neither the isFinal test nor its negation can be observed."
+  },
+  {
+    "file": "verify.go",
+    "function": "walker.update",
+    "operator": "if_negate",
+    "original": "if isFinal",
+    "mutated": "if !(isFinal)",
+    "reason": "inside the unreachable signing == nil block (see 1204): neither the isFinal test nor its negation can be observed."
+  },
+  {
+    "file": "verify.go",
+    "function": "walker.update",
+    "operator": "guard_off",
+    "original": "if !ok",
+    "mutated": "if false",
+    "reason": "the domain epoch is the epoch of max(signature_slot,1)-1, which is never below the attested slot's epoch because signature_slot > attested slot; headerValid has already found a fork for the attested slot's epoch, and the schedule is ascending, so forkAt finds one here too."
+  },
+  {
+    "file": "verify.go",
+    "function": "walker.update",
+    "operator": "cmp_boundary",
+    "original": "newEpoch > prevEpoch",
+    "mutated": "newEpoch >= prevEpoch",
+    "reason": "WSPEpochs is unsigned: newEpoch == prevEpoch gives a distance of 0, which is never greater than WSPEpochs, so > and >= on the epochs agree."
+  },
+  {
+    "file": "verify.go",
+    "function": "walker.update",
+    "operator": "cmp_boundary",
+    "original": "fs > w.s.finSlot",
+    "mutated": "fs >= w.s.finSlot",
+    "reason": "fs >= finSlot differs from > only when they are equal, and then finSlot is assigned the same value."
+  },
+  {
+    "file": "verify.go",
+    "function": "walker.update",
+    "operator": "guard_off",
+    "original": "if finalizedPeriod != storePeriod",
+    "mutated": "if false",
+    "reason": "unreachable: the store has no next committee here, so the signature period is the store period (checked earlier); the attested slot lies in (store finalized slot, signature slot] or in the attested period, which is therefore the store period, and the finalized slot is at most the attested slot and above the store finalized slot (or in the attested period), so periodOf(finalized slot) always equals the store period and the finalized_period refusal cannot fire."
+  }
+]
