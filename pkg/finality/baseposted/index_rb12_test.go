@@ -207,7 +207,7 @@ func TestRB12IndexAssemblesInterleavedAndMultiBlockChannelsLikeFindChannel(t *te
 		txs   int
 		first uint64
 	}{{"A", 1_790_100_000 + 20, 4, 1010}, {"B", 1_790_200_000 + 40, 3, 1010}} {
-		ch, frameTxs, _, _ := findChannel(all, bp, c.ts)
+		ch, frameTxs, _, _ := findChannel(all, bp, finality.HeaderFields{Timestamp: c.ts})
 		if ch == nil {
 			t.Fatalf("%s: the reference finds no channel", c.label)
 		}

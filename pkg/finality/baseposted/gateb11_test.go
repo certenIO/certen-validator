@@ -207,7 +207,7 @@ func TestTheBuilderListsChannelsFrameByFrameWhenOneTransactionCarriesSeveralAndS
 		if err != nil {
 			t.Fatal(err)
 		}
-		if ref, _, _, _ := findChannel(txs, newPins(), 1790000200); ref != nil {
+		if ref, _, _, _ := findChannel(txs, newPins(), finality.HeaderFields{Timestamp: 1790000200}); ref != nil {
 			t.Errorf("%s: an incomplete channel was found", name)
 		}
 	}
@@ -216,7 +216,7 @@ func TestTheBuilderListsChannelsFrameByFrameWhenOneTransactionCarriesSeveralAndS
 	st := NewMemStore()
 	putSynth(t, st, s)
 	txs, _ := (&Builder{Store: st}).load(context.Background(), newPins())
-	if ref, _, bt, _ := findChannel(txs, newPins(), 1790000200); ref == nil || ref.ID != idX || bt.Timestamp != 1790000200 {
+	if ref, _, bt, _ := findChannel(txs, newPins(), finality.HeaderFields{Timestamp: 1790000200}); ref == nil || ref.ID != idX || bt.Timestamp != 1790000200 {
 		t.Fatal("a complete channel of two frames in one transaction")
 	}
 	// the store's own failures reach the caller

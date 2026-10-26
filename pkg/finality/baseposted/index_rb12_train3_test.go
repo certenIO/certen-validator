@@ -41,7 +41,7 @@ func vRef(t *testing.T, st finality.CaptureStore, bp *Pins, origin, end, ts uint
 	if err != nil {
 		t.Fatal(err)
 	}
-	ch, _, _, _ := findChannel(all, bp, ts)
+	ch, _, _, _ := findChannel(all, bp, finality.HeaderFields{Timestamp: ts})
 	return ch
 }
 

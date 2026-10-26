@@ -199,6 +199,15 @@
     "max_l2_headers": 1024,
     "max_rlp_bytes_per_channel": 100000000,
     "portal": "0x49f53e41452c74589e85ca1677426ba426459e85",
+    "post_denim": {
+      "base_time_predeploy": "0x4200000000000000000000000000000000000030",
+      "base_time_selector": "0x86bdf394",
+      "batch_types": [
+        0
+      ],
+      "block_interval_ms": 200,
+      "blocks_per_second": 5
+    },
     "proxy_pins": {
       "0x33920c8270353487e486debc0d8ddbb187fa86727f2daf412d794589e6f26cb5": {
         "bytes": 2100,

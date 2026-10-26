@@ -60,6 +60,8 @@ type synthOpts struct {
 	txData           []byte // the calldata of every frame transaction, used as given instead of the marshalled frame
 	channelLabel     string // another label gives another channel id
 	garbageTx        []byte // the frame transaction bytes put in the block trie instead of the signed transaction
+	sameSecondBefore int    // singular batches with the SAME timestamp and another parent hash, placed before the leg's batch (Denim: five blocks share a second)
+	parentLabel      string // another label gives another parent hash of the leg's block
 }
 
 type synth struct {
@@ -131,6 +133,9 @@ func makeSynth(t *testing.T, o synthOpts) *synth {
 	bp := newPins()
 	epochHash := crypto.Keccak256Hash([]byte("epoch hash"))
 	parent := crypto.Keccak256Hash([]byte("parent"))
+	if o.parentLabel != "" {
+		parent = crypto.Keccak256Hash([]byte(o.parentLabel))
+	}
 	deposit := l1InfoDeposit(o.epochNum, epochHash)
 	users := [][]byte{userTx(1), userTx(2)}
 	all := append([][]byte{deposit}, users...)
@@ -143,6 +148,13 @@ func makeSynth(t *testing.T, o synthOpts) *synth {
 		batchBytes = append([]byte{0}, enc...)
 	}
 	stream, _ := rlp.EncodeToBytes(batchBytes)
+	var preStream []byte
+	for i := 0; i < o.sameSecondBefore; i++ {
+		enc, _ := rlp.EncodeToBytes(singularRLP{ParentHash: crypto.Keccak256Hash([]byte("sibling"), []byte{byte(i)}), EpochNum: o.epochNum, EpochHash: epochHash, Timestamp: o.batchTs, Txs: nil})
+		b, _ := rlp.EncodeToBytes(append([]byte{0}, enc...))
+		preStream = append(preStream, b...)
+	}
+	stream = append(preStream, stream...)
 	// pad the stream with a few other batches so the lookup is real
 	for i := uint64(1); i <= 2 && !o.span; i++ {
 		enc, _ := rlp.EncodeToBytes(singularRLP{ParentHash: crypto.Keccak256Hash([]byte{byte(i)}), EpochNum: o.epochNum, EpochHash: epochHash, Timestamp: o.batchTs + 2*i, Txs: nil})

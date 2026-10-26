@@ -246,8 +246,8 @@ func (b *Builder) Build(ctx context.Context, s *ethproof.Settlement, have finali
 	if err != nil {
 		return nil, nil, err
 	}
-	if l2.Timestamp >= bp.DenimTime {
-		return nil, nil, st(CodeBatchFormat, "type", "post_denim")
+	if err := bp.denimGate(l2.Timestamp); err != nil {
+		return nil, nil, err
 	}
 	pend := func(reason string, kv map[string]any) (*finality.Addendum, *finality.PendingState, error) {
 		return nil, &finality.PendingState{Chain: uint64(Chain), LevelReached: finality.LevelIncluded, NextLevel: finality.LevelL1Posted, Reason: reason, Judged: kv}, nil
@@ -398,7 +398,7 @@ func (b *Builder) search(ctx context.Context, bp *Pins, l2 finality.HeaderFields
 		if txs, err = b.dropOrphans(ctx, txs, twins); err != nil {
 			return sr, err
 		}
-		sr.ch, sr.frameTxs, sr.bt, sr.lastScanned = findChannel(txs, bp, l2.Timestamp)
+		sr.ch, sr.frameTxs, sr.bt, sr.lastScanned = findChannel(txs, bp, l2)
 		return sr, nil
 	}
 	blk, err := b.L2.Block(ctx, l2.Number)
@@ -516,7 +516,7 @@ func (b *Builder) search(ctx context.Context, bp *Pins, l2 finality.HeaderFields
 		if derr != nil {
 			return sr, derr
 		}
-		sr.ch, sr.frameTxs, sr.bt, last = findChannel(cands, bp, l2.Timestamp)
+		sr.ch, sr.frameTxs, sr.bt, last = findChannel(cands, bp, l2)
 		if !known && last > sr.lastScanned {
 			sr.lastScanned = last
 		}
@@ -677,9 +677,9 @@ func sortFrames(frames []FrameTx) {
 type channelRef struct{ ID [16]byte }
 
 // findChannel groups the captured frames by channel id, assembles every complete channel, decodes it and returns the first
-// whose batch for timestamp T exists, with the inbox transactions that carry its frames and the batch. lastScanned is the highest
+// whose batch for the block l2 exists (selectBatch), with the inbox transactions that carry its frames and the batch. lastScanned is the highest
 // captured L1 block (for the pending state).
-func findChannel(txs []capturedTx, bp *Pins, ts uint64) (*channelRef, []capturedTx, *Batch, uint64) {
+func findChannel(txs []capturedTx, bp *Pins, l2 finality.HeaderFields) (*channelRef, []capturedTx, *Batch, uint64) {
 	var last uint64
 	byCh := map[[16]byte][]capturedTx{}
 	var order [][16]byte
@@ -727,10 +727,9 @@ func findChannel(txs []capturedTx, bp *Pins, ts uint64) (*channelRef, []captured
 		if err != nil {
 			continue
 		}
-		for i := range batches {
-			if batches[i].Timestamp == ts {
-				return &channelRef{ID: id}, byCh[id], &batches[i], last
-			}
+		// selectBatch: the batch of the block (for a Denim second, the one with its parent hash: the second may straddle two channels)
+		if bt, err := selectBatch(bp, batches, l2); err == nil {
+			return &channelRef{ID: id}, byCh[id], bt, last
 		}
 	}
 	return nil, nil, nil, last
