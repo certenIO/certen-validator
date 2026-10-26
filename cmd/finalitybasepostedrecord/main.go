@@ -45,6 +45,29 @@ func main() {
 			fmt.Fprintln(os.Stderr, "build:", err)
 			os.Exit(1)
 		}
+	case "capture":
+		fs := flag.NewFlagSet("capture", flag.ExitOnError)
+		dir := fs.String("dir", "", "capture directory")
+		from := fs.Uint64("from", 0, "first L1 block")
+		to := fs.Uint64("to", 0, "last L1 block (0: the current head)")
+		follow := fs.Duration("for", 0, "keep following the head for this long after reaching it")
+		fs.Parse(os.Args[2:])
+		if *dir == "" || *from == 0 {
+			fmt.Fprintln(os.Stderr, "-dir and -from are required")
+			os.Exit(2)
+		}
+		if err := captureRange(*dir, *from, *to, *follow); err != nil {
+			exitf(err)
+		}
+	case "build-denim":
+		fs := flag.NewFlagSet("build-denim", flag.ExitOnError)
+		capDir := fs.String("cap", "", "capture directory")
+		raw := fs.String("raw", "", "finalityethl1record raw directory")
+		out := fs.String("out", "", "output set directory")
+		fs.Parse(os.Args[2:])
+		if err := buildDenim(*capDir, *raw, *out); err != nil {
+			exitf(err)
+		}
 	default:
 		fmt.Fprintln(os.Stderr, "unknown command", os.Args[1])
 		os.Exit(2)

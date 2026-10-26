@@ -54,6 +54,13 @@ func TestASpanBatchThatWouldProduceADenimBlockIsRefusedWithANamedState(t *testin
 	wantCode(t, err, CodeBatchFormat, map[string]string{"type": "span_post_denim"})
 }
 
+func TestADenimBlockPostedByAnotherSenderThanTheSystemConfigBatcherIsRefused(t *testing.T) {
+	s := makeSynth(t, synthOpts{compression: "zlib", calldata: true, batchTs: denimTs, sameSecondBefore: 3, chainBatch: testKey("someone else")})
+	denimPins(s.bp)
+	_, err := s.verify()
+	wantCode(t, err, CodeBatcherSender, map[string]string{})
+}
+
 func TestAPreDenimBlockKeepsTheTimestampKeyedLookup(t *testing.T) {
 	s := makeSynth(t, synthOpts{compression: "zlib", calldata: true, span: true, batchTs: 1790000000})
 	denimPins(s.bp)
