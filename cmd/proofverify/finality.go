@@ -111,6 +111,22 @@ func builderPinsNotes(ctx context.Context, repo finality.BuilderStatusStore, pro
 // holds nothing to recompute D0 from: no level is judged and none is claimed, and the report says so by name
 // (finality_included_unavailable, summary-only).
 func reportFinalityFile(w io.Writer, path string, reg *finality.Registry, pins *finality.Pins, leg *legSettlement) int {
+	return reportFinalityFileCI(w, path, reg, pins, leg, nil)
+}
+
+// reportFinalityFileCI is reportFinalityFile and, when req is set (--contract-identity), the S8 judgement of the document's contractIdentity member
+// against the same leg and the S7 report this run has just produced (contract_identity.go). With req nil it is exactly reportFinalityFile.
+func reportFinalityFileCI(w io.Writer, path string, reg *finality.Registry, pins *finality.Pins, leg *legSettlement, req *ciRequest) int {
+	var s7 *finality.Report
+	code := judgeFinalityFile(w, path, reg, pins, leg, &s7)
+	if req == nil {
+		return code
+	}
+	return reportContractIdentityFile(w, path, leg, s7, code, req)
+}
+
+// judgeFinalityFile is the S7 judgement of a portable document file; s7 receives the report when the leg was judged against a Settlement.
+func judgeFinalityFile(w io.Writer, path string, reg *finality.Registry, pins *finality.Pins, leg *legSettlement, s7 **finality.Report) int {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		fmt.Fprintf(w, "FAILED (finality)  %s\n  %v\n", path, err)
@@ -162,6 +178,7 @@ func reportFinalityFile(w io.Writer, path string, reg *finality.Registry, pins *
 			leg.outcome.tx.Hex(), leg.outcome.chain, leg.outcome.blockNumber, leg.outcome.blockHash.Hex())
 	}
 	rep := reg.Verify(leg.chain, leg.s, carried, section.Addenda, pins)
+	*s7 = &rep
 	return printReport(w, rep, path)
 }
 
@@ -175,6 +192,8 @@ type legSettlement struct {
 	unrecorded bool
 	// outcome is set when the Settlement came from an exported outcome evidence file: the chain, transaction and block the file records.
 	outcome *outcomeTx
+	// ev is the whole outcome evidence file the Settlement came from (nil for a stored bundle): --contract-identity builds its LegContext from it.
+	ev *execution.OutcomeEvidence
 }
 
 // outcomeTx is what an exported outcome evidence file records about its member's settlement transaction.
@@ -256,7 +275,7 @@ func settlementFromOutcomeFile(path string) (*legSettlement, error) {
 		Receipt: proof(inc.Receipt, inc.ReceiptProof, hdr.ReceiptHash),
 	}
 	return &legSettlement{chain: uint64(ev.ChainID), s: s, source: "outcome evidence " + path,
-		outcome: &outcomeTx{chain: uint64(ev.ChainID), tx: s.TxHash, blockNumber: hdr.Number.Uint64(), blockHash: s.BlockHash}}, nil
+		outcome: &outcomeTx{chain: uint64(ev.ChainID), tx: s.TxHash, blockNumber: hdr.Number.Uint64(), blockHash: s.BlockHash}, ev: ev}, nil
 }
 
 // settlementFromDB loads the stored bundle's L6 execution proof of a proof id (the same leg the database path judges).
