@@ -31,9 +31,10 @@ const (
 )
 
 // Defaults of the wait for the proof row: the settlement is captured at first observation, and the proof row and its bundle are written by the
-// proof builder some time later.
+// proof builder some time later: measured on the live system 2026-10-26, the proof row appeared 26 minutes after the settlement (the 15 minute
+// default of the first release gave up before it existed).
 const (
-	DefaultFinishWait    = 15 * time.Minute
+	DefaultFinishWait    = 60 * time.Minute
 	DefaultFinishPoll    = 15 * time.Second
 	DefaultFinishPending = 64
 )

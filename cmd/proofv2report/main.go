@@ -126,7 +126,7 @@ func run(dsn, incPath, pinHex, only string) (int, error) {
 			fmt.Printf("FAILED   %s: stored evidence does not decode: %v\n", id, err)
 			continue
 		}
-		rep, err := proofv2.Verify(ev, ar, inc, pin)
+		rep, err := verifyStored(ev, ar, inc, pin)
 		if err != nil {
 			failures++
 			fmt.Printf("FAILED   %s: stored evidence does not verify offline: %v\n", id, err)
@@ -333,4 +333,17 @@ func collect(v any, out map[string]page) {
 			collect(c, out)
 		}
 	}
+}
+
+// verifyStored judges stored evidence by its version: 2.0 with Verify, and 2.1 (written since the G1 activation) with
+// Verify21FromGenesis, because Verify, VerifyFromGenesis and VerifyFromSpine refuse 2.1 by design (evidence.go).
+func verifyStored(ev *proofv2.Evidence, ar *proofv2.Archive, inc *proof.IncarnationEvidence, pin [32]byte) (*proofv2.Report, error) {
+	if ev != nil && ev.Version == proofv2.Version21 {
+		ir, err := inc.Verify()
+		if err != nil {
+			return nil, fmt.Errorf("incarnation evidence: %w", err)
+		}
+		return proofv2.Verify21FromGenesis(ev, ar, ir.Inputs, pin)
+	}
+	return proofv2.Verify(ev, ar, inc, pin)
 }
