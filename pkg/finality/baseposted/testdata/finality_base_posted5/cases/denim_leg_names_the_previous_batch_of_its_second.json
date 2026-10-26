@@ -1,0 +1,20 @@
+{
+  "format": "certen-base-posted-case/1",
+  "id": "denim_leg_names_the_previous_batch_of_its_second",
+  "description": "the header of the second block of a second carries the parent hash of the first: the previous block's batch is selected and its transactions do not rebuild this header's root",
+  "pins": "pins/main.json",
+  "leg": "legs/g2_names_the_previous_batch.json",
+  "evidence": "evidence/second_block_second_of_its_second.bin",
+  "splice": {
+    "offset": 50,
+    "delete": 32,
+    "insert": "0x2d313895d2a1f0623b6bed73740cd4182cb35d5989f992b6f33385af42b44179"
+  },
+  "expect": {
+    "result": "state",
+    "code": "batch_binding_mismatch",
+    "fields": {
+      "field": "transactions_root"
+    }
+  }
+}

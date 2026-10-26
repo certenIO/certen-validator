@@ -1,0 +1,20 @@
+{
+  "format": "certen-base-posted-case/1",
+  "id": "denim_leg_parent_hash_altered",
+  "description": "a block of a five-block second whose header has another parent hash: no batch of the second commits it",
+  "pins": "pins/main.json",
+  "leg": "legs/g2_parent_altered.json",
+  "evidence": "evidence/second_block_second_of_its_second.bin",
+  "splice": {
+    "offset": 50,
+    "delete": 32,
+    "insert": "0x7421a3030b48e24aa9661050367501bdf6e53be9c2724ec0e8d9d5a31eae1fd7"
+  },
+  "expect": {
+    "result": "state",
+    "code": "batch_binding_mismatch",
+    "fields": {
+      "field": "parent_hash"
+    }
+  }
+}

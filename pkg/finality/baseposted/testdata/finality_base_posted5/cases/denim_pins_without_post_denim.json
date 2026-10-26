@@ -1,0 +1,15 @@
+{
+  "format": "certen-base-posted-case/1",
+  "id": "denim_pins_without_post_denim",
+  "description": "pins without the post_denim capability row: the post-Denim block keeps the named refusal",
+  "pins": "pins/without_post_denim.json",
+  "leg": "legs/second_block_second_of_its_second.json",
+  "evidence": "evidence/second_block_second_of_its_second.bin",
+  "expect": {
+    "result": "state",
+    "code": "batch_format_unsupported",
+    "fields": {
+      "type": "post_denim"
+    }
+  }
+}

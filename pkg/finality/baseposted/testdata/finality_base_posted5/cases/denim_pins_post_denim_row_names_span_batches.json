@@ -1,0 +1,16 @@
+{
+  "format": "certen-base-posted-case/1",
+  "id": "denim_pins_post_denim_row_names_span_batches",
+  "description": "a post_denim row that lists batch type 1: the pins are corrupt",
+  "pins": "pins/post_denim_span_type.json",
+  "leg": "legs/second_block_second_of_its_second.json",
+  "evidence": "evidence/second_block_second_of_its_second.bin",
+  "expect": {
+    "result": "state",
+    "code": "finality_pins_corrupt",
+    "fields": {
+      "key": "base_sepolia.post_denim",
+      "reason": "bad_value"
+    }
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "format": "certen-base-posted-case/1",
+  "id": "valid_another_channel_fourth_block",
+  "description": "the fourth block of a second in a channel of its own (Base Sepolia block 50459059, timestamp 1793013680)",
+  "pins": "pins/main.json",
+  "leg": "legs/another_channel_fourth_block.json",
+  "evidence": "evidence/another_channel_fourth_block.bin",
+  "expect": {
+    "result": "ok",
+    "fields": {
+      "batch_type": "0",
+      "batcher": "0xfc56e7272eebbba5bc6c544e159483c4a38f8ba3",
+      "channel_id": "0x5d6332f3392411bdface99f0be47e31f",
+      "epoch_hash_bits": "256",
+      "finalized_epoch": "357501",
+      "finalized_slot": "11440032",
+      "l1_blocks": [
+        "11997666"
+      ],
+      "parent_hash_bits": "256",
+      "span_blocks": "1",
+      "span_index": "0"
+    }
+  }
+}
