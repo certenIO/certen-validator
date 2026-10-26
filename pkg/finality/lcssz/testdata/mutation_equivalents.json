@@ -1,0 +1,26 @@
+[
+ {
+  "file": "lcssz.go",
+  "function": "FinalizedExec",
+  "operator": "int_literal",
+  "original": "…gloasHeader+beaconHeader:gloasHeader+beaconHeader+32]",
+  "mutated": "…gloasHeader+beaconHeader:gloasHeader+beaconHeader+33]",
+  "reason": "The slice end is one byte past the 32-byte hash, but the destination hash[:] holds 32 bytes and copy moves min(len(dst), len(src)) bytes, so the extra source byte is never read into anything; the slice stays inside the object (the header size is checked before it is cut), so no other effect"
+ },
+ {
+  "file": "lcssz.go",
+  "function": "FinalizedExec",
+  "operator": "int_literal",
+  "original": "ex[electraExecHashAt:electraExecHashAt+32]",
+  "mutated": "ex[electraExecHashAt:electraExecHashAt+33]",
+  "reason": "The slice end is one byte past the 32-byte hash, but the destination hash[:] holds 32 bytes and copy moves min(len(dst), len(src)) bytes, so the extra source byte is never read into anything; the slice stays inside the object (the header size is checked before it is cut), so no other effect"
+ },
+ {
+  "file": "lcssz.go",
+  "function": "FinalityUpdateParticipants",
+  "operator": "int_literal",
+  "original": "fu[at : at+512/8]",
+  "mutated": "fu[at : at+513/8]",
+  "reason": "513/8 and 512/8 are the same integer (64): the mutated constant does not change the bit window"
+ }
+]

@@ -294,5 +294,13 @@
     "original": "l2Max > lim.MaxL2Headers",
     "mutated": "l2Max >= lim.MaxL2Headers",
     "reason": "At l2Max == lim.MaxL2Headers the guarded assignment sets l2Max to lim.MaxL2Headers, the value it already has, so `>=` and `>` give the same bound for every input."
+  },
+  {
+    "file": "pins.go",
+    "function": "EthL1Pins",
+    "operator": "guard_off",
+    "original": "if err != nil",
+    "mutated": "if false",
+    "reason": "l1adapt.PinsOf returns the zero ethl1.Pins{} together with every error it returns, so returning its value unconditionally gives the same zero value"
   }
 ]
