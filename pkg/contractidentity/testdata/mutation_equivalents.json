@@ -1,0 +1,146 @@
+[
+  {
+    "file": "abi.go",
+    "function": "abiDec.scalar",
+    "operator": "cmp_boundary",
+    "original": "t.bits < 256",
+    "mutated": "t.bits <= 256",
+    "reason": "For bits == 256 the guard calls zeroAbove(32 - 256/8) = zeroAbove(0), which ranges over w[:0] and is true, so '<= 256' adds a check that cannot fail."
+  },
+  {
+    "file": "abi.go",
+    "function": "abiDec.scalar",
+    "operator": "int_literal",
+    "original": "t.bits < 256",
+    "mutated": "t.bits < 255",
+    "reason": "'< 255' differs from '< 256' only for bits == 255; every schema uses tU(8), tU(64) or tU(256) (grep tU in abi.go), so no type reaches the difference."
+  },
+  {
+    "file": "abi.go",
+    "function": "Selector4",
+    "operator": "int_literal",
+    "original": "crypto.Keccak256([]byte(signature))[:4]",
+    "mutated": "crypto.Keccak256([]byte(signature))[:5]",
+    "reason": "[4]byte(slice) converts the first four bytes of a slice of at least four, so [:5] and [:4] of the 32-byte Keccak256 give the same array."
+  },
+  {
+    "file": "abi.go",
+    "function": "abiV.addr",
+    "operator": "int_literal",
+    "original": "v.w[12:]",
+    "mutated": "v.w[11:]",
+    "reason": "common.BytesToAddress crops from the left to the last 20 bytes: w[11:] (21 bytes) and w[12:] give the same address."
+  },
+  {
+    "file": "abi.go",
+    "function": "DecodeComprehensiveProofCall",
+    "operator": "int_literal",
+    "original": "bls[1]",
+    "mutated": "bls[2]",
+    "reason": "Reached only after the length guard 'len(bls[1].items) != len(bls[2].items)' returned, so the two lists have equal length and ranging over either iterates the same indices."
+  },
+  {
+    "file": "canon.go",
+    "function": "canonWrite",
+    "operator": "guard_off",
+    "original": "if rv.IsNil()",
+    "mutated": "if false",
+    "reason": "Dereferencing a nil pointer or nil interface with Elem() yields the zero reflect.Value, which canonWrite renders as null through its !IsValid guard in the recursive call: the bytes are identical whether or not the nil check returns first."
+  },
+  {
+    "file": "canon.go",
+    "function": "canonWrite",
+    "operator": "guard_off",
+    "original": "if rv.Kind() == reflect.Slice && rv.IsNil()",
+    "mutated": "if false",
+    "reason": "A nil slice of non-byte elements has Len 0, so the general branch writes '[' then ']' and produces the same two bytes as the explicit nil branch."
+  },
+  {
+    "file": "canon.go",
+    "function": "canonWrite",
+    "operator": "bool_call",
+    "original": "if rv.Kind() == reflect.Slice && rv.IsNil() { b.WriteString(\"[]\") return nil }",
+    "mutated": "if rv.Kind() == reflect.Slice && false { b.WriteString(\"[]\") return nil }",
+    "reason": "Same as the nil-slice branch: with the nil test replaced by false, a nil slice goes through the loop with zero iterations and writes '[]'; non-nil slices never took the branch."
+  },
+  {
+    "file": "canon.go",
+    "function": "canonWrite",
+    "operator": "cmp_boundary",
+    "original": "keys[i].String() < keys[j].String()",
+    "mutated": "keys[i].String() <= keys[j].String()",
+    "reason": "WEAK (relies on the standard library): map keys are distinct, so '<' and '<=' differ only when a key is compared with itself, and sort.Slice (pdqsort) never compares an element with itself; a 70-key map test passes unchanged under the mutant."
+  },
+  {
+    "file": "codec.go",
+    "function": "decoder.u32",
+    "operator": "guard_off",
+    "original": "if err != nil",
+    "mutated": "if false",
+    "reason": "d.u32 is called only by the attest decoder (TxIndex), whose next read is d.lp; a failed U32 consumes nothing, so ignoring its error makes the next read (U32 of the same width, same part after baseOf, same remaining length) fail with the identical truncated state."
+  },
+  {
+    "file": "codec.go",
+    "function": "Decode",
+    "operator": "guard_off",
+    "original": "if c.Chain, err = d.u64(PartContainer); err != nil",
+    "mutated": "if c.Chain, err = d.u64(PartContainer); false",
+    "reason": "Chain and Leg.Number are both d.u64(PartContainer); a failed U64 consumes nothing, so ignoring the first error makes the second read fail with the identical state (same part, offset, got_len, want_len)."
+  },
+  {
+    "file": "codec.go",
+    "function": "Decode",
+    "operator": "cmp_boundary",
+    "original": "cmp > 0",
+    "mutated": "cmp >= 0",
+    "reason": "In the switch 'case cmp == 0' precedes 'case cmp > 0', so cmp == 0 never reaches the second case; '>' and '>=' select the same cases. Same text at a second site: Same switch order: 'case cmp == 0' (duplicate) is tested before 'case cmp > 0', so '>=' changes nothing."
+  },
+  {
+    "file": "codec.go",
+    "function": "Decode",
+    "operator": "cmp_boundary",
+    "original": "i > 0",
+    "mutated": "i >= 0",
+    "reason": "At i == 0 the mutant compares the zero array prev with keccak256(node): cmp is -1 unless the hash is 32 zero bytes, which needs a keccak256 preimage of zero (infeasible); so no refusal differs."
+  },
+  {
+    "file": "codec.go",
+    "function": "decoder.attest",
+    "operator": "guard_off",
+    "original": "if a.TxIndex, err = d.u32(PartAttest); err != nil",
+    "mutated": "if a.TxIndex, err = d.u32(PartAttest); false",
+    "reason": "TxIndex is d.u32(PartAttest) followed by d.lp(PartAttest, ...), whose first read is U32(part+'.len'), reduced to PartAttest by baseOf: a failed U32 consumes nothing, so the next read fails with the identical truncated state."
+  },
+  {
+    "file": "codec.go",
+    "function": "Container.validate",
+    "operator": "cmp_boundary",
+    "original": "cmp > 0",
+    "mutated": "cmp >= 0",
+    "reason": "Same switch order in Container.validate: 'case cmp == 0' precedes 'case cmp > 0'. Same text at a second site: Same switch order in Container.validate (nodes): 'case cmp == 0' precedes 'case cmp > 0'."
+  },
+  {
+    "file": "codec.go",
+    "function": "Container.validate",
+    "operator": "cmp_boundary",
+    "original": "i > 0",
+    "mutated": "i >= 0",
+    "reason": "At i == 0 the mutant compares the zero array prev with keccak256(node) as for Decode: cmp is -1 unless the hash is 32 zero bytes (a keccak256 preimage of zero, infeasible)."
+  },
+  {
+    "file": "inputs.go",
+    "function": "ContextToFile",
+    "operator": "guard_off",
+    "original": "if err != nil",
+    "mutated": "if false",
+    "reason": "json.Marshal of *ethproof.Settlement cannot fail: the type is plain data (common.Hash, hexutil.Bytes, uint and byte fields of InclusionProof, no custom marshaller, no channel, function or float)."
+  },
+  {
+    "file": "inputs.go",
+    "function": "Materialise",
+    "operator": "guard_off",
+    "original": "if err != nil",
+    "mutated": "if false",
+    "reason": "The InputsFile marshalled here holds only strings and a json.RawMessage produced by ContextToFile (always valid JSON from json.Marshal or the literal null), so json.MarshalIndent cannot fail."
+  }
+]
