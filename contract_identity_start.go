@@ -14,6 +14,7 @@ import (
 	"github.com/certen/independant-validator/pkg/chain/strategy"
 	ci "github.com/certen/independant-validator/pkg/contractidentity"
 	"github.com/certen/independant-validator/pkg/contractidentity/capture"
+	"github.com/certen/independant-validator/pkg/database"
 	"github.com/certen/independant-validator/pkg/metrics"
 )
 
@@ -25,10 +26,17 @@ import (
 // certen_contract_identity_capture_enabled 0, and the capture block of /health/detailed) and the function returns. The capture reads no
 // stored data and enters no hashed input.
 
-// contractIdentityStore returns the durable capture store. WP-S8-5 replaces it with the Postgres implementation of capture.Store (the
-// conformance suite is capture/storetest); until then there is none, and a switched-on capture is the named state no_durable_store.
+// contractIdentityDB is the validator's database client, set by main before the capture starts (nil in tests that supply their own store).
+var contractIdentityDB *database.Client
+
+// contractIdentityStore returns the durable capture store: the insert-only Postgres store (migration 00031, proof_identity_capture; it passes
+// the capture/storetest conformance suite). Without a database client there is none, and a switched-on capture is the named state
+// no_durable_store.
 var contractIdentityStore = func() (capture.Store, error) {
-	return nil, errors.New("the Postgres capture store is WP-S8-5")
+	if contractIdentityDB == nil {
+		return nil, errors.New("no database client")
+	}
+	return database.NewIdentityCaptureStore(contractIdentityDB), nil
 }
 
 // contractIdentityRuntime is the running capture, or nil.
@@ -68,7 +76,19 @@ func startContractIdentityCapture(ctx context.Context, logf func(string, ...any)
 		man = nil
 	}
 	var readers sync.Map
-	rt, _ := capture.Start(ctx, set, capture.Deps{Store: store, Manifest: man, Logf: logf, Deadline: contractIdentityDeadline(),
+	// The production path to the proof row (WP-S8-7): each finished leg goes to the finisher, which maps it to its proof, composes the context
+	// from the stored rows and appends through the Appender with the real verifier. Only with the Postgres store of this binary's database.
+	var onLeg func(capture.CapturedLeg)
+	if store != nil && man != nil && contractIdentityDB != nil {
+		if _, isPG := store.(*database.IdentityCaptureStore); isPG {
+			if fin, ferr := database.NewIdentityFinisher(ctx, contractIdentityDB, store, man, logf); ferr == nil {
+				onLeg = fin.OnLeg
+			} else {
+				logf("⚠️ [CONTRACT-IDENTITY] containers will not be appended: %v", ferr)
+			}
+		}
+	}
+	rt, _ := capture.Start(ctx, set, capture.Deps{Store: store, Manifest: man, Logf: logf, Deadline: contractIdentityDeadline(), OnLeg: onLeg,
 		SourceFor: func(chain uint64) (capture.AttestSource, error) {
 			if v, ok := readers.Load(chain); ok {
 				return v.(capture.AttestSource), nil

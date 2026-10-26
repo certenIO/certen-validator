@@ -2333,6 +2333,7 @@ func startValidator(
 			return nil, nil, ferr
 		}
 		// S8 contract-identity capture (RB12 WP-S8-3b): off by default; no failure of its start ends this process.
+		contractIdentityDB = dbClient
 		startContractIdentityCapture(context.Background(), log.Printf)
 	}
 

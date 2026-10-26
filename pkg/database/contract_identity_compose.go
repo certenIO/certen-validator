@@ -137,34 +137,59 @@ func (s *ContractIdentitySource) ComposeContractIdentity(ctx context.Context, pr
 		}
 		lc.Tx = tx
 	}
-	var accountURL sql.NullString
-	var opID, guard []byte
-	if err := s.client.DB().QueryRowContext(ctx, `SELECT pa.account_url, ecr.operation_id, ecr.artifact_json->'replay_guard'
-		FROM proof_artifacts pa LEFT JOIN LATERAL (SELECT operation_id, artifact_json FROM external_chain_results WHERE proof_id = pa.proof_id ORDER BY created_at DESC LIMIT 1) ecr ON true
-		WHERE pa.proof_id = $1::uuid`, proofID).Scan(&accountURL, &opID, &guard); err != nil {
+	var accountURL, opID, accSet, incarn sql.NullString
+	var guard, abRoot []byte
+	// The batch facts are the proof's anchor_batches row (proof_artifacts.batch_id; the live link, see pr/rb11-prod-shape-check.sh S8-10): NULL on
+	// the rows written before stage 3 and on batches that recorded none, which stays zero and is named by the verifier.
+	if err := s.client.DB().QueryRowContext(ctx, `SELECT pa.account_url, ab.merkle_root, ab.batch_operation_id, ab.accumulate_set_root, ab.accumulate_incarnation, ecr.artifact_json->'replay_guard'
+		FROM proof_artifacts pa LEFT JOIN anchor_batches ab ON ab.id = pa.batch_id
+		LEFT JOIN LATERAL (SELECT artifact_json FROM external_chain_results WHERE proof_id = pa.proof_id ORDER BY created_at DESC LIMIT 1) ecr ON true
+		WHERE pa.proof_id = $1::uuid`, proofID).Scan(&accountURL, &abRoot, &opID, &accSet, &incarn, &guard); err != nil {
 		return lc, err
 	}
 	lc.ADIURL = ADIURLOf(accountURL.String)
-	if lc.Batch.BatchRoot, err = s.batchRoot(ctx, proofID); err != nil {
+	// The batch root is stored twice, in the bundle (component 1, hex without 0x) and in the batch row (bytea); the two must agree, and either alone
+	// is the root. A disagreement is an error, never a choice.
+	bundleRoot, err := s.batchRoot(ctx, proofID)
+	if err != nil {
 		return lc, err
 	}
-	if len(opID) == 32 {
-		copy(lc.Batch.OperationID[:], opID)
-		var reg, inputs []byte
-		err := s.client.DB().QueryRowContext(ctx, `SELECT registry, message_inputs FROM intent_quorum_certificates WHERE operation_id = $1`, "0x"+hex.EncodeToString(opID)).Scan(&reg, &inputs)
-		if err != nil && err != sql.ErrNoRows {
-			return lc, err
+	lc.Batch.BatchRoot = bundleRoot
+	if len(abRoot) != 0 {
+		if len(abRoot) != 32 {
+			return lc, fmt.Errorf("anchor_batches.merkle_root is %d bytes", len(abRoot))
 		}
-		if err == nil {
-			var in qcInputs
-			if err := json.Unmarshal(inputs, &in); err != nil {
-				return lc, fmt.Errorf("the QC message_inputs are not the stored shape: %w", err)
+		var rowRoot [32]byte
+		copy(rowRoot[:], abRoot)
+		if bundleRoot != ([32]byte{}) && bundleRoot != rowRoot {
+			return lc, fmt.Errorf("the batch root of the bundle (0x%x) is not the batch row's (0x%x)", bundleRoot, rowRoot)
+		}
+		lc.Batch.BatchRoot = rowRoot
+	}
+	if opID.Valid {
+		if lc.Batch.OperationID, err = hex32(opID.String); err != nil {
+			return lc, fmt.Errorf("anchor_batches.batch_operation_id: %w", err)
+		}
+		if accSet.Valid {
+			if lc.Batch.AccSetRoot, err = hex32(accSet.String); err != nil {
+				return lc, fmt.Errorf("anchor_batches.accumulate_set_root: %w", err)
 			}
-			lc.Batch.AccSetRoot, _ = hex32(in.AccumulateSetRoot)
-			lc.Batch.Incarnation, _ = hex32(in.Incarnation)
+		}
+		if incarn.Valid {
+			if lc.Batch.Incarnation, err = hex32(incarn.String); err != nil {
+				return lc, fmt.Errorf("anchor_batches.accumulate_incarnation: %w", err)
+			}
+		}
+		// the S9 registry of the intent that carries this operation id: none is legal (an absent Registry9), a malformed one is an error
+		var reg []byte
+		switch err := s.client.DB().QueryRowContext(ctx, `SELECT registry FROM intent_quorum_certificates WHERE operation_id = $1`, opID.String).Scan(&reg); err {
+		case nil:
 			if lc.Registry9, err = Registry9Of(reg); err != nil {
 				return lc, err
 			}
+		case sql.ErrNoRows:
+		default:
+			return lc, err
 		}
 	}
 	lc.S6Status, lc.S6Reason, lc.S6State, lc.S6 = S6Of(st.Included, guard)

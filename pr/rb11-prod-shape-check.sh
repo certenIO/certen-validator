@@ -1670,6 +1670,16 @@ s8chk S8-7 "external_chain_results.artifact_json holds the S6 replay_guard evide
   "SELECT count(*) FROM external_chain_results WHERE NOT (coalesce(artifact_json,'{}'::jsonb) ? 'replay_guard')" WARN
 s8chk S8-8 "legs with a QC row: anchor_batches.accumulate_set_root populated (87 of 71611 batches on 2026-10-25)" "0 batches without it among the batches of QC operation ids" \
   "SELECT count(*) FROM anchor_batches b WHERE b.accumulate_set_root IS NULL AND EXISTS (SELECT 1 FROM intent_quorum_certificates q WHERE q.operation_id = b.batch_operation_id)" WARN
+s8chk S8-10 "proof_artifacts.settlement_tx_hash of settled proofs is 0x + 64 lowercase hex (the finisher maps a leg to its proof by it)" "0 settled proofs with another form" \
+  "SELECT count(*) FROM proof_artifacts WHERE settlement_tx_hash IS NOT NULL AND settlement_tx_hash !~ '^0x[0-9a-f]{64}\$'" FAIL
+s8chk S8-11 "a settlement hash identifies ONE proof (a shared hash is ambiguous: the finisher stores nothing for it, OQ-S8-12)" "0 settlement hashes carried by more than one proof" \
+  "SELECT count(*) FROM (SELECT settlement_tx_hash FROM proof_artifacts WHERE settlement_tx_hash IS NOT NULL GROUP BY 1 HAVING count(*) > 1) d" WARN
+s8chk S8-12 "settled proofs link to their anchor_batches row (proof_artifacts.batch_id, the source of operation id, accumulate set root, incarnation and batch root); a settled proof without it composes with zero batch facts" "0 settled proofs without batch_id" \
+  "SELECT count(*) FROM proof_artifacts WHERE settlement_tx_hash IS NOT NULL AND batch_id IS NULL" WARN
+s8chk S8-13 "settled proofs whose batch row records the accumulate set root and incarnation (84 of 383 joined on 2026-10-25)" "0 joined settled proofs missing either" \
+  "SELECT count(*) FROM proof_artifacts p JOIN anchor_batches b ON b.id = p.batch_id WHERE p.settlement_tx_hash IS NOT NULL AND (b.accumulate_set_root IS NULL OR b.accumulate_incarnation IS NULL OR b.batch_operation_id IS NULL)" WARN
+s8chk S8-14 "settled proofs whose operation id has a quorum certificate (Registry9 present; none is legal; 0 of 235 matched on 2026-10-25)" "0 joined settled proofs without a quorum certificate" \
+  "SELECT count(*) FROM proof_artifacts p JOIN anchor_batches b ON b.id = p.batch_id WHERE p.settlement_tx_hash IS NOT NULL AND b.batch_operation_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM intent_quorum_certificates q WHERE q.operation_id = b.batch_operation_id)" WARN
 rec NOT-CHECKED S8-9 "proof_bundles.bundle_data component 1_merkle_inclusion.merkle_root is 64 lowercase hex (the batch root, no 0x)" \
   "str64 in every bundle" "read by hand with jq on the newest settled bundle on 2026-10-25 (str64); the sampled loop (b3) does not read component 1, so this stays NOT-CHECKED here"
 

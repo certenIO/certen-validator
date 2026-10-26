@@ -161,6 +161,10 @@ type Deps struct {
 	Deadline func(chain uint64, anchorID [32]byte) (time.Time, bool)
 	// TickPoll is how often the hop tick loop looks at the head (default DefaultTickPoll); tests lower it.
 	TickPoll time.Duration
+	// OnLeg receives each leg whose settlement station has finished and whose settle row is stored (captured or Stated), once per job. It
+	// must return at once (it hands the leg to the container assembly, which waits for the proof row on its own goroutine); a panic in it is
+	// recovered and logged. Optional: nil = the legs are only captured.
+	OnLeg func(CapturedLeg)
 }
 
 type jobKey struct {
@@ -449,6 +453,7 @@ func (r *Runtime) runSettle(ctx context.Context, cfg Config, j job) string {
 		if err := SaveSettle(ctx, r.d.Store, res); err != nil {
 			return r.storeOutcome(cfg.Chain, "settle", true, err)
 		}
+		r.leg(CapturedLeg{Chain: cfg.Chain, AnchorID: facts.AnchorID, Tx: tx, Attest: att, Settle: res, Source: src})
 		return outcomeOf(res.Stated)
 	}
 	req := SettleRequest{TxHash: tx, PKC: att.PKC, Link: ci.LinkSpine}
@@ -468,7 +473,21 @@ func (r *Runtime) runSettle(ctx context.Context, cfg Config, j job) string {
 		return r.storeOutcome(cfg.Chain, "settle", res.Stated != nil, err)
 	}
 	r.untrack(cfg.Chain, facts.AnchorID)
+	r.leg(CapturedLeg{Chain: cfg.Chain, AnchorID: facts.AnchorID, Tx: tx, Attest: att, Settle: res, Source: src})
 	return outcomeOf(res.Stated)
+}
+
+// leg hands a finished leg to Deps.OnLeg; a panic of the hook is recovered and logged, never the capture's.
+func (r *Runtime) leg(l CapturedLeg) {
+	if r.d.OnLeg == nil {
+		return
+	}
+	defer func() {
+		if p := recover(); p != nil {
+			r.logf("⚠️ [CONTRACT-IDENTITY] chain %d leg %s: the leg hook panicked: %v", l.Chain, l.Tx.Hex(), p)
+		}
+	}()
+	r.d.OnLeg(l)
 }
 
 // track hands an attested anchor to the tick chain of its chain (E1b), starting the chain's loop on first use. A chain without a tick

@@ -20,20 +20,8 @@ import (
 // composed LegContext.
 func seedComposable(t *testing.T) (string, ci.LegContext) {
 	t.Helper()
-	pid, leg := storeLeg(t, "base_sepolia_47368146")
-	opID := make([]byte, 32)
-	_, _ = rand.Read(opID)
-	if _, err := testDB.Exec(`INSERT INTO external_chain_results (proof_id, bundle_id, operation_id, chain_type, chain_id, tx_hash, tx_index, tx_gas_used, tx_from_address,
-		block_number, block_hash, block_timestamp, state_root, transactions_root, receipts_root, execution_status, execution_success, result_hash, observer_validator_id, observed_at)
-		VALUES ($1::uuid, $2, $3, 'ethereum', $4, $5, 0, 1, $6, $7, $8, now(), $8, $8, $8, 1, true, $8, 'validator-1', now())`,
-		pid, opID, opID, int64(leg.Chain), make([]byte, 32), make([]byte, 20), int64(leg.Block().Number), bytes.Repeat([]byte{1}, 32)); err != nil {
-		t.Fatal(err)
-	}
-	inputs := `{"accumulate_set_root":"0x` + strings.Repeat("ab", 32) + `","incarnation":"0x` + strings.Repeat("cd", 32) + `"}`
-	if _, err := testDB.Exec(`INSERT INTO intent_quorum_certificates (operation_id, message, registry_version, certen_chain_id, certificate, registry, message_inputs, certified_height)
-		VALUES ($1, $2, 1, 'certen-testnet', '{}', $3::jsonb, $4::jsonb, 1)`, "0x"+hex.EncodeToString(opID), "0x"+strings.Repeat("11", 32), string(fixtureBytes(t, "qc_registry.sample.json")), inputs); err != nil {
-		t.Fatal(err)
-	}
+	pid, _ := storeLeg(t, "base_sepolia_47368146")
+	seedBatchFacts(t, pid)
 	if _, err := testDB.Exec(`UPDATE proof_artifacts SET account_url = 'acc://certen-demo.acme/book/1' WHERE proof_id = $1::uuid`, pid); err != nil {
 		t.Fatal(err)
 	}
@@ -119,4 +107,62 @@ func TestMaxContractIdentityBytesEqualsTheContainerLimitAndTheMigration(t *testi
 	if capture.MaxItemBytes() != ci.MaxContractIdentityBytes {
 		t.Fatalf("capture item bound %d", capture.MaxItemBytes())
 	}
+}
+
+// seedBatchFacts stores what the live store holds for a settled proof that has its batch facts: an anchor_batches row (operation id, accumulate
+// set root, incarnation) linked by proof_artifacts.batch_id, and the intent_quorum_certificates row of that operation id carrying the registry
+// sample. The operation id of the live anchor_batches rows is 0x + 64 hex.
+func seedBatchFacts(t *testing.T, proofID string) {
+	t.Helper()
+	opID := make([]byte, 32)
+	_, _ = rand.Read(opID)
+	opHex := "0x" + hex.EncodeToString(opID)
+	var batch string
+	if err := testDB.QueryRow(`INSERT INTO anchor_batches (merkle_root, batch_operation_id, accumulate_set_root, accumulate_incarnation, certen_validator_set_root)
+		VALUES ($1, $2, $3, $4, $5) RETURNING id::text`, bytes.Repeat([]byte{3}, 32), opHex, "0x"+strings.Repeat("ab", 32), "0x"+strings.Repeat("cd", 32), "0x"+strings.Repeat("ef", 32)).Scan(&batch); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testDB.Exec(`UPDATE proof_artifacts SET batch_id = $2::uuid WHERE proof_id = $1::uuid`, proofID, batch); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testDB.Exec(`INSERT INTO intent_quorum_certificates (operation_id, message, registry_version, certen_chain_id, certificate, registry, message_inputs, certified_height)
+		VALUES ($1, $2, 1, 'certen-testnet', '{}', $3::jsonb, '{}'::jsonb, 1)`, opHex, "0x"+strings.Repeat("11", 32), string(fixtureBytes(t, "qc_registry.sample.json"))); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A settled proof without an anchor_batches row (the rows written before stage 3: 192 of the 575 live settled proofs have no batch_id) composes
+// with ZERO batch facts and no registry: nothing is defaulted, and the verifier names what is missing (context_incomplete).
+func TestComposeWithoutABatchRowLeavesTheBatchFactsZeroAndNamed(t *testing.T) {
+	pid, _ := storeLeg(t, "base_sepolia_47368146")
+	pins, err := finality.EmbeddedPins()
+	if err != nil {
+		t.Fatal(err)
+	}
+	lc, err := NewContractIdentitySource(NewClientFromDB(testDB), NewFinalityAddendaRepository(NewClientFromDB(testDB)), pins).ComposeContractIdentity(context.Background(), pid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lc.Batch.OperationID != ([32]byte{}) || lc.Batch.AccSetRoot != ([32]byte{}) || lc.Batch.Incarnation != ([32]byte{}) || lc.Registry9 != nil {
+		t.Fatalf("no batch row: %+v", lc.Batch)
+	}
+	var se *ci.StateError
+	if err := lc.ValidateContext(); !errors.As(err, &se) || se.Code != ci.CodeContextIncomplete {
+		t.Fatalf("the verifier must name the missing facts: %v", err)
+	}
+}
+
+// storeLegContext stores a production-shaped leg WITHOUT batch facts and composes its context.
+func storeLegContext(t *testing.T) (string, ci.LegContext) {
+	t.Helper()
+	pid, _ := storeLeg(t, "base_sepolia_47368146")
+	pins, err := finality.EmbeddedPins()
+	if err != nil {
+		t.Fatal(err)
+	}
+	lc, err := NewContractIdentitySource(NewClientFromDB(testDB), NewFinalityAddendaRepository(NewClientFromDB(testDB)), pins).ComposeContractIdentity(context.Background(), pid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pid, lc
 }
