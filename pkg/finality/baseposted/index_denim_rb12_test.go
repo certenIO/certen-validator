@@ -137,7 +137,7 @@ func TestTheLiveDenimIndexEntriesCoverEveryBatchOfTheirChannel(t *testing.T) {
 		if !ok {
 			t.Fatal("bad line")
 		}
-		b, err := hex.DecodeString(hexBytes)
+		b, err := hex.DecodeString(strings.TrimSpace(hexBytes))
 		if err != nil {
 			t.Fatal(err)
 		}
