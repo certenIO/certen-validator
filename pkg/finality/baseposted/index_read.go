@@ -382,7 +382,16 @@ func (b *Builder) searchIndexed(ctx context.Context, bp *Pins, l2 finality.Heade
 		// a Denim second may straddle two channels (the index covers the timestamp, not the parent hash): the hit is the channel whose
 		// batch has this block's parent hash, else the next hit is tried, as the window reader's findChannel does
 		if l2.Timestamp >= bp.DenimTime {
-			if ref, _, _, _ := findChannel(txs, bp, l2); ref == nil || ref.ID != hit.entry.ID {
+			// Assemble returns rows, not decoded frames: findChannel on them finds no channel at all (RB12-EPS-GAP: every Denim leg was
+			// judged l1_capture_gap{unrecorded} although its channel was captured and indexed)
+			framed, ferr := withFrames(txs)
+			if ferr != nil {
+				if firstFailure == nil {
+					firstFailure = r.inconsistent(finality.IndexRowsDisagree, "item", hit.key.Item, "l1_block", hit.key.L1Block)
+				}
+				continue
+			}
+			if ref, _, _, _ := findChannel(framed, bp, l2); ref == nil || ref.ID != hit.entry.ID {
 				continue
 			}
 		}

@@ -120,6 +120,39 @@ type capturedTx struct {
 	frames []Frame
 }
 
+// withFrames returns txs with the frames each transaction carries decoded. loadRange decodes them as it reads the window; the index path
+// assembles a channel's transactions from rows (Assemble) without decoding, and a judgement that needs the batches of the channel (a Denim
+// second names five batches, the parent hash tells them apart) decodes them here, from the same bytes the verifier is given.
+func withFrames(txs []capturedTx) ([]capturedTx, error) {
+	out := make([]capturedTx, len(txs))
+	for i, ct := range txs {
+		var tx txView
+		if err := tx.parse(ct.raw); err != nil {
+			return nil, err
+		}
+		var datas [][]byte
+		if tx.isBlob {
+			for _, bl := range ct.blobs {
+				d, err := blobToData(bl.Raw)
+				if err != nil {
+					continue // a blob that is not frame data belongs to no channel
+				}
+				datas = append(datas, d)
+			}
+		} else {
+			datas = append(datas, tx.data)
+		}
+		ct.frames = nil
+		for _, d := range datas {
+			if fr, err := parseFrames(d); err == nil {
+				ct.frames = append(ct.frames, fr...)
+			}
+		}
+		out[i] = ct
+	}
+	return out, nil
+}
+
 // load reads every captured inbox block (the diagnostic listing of Channels). A build never calls it: it reads the window of its leg.
 func (b *Builder) load(ctx context.Context, bp *Pins) ([]capturedTx, error) {
 	return b.loadRange(ctx, bp, 0, finality.MaxCaptureBlock, nil)
