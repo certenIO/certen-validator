@@ -1,0 +1,25 @@
+{
+  "format": "certen-base-posted-case/1",
+  "id": "valid_straddle_first_of_next_channel",
+  "description": "the first block of the next channel, the same timestamp second (Base Sepolia block 50447097, timestamp 1793011288)",
+  "pins": "pins/main.json",
+  "leg": "legs/straddle_first_of_next_channel.json",
+  "evidence": "evidence/straddle_first_of_next_channel.bin",
+  "expect": {
+    "result": "ok",
+    "fields": {
+      "batch_type": "0",
+      "batcher": "0xfc56e7272eebbba5bc6c544e159483c4a38f8ba3",
+      "channel_id": "0x386bfe8c1c850f58db5e77091cce2b92",
+      "epoch_hash_bits": "256",
+      "finalized_epoch": "357501",
+      "finalized_slot": "11440032",
+      "l1_blocks": [
+        "11997464"
+      ],
+      "parent_hash_bits": "256",
+      "span_blocks": "1",
+      "span_index": "0"
+    }
+  }
+}

@@ -170,12 +170,21 @@ func (c Case) RunSupplied(dir string, supply map[string]uint64) ([]byte, error) 
 }
 
 func (c Case) run(dir string, supply map[string]uint64) ([]byte, error) {
+	if supply == nil {
+		return c.RunEdited(dir, nil)
+	}
+	return c.RunEdited(dir, func(raw []byte) ([]byte, error) { return SupplyBaseSepoliaPins(raw, supply) })
+}
+
+// RunEdited is Run with the case's pins file passed through edit first (nil: as it is): a published set judged under pins that gained a
+// key after the set was published (the harness never edits the set's files).
+func (c Case) RunEdited(dir string, edit func(pinsRaw []byte) ([]byte, error)) ([]byte, error) {
 	pinsRaw, err := ReadFile(dir, c.Pins)
 	if err != nil {
 		return nil, err
 	}
-	if supply != nil {
-		if pinsRaw, err = SupplyBaseSepoliaPins(pinsRaw, supply); err != nil {
+	if edit != nil {
+		if pinsRaw, err = edit(pinsRaw); err != nil {
 			return nil, err
 		}
 	}

@@ -3,6 +3,7 @@
 package baseposted
 
 import (
+	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"strings"
@@ -46,6 +47,72 @@ type Pins struct {
 	KZGSetupSHA256         string            // from Pins.KZGSetupPin: the shared section, or the legacy base_sepolia copy of a published pins file
 	KZGSetupKey            string            // the pins key KZGSetupSHA256 was read from, for pins_corrupt reports
 	SystemConfigImplHashes map[[32]byte]bool // impl_pins rows with role syscfg_impl
+	// PostDenim is the capability row (base_sepolia.post_denim) that lets a block with timestamp >= DenimTime be judged: nil when the
+	// pins file has none, and then every such block is batch_format_unsupported{post_denim} (a new binary on old pins fails closed).
+	PostDenim *PostDenim
+}
+
+// PostDenim is what the verifier assumes of Base after the Denim fork (R11-base-denim): 200 ms blocks, five blocks per timestamp
+// second, and singular batches only (op-node drops a span batch that would produce a Denim block, BatchDropReason::SpanPostDenim).
+// BatchTypes is judged (the selected batch's type must be in it) and BlockIntervalMS * BlocksPerSecond must be one second. The
+// BaseTime pair is carried so a later predicate on the BaseTime deposit needs no second pins change; ParsePins validates its shape and
+// l1_posted does not yet judge it (TECH_DEBT O6: the schedule predicate is not part of l1_posted).
+type PostDenim struct {
+	BatchTypes        []uint8
+	BlockIntervalMS   uint64
+	BlocksPerSecond   uint64
+	BaseTimePredeploy [20]byte
+	BaseTimeSelector  [4]byte
+}
+
+// allowsBatchType is whether a batch of type t may carry a post-Denim block.
+func (p *PostDenim) allowsBatchType(t uint8) bool {
+	if p == nil {
+		return false
+	}
+	for _, x := range p.BatchTypes {
+		if x == t {
+			return true
+		}
+	}
+	return false
+}
+
+type rawPostDenim struct {
+	BatchTypes        []uint8 `json:"batch_types"`
+	BlockIntervalMS   uint64  `json:"block_interval_ms"`
+	BlocksPerSecond   uint64  `json:"blocks_per_second"`
+	BaseTimePredeploy string  `json:"base_time_predeploy"`
+	BaseTimeSelector  string  `json:"base_time_selector"`
+}
+
+// parsePostDenim reads the capability row; ok is false for any malformed row (the caller names the key).
+func parsePostDenim(raw json.RawMessage) (*PostDenim, bool) {
+	var r rawPostDenim
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&r); err != nil {
+		return nil, false
+	}
+	// only singular batches (type 0) can carry a Denim block: a span batch is dropped by derivation, so a row naming one is corrupt
+	if len(r.BatchTypes) != 1 || r.BatchTypes[0] != 0 {
+		return nil, false
+	}
+	if r.BlockIntervalMS == 0 || r.BlocksPerSecond == 0 || r.BlockIntervalMS > 1000 || 1000%r.BlockIntervalMS != 0 || 1000/r.BlockIntervalMS != r.BlocksPerSecond {
+		return nil, false
+	}
+	pre, ok := unhex(r.BaseTimePredeploy, 20)
+	if !ok {
+		return nil, false
+	}
+	sel, ok := unhex(r.BaseTimeSelector, 4)
+	if !ok {
+		return nil, false
+	}
+	out := &PostDenim{BatchTypes: append([]uint8(nil), r.BatchTypes...), BlockIntervalMS: r.BlockIntervalMS, BlocksPerSecond: r.BlocksPerSecond}
+	copy(out.BaseTimePredeploy[:], pre)
+	copy(out.BaseTimeSelector[:], sel)
+	return out, true
 }
 
 type rawBasePins struct {
@@ -65,6 +132,7 @@ type rawBasePins struct {
 	L2BlockTime           uint64                     `json:"l2_block_time"`
 	KZGSetupSHA256        string                     `json:"kzg_setup_sha256"`
 	ImplPins              map[string]json.RawMessage `json:"impl_pins"`
+	PostDenim             json.RawMessage            `json:"post_denim"`
 }
 
 func unhex(s string, n int) ([]byte, bool) {
@@ -157,6 +225,13 @@ func ParsePins(p *finality.Pins) (*Pins, error) {
 	}
 	if len(out.SystemConfigImplHashes) == 0 {
 		return nil, bad("impl_pins")
+	}
+	if len(r.PostDenim) != 0 {
+		pd, ok := parsePostDenim(r.PostDenim)
+		if !ok {
+			return nil, bad("post_denim")
+		}
+		out.PostDenim = pd
 	}
 	return out, nil
 }

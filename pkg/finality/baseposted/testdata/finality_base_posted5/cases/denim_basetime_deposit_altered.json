@@ -1,0 +1,20 @@
+{
+  "format": "certen-base-posted-case/1",
+  "id": "denim_basetime_deposit_altered",
+  "description": "the last byte of the BaseTime deposit changed",
+  "pins": "pins/main.json",
+  "leg": "legs/second_block_second_of_its_second.json",
+  "evidence": "evidence/second_block_second_of_its_second.bin",
+  "splice": {
+    "offset": 966480,
+    "delete": 1,
+    "insert": "0xc9"
+  },
+  "expect": {
+    "result": "state",
+    "code": "batch_binding_mismatch",
+    "fields": {
+      "field": "transactions_root"
+    }
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "format": "certen-base-posted-case/1",
+  "id": "denim_basetime_deposit_dropped",
+  "description": "the BaseTime deposit (transaction 1) removed from the deposit list: the transaction root of the header no longer rebuilds",
+  "pins": "pins/main.json",
+  "leg": "legs/second_block_second_of_its_second.json",
+  "evidence": "evidence/second_block_second_of_its_second.bin",
+  "splice": {
+    "offset": 966084,
+    "delete": 397,
+    "insert": "0x010000010a7ef90106a003fe4d69410a6a96fab65e9c53cccc93dabfdb9f6a31c608138b4cc79b8489b594deaddeaddeaddeaddeaddeaddeaddeaddead00019442000000000000000000000000000000000000158080830f424080b8b23db6be2b0000044d000a118b000000000000001a000000006adf2c8c0000000000b710e400000000000000000000000000000000000000000000000000000000000000110000000000000000000000000000000000000000000000000000000000000002a00732d29f702622216e01ca01f034306add52a88bbe95f0753593747b10d16d000000000000000000000000fc56e7272eebbba5bc6c544e159483c4a38f8ba300000000000000000000000001be"
+  },
+  "expect": {
+    "result": "state",
+    "code": "batch_binding_mismatch",
+    "fields": {
+      "field": "transactions_root"
+    }
+  }
+}

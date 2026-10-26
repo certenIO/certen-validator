@@ -1,0 +1,20 @@
+{
+  "format": "certen-base-posted-case/1",
+  "id": "denim_straddle_leg_with_the_other_channel",
+  "description": "the first block of the next channel judged with the evidence of the previous channel, which holds the same timestamp second with other parent hashes",
+  "pins": "pins/main.json",
+  "leg": "legs/straddle_first_of_next_channel.json",
+  "evidence": "evidence/straddle_last_of_first_channel.bin",
+  "splice": {
+    "offset": 49,
+    "delete": 33,
+    "insert": "0xf9d52c5bd7a93b9e37d1002dfbfc1c656ede47837fae7574cc367a545cfbfe9da1"
+  },
+  "expect": {
+    "result": "state",
+    "code": "batch_binding_mismatch",
+    "fields": {
+      "field": "parent_hash"
+    }
+  }
+}

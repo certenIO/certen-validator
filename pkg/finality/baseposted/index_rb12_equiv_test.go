@@ -100,7 +100,7 @@ func TestRB12IndexEvidenceIsByteIdenticalToTheWindowReaderOnTheRealPublishedEvid
 					if err != nil {
 						t.Fatal(err)
 					}
-					ch, _, bt, _ := findChannel(all, bp, w.refTimestamp(t))
+					ch, _, bt, _ := findChannel(all, bp, finality.HeaderFields{Timestamp: w.refTimestamp(t)})
 					if ch == nil {
 						t.Fatal("the published channel is not found by the window reader")
 					}

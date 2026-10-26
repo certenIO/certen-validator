@@ -15,7 +15,7 @@ import (
 // pins file (and so PinsSHA256) in the meantime. The integrated tree must report the hash of ITS OWN pins file: a row written by the
 // merged code names fdba733e... (the e1-raise pins), not the hash the dbfix branch was written against, and the figure is not a
 // constant copied into the status code.
-const mergedTreePinsSHA256 = "fdba733e7fc4206d96d73c87352834c51801ee8fe0af76d60654cb461fbd5440"
+const mergedTreePinsSHA256 = "9f4fc10feca95909272c9f6eaef1a38d7a06110cfead0a88cb79e8ffd7a3d1cf"
 
 func TestRB12GOINTTheStatusRowReportsThePinsHashOfTheMergedTree(t *testing.T) {
 	sum := sha256.Sum256(EmbeddedPinsBytes())

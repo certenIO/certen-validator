@@ -198,9 +198,10 @@ func (Kind) Verify(p *finality.Pins, b finality.BlockRef, evidence []byte) (fina
 	if l2.Number != b.Number {
 		return finality.Verdict{}, finality.BlockMismatch("blockNumber", b.Number, l2.Number)
 	}
-	// O6: post-Denim blocks (200 ms blocks, shared timestamps, new batch format) are not yet pinned.
-	if l2.Timestamp >= bp.DenimTime {
-		return finality.Verdict{}, st(CodeBatchFormat, "type", "post_denim")
+	// O6: a post-Denim block (200 ms blocks, five per timestamp second, singular batches only) is judged only under pins that carry the
+	// post_denim capability row; under pins without it the refusal is the named state it always was.
+	if err := bp.denimGate(l2.Timestamp); err != nil {
+		return finality.Verdict{}, err
 	}
 	// O1: L1 finality, then the spine.
 	head, err := ethl1.VerifyFinalizedHead(ep, body.LC)
@@ -343,15 +344,9 @@ func verifyChannel(bp *Pins, body Body, covered []ethl1.L1Block, l2 finality.Hea
 		}
 		return finality.Verdict{}, st(CodeChannelMalformed)
 	}
-	var bt *Batch
-	for i := range batches {
-		if batches[i].Timestamp == l2.Timestamp {
-			bt = &batches[i]
-			break
-		}
-	}
-	if bt == nil {
-		return finality.Verdict{}, st(CodeBatchNotFound, "timestamp", l2.Timestamp, "n_batches", uint64(len(batches)))
+	bt, err := selectBatch(bp, batches, l2)
+	if err != nil {
+		return finality.Verdict{}, err
 	}
 	// O5: binding.
 	if !prefixEq(bt.ParentHash, bt.ParentLen, l2.ParentHash) {
@@ -405,6 +400,58 @@ func verifyChannel(bp *Pins, body Body, covered []ethl1.L1Block, l2 finality.Hea
 		"parent_hash_bits": uint64(bt.ParentLen * 8), "epoch_hash_bits": uint64(bt.EpochLen * 8),
 		"finalized_slot": head.Slot, "finalized_epoch": head.Epoch,
 	}}, nil
+}
+
+// denimGate is the O6 gate: a block with timestamp >= denim_time is batch_format_unsupported{post_denim} unless the pins carry the
+// post_denim capability row.
+func (p *Pins) denimGate(ts uint64) error {
+	if ts >= p.DenimTime && p.PostDenim == nil {
+		return st(CodeBatchFormat, "type", "post_denim")
+	}
+	return nil
+}
+
+// selectBatch is the batch of the channel that produced the block l2 (derivation takes, for a block, the first valid batch of its
+// position). Before denim_time a timestamp names one block (2 s blocks), so the first batch with the block's timestamp is it and the
+// parent-hash binding is O5's. From denim_time five blocks share a timestamp second (200 ms blocks), so the timestamp alone names
+// five batches and the block is the one whose parent hash the batch commits in full: a singular batch (32-byte parent) with the block's
+// timestamp and parent hash. A span batch with the block's timestamp would be dropped by derivation (op-node SpanBatchPostDenim), so it
+// is never taken: with no singular match it is batch_format_unsupported{type:span_post_denim}; a singular batch of the second with
+// another parent is batch_binding_mismatch{parent_hash}; none at all is batch_not_found.
+func selectBatch(bp *Pins, batches []Batch, l2 finality.HeaderFields) (*Batch, error) {
+	if l2.Timestamp < bp.DenimTime {
+		for i := range batches {
+			if batches[i].Timestamp == l2.Timestamp {
+				return &batches[i], nil
+			}
+		}
+		return nil, st(CodeBatchNotFound, "timestamp", l2.Timestamp, "n_batches", uint64(len(batches)))
+	}
+	if err := bp.denimGate(l2.Timestamp); err != nil {
+		return nil, err
+	}
+	var sameSecond, span bool
+	for i := range batches {
+		b := &batches[i]
+		if b.Timestamp != l2.Timestamp {
+			continue
+		}
+		if !bp.PostDenim.allowsBatchType(b.Type) {
+			span = true
+			continue
+		}
+		sameSecond = true
+		if b.ParentLen == 32 && b.ParentHash == l2.ParentHash {
+			return b, nil
+		}
+	}
+	switch {
+	case span:
+		return nil, st(CodeBatchFormat, "type", "span_post_denim")
+	case sameSecond:
+		return nil, st(CodeBatchBindingMismatch, "field", "parent_hash")
+	}
+	return nil, st(CodeBatchNotFound, "timestamp", l2.Timestamp, "n_batches", uint64(len(batches)))
 }
 
 func prefixEq(have [32]byte, n int, want [32]byte) bool {

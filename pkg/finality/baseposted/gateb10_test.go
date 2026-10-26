@@ -94,11 +94,11 @@ func TestTheBuilderLoadsEveryInboxTransactionOfEveryCapturedBlockAndTheFramesThe
 			t.Errorf("tx %d: %+v", i, tx)
 		}
 	}
-	ref, frameTxs, bt, last := findChannel(txs, bp, 1790000000)
+	ref, frameTxs, bt, last := findChannel(txs, bp, finality.HeaderFields{Timestamp: 1790000000})
 	if ref == nil || ref.ID != s.body.ChannelID || len(frameTxs) != 3 || bt == nil || bt.Timestamp != 1790000000 || last != 1001 {
 		t.Fatalf("%v %d %v %d", ref, len(frameTxs), bt, last)
 	}
-	if ref2, _, _, last2 := findChannel(txs, bp, 1790000000+2*1000); ref2 != nil || last2 != 1001 {
+	if ref2, _, _, last2 := findChannel(txs, bp, finality.HeaderFields{Timestamp: 1790000000 + 2*1000}); ref2 != nil || last2 != 1001 {
 		t.Fatalf("a timestamp no batch covers: %v %d", ref2, last2)
 	}
 	chs, err := (&Builder{Pins: nil, Store: st}).Channels(context.Background())
@@ -235,14 +235,14 @@ func TestTheBuilderFindsAndListsOnlyCompleteDecodableChannelsInCaptureOrder(t *t
 		t.Fatal(err)
 	}
 	// the channel for a timestamp is the first complete decodable one that has a batch for it; the highest block scanned is reported
-	ref, frameTxs, bt, last := findChannel(txs, bp, 1790000100)
+	ref, frameTxs, bt, last := findChannel(txs, bp, finality.HeaderFields{Timestamp: 1790000100})
 	if ref == nil || ref.ID != two.body.ChannelID || len(frameTxs) != 1 || bt.Timestamp != 1790000100 || last != 1300 {
 		t.Fatalf("%v %d %v %d", ref, len(frameTxs), bt, last)
 	}
-	if ref, _, _, last = findChannel(txs, bp, 1790000000); ref == nil || ref.ID != one.body.ChannelID || last != 1300 {
+	if ref, _, _, last = findChannel(txs, bp, finality.HeaderFields{Timestamp: 1790000000}); ref == nil || ref.ID != one.body.ChannelID || last != 1300 {
 		t.Fatalf("%v %d", ref, last)
 	}
-	if ref, _, _, last = findChannel(txs, bp, 1); ref != nil || last != 1300 {
+	if ref, _, _, last = findChannel(txs, bp, finality.HeaderFields{Timestamp: 1}); ref != nil || last != 1300 {
 		t.Fatalf("a timestamp of no batch: %v %d", ref, last)
 	}
 }

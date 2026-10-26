@@ -17,7 +17,7 @@ import (
 // The digest of the shipped file is part of the contract of the channel (certen-contracts evm/deployments/finality-pins.json, the SDK copy
 // and this file all hash to it): a change to the loader must not move it, and a change to the file must be a deliberate new constant.
 func TestThePinsDigestOfTheShippedFileIsTheOneTheChannelPublishes(t *testing.T) {
-	const published = "fdba733e7fc4206d96d73c87352834c51801ee8fe0af76d60654cb461fbd5440"
+	const published = "9f4fc10feca95909272c9f6eaef1a38d7a06110cfead0a88cb79e8ffd7a3d1cf"
 	sum := sha256.Sum256(EmbeddedPinsBytes())
 	if got := hex.EncodeToString(sum[:]); got != published {
 		t.Fatalf("the shipped pins file hashes to %s, the published digest is %s", got, published)

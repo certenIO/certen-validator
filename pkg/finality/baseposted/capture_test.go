@@ -228,6 +228,8 @@ func TestBuilderPendingWhenNoCapturedChannelCoversTheBlockAndPostDenimIsNamed(t 
 		t.Fatal("a level already present is never rebuilt")
 	}
 	post := makeSynth(t, synthOpts{compression: "zlib", calldata: true, batchTs: 1792605600})
-	_, _, err = b.Build(context.Background(), &ethproof.Settlement{Header: post.l2Raw}, 0, finality.LevelL1Posted)
+	// the embedded pins carry the post_denim capability since RB12-EPS-DENIM; the refusal is the one of pins without the row
+	// (denim_rb12_test.go judges the same block under the embedded pins)
+	_, _, err = (&Builder{Pins: embeddedPinsWithout(t, "post_denim"), Store: NewMemStore()}).Build(context.Background(), &ethproof.Settlement{Header: post.l2Raw}, 0, finality.LevelL1Posted)
 	wantCode(t, err, CodeBatchFormat, map[string]string{"type": "post_denim"})
 }

@@ -41,7 +41,7 @@ func vRef(t *testing.T, st finality.CaptureStore, bp *Pins, origin, end, ts uint
 	if err != nil {
 		t.Fatal(err)
 	}
-	ch, _, _, _ := findChannel(all, bp, ts)
+	ch, _, _, _ := findChannel(all, bp, finality.HeaderFields{Timestamp: ts})
 	return ch
 }
 
@@ -213,6 +213,7 @@ func TestVIndexEntryWithNoTransactions(t *testing.T) {
 
 func TestVIndexTieBreakAndDigitWidth(t *testing.T) {
 	_, bp := idxPins(t)
+	bp.DenimTime = 1 << 40 // the digit-width worlds below use timestamps of 10 and 11 digits to test the index names, not Denim blocks (a Denim block is keyed by its parent hash too)
 	W := bp.SeqWindowSize
 	E := uint64(1000)
 	// two channels that both hold T, first frames in ONE transaction, B before A in the transaction

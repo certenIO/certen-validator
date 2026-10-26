@@ -379,6 +379,13 @@ func (b *Builder) searchIndexed(ctx context.Context, bp *Pins, l2 finality.Heade
 			}
 			continue
 		}
+		// a Denim second may straddle two channels (the index covers the timestamp, not the parent hash): the hit is the channel whose
+		// batch has this block's parent hash, else the next hit is tried, as the window reader's findChannel does
+		if l2.Timestamp >= bp.DenimTime {
+			if ref, _, _, _ := findChannel(txs, bp, l2); ref == nil || ref.ID != hit.entry.ID {
+				continue
+			}
+		}
 		sr.ch, sr.frameTxs = &channelRef{ID: hit.entry.ID}, txs
 		sr.bt = &Batch{Type: hit.run.Type, EpochNum: hit.run.Epoch, Timestamp: l2.Timestamp}
 		metrics.IncFinalityIndexLookup(uint64(Chain), FamilyBaseInbox, "hit")

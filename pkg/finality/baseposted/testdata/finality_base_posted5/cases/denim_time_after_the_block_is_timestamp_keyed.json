@@ -1,0 +1,15 @@
+{
+  "format": "certen-base-posted-case/1",
+  "id": "denim_time_after_the_block_is_timestamp_keyed",
+  "description": "denim_time one second after the block: the block is judged as before the fork, by its timestamp alone, which selects the first batch of the second",
+  "pins": "pins/denim_time_after_block_g2.json",
+  "leg": "legs/second_block_second_of_its_second.json",
+  "evidence": "evidence/second_block_second_of_its_second.bin",
+  "expect": {
+    "result": "state",
+    "code": "batch_binding_mismatch",
+    "fields": {
+      "field": "parent_hash"
+    }
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "format": "certen-base-posted-case/1",
+  "id": "valid_second_block_second_of_its_second",
+  "description": "the second block of that second: the batch a timestamp-only lookup does not select (Base Sepolia block 50446332, timestamp 1793011135)",
+  "pins": "pins/main.json",
+  "leg": "legs/second_block_second_of_its_second.json",
+  "evidence": "evidence/second_block_second_of_its_second.bin",
+  "expect": {
+    "result": "ok",
+    "fields": {
+      "batch_type": "0",
+      "batcher": "0xfc56e7272eebbba5bc6c544e159483c4a38f8ba3",
+      "channel_id": "0x57717b8326d6f3aa1f2ad0a958f21dea",
+      "epoch_hash_bits": "256",
+      "finalized_epoch": "357501",
+      "finalized_slot": "11440032",
+      "l1_blocks": [
+        "11997451"
+      ],
+      "parent_hash_bits": "256",
+      "span_blocks": "1",
+      "span_index": "0"
+    }
+  }
+}
