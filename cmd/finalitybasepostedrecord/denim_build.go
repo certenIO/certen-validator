@@ -36,6 +36,15 @@ type dLeg struct {
 	what string
 }
 
+// frameTxsOf lists the L1 blocks of a channel's frame transactions as frame entries, so that distinct() (sorted, once each) applies.
+func frameTxsOf(blocks []uint64) []baseposted.FrameTx {
+	out := make([]baseposted.FrameTx, len(blocks))
+	for i, n := range blocks {
+		out[i].L1Block = n
+	}
+	return out
+}
+
 func countTs(ts []uint64, s uint64) (n int) {
 	for _, t := range ts {
 		if t == s {
@@ -234,7 +243,7 @@ func buildDenim(capDir, rawDir, outDir string) error {
 			out[k] = string(raw)
 		}
 		var l1 []string
-		for _, n := range l.ch.L1Blocks {
+		for _, n := range distinct(frameTxsOf(l.ch.L1Blocks)) {
 			l1 = append(l1, strconv.Quote(strconv.FormatUint(n, 10)))
 		}
 		for k, want := range map[string]string{"batch_type": `"0"`, "span_blocks": `"1"`, "span_index": `"0"`, "parent_hash_bits": `"256"`, "epoch_hash_bits": `"256"`,
