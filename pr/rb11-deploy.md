@@ -184,3 +184,5 @@ Expected time to level after the leg's inclusion:
 
 See `pr/rb11-alerts.md` (metric, condition, severity, why). The same state, without history, is the `finality` member of
 `/health/detailed`.
+
+- Correction (RB12-EPS-DENIM, appended; the lines above are left as written): the embedded pins file is hash-checked against `finality.PinsSHA256` = `9f4fc10feca95909272c9f6eaef1a38d7a06110cfead0a88cb79e8ffd7a3d1cf` on branch `pv2/rb12-eps-denim` (the `base_sepolia.post_denim` capability row was appended; `fdba733e...5440` above is the hash before that row, and `13ee2d85...df05` was the hash before the e1-raise pins). Judge the deployed pins hash by `/health/detailed` and the status `pins_sha256`, not by this note.
