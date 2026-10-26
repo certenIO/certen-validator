@@ -149,6 +149,7 @@ func TestAMalformedPostDenimRowIsAPinsCorruption(t *testing.T) {
 		{"interval zero", func(m map[string]any) { m["block_interval_ms"] = 0 }},
 		{"per second zero", func(m map[string]any) { m["blocks_per_second"] = 0 }},
 		{"interval times count is not a second", func(m map[string]any) { m["blocks_per_second"] = 4 }},
+		{"interval times count wraps modulo 2^64 to a second (RB12-F23)", func(m map[string]any) { m["block_interval_ms"] = 1000; m["blocks_per_second"] = uint64(1<<61 + 1) }},
 		{"predeploy short", func(m map[string]any) { m["base_time_predeploy"] = "0x4200" }},
 		{"predeploy upper case", func(m map[string]any) { m["base_time_predeploy"] = "0x42000000000000000000000000000000000000AA" }},
 		{"selector short", func(m map[string]any) { m["base_time_selector"] = "0x86bdf3" }},

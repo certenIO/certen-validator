@@ -98,7 +98,7 @@ func parsePostDenim(raw json.RawMessage) (*PostDenim, bool) {
 	if len(r.BatchTypes) != 1 || r.BatchTypes[0] != 0 {
 		return nil, false
 	}
-	if r.BlockIntervalMS == 0 || r.BlocksPerSecond == 0 || r.BlockIntervalMS > 1000 || r.BlockIntervalMS*r.BlocksPerSecond != 1000 {
+	if r.BlockIntervalMS == 0 || r.BlocksPerSecond == 0 || r.BlockIntervalMS > 1000 || 1000%r.BlockIntervalMS != 0 || 1000/r.BlockIntervalMS != r.BlocksPerSecond {
 		return nil, false
 	}
 	pre, ok := unhex(r.BaseTimePredeploy, 20)
