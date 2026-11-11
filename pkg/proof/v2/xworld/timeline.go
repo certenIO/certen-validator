@@ -56,6 +56,13 @@ type Timeline struct {
 	// Initiate makes the last scripted signature the one that initiated the transaction: Header.Initiator is that signature's metadata
 	// hash, as the signing builder sets it (RB9 Phase C1b-2). Not combined with Delegated.
 	Initiate bool
+	// ExternalInitiator makes a page that is NOT a voting authority the initiator of the transaction (RB9 Phase C1b-2's "the payer may be a
+	// page that signed nothing a vote needed"; the tcl `*-erp` pattern, decision 0042): ErpPage1 of ErpBook on BVN3 signs the transaction
+	// first (Header.Initiator is that signature's metadata hash) and pays, and BankBook then votes through BankPage1 as before. ErpPage1 is
+	// proven at BVN3's block with its chains, records the roles initiator-signer and certified-key-page (the intent's declared signer, as the
+	// capture records them), and is no authority of the principal. The world carries what the CURRENT collector can capture for it
+	// (see Built.Initiating for the signature itself). Not combined with Initiate, Delegated or a second voter.
+	ExternalInitiator bool
 	// LedgerVersion, when non-zero, proves the transaction partition's system ledger at its block with this executor version
 	// (protocol.ExecutorVersion, e.g. 6 for Baikonur): the document then proves the version in force (RB9 Phase C1b-2).
 	LedgerVersion uint64
@@ -293,9 +300,16 @@ const SecondSigBlock = 66
 // voteNumber2 is the sequence number of the second voter's vote (BVN3 to BVN1).
 const voteNumber2 = 6
 
+// InitiatorSigBlock is the block of BVN3 the external initiator's signature arrives in (it signs first: before the vote's key signature
+// arrives in BVN2 at HopBlock, and before every scripted block of the voters' pages).
+const InitiatorSigBlock = 64
+
 var (
 	firstVoter  = voterID{BankPage1, BankBook, PartBVN2, "BVN2", voteNumber, "", "K0", HopBlock}
 	secondVoter = voterID{DelePage1, DeleBook, PartBVN3, "BVN3", voteNumber2, " (second voter)", "K2", SecondSigBlock}
+	// initiatorVoter is the external initiator (Timeline.ExternalInitiator): not a voter - it casts no vote and no sequenced message
+	// (number 0) - but its page is scripted exactly like a voter's (history, signature chain, index chains).
+	initiatorVoter = voterID{ErpPage1, ErpBook, PartBVN3, "BVN3", 0, " (initiator)", "K4", InitiatorSigBlock}
 )
 
 func (id voterID) seed(label string) []byte { return seed(label + id.tag) }
@@ -305,6 +319,7 @@ func (id voterID) seed(label string) []byte { return seed(label + id.tag) }
 type timelineWorld struct {
 	id         voterID
 	second     *timelineWorld
+	erp        *timelineWorld // the external initiator's page (Timeline.ExternalInitiator), scripted like a voter's but casting no vote
 	t          Timeline
 	txn        *protocol.Transaction
 	txHash     []byte
@@ -394,7 +409,20 @@ func newTimelineWorld(spec Timeline) *timelineWorld {
 		s := must(new(signing.Builder).SetType(protocol.SignatureTypeED25519).SetUrl(mustURL(BankPage1)).SetVersion(last.Version).SetTimestamp(1700000000000).SetPrivateKey(k.priv).Sign(make([]byte, 32)))
 		copy(w.txn.Header.Initiator[:], s.Metadata().Hash())
 	}
+	if t.ExternalInitiator {
+		if t.Initiate || t.Delegated || spec.Second != nil || spec.NoFirstVote {
+			panic("xworld: ExternalInitiator does not combine with Initiate, Delegated, Second or NoFirstVote")
+		}
+		// The external initiator's signature, as the signing builder sets the header's initiator: its metadata hash (the signature value is not
+		// part of the metadata, so it is the same whatever the transaction hash is, which depends on this header).
+		k := keyOf(initiatorVoter.key)
+		s := must(new(signing.Builder).SetType(protocol.SignatureTypeED25519).SetUrl(mustURL(ErpPage1)).SetVersion(1).SetTimestamp(1700000000000).SetPrivateKey(k.priv).Sign(make([]byte, 32)))
+		copy(w.txn.Header.Initiator[:], s.Metadata().Hash())
+	}
 	w.txHash = w.txn.GetHash()
+	if t.ExternalInitiator {
+		w.erp = newInitiatorWorld(w.txn, w.txHash)
+	}
 	if t.Delegated {
 		if t.DelegateDepth > 1 {
 			w.dw = newChainDelegatedWorld(t, w.txn, w.txHash)
@@ -417,6 +445,14 @@ func newSecondVoter(spec Timeline, txn *protocol.Transaction, txHash []byte) *ti
 	w := &timelineWorld{t: spec.withDefaults(secondVoter), id: secondVoter, txn: txn, txHash: txHash}
 	w.scriptPage()
 	w.addSynth()
+	return w
+}
+
+// newInitiatorWorld is the scripted ErpPage1 of the external initiator over the same transaction: one key (K4) at genesis, one signature by
+// it at version 1 in block InitiatorSigBlock - the signature whose metadata hash is the transaction's Header.Initiator.
+func newInitiatorWorld(txn *protocol.Transaction, txHash []byte) *timelineWorld {
+	w := &timelineWorld{t: Timeline{}.withDefaults(initiatorVoter), id: initiatorVoter, txn: txn, txHash: txHash}
+	w.scriptPage()
 	return w
 }
 
