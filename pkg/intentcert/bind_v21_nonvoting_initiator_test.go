@@ -120,8 +120,9 @@ func TestWorldVotingInitiatorVerifiesAndBinds(t *testing.T) {
 // T1 (G-83), the situation as the DESIRED behaviour: a transaction initiated by a page that is NOT a voting authority - ErpPage1 of an
 // identity that is no authority of the principal signs first and pays, BankBook then votes through BankPage1 - whose page records the role
 // initiator-signer, verifies with the role PROVEN (nothing unproven, no Declared initiator-signer) and BindProofV21 accepts it, with the
-// initiator proven. On the base it fails with g1_initiator_signature_not_carried: no member of the document carries the initiating signature,
-// and initiatorPages searches only the cause chains of the votes.
+// initiator proven. On the base it failed with g1_initiator_signature_not_carried (fail-before recorded in state/dax/dax1g/evidence/t1-run-2.txt): no
+// member of the document carried the initiating signature, and initiatorPages searched only the cause chains of the votes. It now passes because the
+// document carries it (Evidence.InitiatingSignature) and the verifier proves it (xroles.go carriedInitiatorPages); bind_v21.go is not changed.
 func TestNonVotingInitiatorIsProvenAndBound(t *testing.T) {
 	b := nvWorld(t, xworld.Timeline{ExternalInitiator: true})
 	if b.Initiating == nil {
@@ -222,26 +223,26 @@ func TestNonVotingInitiatorIsProvenAndBound(t *testing.T) {
 	}
 }
 
-// Attribution of T1: the binding itself is sufficient. The report a verifier that PROVES the initiating signature must produce for the
-// non-voting-initiator world - nothing unproven, initiator-signer a proven role of ErpPage1 and only certified-key-page declared - is bound by
-// BindProofV21 as it stands. (The report is edited from the world's, which carries no initiating signature on the base: this test does not
-// need the verifier's change, so it passes before and after it; the failure of T1 is therefore the verifier's and the document's.) The same
-// edit without the role proven - the report as it is - is refused, which is the binding rule T1's change must not relax.
+// The binding rule, which DAX-1G does not change (bind_v21.go is untouched). On the document WITHOUT the member (the world built as every document
+// made before the member is: the page records initiator-signer, nothing carries the signature) the report names g1_initiator_signature_not_carried
+// and the binding refuses it by that entry, before anything else is judged. The report a verifier that PROVES the initiating signature must
+// produce for the same transaction - nothing unproven, initiator-signer a proven role of ErpPage1 and only certified-key-page declared - is bound
+// as it stands (the report is edited from the member-absent world's, so the binding alone is shown sufficient: T1 turns green by the verifier and
+// the document, never by the binding). The same report without the role proven is refused by the initiator's state. Passes before and after the
+// verifier's change: the member-absent document stays refused and its report stays unbound.
 func TestBindingAcceptsTheReportAProvenNonVotingInitiatorProduces(t *testing.T) {
-	b := nvWorld(t, xworld.Timeline{ExternalInitiator: true})
+	b := nvWorld(t, xworld.Timeline{ExternalInitiator: true, OmitInitiatingSignature: true})
 	rep, err := nvVerify(t, b)
 	if err != nil {
 		t.Fatal(err)
 	}
 	facts := nvFacts(t, b, b.Initiating)
 
-	// Left as the base verifier reports it: refused by its own first named state, before anything else is judged.
+	// The member-absent report: refused by its own first named state, before anything else is judged.
 	if err := nvBind(rep, facts, xworld.ErpPage1, xworld.ErpBook); err == nil {
 		t.Fatal("a report with an unproven initiator was bound")
 	} else if !strings.Contains(err.Error(), proofv2.StateInitiatorSignatureNotCarried) {
-		// after the change the world carries the member and this refusal is gone: the rule is then exercised by the member-absent cases
-		t.Logf("the world's report is no longer refused for the initiator (the document carries the initiating signature): %v", err)
-		return
+		t.Fatalf("refused, but not by the unproven initiating signature: %v", err)
 	}
 
 	// The report a proving verifier produces for the same document.

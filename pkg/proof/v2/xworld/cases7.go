@@ -56,8 +56,8 @@ func Cases7() []Case {
 				}
 				ev.InitiatingSignature.Signature = string(b)
 			}},
-		{Name: "initiator-signature-other-transaction", Description: "the member is the initiating signature of ANOTHER transaction (another body, so another transaction id): it is not the message ErpPage1's chain holds for this transaction", Expect: refused,
-			State: proofv2.StateSignatureInvalid, Partition: erpPartition, Block: erpBlock, Opts: initiatorWorld(Timeline{}),
+		{Name: "initiator-signature-other-transaction", Description: "the member is the initiating signature of ANOTHER transaction (another body): ErpPage1's chain does not hold its message for this transaction", Expect: refused,
+			State: proofv2.StateBlockBeforeArrival, Partition: erpPartition, Block: erpBlock, Opts: initiatorWorld(Timeline{}),
 			Mutate: func(ev *proofv2.Evidence) {
 				other, err := Build(initiatorWorld(Timeline{Body: &protocol.WriteData{Entry: &protocol.DoubleHashDataEntry{Data: [][]byte{[]byte("another transaction")}}}}))
 				if err != nil {
@@ -66,6 +66,8 @@ func Cases7() []Case {
 				h := *other.Initiating
 				ev.InitiatingSignature = &h
 			}},
+		{Name: "initiator-signature-signs-another-transaction", Description: "ErpPage1's signature chain holds the message of a signature that has the initiating signature's metadata but signs ANOTHER transaction (a forgery no real chain holds): it is a member of the chain and it initiates by metadata, but it does not sign this transaction", Expect: refused,
+			State: proofv2.StateSignatureInvalid, Partition: erpPartition, Block: erpBlock, Opts: initiatorWorld(Timeline{InitiatorSignsAnotherTransaction: true})},
 		{Name: "initiator-signature-other-page", Description: "the member names BankPage1 as the page that records the signature, but the message is ErpPage1's: BankPage1's signature chain does not hold it", Expect: refused,
 			State: proofv2.StateBlockBeforeArrival, Partition: "BVN2", Block: ProvenBlockBVN2, Opts: initiatorWorld(Timeline{}),
 			Mutate: func(ev *proofv2.Evidence) { ev.InitiatingSignature.Page = BankPage1 }},

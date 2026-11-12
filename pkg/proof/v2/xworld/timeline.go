@@ -79,6 +79,9 @@ type Timeline struct {
 	// InitiatorDelegator, when set, makes the initiating signature a DELEGATED signature whose delegator is that page (a proven page of the
 	// document, which records initiator-signer beside its other roles): Header.Initiator is the metadata hash of the delegated signature.
 	InitiatorDelegator string
+	// InitiatorSignsAnotherTransaction makes the initiator's recorded signature sign a transaction that is not this one: the page's chain holds its
+	// message, it initiates (same metadata) but it does not sign this transaction.
+	InitiatorSignsAnotherTransaction bool
 	// LedgerVersion, when non-zero, proves the transaction partition's system ledger at its block with this executor version
 	// (protocol.ExecutorVersion, e.g. 6 for Baikonur): the document then proves the version in force (RB9 Phase C1b-2).
 	LedgerVersion uint64
@@ -148,6 +151,9 @@ type SigEvent struct {
 	// Hidden records the message in the page's signature chain without carrying it as a hop or a counted signature of the vote: an entry the
 	// chain holds that the document's votes do not name (Built.HiddenOnBank is its hop). It is never the last signature.
 	Hidden bool
+	// SignOther makes the signature sign a transaction that is NOT this one (its metadata, so the header's initiator, is unchanged): a forgery no real
+	// chain holds, for the case that refuses a recorded signature that does not sign the transaction.
+	SignOther bool
 }
 
 type keyMat struct {
@@ -483,6 +489,9 @@ func newInitiatorWorld(spec Timeline, txn *protocol.Transaction, txHash []byte) 
 		t.Genesis = append(append([]string(nil), t.Genesis...), spec.InitiatorCosign)
 		t.Sigs = append(t.Sigs, SigEvent{Key: spec.InitiatorCosign, Version: 1, Block: InitiatorSigBlock + 1})
 	}
+	if spec.InitiatorSignsAnotherTransaction {
+		t.Sigs[0].SignOther = true
+	}
 	w := &timelineWorld{t: t, id: initiatorVoter, txn: txn, txHash: txHash, delegator: spec.InitiatorDelegator}
 	w.scriptPage()
 	return w
@@ -569,7 +578,11 @@ func (w *timelineWorld) scriptPage() {
 			b.AddDelegator(mustURL(w.delegator)) // the first signature of the initiator's page is the delegated initiating one
 		}
 		b.Vote = s.Vote
-		sig := must(b.Sign(w.txHash))
+		signed := w.txHash
+		if s.SignOther {
+			signed = seed("a transaction that is not this one")
+		}
+		sig := must(b.Sign(signed))
 		msg := (&messaging.SignatureMessage{Signature: sig, TxID: w.txn.ID()}).Hash()
 		w.sigPos = append(w.sigPos, len(w.sigEntries))
 		w.sigEntries = append(w.sigEntries, msg[:])

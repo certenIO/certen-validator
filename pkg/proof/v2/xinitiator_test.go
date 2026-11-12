@@ -17,7 +17,7 @@ import (
 // partition and block it was judged at.
 func TestInitiatorSuiteCases(t *testing.T) {
 	cases := xworld.Cases7()
-	if len(cases) != 15 {
+	if len(cases) != 16 {
 		t.Fatalf("the suite holds %d cases", len(cases))
 	}
 	for _, c := range cases {

@@ -341,8 +341,8 @@ func verifyFrom(ev *Evidence, rep *Report, at map[uint64]*Spine, pinned, genesis
 	is21 := ev.Version == Version21
 	if !is21 {
 		// A 2.0 document carries none of the 2.1 members; one that does would have them silently ignored.
-		if ev.Anchors != nil || ev.Votes != nil || ev.Check.Routing != nil {
-			return nil, fmt.Errorf("evidence 2.0 carries 2.1 members (anchors, votes or a routing proof)")
+		if ev.Anchors != nil || ev.Votes != nil || ev.Check.Routing != nil || ev.InitiatingSignature != nil {
+			return nil, fmt.Errorf("evidence 2.0 carries 2.1 members (anchors, votes, a routing proof or an initiating signature)")
 		}
 		for _, p := range ev.Pages {
 			if p.Partition != "" || p.Roles != nil {
