@@ -30,6 +30,8 @@ type Case struct {
 	Note   string
 	Opts   Options
 	Mutate func(ev *proofv2.Evidence)
+	// MutateBuilt, for a case that needs what the world holds beside the document (Built.Initiating, Built.InitiatorCosign), runs before Mutate.
+	MutateBuilt func(b *Built)
 }
 
 func idx(ev *proofv2.Evidence, u string) int {
@@ -133,6 +135,9 @@ func (c Case) Document() (*Built, *proofv2.Portable, error) {
 	b, err := Build(c.Opts)
 	if err != nil {
 		return nil, nil, err
+	}
+	if c.MutateBuilt != nil {
+		c.MutateBuilt(b)
 	}
 	if c.Mutate != nil {
 		c.Mutate(b.Evidence)

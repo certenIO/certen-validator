@@ -99,9 +99,13 @@ type Built struct {
 	Pin      [32]byte
 	// Initiating, for a Timeline.ExternalInitiator world, is the signature that initiated the transaction as the transaction's signature set holds
 	// it - on the page that is not a voting authority - with the receipt and arrival proof that place it in that page's signature chain (the
-	// hop Assembly.ProveMembers builds). It is what a collector reads (TxFacts) and what the intent's own vote evidence carries; the document the
-	// world builds carries only what Evidence has a member for.
+	// hop Assembly.ProveInitiating builds). It is what a collector reads (TxFacts) and what the intent's own vote evidence carries; the document the
+	// world builds carries it as Evidence.InitiatingSignature unless the world omits it (Timeline.OmitInitiatingSignature).
 	Initiating *proofv2.VoteHop
+	// InitiatorCosign, with Timeline.InitiatorCosign, is a valid signature of the initiator's page that did NOT initiate the transaction.
+	InitiatorCosign *proofv2.VoteHop
+	// HiddenOnBank is the hop of the first SigEvent.Hidden entry of BankPage1's signature chain: a message the chain holds that no vote names.
+	HiddenOnBank *proofv2.VoteHop
 }
 
 // Portable is the world as a portable document.
@@ -442,6 +446,10 @@ func build(o Options) *Built {
 		// certified-key-page: it is the intent's declared signer) and is no authority of the principal.
 		bvn3 = append(bvn3, tw.erp.pageAcct)
 		bvn3Roles[ErpPage1] = []proofv2.PageRole{proofv2.RoleInitiatorSigner, proofv2.RoleCertifiedKeyPage}
+		if d := tw.t.InitiatorDelegator; d != "" {
+			// the delegator of the initiating signature is in its path: a proven page with the role beside its own
+			bvn3Roles[d] = append(append([]proofv2.PageRole(nil), bvn3Roles[d]...), proofv2.RoleInitiatorSigner)
+		}
 	}
 	if tw != nil && !tw.t.NoFirstVote {
 		if tw.dw == nil {
@@ -750,9 +758,32 @@ func build(o Options) *Built {
 		}
 	}
 	built := &Built{Evidence: ev, Archive: &proofv2.Archive{Majors: []*api.MajorHeaderRecord{m1}}, Inputs: in, Pin: pin}
+	if tw != nil && tw.dw == nil && !tw.t.NoFirstVote {
+		for i, sg := range tw.t.Sigs {
+			if sg.Hidden {
+				h := tw.hopOf(i)
+				built.HiddenOnBank = &h
+				break
+			}
+		}
+	}
 	if tw != nil && tw.erp != nil {
-		hop, _ := tw.erp.hops()
+		hop := tw.erp.hopOf(0)
 		built.Initiating = &hop
+		if tw.t.InitiatorCosign != "" {
+			cos := tw.erp.hopOf(1)
+			built.InitiatorCosign = &cos
+		}
+		if !tw.t.OmitInitiatingSignature {
+			ev.InitiatingSignature = &hop
+			if !tw.t.OmitInitiatorHistory {
+				for i := range ev.Pages {
+					if ev.Pages[i].URL == ErpPage1 {
+						ev.Pages[i].History = tw.erp.history
+					}
+				}
+			}
+		}
 	}
 	return built
 }

@@ -85,6 +85,17 @@ type Evidence struct {
 	// Verify21FromGenesis) and by the spine-log walk consensus runs (VerifyEvidence21FromSpine) alike: certify_link_missing{genesis}. In a document that
 	// claims 2.0 the member is not read.
 	GenesisLink string `json:"genesisLink,omitempty"`
+	// InitiatingSignature (evidence 2.1 only; DAX-1G, G-83) is the signature that initiated the transaction (Header.Initiator is its metadata hash) when no
+	// signature of a vote's cause chain is it: a separate, NON-VOTING initiator (the tcl `*-erp` pattern: an identity that is no authority of the
+	// principal signs first and pays, and the authorities vote afterwards). It is a VoteHop: the page whose signature chain records the message (the payer;
+	// a lite token address pays as its lite identity), the message (the entry hash, SignatureMessage{signature, this transaction's id}.Hash()), the signature
+	// (binary, hex), the receipt placing the message in that page's signature chain as bound at the page's block, and the arrival proof (REQUIRED here)
+	// that fixes the block it arrived in; the page's certified history rides in its PageState.History. The verifier proves it completely or refuses the
+	// document by name (xroles.go carriedInitiatorPages); what it proves is that initiator-signer is a PROVEN role of the payer and every delegator of the
+	// signature's path. Absent, in every document made before it and for a VOTING initiator (whose signature is already in a vote's cause chain), the
+	// role stays declared and the report says g1_initiator_signature_not_carried, exactly as before. In a document that claims 2.0 the member is not read.
+	// It enters no hashed input (govRoot v4 commits the pages' recorded roles, proven or declared, and the votes): evidence beside the hashed summaries.
+	InitiatingSignature *VoteHop `json:"initiatingSignature,omitempty"`
 
 	// Check proves the validator set in force at a certified block at or after the certified one.
 	Check SetCheck `json:"check"`

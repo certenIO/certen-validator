@@ -60,9 +60,25 @@ type Timeline struct {
 	// page that signed nothing a vote needed"; the tcl `*-erp` pattern, decision 0042): ErpPage1 of ErpBook on BVN3 signs the transaction
 	// first (Header.Initiator is that signature's metadata hash) and pays, and BankBook then votes through BankPage1 as before. ErpPage1 is
 	// proven at BVN3's block with its chains, records the roles initiator-signer and certified-key-page (the intent's declared signer, as the
-	// capture records them), and is no authority of the principal. The world carries what the CURRENT collector can capture for it
-	// (see Built.Initiating for the signature itself). Not combined with Initiate, Delegated or a second voter.
+	// capture records them), and is no authority of the principal. The world carries what the collector captures for it: the member
+	// (Evidence.InitiatingSignature, also Built.Initiating) and the page's certified history (see OmitInitiatingSignature, OmitInitiatorHistory). Not combined with Initiate, Delegated or a second voter.
 	ExternalInitiator bool
+	// OmitInitiatingSignature (with ExternalInitiator) leaves the member out of the document, as every document made before DAX-1G is: the page
+	// records initiator-signer, the document carries no signature that initiated the transaction, and the report says g1_initiator_signature_not_carried.
+	OmitInitiatingSignature bool
+	// OmitInitiatorHistory (with ExternalInitiator) carries the member without the page's certified history, which the proof of its key needs.
+	OmitInitiatorHistory bool
+	// InitiatorGenesis (default K4) and InitiatorEvents script the external initiator's page: its genesis keys and its later transactions (blocks
+	// after 10 and before InitiatorSigBlock for a change the signature must see, after it for one it must not). The signature is always by K4 at
+	// version 1.
+	InitiatorGenesis []string
+	InitiatorEvents  []PageEvent
+	// InitiatorCosign, when set, is a key label of the initiator's page that signs AFTER the initiating signature (a second key, not the initiator:
+	// its metadata differs). Built.InitiatorCosign is its signature, a valid signature of the same page that did not initiate the transaction.
+	InitiatorCosign string
+	// InitiatorDelegator, when set, makes the initiating signature a DELEGATED signature whose delegator is that page (a proven page of the
+	// document, which records initiator-signer beside its other roles): Header.Initiator is the metadata hash of the delegated signature.
+	InitiatorDelegator string
 	// LedgerVersion, when non-zero, proves the transaction partition's system ledger at its block with this executor version
 	// (protocol.ExecutorVersion, e.g. 6 for Baikonur): the document then proves the version in force (RB9 Phase C1b-2).
 	LedgerVersion uint64
@@ -126,6 +142,12 @@ type SigEvent struct {
 	Block   uint64
 	// Vote is the vote the signature carries (the zero value is accept).
 	Vote protocol.VoteType
+	// SignAs, when set, is the page the signature is MADE as (its Signer) although it is recorded in this page's signature chain: a forgery no real
+	// chain holds (the executor records a signature on its signer's page), for the cases that refuse it.
+	SignAs string
+	// Hidden records the message in the page's signature chain without carrying it as a hop or a counted signature of the vote: an entry the
+	// chain holds that the document's votes do not name (Built.HiddenOnBank is its hop). It is never the last signature.
+	Hidden bool
 }
 
 type keyMat struct {
@@ -319,6 +341,7 @@ func (id voterID) seed(label string) []byte { return seed(label + id.tag) }
 type timelineWorld struct {
 	id         voterID
 	second     *timelineWorld
+	delegator  string         // the external initiator's delegator (Timeline.InitiatorDelegator): its signature is delegated through this page
 	erp        *timelineWorld // the external initiator's page (Timeline.ExternalInitiator), scripted like a voter's but casting no vote
 	t          Timeline
 	txn        *protocol.Transaction
@@ -416,12 +439,16 @@ func newTimelineWorld(spec Timeline) *timelineWorld {
 		// The external initiator's signature, as the signing builder sets the header's initiator: its metadata hash (the signature value is not
 		// part of the metadata, so it is the same whatever the transaction hash is, which depends on this header).
 		k := keyOf(initiatorVoter.key)
-		s := must(new(signing.Builder).SetType(protocol.SignatureTypeED25519).SetUrl(mustURL(ErpPage1)).SetVersion(1).SetTimestamp(1700000000000).SetPrivateKey(k.priv).Sign(make([]byte, 32)))
+		sb := new(signing.Builder).SetType(protocol.SignatureTypeED25519).SetUrl(mustURL(ErpPage1)).SetVersion(1).SetTimestamp(1700000000000).SetPrivateKey(k.priv)
+		if t.InitiatorDelegator != "" {
+			sb.AddDelegator(mustURL(t.InitiatorDelegator))
+		}
+		s := must(sb.Sign(make([]byte, 32)))
 		copy(w.txn.Header.Initiator[:], s.Metadata().Hash())
 	}
 	w.txHash = w.txn.GetHash()
 	if t.ExternalInitiator {
-		w.erp = newInitiatorWorld(w.txn, w.txHash)
+		w.erp = newInitiatorWorld(t, w.txn, w.txHash)
 	}
 	if t.Delegated {
 		if t.DelegateDepth > 1 {
@@ -450,8 +477,13 @@ func newSecondVoter(spec Timeline, txn *protocol.Transaction, txHash []byte) *ti
 
 // newInitiatorWorld is the scripted ErpPage1 of the external initiator over the same transaction: one key (K4) at genesis, one signature by
 // it at version 1 in block InitiatorSigBlock - the signature whose metadata hash is the transaction's Header.Initiator.
-func newInitiatorWorld(txn *protocol.Transaction, txHash []byte) *timelineWorld {
-	w := &timelineWorld{t: Timeline{}.withDefaults(initiatorVoter), id: initiatorVoter, txn: txn, txHash: txHash}
+func newInitiatorWorld(spec Timeline, txn *protocol.Transaction, txHash []byte) *timelineWorld {
+	t := Timeline{Genesis: spec.InitiatorGenesis, Events: spec.InitiatorEvents}.withDefaults(initiatorVoter)
+	if spec.InitiatorCosign != "" {
+		t.Genesis = append(append([]string(nil), t.Genesis...), spec.InitiatorCosign)
+		t.Sigs = append(t.Sigs, SigEvent{Key: spec.InitiatorCosign, Version: 1, Block: InitiatorSigBlock + 1})
+	}
+	w := &timelineWorld{t: t, id: initiatorVoter, txn: txn, txHash: txHash, delegator: spec.InitiatorDelegator}
 	w.scriptPage()
 	return w
 }
@@ -528,7 +560,14 @@ func (w *timelineWorld) scriptPage() {
 	w.sigBlkAll = []uint64{30, 30}
 	for _, s := range t.Sigs {
 		k := keyOf(s.Key)
-		b := new(signing.Builder).SetType(protocol.SignatureTypeED25519).SetUrl(mustURL(w.id.page)).SetVersion(s.Version).SetTimestamp(1700000000000).SetPrivateKey(k.priv)
+		signer := w.id.page
+		if s.SignAs != "" {
+			signer = s.SignAs
+		}
+		b := new(signing.Builder).SetType(protocol.SignatureTypeED25519).SetUrl(mustURL(signer)).SetVersion(s.Version).SetTimestamp(1700000000000).SetPrivateKey(k.priv)
+		if w.delegator != "" && len(w.sigSigs) == 0 {
+			b.AddDelegator(mustURL(w.delegator)) // the first signature of the initiator's page is the delegated initiating one
+		}
 		b.Vote = s.Vote
 		sig := must(b.Sign(w.txHash))
 		msg := (&messaging.SignatureMessage{Signature: sig, TxID: w.txn.ID()}).Hash()
@@ -578,21 +617,27 @@ func (w *timelineWorld) hops() (hop proofv2.VoteHop, counted []proofv2.VoteHop) 
 	if w.dw != nil {
 		return w.dw.hopAuth, nil
 	}
-	mk := func(i int) proofv2.VoteHop {
-		pos := w.sigPos[i]
-		return proofv2.VoteHop{
-			Page: w.id.page, Message: hexs(w.sigEntries[pos]), Signature: hexs(must(w.sigSigs[i].MarshalBinary())),
-			Block:   w.t.Sigs[i].Block,
-			Receipt: rcptHex(entryReceipt(w.sigEntries, pos)),
-			Arrival: func() *proofv2.Arrival { a := arrivalFor(w.sigIdx, w.sigBlkAll, pos); return &a }(),
-		}
-	}
+	mk := w.hopOf
 	last := len(w.t.Sigs) - 1
 	hop = mk(last)
 	for i := last - 1; i >= 0; i-- {
+		if w.t.Sigs[i].Hidden {
+			continue
+		}
 		counted = append(counted, mk(i))
 	}
 	return hop, counted
+}
+
+// hopOf is the scripted signature i as a hop of the page's signature chain: its entry, receipt and arrival proof.
+func (w *timelineWorld) hopOf(i int) proofv2.VoteHop {
+	pos := w.sigPos[i]
+	return proofv2.VoteHop{
+		Page: w.id.page, Message: hexs(w.sigEntries[pos]), Signature: hexs(must(w.sigSigs[i].MarshalBinary())),
+		Block:   w.t.Sigs[i].Block,
+		Receipt: rcptHex(entryReceipt(w.sigEntries, pos)),
+		Arrival: func() *proofv2.Arrival { a := arrivalFor(w.sigIdx, w.sigBlkAll, pos); return &a }(),
+	}
 }
 
 func (w *timelineWorld) production() *proofv2.Production {
