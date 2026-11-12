@@ -156,7 +156,15 @@ func TestCollectCarriesTheInitiatingSignatureOfANonVotingInitiator(t *testing.T)
 	if erp.History == nil || len(erp.History.Entries) != 1 || len(erp.History.Index) != 1 || !hasRoleOf(c, erpPage, proofv2.RoleInitiatorSigner) {
 		t.Fatalf("the initiator's page: history %+v roles %v", erp.History, erp.Roles)
 	}
-	// Assembly passes it on, and the assembler proves it in the page's own chains.
+	// Capture.Assembly passes it on to the assembler.
+	passed, aerr := c.Assembly(context.Background(), fakeLog{f}, e)
+	if aerr != nil {
+		t.Fatalf("Capture.Assembly: %v", aerr)
+	}
+	if passed.Initiating == nil || passed.Initiating.Message != h.Message || passed.Initiating.Page != h.Page {
+		t.Fatalf("the assembly carries %+v, the capture %+v", passed.Initiating, h)
+	}
+	// The assembler proves it in the page's own chains.
 	asm := &proofv2.Assembly{Source: e, Initiating: c.Initiating}
 	for i := range c.Pages {
 		p := c.Pages[i].PageState

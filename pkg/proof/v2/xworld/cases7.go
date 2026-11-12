@@ -3,6 +3,8 @@
 package xworld
 
 import (
+	"encoding/hex"
+
 	proofv2 "github.com/certen/independant-validator/pkg/proof/v2"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/database/merkle"
 	"gitlab.com/accumulatenetwork/accumulate/protocol"
@@ -104,6 +106,21 @@ func Cases7() []Case {
 			Mutate: func(ev *proofv2.Evidence) {
 				ev.InitiatingSignature.Receipt = alterReceiptHex(ev.InitiatingSignature.Receipt)
 			}},
+		{Name: "initiator-member-header-names-no-initiator", Description: "the member is carried but the transaction's header names no initiator: the role the member claims is not one the transaction justifies", Expect: refused,
+			State: proofv2.StateRoleMismatch, Partition: erpPartition, Block: erpBlock, Opts: initiatorWorld(Timeline{InitiatorNotInHeader: true})},
+		{Name: "initiator-member-without-transaction", Description: "the member is carried but the document carries no transaction, so nothing says what initiated it", Expect: refused,
+			State: proofv2.StateTransactionMismatch, Partition: "BVN1", Block: ProvenBlockBVN1, Opts: initiatorWorld(Timeline{OmitTransaction: true})},
+		{Name: "initiator-member-is-an-authority-signature", Description: "the member's signature is an authority signature, which cannot initiate a transaction", Expect: refused,
+			State: proofv2.StateSignatureInvalid, Partition: erpPartition, Block: erpBlock, Opts: initiatorWorld(Timeline{}),
+			Mutate: func(ev *proofv2.Evidence) {
+				auth := &protocol.AuthoritySignature{Origin: mustURL(ErpPage1), Authority: mustURL(ErpBook), Vote: protocol.VoteTypeAccept}
+				ev.InitiatingSignature.Signature = hex.EncodeToString(must(auth.MarshalBinary()))
+			}},
+		{Name: "initiator-member-no-arrival-proof", Description: "the member is carried without its arrival proof: the block it arrived in, which the key is judged at, is not established", Expect: refused,
+			State: proofv2.StateArrivalUnproven, Partition: erpPartition, Block: erpBlock, Opts: initiatorWorld(Timeline{}),
+			Mutate: func(ev *proofv2.Evidence) { ev.InitiatingSignature.Arrival = nil }},
+		{Name: "initiator-delegator-not-a-proven-page", Description: "the initiating signature is delegated through a page that is not among the proven pages: it is in the signature's path and the document does not prove it", Expect: refused,
+			State: proofv2.StateInitiatorPageUnproven, Partition: "BVN1", Block: ProvenBlockBVN1, Opts: initiatorWorld(Timeline{InitiatorDelegator: "acc://pv2-erpdel-5.acme/book/1"})},
 		{Name: "initiator-member-in-20-document", Description: "a document that says 2.0 but carries the member (with the other 2.1 members): refused as every 2.0 document that carries 2.1 members is", Expect: refused,
 			Opts:   initiatorWorld(Timeline{}),
 			Mutate: func(ev *proofv2.Evidence) { ev.Version = proofv2.Version }},

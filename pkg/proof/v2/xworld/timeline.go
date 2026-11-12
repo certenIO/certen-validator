@@ -82,6 +82,8 @@ type Timeline struct {
 	// InitiatorSignsAnotherTransaction makes the initiator's recorded signature sign a transaction that is not this one: the page's chain holds its
 	// message, it initiates (same metadata) but it does not sign this transaction.
 	InitiatorSignsAnotherTransaction bool
+	// InitiatorNotInHeader leaves Header.Initiator zero although the initiator's signature is carried: the transaction names no initiator.
+	InitiatorNotInHeader bool
 	// LedgerVersion, when non-zero, proves the transaction partition's system ledger at its block with this executor version
 	// (protocol.ExecutorVersion, e.g. 6 for Baikonur): the document then proves the version in force (RB9 Phase C1b-2).
 	LedgerVersion uint64
@@ -450,7 +452,9 @@ func newTimelineWorld(spec Timeline) *timelineWorld {
 			sb.AddDelegator(mustURL(t.InitiatorDelegator))
 		}
 		s := must(sb.Sign(make([]byte, 32)))
-		copy(w.txn.Header.Initiator[:], s.Metadata().Hash())
+		if !t.InitiatorNotInHeader {
+			copy(w.txn.Header.Initiator[:], s.Metadata().Hash())
+		}
 	}
 	w.txHash = w.txn.GetHash()
 	if t.ExternalInitiator {
