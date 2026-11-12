@@ -275,8 +275,9 @@ their measurements are in `xbudget.go`'s header; `TestCertificateBudgetCoversMea
 
 **Declared roles (done; semantics).** With the transaction carried, `header-authority` is PROVEN: the books `Header.Authorities` and `GetAdditionalAuthorities()` name, each book and every page
 of it; a recorded role that is not derived (or the reverse) is `g1_role_mismatch`, a named authority without proven pages `g1_header_authority_missing`. `initiator-signer` is PROVEN when the
-evidence carries the signature that initiated the transaction (the cause-chain key signature whose initiator hash is `Header.Initiator`; the pages are the payer and every delegator of its
-path); when it does not, the role is recorded and listed as Declared and the report says `g1_initiator_signature_not_carried{partition,block}`. `certified-key-page` stays Declared in every
+evidence carries the signature that initiated the transaction - the cause-chain key signature of a recorded vote whose initiator hash is `Header.Initiator`, or, for a separate NON-VOTING
+initiator, the document's member `initiatingSignature` (D8) - and the pages are the payer and every delegator of its path; when it carries neither, the role is recorded and listed as Declared and
+the report says `g1_initiator_signature_not_carried{partition,block}`. `certified-key-page` stays Declared in every
 case: it depends on the key book and page the INTENT declares, which only the intent certificate carries; the binding in RB9-C2 (`BindProofV2`) checks it against the certificate.
 
 **Held votes (RB9-C1b-1-F2, resolved).** The executor does NOT re-ask `AuthorityWillVote` at the release (`sig_common.go:84-172`): the vote is computed when the completing signature
@@ -328,3 +329,28 @@ consensus refuses a 2.0 certificate, so a one-partition intent needs 2.1 as well
 anything `Unproven`, a prover that cannot build 2.1, an unreadable activation and a capture holding a nonexistent listed authority book (`g1_authority_missing`; absence of an account is provable by no
 receipt the evidence carries, so the capture refuses it by name at capture for a foreign capture and at assembly for 2.1) all hold the intent. (3) The builder maps a freshly served minor-root record
 with no validator signature yet (`quorum not met: 0 of N validator signatures`) to `ErrNotYetCertified`, under the bound the builder callers already use; the verifiers are untouched.
+
+**D8, the initiating signature of a non-voting initiator (DAX-1G, G-83; an additive member of evidence 2.1, no new version, no new domain tag, no pin).** Decision 0042 of the transaction-controls lab opens every Tier A payment
+through a SEPARATE initiator identity (`<customer>-erp`) that is an authority of nothing: it signs first and pays, the authorities vote afterwards. Its signature is in no vote's cause chain, so before this member the page was
+captured and its role recorded but nothing carried the signature, the verifier reported `g1_initiator_signature_not_carried`, `BindProofV21` refused the report and the proposer held the intent. The document now carries it:
+
+- **The member.** `Evidence.InitiatingSignature` (JSON `initiatingSignature`, portable form `PortableEvidence.InitiatingSignature`, read only for a document that claims 2.1) is a `VoteHop`: the page whose signature chain records
+  the message (the payer; a lite token address pays as its lite identity), the message (the entry hash, `SignatureMessage.Hash()`, which is the signature's own hash), the signature (binary, hex), the claimed block (derived from the
+  arrival and required equal), the receipt placing the message in that page's signature chain as bound at the page's block, and the arrival proof (the two adjacent signature-index entries with their receipts; required). The page
+  carries its certified history (`PageState.History`). The member enters no hashed input: govRoot v4 commits the pages' recorded roles, proven or declared, and the votes, so the commitment is the same with or without it.
+- **The collector** (`pkg/proofv2shadow`) captures it only when no vote's cause chain or counted signature holds the initiating message (a voting initiator needs none; its capture and document are what they were), with the
+  arrival block from the chain, and captures the page with its history; a page whose history cannot be read ends the capture with `g1_history_unavailable` and carries no member. An intent captured before the change keeps its capture
+  (a capture that holds pages is never replaced), so it stays held.
+- **The verifier** (`carriedInitiatorPages`, `xroles.go`) proves the member completely or refuses the document by name; there is no state in which a carried signature is partly proven. In order: the page is a proven page
+  (`g1_initiator_page_unproven`); the transaction names an initiator (`g1_role_mismatch`); the signature decodes and is not an authority signature, and its message hash is the member's message (`g1_signature_invalid`); it is
+  the signature the header names as the initiator, `SignatureDidInitiate` (`g1_role_mismatch`); the message is a member of the page's signature chain at the page's block and the claimed block is the one the signature-index chain gives
+  (`g1_block_before_signature`, `g1_arrival_unproven`); the signature signs this transaction, is of a type the executor version in force there admits and is within the delegation depth (`govsig.Verify`: `g1_signature_invalid`,
+  `g1_executor_version_unproven`, `g1_delegation_depth_exceeded`); the key signature's payer is the page it is recorded on (`g1_signature_invalid`); the page's certified history is carried (`g1_history_unavailable`) and a state of the page
+  at the signature's signer version during the arrival block held the key and did not blacklist the transaction type, by the one rule the vote model uses (`govvote.KeyHeldDuring`; `g1_initiator_key_not_held`). Every delegator of the signature
+  must then be a proven page (`g1_initiator_page_unproven`), and the recorded roles are compared exactly as for a hop-found signature (`g1_role_mismatch`).
+- **What it does not prove.** That each DELEGATION of a delegated initiating signature was admitted by the executor at arrival (the delegator pages' entries naming the delegate book): the initiator authorizes nothing, the executor's
+  acceptance of the message is evidenced by its membership in the key page's signature chain, and the vote model re-evaluates delegation for votes only. A lite identity as initiator carries no page history, so it is not carried (the capture
+  ends with `g1_history_unavailable`).
+- **The binding is unchanged.** `BindProofV21` still returns the first Unproven entry and still requires `initiator-signer` PROVEN on every initiating page and delegator; a document without the member stays Unproven and refused.
+  The suite `testdata/xpartition7` (21 documents, `xworld.Cases7`, at blocks the executor-activation table proves) pins every refusal; `TestNonVotingInitiatorIsProvenAndBound` runs one document through verify, the facts the intent's vote
+  evidence gives (a real one: the live g7 probe, `testdata/g1_erp_initiator`) and `BindProofV21`.
