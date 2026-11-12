@@ -117,6 +117,7 @@ type ValidatorApp struct {
 	blockRulesV13Verdict bool
 	blockRulesV14Verdict bool
 	blockRulesV15Verdict bool
+	blockRulesV16Verdict bool
 	rulesV8FirstVerdict  int64
 	rulesV9FirstVerdict  int64
 	rulesV10FirstVerdict int64
@@ -125,6 +126,7 @@ type ValidatorApp struct {
 	rulesV13FirstVerdict int64
 	rulesV14FirstVerdict int64
 	rulesV15FirstVerdict int64
+	rulesV16FirstVerdict int64
 
 	// blockAdminSetChanged: this execution of the block has accepted an admin-set change (a re-seal or an admin
 	// rotation). At most one lands per block (rules v12, admin_rotate_apply.go). Reset by FinalizeBlock.
@@ -168,6 +170,8 @@ func (app *ValidatorApp) EntitlementMode() EntitlementMode {
 //   - v8 from then on,
 //   - v9 once a block is decided in a way only v9 decides it: a refused second block for a committed
 //     operation, or a block naming no validator that v8 would have accepted under the chain's name.
+//   - v16 once a block decides a version-2 cross-partition activation (the initiating-signature member), accepted or refused: v15 refused
+//     every version but 1 with code 18 and v16 may accept one.
 //   - v10, v11, v12, v13, v14 and v15 once a block decides a transaction of the kind each adds (registry, re-seal, admin
 //     rotation, spine genesis or extension, anchor set, cross-partition activation), accepted or refused - each older version judged those bytes as a
 //     ValidatorBlock. v14's ValidatorBlock rules (anchors, ENTITLEMENT_UNPRICED) apply only once an anchor set is in force, so
@@ -178,6 +182,8 @@ func (app *ValidatorApp) EntitlementMode() EntitlementMode {
 // on this state until a block makes that genuinely impossible.
 func (app *ValidatorApp) committedRulesVersion() uint64 {
 	switch {
+	case app.rulesV16FirstVerdict > 0:
+		return executionRulesV16
 	case app.rulesV15FirstVerdict > 0:
 		return executionRulesV15
 	case app.rulesV14FirstVerdict > 0:
@@ -307,7 +313,7 @@ func NewValidatorApp(ledgerStore *ledger.LedgerStore, chainID string) *Validator
 		}{{executionRulesV8, &app.rulesV8FirstVerdict}, {executionRulesV9, &app.rulesV9FirstVerdict},
 			{executionRulesV10, &app.rulesV10FirstVerdict}, {executionRulesV11, &app.rulesV11FirstVerdict},
 			{executionRulesV12, &app.rulesV12FirstVerdict}, {executionRulesV13, &app.rulesV13FirstVerdict}, {executionRulesV14, &app.rulesV14FirstVerdict},
-			{executionRulesV15, &app.rulesV15FirstVerdict}} {
+			{executionRulesV15, &app.rulesV15FirstVerdict}, {executionRulesV16, &app.rulesV16FirstVerdict}} {
 			first, err := ledgerStore.RulesFirstVerdict(v.version)
 			if err != nil {
 				app.logger.Fatalf("❌ the first v%d verdict could not be read: %v - not starting on a ledger this node cannot read", v.version, err)
@@ -942,6 +948,7 @@ func (app *ValidatorApp) FinalizeBlock(ctx context.Context, req *abcitypes.Reque
 	app.blockRulesV13Verdict = false
 	app.blockRulesV14Verdict = false
 	app.blockRulesV15Verdict = false
+	app.blockRulesV16Verdict = false
 	app.blockAdminSetChanged = false
 	app.blockSpine = spineAcceptances{}
 	app.blockPolicyChanges, app.blockRotationRecords, app.blockRegistryRecords = nil, nil, nil
@@ -995,6 +1002,9 @@ func (app *ValidatorApp) FinalizeBlock(ctx context.Context, req *abcitypes.Reque
 		// Nor is the cross-partition activation (rules v15). v14 judged it as a ValidatorBlock.
 		if ga, ok := DecodeG1Activation(tx); ok {
 			app.blockRulesV15Verdict = true
+			if ga.Version == 2 {
+				app.blockRulesV16Verdict = true // v15 refused every version but 1 (code 18); v16 may accept a second activation
+			}
 			result := app.processG1Activation(ga, req.Height)
 			txResults[i] = &result
 			continue

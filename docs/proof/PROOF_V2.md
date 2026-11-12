@@ -204,8 +204,12 @@ tool, never a proof).
    `certen:g2:v3`, root `certen:govroot:v3`); Phase B adds `certen:finality:v1` and `certen:contract-identity:v1`. New evidence beside hashed summaries, never inside them.
 4. govRoot changes → atomic fleet switch after shadow; v2 goldens are new files.
    **Evidence 2.1 freeze.** After the 2.1 activation any change to what `Spine.AdvanceAnchored` accepts is consensus-breaking
-   and needs rules v16. A binary older than the activation cannot replay anchored blocks, so there is no rollback to one
+   and needs a new rules version (rules v16 is taken by the initiating-signature member below). A binary older than the activation cannot replay anchored blocks, so there is no rollback to one
    after the activation; before it, rollback is safe because a 2.1 certificate is refused first.
+   **Evidence 2.1 initiating-signature member (DAX-1G, G-83; rules v16).** A document may carry `Evidence.InitiatingSignature`, the signature of a separate, non-voting initiator that no vote's cause chain holds
+   (the `*-erp` pattern), proven completely or refused by name (`docs/proof/G1_CROSS_PARTITION.md` D8). A rules v15 binary ignores the member, so reading it is consensus-visible: it is read only from the height after
+   a committed version-2 cross-partition activation (`docs/runbooks/rules-v16-initiator-member-activation.md`); before it a v16 binary decides as v15 does. Verifiers (Go and the TypeScript twin) ship before
+   the activation is signed, and there is no rollback to v15 after it.
 5. Named states include: `g1_historical_unavailable`, `l4_spine_unavailable`, `historical_state_unavailable`,
    `g1_completeness_unproven`, `finality_pending` (with the level reached), `consensus_engine_unsupported`.
 

@@ -125,6 +125,17 @@ func defaultProofV2Verifier(is21 bool) proofV2Verifier {
 	return proofv2.VerifyFromSpine
 }
 
+// withoutInitiatingSignature is a 2.1 document as the rules v15 binary judged it: the initiating-signature member, which v15 did not know, cleared.
+// The document is copied, never edited (the certificate keeps its member); one that carries none is returned as it is.
+func withoutInitiatingSignature(ev *proofv2.Evidence) *proofv2.Evidence {
+	if ev == nil || ev.InitiatingSignature == nil {
+		return ev
+	}
+	cp := *ev
+	cp.InitiatingSignature = nil
+	return &cp
+}
+
 // intentInputs recomputes every input of the block's intent message from the block and the registry. g1 is the
 // cross-partition activation in force for the block's height (G1ActivationAt), nil before it: from the height after the
 // activation a v3 certificate must carry evidence 2.1 and is judged by govRoot v4; before it, a certificate carrying 2.1 is
@@ -182,6 +193,10 @@ func judgeProofV2(ev *IntentCertificateEvidence, g0 *govproof.G0Result, g1doc *g
 	doc := ev.ProofV2
 	if !is21 {
 		doc = Evidence20View(doc)
+	} else if g1 == nil || !g1.MemberInForce {
+		// A document that claims 2.1 and reaches here is judged before the member's activation (rules v16): as v15 judged it, with the member - a key v15's
+		// decode ignored - cleared, so a staggered deploy never decides one block two ways.
+		doc = withoutInitiatingSignature(doc)
 	}
 	rep, err := verify(doc, spine, incarnation)
 	if err != nil {

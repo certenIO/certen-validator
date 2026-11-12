@@ -130,6 +130,10 @@ func (app *ValidatorApp) recordCommittedOperations(height int64) {
 		app.recordFirstVerdict(executionRulesV15, &app.rulesV15FirstVerdict, height)
 		app.blockRulesV15Verdict = false
 	}
+	if app.blockRulesV16Verdict {
+		app.recordFirstVerdict(executionRulesV16, &app.rulesV16FirstVerdict, height)
+		app.blockRulesV16Verdict = false
+	}
 	// This binary decided this block, so it holds nothing this version decides differently (checkCommittedKinds).
 	if err := app.ledgerStore.AdvanceKindsChecked(CurrentExecutionRulesVersion, CommittedHistoryCheckVersion, height); err != nil {
 		app.logger.Fatalf("❌ [HISTORY] could not record committed block %d as checked: %v", height, err)
@@ -312,8 +316,11 @@ func (app *ValidatorApp) indexCommittedOperations(h committedHistory) error {
 				app.recordFirstVerdict(executionRulesV13, &app.rulesV13FirstVerdict, height)
 			} else if _, ok := DecodeAnchorSet(tx); ok {
 				app.recordFirstVerdict(executionRulesV14, &app.rulesV14FirstVerdict, height)
-			} else if _, ok := DecodeG1Activation(tx); ok {
+			} else if ga, ok := DecodeG1Activation(tx); ok {
 				app.recordFirstVerdict(executionRulesV15, &app.rulesV15FirstVerdict, height)
+				if ga.Version == 2 {
+					app.recordFirstVerdict(executionRulesV16, &app.rulesV16FirstVerdict, height)
+				}
 			}
 		}
 		violations = append(violations, found...)
@@ -646,6 +653,12 @@ func kindViolationWith(height int64, i int, tx []byte, code uint32,
 		// corrupt state. No node before v15 can have recorded one, so records it cannot serve are no excuse.
 		switch code {
 		case codeG1ActivationRefused:
+			if ga.Version == 2 {
+				// v15 refused every version but 1 with this code; v16 accepts a version-2 activation that follows version 1, so the same bytes
+				// might be decided differently now.
+				return fmt.Sprintf("height %d tx %d is a version-2 cross-partition activation that v15 refused (code %d); v16 decides it as the "+
+					"activation of the initiating-signature member, which could reverse that verdict", height, i, code), true, "", nil
+			}
 			return "", true, "", nil
 		case 0:
 			rec, err := records()

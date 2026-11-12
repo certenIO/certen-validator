@@ -352,5 +352,12 @@ captured and its role recorded but nothing carried the signature, the verifier r
   acceptance of the message is evidenced by its membership in the key page's signature chain, and the vote model re-evaluates delegation for votes only. A lite identity as initiator carries no page history, so it is not carried (the capture
   ends with `g1_history_unavailable`).
 - **The binding is unchanged.** `BindProofV21` still returns the first Unproven entry and still requires `initiator-signer` PROVEN on every initiating page and delegator; a document without the member stays Unproven and refused.
-  The suite `testdata/xpartition7` (21 documents, `xworld.Cases7`, at blocks the executor-activation table proves) pins every refusal; `TestNonVotingInitiatorIsProvenAndBound` runs one document through verify, the facts the intent's vote
+  The suite `testdata/xpartition7` (22 documents, `xworld.Cases7`, at blocks the executor-activation table proves) pins every refusal; `TestNonVotingInitiatorIsProvenAndBound` runs one document through verify, the facts the intent's vote
   evidence gives (a real one: the live g7 probe, `testdata/g1_erp_initiator`) and `BindProofV21`.
+- **The consensus switch (rules v16, `docs/runbooks/rules-v16-initiator-member-activation.md`).** A rules v15 binary decodes the member as an unknown JSON key and ignores it, so a v16 binary that reads it accepts what v15
+  refuses: the change is consensus-visible and switches at a committed fact. The cross-partition activation transaction (D7) gains version 2, accepted only after version 1 and once, admin-quorum authorised, recorded at its height H
+  and served at `/certen/g1_activation`; from H+1 the member is read (`G1ActivationAt(...).MemberInForce`). Up to and including H the v16 binary clears the member from the 2.1 document before it judges it
+  (`judgeProofV2`), so it decides every block exactly as v15 did, and the proposer attaches the member only from the same height (`Shadow.SetInitiatorMemberGate`). The state stays stamped v15 until a block decides a version-2
+  activation, accepted or refused; a committed version-2 activation that v15 refused (code 18) stops a v16 node at boot (the history check), because v16 might decide the same bytes the other way. After an accepted version-2
+  activation there is no rollback to v15. `execution.CheckIntentCertificate` (the offline check) cannot know the height and reads the member always; a certificate accepted by consensus below H was judged with it cleared, and
+  the proposer never attaches one before H, so the difference exists only for a crafted certificate.

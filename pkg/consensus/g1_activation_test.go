@@ -86,9 +86,9 @@ func TestAG1ActivationNeedsEverythingItClaims(t *testing.T) {
 			tx.Version = 0
 			return tx.signedBy(f.admins, "ops-1", "ops-2")
 		}, want: "version 1"},
-		"version two": {tx: func() *G1ActivationTx {
+		"version three": {tx: func() *G1ActivationTx {
 			tx := liveG1Activation(f)
-			tx.Version = 2
+			tx.Version = 3
 			return tx.signedBy(f.admins, "ops-1", "ops-2")
 		}, want: "version 1"},
 		"a wrong kind": {tx: func() *G1ActivationTx {
@@ -271,9 +271,9 @@ func TestCheckTxFiltersTheG1ActivationShape(t *testing.T) {
 		t.Fatalf("a well-formed activation: code %d", c)
 	}
 	bad := liveG1Activation(f, "ops-1", "ops-2")
-	bad.Version = 2
+	bad.Version = 3
 	if c := check(rotJSON(t, bad)); c != codeG1ActivationRefused {
-		t.Fatalf("version 2: code %d", c)
+		t.Fatalf("version 3: code %d", c)
 	}
 	// Bytes of the kind that do not decode are still the kind, refused by name - never judged as a ValidatorBlock.
 	if c := check([]byte(`{"kind":"` + G1ActivationKind + `","version":"one"}`)); c != codeG1ActivationRefused {

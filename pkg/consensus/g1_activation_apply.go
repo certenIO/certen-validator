@@ -38,13 +38,14 @@ func (app *ValidatorApp) processG1Activation(ga *G1ActivationTx, height int64) a
 	}
 
 	// The same activation accepted earlier in this block: the same bytes again are accepted and change nothing; anything
-	// else after an accepted activation is refused (there is one activation per chain).
-	if len(before.Activations) > 0 {
-		r := before.Activations[0]
+	// else after an accepted activation of its version is refused (each version is activated once).
+	for _, r := range before.Activations {
 		if r.Height == height && r.ID == ga.ActivationID() {
 			app.blockBundles = append(app.blockBundles, r.ID)
 			return abcitypes.ExecTxResult{Code: 0, GasWanted: 1, GasUsed: 1}
 		}
+	}
+	if ga.Version == 1 && len(before.Activations) > 0 {
 		return abcitypes.ExecTxResult{Code: codeG1ActivationRefused, Log: "cross-partition activation refused: the chain is already activated"}
 	}
 
@@ -60,10 +61,10 @@ func (app *ValidatorApp) processG1Activation(ga *G1ActivationTx, height int64) a
 	}
 	written := false
 	for _, r := range log.Activations {
-		if r.Height == height {
+		if r.Height == height && r.Version == rec.Version {
 			if r.ID != rec.ID {
-				app.logger.Fatalf("❌ [G1-ACTIVATION] height %d already records activation %s, but this execution of the block "+
-					"accepts %s: the committed record and this block disagree", height, r.ID, rec.ID)
+				app.logger.Fatalf("❌ [G1-ACTIVATION] height %d already records version-%d activation %s, but this execution of the block "+
+					"accepts %s: the committed record and this block disagree", height, r.Version, r.ID, rec.ID)
 			}
 			written = true
 		}
@@ -73,8 +74,13 @@ func (app *ValidatorApp) processG1Activation(ga *G1ActivationTx, height int64) a
 		if err := app.ledgerStore.SaveG1Activation(log); err != nil {
 			app.logger.Fatalf("❌ [G1-ACTIVATION] could not persist an accepted activation at height %d: %v", height, err)
 		}
-		app.logger.Printf("🧭 [G1-ACTIVATION] accepted at height %d; evidence 2.1 is required from height %d (rules v15 active)",
-			height, height+1)
+		if rec.Version == 2 {
+			app.logger.Printf("🧭 [G1-ACTIVATION] version 2 accepted at height %d; the initiating-signature member is read from height %d (rules v16 active)",
+				height, height+1)
+		} else {
+			app.logger.Printf("🧭 [G1-ACTIVATION] accepted at height %d; evidence 2.1 is required from height %d (rules v15 active)",
+				height, height+1)
+		}
 	}
 	app.blockG1ActivationRecords = append(app.blockG1ActivationRecords, *rec)
 	app.blockBundles = append(app.blockBundles, rec.ID)
@@ -103,6 +109,17 @@ func (app *ValidatorApp) G1CrossPartitionRequired() (bool, error) {
 		return false, err
 	}
 	return G1CrossPartitionRequired(g), nil
+}
+
+// G1InitiatorMemberInForce is whether the initiating-signature member of evidence 2.1 is read for the next block (rules v16): the same committed state
+// FinalizeBlock judges by. The proposer attaches the member to a certificate's proof only when it is (Shadow.SetInitiatorMemberGate); before it a
+// document carrying one would be judged with the member cleared and refused as v15 refused it.
+func (app *ValidatorApp) G1InitiatorMemberInForce() (bool, error) {
+	g, err := app.G1ActivationContext()
+	if err != nil {
+		return false, err
+	}
+	return g != nil && g.MemberInForce, nil
 }
 
 // G1ActivationContext is the activation in force for the next block, nil when none is recorded - read from the same

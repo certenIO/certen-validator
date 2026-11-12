@@ -55,6 +55,38 @@ type Shadow struct {
 	builds chan job
 	stored int // major records already stored
 	mu     sync.Mutex
+
+	// memberGate says whether the rules v16 activation of the initiating-signature member is in force for the next block (consensus G1InitiatorMemberInForce).
+	// Unset, or answering no or with an error, the assembler attaches no member: the document is what it was before the member and the intent is held with
+	// g1_initiator_signature_not_carried, which is what the v16 binary would decide for a document that carried one.
+	memberGate atomic.Pointer[func() (bool, error)]
+}
+
+// SetInitiatorMemberGate installs the gate of the initiating-signature member (see Shadow.memberGate).
+func (s *Shadow) SetInitiatorMemberGate(g func() (bool, error)) { s.memberGate.Store(&g) }
+
+// initiatorMemberInForce reads the gate: false when none is installed, and when it cannot be read (never an assumed activation).
+func (s *Shadow) initiatorMemberInForce() bool {
+	g := s.memberGate.Load()
+	if g == nil || *g == nil {
+		return false
+	}
+	on, err := (*g)()
+	if err != nil {
+		if s.logf != nil {
+			s.logf("[PROOF-V2] the activation of the initiating-signature member could not be read, so no member is attached: %v", err)
+		}
+		return false
+	}
+	return on
+}
+
+// gateInitiating is the proposer side of the rules v16 gate: the assembly carries the captured initiating signature only when the member is in force.
+// Before the activation the document is built exactly as before the member existed.
+func (s *Shadow) gateInitiating(asm *proofv2.Assembly) {
+	if asm != nil && !s.initiatorMemberInForce() {
+		asm.Initiating = nil
+	}
 }
 
 type job struct{ intentID, account, tx, bvn string }
@@ -389,6 +421,7 @@ func (s *Shadow) buildOne(ctx context.Context, j job, maxMajors uint64, prove, a
 			if err != nil {
 				return nil, nil, err
 			}
+			s.gateInitiating(asm) // before the rules v16 activation the member is neither read nor attached
 			ev, rep, err := s.b.Build21(ctx, maxMajors, j.account, j.tx, j.bvn, asm)
 			if errors.Is(err, proofv2.ErrNotYetCertified) && time.Now().Before(deadline) {
 				select {
@@ -433,11 +466,33 @@ type Lazy struct {
 	p    atomic.Pointer[Shadow]
 	repo *database.ProofV2ShadowRepository
 	logf func(string, ...any)
+
+	memberGate atomic.Pointer[func() (bool, error)] // installed on the shadow when it starts (SetInitiatorMemberGate)
+}
+
+// SetInitiatorMemberGate installs the gate of the initiating-signature member on the shadow now, or when it becomes ready.
+func (l *Lazy) SetInitiatorMemberGate(g func() (bool, error)) {
+	l.memberGate.Store(&g)
+	if s := l.p.Load(); s != nil {
+		s.SetInitiatorMemberGate(g)
+	}
 }
 
 // NewLazy returns a shadow that becomes ready when Start succeeds.
 func NewLazy(repo *database.ProofV2ShadowRepository, logf func(string, ...any)) *Lazy {
 	return &Lazy{repo: repo, logf: logf}
+}
+
+// ready publishes the shadow once it is built, with the member gate installed on it first (a gate installed meanwhile is installed again after, so no
+// order of SetInitiatorMemberGate and the shadow becoming ready can lose it).
+func (l *Lazy) ready(s *Shadow) {
+	if g := l.memberGate.Load(); g != nil {
+		s.SetInitiatorMemberGate(*g)
+	}
+	l.p.Store(s)
+	if g := l.memberGate.Load(); g != nil {
+		s.SetInitiatorMemberGate(*g)
+	}
 }
 
 // Start derives the configured incarnation's evidence and walks the spine, retrying every minute until both succeed.
@@ -451,7 +506,7 @@ func (l *Lazy) Start(endpoint string, pin [32]byte) {
 		}
 		cancel()
 		if err == nil {
-			l.p.Store(s)
+			l.ready(s)
 			l.logf("[PROOF-V2-SHADOW] ready: spine walked from the pinned incarnation's genesis (%d major blocks)", len(s.b.Archive().Majors))
 			return
 		}

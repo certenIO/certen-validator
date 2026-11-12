@@ -27,9 +27,9 @@ import (
 //
 //   - The admin quorum in force for the block authorises it, by distinct keys, over the kind, the chain and the version,
 //     under a length-prefixed encoding nothing else shares.
-//   - It carries no payload but the version, which is always 1: one activation per chain. A second is refused by name, so
-//     the activation cannot be replayed, moved or undone, and "in force at h" is exactly "an activation was accepted at a
-//     height below h".
+//   - It carries no payload but the version: 1 (evidence 2.1, rules v15) or 2 (the initiating-signature member of evidence 2.1,
+//     rules v16, DAX-1G), each accepted once, version 2 only after version 1. A repeat is refused by name, so the activation
+//     cannot be replayed, moved or undone, and "in force at h" is exactly "an activation was accepted at a height below h".
 //
 // # THE V15 ACTIVATION
 //
@@ -94,8 +94,8 @@ func (t *G1ActivationTx) CheckShape() error {
 	if strings.TrimSpace(t.ChainID) == "" {
 		return fmt.Errorf("a cross-partition activation names its chain")
 	}
-	if t.Version != 1 {
-		return fmt.Errorf("a cross-partition activation is version 1: the chain activates once, and %d is not that version", t.Version)
+	if t.Version != 1 && t.Version != 2 {
+		return fmt.Errorf("a cross-partition activation is version 1 (evidence 2.1) or version 2 (the initiating-signature member, rules v16): the chain activates each once, and %d is neither", t.Version)
 	}
 	return nil
 }
@@ -108,10 +108,26 @@ func G1ActivationAt(log *ledger.G1ActivationLog, h int64) *ledger.G1ActivationRe
 	}
 	for i := range log.Activations {
 		if log.Activations[i].Height < h {
-			return &log.Activations[i]
+			rec := log.Activations[i]
+			rec.MemberInForce = G1InitiatorMemberInForce(log, h)
+			return &rec
 		}
 	}
 	return nil
+}
+
+// G1InitiatorMemberInForce is whether the initiating-signature member of evidence 2.1 is read for a block at height h (rules v16): a version-2 activation
+// was accepted below h. It depends only on committed state, so every validator switches at the same block; before it a v16 binary decides as v15 did.
+func G1InitiatorMemberInForce(log *ledger.G1ActivationLog, h int64) bool {
+	if log == nil {
+		return false
+	}
+	for _, r := range log.Activations {
+		if r.Version >= 2 && r.Height < h {
+			return true
+		}
+	}
+	return false
 }
 
 // VerifyG1Activation judges an activation transaction for a block at height h against committed state - the policy,
@@ -126,9 +142,32 @@ func VerifyG1Activation(t *G1ActivationTx, chainID string, policy *ledger.Entitl
 	if t.ChainID != chainID {
 		return nil, fmt.Errorf("the activation is for chain %q, this is %q", t.ChainID, chainID)
 	}
-	if log != nil && len(log.Activations) > 0 {
-		return nil, fmt.Errorf("the chain activated cross-partition evidence at height %d: an activation cannot be replayed, "+
-			"moved or undone", log.Activations[0].Height)
+	switch t.Version {
+	case 1:
+		if log != nil && len(log.Activations) > 0 {
+			return nil, fmt.Errorf("the chain activated cross-partition evidence at height %d: an activation cannot be replayed, "+
+				"moved or undone", log.Activations[0].Height)
+		}
+	case 2:
+		// The member rides evidence 2.1: it can be activated only once 2.1 is, and once.
+		var v1, v2 *ledger.G1ActivationRecord
+		if log != nil {
+			for i := range log.Activations {
+				switch log.Activations[i].Version {
+				case 1:
+					v1 = &log.Activations[i]
+				case 2:
+					v2 = &log.Activations[i]
+				}
+			}
+		}
+		if v1 == nil {
+			return nil, fmt.Errorf("the initiating-signature member can be activated only after the cross-partition activation: evidence 2.1 is not in force")
+		}
+		if v2 != nil {
+			return nil, fmt.Errorf("the chain activated the initiating-signature member at height %d: an activation cannot be replayed, "+
+				"moved or undone", v2.Height)
+		}
 	}
 	if err := verifyAdminQuorum(t.SigningBytes(), t.Signatures, policy, "cross-partition activation", "no activation can be set"); err != nil {
 		return nil, err
