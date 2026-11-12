@@ -101,8 +101,9 @@ func TestTheMemberActivationIsRecordedAndStampsRulesV16(t *testing.T) {
 	v2 := rotJSON(t, memberActivation(f, "ops-1", "ops-2"))
 
 	v14Step(t, app, 1, []uint32{0}, anchoredBlockJSON(t, "op-1", "validator-1", []ChainTarget{target(84532, liveAnchorBaseAndSepolia)}, nil))
-	// Version 2 before version 1: refused (code 18, the code v15 gave every version but 1) - and stamped, because v16 may accept what v15 refused.
-	v14Step(t, app, 2, []uint32{codeG1ActivationRefused}, v2)
+	// Version 2 before version 1: refused with code 19 (v15 refused it with code 18; v16's refusal has its own code) - and stamped, because v16 may accept
+	// what v15 refused.
+	v14Step(t, app, 2, []uint32{codeG1MemberActivationRefused}, v2)
 	if app.committedRulesVersion() != executionRulesV16 {
 		t.Fatalf("a decided version-2 activation left the state stamped v%d", app.committedRulesVersion())
 	}
@@ -125,7 +126,7 @@ func TestTheMemberActivationIsRecordedAndStampsRulesV16(t *testing.T) {
 	if bytes.Equal(accepted, refused) {
 		t.Fatal("the member activation is not in the app hash")
 	}
-	resp2 := v14Step(t, app, 4, []uint32{codeG1ActivationRefused, 0, 0, 0},
+	resp2 := v14Step(t, app, 4, []uint32{codeG1MemberActivationRefused, 0, 0, 0},
 		rotJSON(t, memberActivation(f, "ops-1")), v2, v2, rotJSON(t, memberActivation(f, "ops-2", "ops-3")))
 	if !strings.Contains(resp2.TxResults[0].Log, "cross-partition activation refused") {
 		t.Fatalf("refusal log %q", resp2.TxResults[0].Log)
@@ -139,7 +140,7 @@ func TestTheMemberActivationIsRecordedAndStampsRulesV16(t *testing.T) {
 		t.Fatalf("the first v16 verdict (%d, %v), want height 2 (the first version-2 activation decided)", got, err)
 	}
 	// Later, the same activation is refused: the chain activates the member once.
-	v14Step(t, app, 5, []uint32{codeG1ActivationRefused}, v2)
+	v14Step(t, app, 5, []uint32{codeG1MemberActivationRefused}, v2)
 
 	q, err := app.Query(context.Background(), &abcitypes.RequestQuery{Path: "/certen/g1_activation"})
 	if err != nil || q.Code != 0 {
@@ -233,7 +234,19 @@ func TestCommittedVersionTwoActivationHistoryIsChecked(t *testing.T) {
 	// The tool's check agrees.
 	v, _, cerr := CommittedBlockViolations(1, [][]byte{raw}, []uint32{codeG1ActivationRefused}, &CommittedRecords{})
 	if cerr != nil || len(v) != 1 {
-		t.Fatalf("the check of a refused version-2 activation: %v %v", v, cerr)
+		t.Fatalf("the check of a version-2 activation v15 refused: %v %v", v, cerr)
+	}
+	// v16's OWN refusal of a version-2 activation (code 19) is no violation, in the boot check and in the tool's: the two refusals are told apart by their
+	// code. Code 19 on a version-1 activation is one: nothing returns it.
+	if err := historyApp(t, 1).IndexCommittedHistory(hist(codeG1MemberActivationRefused)); err != nil {
+		t.Fatalf("a version-2 activation refused by v16: %v", err)
+	}
+	if v, _, cerr := CommittedBlockViolations(1, [][]byte{raw}, []uint32{codeG1MemberActivationRefused}, &CommittedRecords{}); cerr != nil || len(v) != 0 {
+		t.Fatalf("the tool's check of a version-2 activation refused by v16: %v %v", v, cerr)
+	}
+	v1raw := rotJSON(t, liveG1Activation(f, "ops-1", "ops-2"))
+	if v, _, cerr := CommittedBlockViolations(1, [][]byte{v1raw}, []uint32{codeG1MemberActivationRefused}, &CommittedRecords{}); cerr != nil || len(v) != 1 {
+		t.Fatalf("a version-1 activation refused with the version-2 code: %v %v", v, cerr)
 	}
 }
 
@@ -267,7 +280,7 @@ func TestVersionOneAndTwoInOneBlockAreBothRecorded(t *testing.T) {
 	v2 := rotJSON(t, memberActivation(f, "ops-1", "ops-2"))
 	v14Step(t, app, 1, []uint32{0}, anchoredBlockJSON(t, "op-1", "validator-1", []ChainTarget{target(84532, liveAnchorBaseAndSepolia)}, nil))
 	// Version 2 before version 1 in the block is refused (nothing recorded yet); after it, accepted.
-	v14Step(t, app, 2, []uint32{codeG1ActivationRefused, 0, 0, 0}, v2, v1, v2, v1)
+	v14Step(t, app, 2, []uint32{codeG1MemberActivationRefused, 0, 0, 0}, v2, v1, v2, v1)
 	l, err := store.LoadG1Activation()
 	if err != nil || len(l.Activations) != 2 || l.Activations[0].Version != 1 || l.Activations[0].Height != 2 ||
 		l.Activations[1].Version != 2 || l.Activations[1].Height != 2 {

@@ -655,11 +655,17 @@ func kindViolationWith(height int64, i int, tx []byte, code uint32,
 		case codeG1ActivationRefused:
 			if ga.Version == 2 {
 				// v15 refused every version but 1 with this code; v16 accepts a version-2 activation that follows version 1, so the same bytes
-				// might be decided differently now.
+				// might be decided differently now. v16's own refusal of a version-2 activation has its own code, so this one was decided by v15.
 				return fmt.Sprintf("height %d tx %d is a version-2 cross-partition activation that v15 refused (code %d); v16 decides it as the "+
 					"activation of the initiating-signature member, which could reverse that verdict", height, i, code), true, "", nil
 			}
 			return "", true, "", nil
+		case codeG1MemberActivationRefused:
+			if ga.Version == 2 {
+				return "", true, "", nil // v16's refusal of a version-2 activation
+			}
+			return fmt.Sprintf("height %d tx %d is a version-%d cross-partition activation refused with code %d, which only a version-2 activation "+
+				"is refused with", height, i, ga.Version, code), true, "", nil
 		case 0:
 			rec, err := records()
 			if err != nil {
@@ -787,7 +793,10 @@ func spineExtensionRecorded(l *ledger.AccumulateSpineLog, et *AccumulateSpineExt
 //   - 5: rules v15's cross-partition activation (RB9-C): a committed activation-kind transaction must be decided as one -
 //     refused with code 18, or accepted (code 0) with its record in the committed activation log at its height under its
 //     version and id - and CommittedRecords carries that log.
-const CommittedHistoryCheckVersion uint64 = 5
+//   - 6: rules v16's version-2 activation (DAX-1G, the initiating-signature member): a committed version-2 activation that
+//     rules v15 refused (code 18) is a violation - v16 might decide the same bytes the other way - and an accepted one (code 0)
+//     must have its version-2 record in the committed activation log at its height under its id.
+const CommittedHistoryCheckVersion uint64 = 6
 
 // checkCommittedKinds checks every committed block above the kinds watermark (ledger KindsCheckedThrough, for this rules
 // version and CommittedHistoryCheckVersion) with kindViolation and rotationBlockVerdicts, and advances the watermark to

@@ -708,6 +708,11 @@ func TestG1ActivateHistoryCheckRulesSixteenFindsAVersionTwoActivationV15Refused(
 	if ce, ok := historyCheckRules(n.srv.URL, http.DefaultClient, 16).(*checkExit); !ok || ce.code != exitHistoryFound {
 		t.Fatal("a version-2 activation refused by v15 was not FOUND")
 	}
+	// v16's own refusal of a version-2 activation (code 19) is not a violation: it was decided by the rules this check judges by.
+	n.historyCode[2] = 19
+	if err := historyCheckRules(n.srv.URL, http.DefaultClient, 16); err != nil {
+		t.Fatalf("a version-2 activation refused by v16 (code 19): %v", err)
+	}
 	n.historyCode[2] = 0
 	if ce, ok := historyCheckRules(n.srv.URL, http.DefaultClient, 16).(*checkExit); !ok || ce.code != exitHistoryFound {
 		t.Fatal("an accepted version-2 activation without its record was not FOUND")

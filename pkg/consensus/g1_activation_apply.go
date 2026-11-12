@@ -16,8 +16,12 @@ import (
 // block again decides every transaction of it exactly as the first execution did, a refused one included. An acceptance
 // whose record an earlier execution already wrote is not written twice.
 func (app *ValidatorApp) processG1Activation(ga *G1ActivationTx, height int64) abcitypes.ExecTxResult {
+	refused := codeG1ActivationRefused
+	if ga.Version == 2 {
+		refused = codeG1MemberActivationRefused // v15 refused version 2 with code 18; v16's refusal has its own code (codeG1MemberActivationRefused)
+	}
 	if app.ledgerStore == nil {
-		return abcitypes.ExecTxResult{Code: codeG1ActivationRefused, Log: "cross-partition activation requires a ledger store"}
+		return abcitypes.ExecTxResult{Code: refused, Log: "cross-partition activation requires a ledger store"}
 	}
 	log, err := app.ledgerStore.LoadG1Activation()
 	if err != nil {
@@ -46,7 +50,7 @@ func (app *ValidatorApp) processG1Activation(ga *G1ActivationTx, height int64) a
 		}
 	}
 	if ga.Version == 1 && len(before.Activations) > 0 {
-		return abcitypes.ExecTxResult{Code: codeG1ActivationRefused, Log: "cross-partition activation refused: the chain is already activated"}
+		return abcitypes.ExecTxResult{Code: refused, Log: "cross-partition activation refused: the chain is already activated"}
 	}
 
 	policy, err := app.ledgerStore.LoadEntitlementPolicy()
@@ -57,7 +61,7 @@ func (app *ValidatorApp) processG1Activation(ga *G1ActivationTx, height int64) a
 	rec, err := VerifyG1Activation(ga, app.cometChainID, policy, before, height)
 	if err != nil {
 		app.logger.Printf("🚫 [G1-ACTIVATION] refused at height %d: %v", height, err)
-		return abcitypes.ExecTxResult{Code: codeG1ActivationRefused, Log: "cross-partition activation refused: " + err.Error()}
+		return abcitypes.ExecTxResult{Code: refused, Log: "cross-partition activation refused: " + err.Error()}
 	}
 	written := false
 	for _, r := range log.Activations {

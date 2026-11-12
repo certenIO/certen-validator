@@ -269,8 +269,8 @@ const (
 	//
 	//   - the cross-partition activation transaction (g1_activation.go) gains a second version. A version-2 activation, authorised by the admin quorum in
 	//     force over the chain id and the version, is accepted only after the version-1 activation and only once, recorded append-only at the block H that
-	//     accepted it and served at /certen/g1_activation. Accepted, it contributes its id to the app hash; refused, it returns code 18, the code v15 returned
-	//     for every version but 1.
+	//     accepted it and served at /certen/g1_activation. Accepted, it contributes its id to the app hash; refused, it returns code 19 (v15 returned code 18 for every
+	//     version but 1, so the two refusals are told apart by their code).
 	//   - From the height after H the member is read (G1ActivationAt: MemberInForce). Until then the v16 binary clears the member from every evidence 2.1
 	//     document before it judges it (judgeProofV2), so it decides every block exactly as v15 did: the member is ignored, the role stays declared, the
 	//     certificate is refused as v15 refused it. The proposer attaches the member only from the same height (Shadow.SetInitiatorMemberGate).

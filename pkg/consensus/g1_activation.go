@@ -46,6 +46,12 @@ const G1ActivationKind = "certen.g1.crosspartition.activate/v1"
 // the next free.
 const codeG1ActivationRefused uint32 = 18
 
+// codeG1MemberActivationRefused is the result code of a refused VERSION-2 activation (rules v16, the initiating-signature member). Rules v15 refused every
+// version-2 activation with code 18, so a committed version-2 activation with code 18 was decided by v15 - which v16 might decide the other way - and one with
+// code 19 was decided by v16: the two refusals are told apart by their code, never by a guess at who decided them. A version-1 activation is refused with
+// code 18 by both.
+const codeG1MemberActivationRefused uint32 = 19
+
 // ErrG1ActivationRefused names every refusal of an activation transaction.
 var ErrG1ActivationRefused = errors.New("cross-partition activation refused")
 

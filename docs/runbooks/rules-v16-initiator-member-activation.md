@@ -26,9 +26,9 @@ deploy decides one block two ways and forks the chain.
 
 | Rule | Code | Why |
 |---|---|---|
-| `certen.g1.crosspartition.activate/v1` accepts **version 2** beside version 1 (any other version is refused by `CheckShape`, also at `CheckTx`) | 18 when refused | One transaction kind, one admin-signed tool; the version names which gate it opens. |
-| Version 2 is accepted **only after version 1** (evidence 2.1 in force), and **once**; version 1 is still refused once any activation exists | 18 | The member rides evidence 2.1; neither activation can be replayed, moved or undone. |
-| Authorised by at least the threshold of distinct keys of the admin set in force for the block (`AdminSetAt`), over the kind, the chain id and the version, length-prefixed | 18 | The same authority as v15's activation; an approval of version 1 cannot be moved to version 2 (the version is signed). |
+| `certen.g1.crosspartition.activate/v1` accepts **version 2** beside version 1 (any other version is refused by `CheckShape`, also at `CheckTx`, code 18) | 19 when a version-2 activation is refused (v15 refused it with 18, so the two are told apart by their code); 18 for version 1 | One transaction kind, one admin-signed tool; the version names which gate it opens. |
+| Version 2 is accepted **only after version 1**, and **once**; version 1 is still refused once any activation exists | 19 (version 2), 18 (version 1) | The member rides evidence 2.1; neither activation can be replayed, moved or undone. |
+| Authorised by at least the threshold of distinct keys of the admin set in force for the block (`AdminSetAt`), over the kind, the chain id and the version, length-prefixed | 19 (version 2), 18 (version 1) | The same authority as v15's activation; an approval of version 1 cannot be moved to version 2 (the version is signed). |
 | Recorded append-only at its height H (`/certen/g1_activation` now lists up to two records), id folded into the app hash | - | A block is judged identically however often it is executed. |
 | Blocks at height > H **read** the member (`G1ActivationAt(...).MemberInForce`, `G1InitiatorMemberInForce(log, h)`: a version-2 record below h) | 10 (certificate refused) when the member does not prove | After H the document is judged with the member: the role it proves is accepted, a forged or unprovable one is refused by name. |
 | Blocks at height <= H are judged with the member **cleared** (`judgeProofV2`, `withoutInitiatingSignature`): the v16 binary decides them exactly as v15 did | 10 | Before H nothing changes, so v16 continues v15 history without a reset, and a v15 node and a v16 node never disagree before H. |
@@ -37,7 +37,8 @@ deploy decides one block two ways and forks the chain.
 Tests: `TestVersionTwoActivationNeedsVersionOneAndIsAcceptedOnce`, `TestInitiatorMemberIsInForceOnlyAboveItsBlock`,
 `TestTheMemberActivationIsRecordedAndStampsRulesV16`, `TestEvidenceIsJudgedWithoutTheMemberUntilItsActivation`,
 `TestCheckTxFiltersTheVersionTwoActivationShape`, `TestCommittedVersionTwoActivationHistoryIsChecked`,
-`TestV16ContinuesV7ToV15StateAndNothingElse` (consensus); the proposer gate tests in `pkg/proofv2shadow`.
+`TestV16ContinuesV7ToV15StateAndNothingElse` and the in-process four-node rehearsal `TestRulesV15UpgradeAndG1ActivationRehearsalOnALiveNetwork`, which now also drives
+the version-2 activation through the tool (consensus); the proposer gate tests in `pkg/proofv2shadow`.
 
 ## Until the activation: the v16 binary is v15
 
@@ -50,8 +51,8 @@ Tests: `TestVersionTwoActivationNeedsVersionOneAndIsAcceptedOnce`, `TestInitiato
 ## The boot history check
 
 `IndexCommittedHistory` re-checks the whole committed history once under the history-check version this binary names. For v16 it adds:
-a **committed version-2 activation that v15 refused (code 18) is a violation** (v16 might decide the same bytes the other way), and an
-accepted one without its record is divergent state. A v15 node's `CheckTx` refuses version 2 by shape, so such a transaction can only be
+a **committed version-2 activation that v15 refused (code 18) is a violation** (v16 might decide the same bytes the other way), v16's own
+refusal of one (code 19) is not, and an accepted one without its record is divergent state. A v15 node's `CheckTx` refuses version 2 by shape, so such a transaction can only be
 in a block if a proposer bypassed the mempool; run the check before the deploy (below), it must find nothing.
 
 ## Order of the whole change (verifiers first)
@@ -108,7 +109,7 @@ version 2**, requires proof v3, and the chain's own rule (`VerifyG1Activation`) 
 
 Two handling rules, as for v15: sign only at activation time (a signed, unsubmitted activation has no height and no nonce: it is a bearer
 instrument until the admin set rotates), and keep the validator RPC firewalled until it is committed (a shape-valid version-2 transaction
-refused with code 18 **counts as a v16 verdict and stamps the state v16**, which closes the v15 rollback; preflight first).
+refused with code 19 **counts as a v16 verdict and stamps the state v16**, which closes the v15 rollback; preflight first).
 
 ## Verify, after the activation
 
@@ -136,9 +137,10 @@ refused with code 18 **counts as a v16 verdict and stamps the state v16**, which
 - A **delegated** non-voting initiator: the delegators of the signature's path are proven pages and get the role, but the delegation
   entries themselves are not re-evaluated by this member (the initiator authorises nothing; OQ-DAX1G-5, a separate package).
 - A **lite-identity** initiator carries no certified history, so its member is not emitted (the intent stays held, `g1_history_unavailable`).
-- There is no in-process multi-node rehearsal of the v16 upgrade (v15 has `TestRulesV15UpgradeAndG1ActivationRehearsalOnALiveNetwork`); the
-  chain-level behaviour is pinned at the `ValidatorApp` level (two executions of every block, the persisted records, the query, the stamp)
-  and by the CLI tests against fake nodes. A live rehearsal is an owner-run step before the activation.
+- The in-process four-node rehearsal covers the v14 to v16 upgrade, the version-1 activation and the version-2 activation through the tool (every node records
+  both at one height, state stamped v16, the member read only from the next height, a repeat refused by name, `history-check --rules 16`, a whole-fleet
+  restart). Its blocks are uncertified (no BLS registry), so the certificate rule itself is pinned by the `ValidatorApp`-level tests; a rehearsal on a
+  throwaway network with real intents is an owner-run step before the activation.
 
 ## Related
 
