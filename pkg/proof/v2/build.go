@@ -370,6 +370,9 @@ func (b *Builder) assemble21(ctx context.Context, ev *Evidence, x *Assembly, ar 
 	if len(x.Votes) == 0 {
 		ev.Votes = nil
 	}
+	if ev.InitiatingSignature, err = x.ProveInitiating(ctx); err != nil {
+		return nil, nil, err
+	}
 	ev.Transaction = x.Transaction
 	if ev.Check.Routing, err = proof.BuildRoutingProofAt(ctx, b.Q, chk.LastMinorBlock, chk.StateTreeAnchor); err != nil {
 		return nil, nil, fmt.Errorf("routing proof: %w", err)

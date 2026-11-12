@@ -262,7 +262,40 @@ type Assembly struct {
 	SequencedMessages map[string]string
 	// Transaction is the governed transaction, binary, hex.
 	Transaction string
-	Source      ChainSource
+	// Initiating (DAX-1G) is the captured initiating signature of a separate, non-voting initiator (page, message, signature, arrival block; no receipts):
+	// ProveInitiating builds its receipt and arrival proof. Nil for a voting initiator and for a capture made before the member.
+	Initiating *VoteHop
+	Source     ChainSource
+}
+
+// ProveInitiating proves the receipt and the arrival of the captured initiating signature in its page's signature chain, exactly as ProveMembers
+// proves a hop: ProveEntry places the message in the chain the page proves (the receipt is checked against the bound root before it is kept) and
+// fixes the block from the two adjacent signature-index entries. It returns nil for an assembly that carries none.
+func (a *Assembly) ProveInitiating(ctx context.Context) (*VoteHop, error) {
+	if a.Initiating == nil {
+		return nil, nil
+	}
+	h := *a.Initiating
+	var pg *PageState
+	for _, p := range a.Pages {
+		if strings.EqualFold(p.URL, h.Page) {
+			pg = p
+		}
+	}
+	if pg == nil {
+		return nil, fmt.Errorf("the initiating signature on %s is not among the captured pages", h.Page)
+	}
+	hm, err := hex.DecodeString(h.Message)
+	if err != nil || len(hm) != 32 {
+		return nil, fmt.Errorf("the initiating signature on %s: message is not 32 bytes of hex", h.Page)
+	}
+	ep, err := ProveEntry(ctx, a.Source, pg, "signature", hm)
+	if err != nil {
+		return nil, fmt.Errorf("the initiating signature on %s: %w", h.Page, err)
+	}
+	arr := ep.Arrival
+	h.Receipt, h.Arrival, h.Block = ep.Receipt, &arr, ep.Block
+	return &h, nil
 }
 
 // ProveMembers builds the members of the votes that need the chains: the receipt of each vote in the principal's signature chain, of

@@ -187,3 +187,38 @@ func TestAttachHistoryRefusesWhatDoesNotFold(t *testing.T) {
 		t.Fatalf("a page without a bound main chain: %v", err)
 	}
 }
+
+// ProveInitiating (DAX-1G) proves a captured initiating signature exactly as ProveMembers proves a hop: the receipt and the two adjacent
+// index entries are accepted by the verifier's own arrival derivation and give the block the script wrote the entry in; an assembly with none
+// gives none; a signature whose page was not captured, or that the chain does not hold, is an error, never a member.
+func TestProveInitiatingIsAcceptedByTheArrivalDerivation(t *testing.T) {
+	src, p, blocks := signatureWorld(t)
+	pa := &provenAcct{anchor: &xAnchor{id: "BVN2", block: 400}, chain: PageChain{Bound: true}}
+	if h, err := (&Assembly{Source: src}).ProveInitiating(context.Background()); h != nil || err != nil {
+		t.Fatalf("an assembly with no initiating signature gave %v, %v", h, err)
+	}
+	for _, i := range []int{0, 11, 36} {
+		msg := hex.EncodeToString(seedN("signature", i))
+		a := &Assembly{Pages: []*PageState{p}, Source: src, Initiating: &VoteHop{Page: strings.ToUpper(p.URL[:6]) + p.URL[6:], Message: msg, Signature: "00"}}
+		h, err := a.ProveInitiating(context.Background())
+		if err != nil {
+			t.Fatalf("entry %d: %v", i, err)
+		}
+		if h.Block != blocks[i] || h.Arrival == nil || h.Message != msg || h.Signature != "00" {
+			t.Fatalf("entry %d: hop %+v, want block %d", i, h, blocks[i])
+		}
+		got, err := deriveArrival(pa, p, "signature", h.Message, h.Receipt, h.Arrival)
+		if err != nil || got != blocks[i] {
+			t.Fatalf("entry %d: the arrival derivation gives %d, %v; the script wrote it in %d", i, got, err, blocks[i])
+		}
+	}
+	bad := func(h VoteHop, pages []*PageState, want string) {
+		t.Helper()
+		if _, err := (&Assembly{Pages: pages, Source: src, Initiating: &h}).ProveInitiating(context.Background()); err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("want an error containing %q, got %v", want, err)
+		}
+	}
+	bad(VoteHop{Page: "acc://other.acme/book/1", Message: hex.EncodeToString(seedN("signature", 1))}, []*PageState{p}, "not among the captured pages")
+	bad(VoteHop{Page: p.URL, Message: "zz"}, []*PageState{p}, "not 32 bytes of hex")
+	bad(VoteHop{Page: p.URL, Message: hex.EncodeToString(seedN("absent", 1))}, []*PageState{p}, "does not hold the entry")
+}
