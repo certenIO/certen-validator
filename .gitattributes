@@ -61,3 +61,6 @@ cmd/finalityarbpostedrecord/testdata/main_pins_at_sets_2_3_4.json text eol=lf
 
 # The golden status documents shared byte for byte with proofs_service (pkg/server/testdata/finality_status): LF on every platform.
 pkg/finality/testdata/finality_status/*.json text eol=lf
+
+# DAX-1G: the erp-initiator G1 recordings and the vote evidence golden are byte-compared (the golden) and replayed (the capture): their bytes are never normalised.
+accumulate-lite-client-2/liteclient/proof/consolidated_governance-proof/testdata/g1_erp_initiator/* -text
