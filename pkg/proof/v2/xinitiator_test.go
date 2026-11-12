@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"gitlab.com/accumulatenetwork/accumulate/protocol"
+
 	proofv2 "github.com/certen/independant-validator/pkg/proof/v2"
 	"github.com/certen/independant-validator/pkg/proof/v2/xworld"
 )
@@ -18,7 +20,7 @@ import (
 // partition and block it was judged at.
 func TestInitiatorSuiteCases(t *testing.T) {
 	cases := xworld.Cases7()
-	if len(cases) != 21 {
+	if len(cases) != 22 {
 		t.Fatalf("the suite holds %d cases", len(cases))
 	}
 	for _, c := range cases {
@@ -41,6 +43,9 @@ func TestInitiatorSuiteCases(t *testing.T) {
 				// merely a signature that fails (step 7), so removing the message binding is not hidden by the signature check.
 				if c.Name == "initiator-signature-tampered" && !strings.Contains(err.Error(), "is not the message its chain entry holds") {
 					t.Fatalf("refused for another reason than the message binding: %v", err)
+				}
+				if c.Name == "initiator-member-header-names-no-initiator" && !strings.Contains(err.Error(), "names no initiator") {
+					t.Fatalf("refused for another reason than the header naming no initiator (a signature never matches a zero initiator, so step 5 refuses with the same code): %v", err)
 				}
 				if c.Name == "initiator-member-is-an-authority-signature" && !strings.Contains(err.Error(), "authority signature") {
 					t.Fatalf("refused for another reason than the authority signature: %v", err)
@@ -117,6 +122,20 @@ func TestInitiatorMemberMakesTheRoleProvenNotDeclared(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The blacklist case is a refusal BECAUSE of the blacklist: the same world over the same body (an UpdateAccountAuth, the type a page can blacklist) without
+// the blacklist verifies, and the one that blacklists it is refused by g1_initiator_key_not_held at the page's partition and the arrival block.
+func TestInitiatorBlacklistIsTheOnlyDifferenceFromAVerifiedWorld(t *testing.T) {
+	world := func(deny bool) xworld.Case {
+		return xworld.Case{Opts: xworld.Options{Layout: xworld.LayoutBVNProven, GenesisLinked: true, Timeline: &xworld.Timeline{
+			ExternalInitiator: true, ProduceBlock: 66, BindSequenced: true, Body: &protocol.UpdateAccountAuth{}, InitiatorBlacklistsTheType: deny}}}
+	}
+	if _, err := verifyCase(t, world(false)); err != nil {
+		t.Fatalf("the world without the blacklist: %v", err)
+	}
+	_, err := verifyCase(t, world(true))
+	named(t, err, proofv2.StateInitiatorKeyNotHeld, "BVN3", uint64(xworld.ProvenBlockBVN3))
 }
 
 // A TYPED document that claims 2.0 and carries the member (and no other 2.1 member) is refused by name of the member: it is never read in 2.0, and

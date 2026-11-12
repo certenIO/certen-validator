@@ -574,6 +574,16 @@
       "block": 12600050
     },
     {
+      "name": "initiator-page-blacklists-the-transaction-type",
+      "description": "the transaction is an UpdateAccountAuth (one of the two types a page can blacklist) and ErpPage1 blacklisted it (UpdateAllowed) before the initiating signature arrived: its chain holds the signature, but no state of the page at the signature's version during the arrival block both held the key and allowed the type",
+      "file": "initiator-page-blacklists-the-transaction-type.json",
+      "sha256": "d998fbff85dceac3c7e69b43392d80254d39f68e93652f039a4ad571f3b3d333",
+      "expect": "refused",
+      "state": "g1_initiator_key_not_held",
+      "partition": "BVN3",
+      "block": 12600090
+    },
+    {
       "name": "initiator-member-in-20-document",
       "description": "a document that says 2.0 but carries the member (with the other 2.1 members): refused as every 2.0 document that carries 2.1 members is",
       "file": "initiator-member-in-20-document.json",

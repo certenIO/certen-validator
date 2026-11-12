@@ -84,6 +84,10 @@ type Timeline struct {
 	InitiatorSignsAnotherTransaction bool
 	// InitiatorNotInHeader leaves Header.Initiator zero although the initiator's signature is carried: the transaction names no initiator.
 	InitiatorNotInHeader bool
+	// InitiatorBlacklistsTheType makes the initiator's page blacklist the transaction's type (an UpdateAllowed event, in block InitiatorSigBlock-10) before
+	// the initiating signature arrives; the signature is then made at the page's version 2. The page's chain holds the signature, but no state of the page
+	// during the arrival block both held its key and allowed the type.
+	InitiatorBlacklistsTheType bool
 	// LedgerVersion, when non-zero, proves the transaction partition's system ledger at its block with this executor version
 	// (protocol.ExecutorVersion, e.g. 6 for Baikonur): the document then proves the version in force (RB9 Phase C1b-2).
 	LedgerVersion uint64
@@ -138,6 +142,9 @@ type PageEvent struct {
 	Credits   bool     // a BurnCredits (no effect on the authority) instead of an UpdateKeyPage
 
 	RemoveDelegate bool // (delegated world) remove the page's delegate entry
+
+	// Deny, when set, is an UpdateAllowed operation of the page: from this event on the page blacklists these transaction types.
+	Deny []protocol.TransactionType
 }
 
 // SigEvent is one key signature recorded on the page's signature chain for the transaction.
@@ -447,7 +454,11 @@ func newTimelineWorld(spec Timeline) *timelineWorld {
 		// The external initiator's signature, as the signing builder sets the header's initiator: its metadata hash (the signature value is not
 		// part of the metadata, so it is the same whatever the transaction hash is, which depends on this header).
 		k := keyOf(initiatorVoter.key)
-		sb := new(signing.Builder).SetType(protocol.SignatureTypeED25519).SetUrl(mustURL(ErpPage1)).SetVersion(1).SetTimestamp(1700000000000).SetPrivateKey(k.priv)
+		sigVersion := uint64(1)
+		if t.InitiatorBlacklistsTheType {
+			sigVersion = 2 // the signature is made after the page's UpdateAllowed event (newInitiatorWorld)
+		}
+		sb := new(signing.Builder).SetType(protocol.SignatureTypeED25519).SetUrl(mustURL(ErpPage1)).SetVersion(sigVersion).SetTimestamp(1700000000000).SetPrivateKey(k.priv)
 		if t.InitiatorDelegator != "" {
 			sb.AddDelegator(mustURL(t.InitiatorDelegator))
 		}
@@ -496,6 +507,10 @@ func newInitiatorWorld(spec Timeline, txn *protocol.Transaction, txHash []byte) 
 	if spec.InitiatorSignsAnotherTransaction {
 		t.Sigs[0].SignOther = true
 	}
+	if spec.InitiatorBlacklistsTheType {
+		t.Events = append([]PageEvent{{Block: InitiatorSigBlock - 10, Deny: []protocol.TransactionType{txn.Body.Type()}}}, t.Events...)
+		t.Sigs[0].Version = 2
+	}
 	w := &timelineWorld{t: t, id: initiatorVoter, txn: txn, txHash: txHash, delegator: spec.InitiatorDelegator}
 	w.scriptPage()
 	return w
@@ -517,6 +532,7 @@ func (w *timelineWorld) scriptPage() {
 	var held []string
 	held = append(held, t.Genesis...)
 	version, threshold := uint64(1), uint64(1)
+	var blacklist *protocol.AllowedTransactions
 	for n, e := range t.Events {
 		if e.Credits {
 			txns = append(txns, &protocol.Transaction{Header: protocol.TransactionHeader{Principal: mustURL(w.id.page), Memo: fmt.Sprintf("event %d", n)}, Body: &protocol.BurnCredits{Amount: 1}})
@@ -541,6 +557,19 @@ func (w *timelineWorld) scriptPage() {
 			ops = append(ops, &protocol.SetThresholdKeyPageOperation{Threshold: e.Threshold})
 			threshold = e.Threshold
 		}
+		if len(e.Deny) > 0 {
+			ops = append(ops, &protocol.UpdateAllowedKeyPageOperation{Deny: e.Deny})
+			for _, typ := range e.Deny {
+				bit, ok := typ.AllowedTransactionBit()
+				if !ok {
+					panic("xworld: a transaction type that cannot be blacklisted: " + typ.String())
+				}
+				if blacklist == nil {
+					blacklist = new(protocol.AllowedTransactions)
+				}
+				blacklist.Set(bit)
+			}
+		}
 		if threshold > uint64(len(held)) {
 			threshold = uint64(len(held))
 		}
@@ -552,7 +581,7 @@ func (w *timelineWorld) scriptPage() {
 	if len(t.ProvenHeadKeys) > 0 {
 		headKeys = t.ProvenHeadKeys
 	}
-	w.page = &protocol.KeyPage{Url: mustURL(w.id.page), Version: version, AcceptThreshold: threshold}
+	w.page = &protocol.KeyPage{Url: mustURL(w.id.page), Version: version, AcceptThreshold: threshold, TransactionBlacklist: blacklist}
 	for _, h := range sortedKeys(headKeys) {
 		w.page.Keys = append(w.page.Keys, &protocol.KeySpec{PublicKeyHash: h})
 	}

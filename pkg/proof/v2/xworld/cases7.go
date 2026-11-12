@@ -121,6 +121,8 @@ func Cases7() []Case {
 			Mutate: func(ev *proofv2.Evidence) { ev.InitiatingSignature.Arrival = nil }},
 		{Name: "initiator-delegator-not-a-proven-page", Description: "the initiating signature is delegated through a page that is not among the proven pages: it is in the signature's path and the document does not prove it", Expect: refused,
 			State: proofv2.StateInitiatorPageUnproven, Partition: "BVN1", Block: ProvenBlockBVN1, Opts: initiatorWorld(Timeline{InitiatorDelegator: "acc://pv2-erpdel-5.acme/book/1"})},
+		{Name: "initiator-page-blacklists-the-transaction-type", Description: "the transaction is an UpdateAccountAuth (one of the two types a page can blacklist) and ErpPage1 blacklisted it (UpdateAllowed) before the initiating signature arrived: its chain holds the signature, but no state of the page at the signature's version during the arrival block both held the key and allowed the type", Expect: refused,
+			State: proofv2.StateInitiatorKeyNotHeld, Partition: erpPartition, Block: erpBlock, Opts: initiatorWorld(Timeline{InitiatorBlacklistsTheType: true, Body: &protocol.UpdateAccountAuth{}})},
 		{Name: "initiator-member-in-20-document", Description: "a document that says 2.0 but carries the member (with the other 2.1 members): refused as every 2.0 document that carries 2.1 members is", Expect: refused,
 			Opts:   initiatorWorld(Timeline{}),
 			Mutate: func(ev *proofv2.Evidence) { ev.Version = proofv2.Version }},
