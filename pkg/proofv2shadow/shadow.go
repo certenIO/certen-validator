@@ -467,12 +467,17 @@ type Lazy struct {
 	repo *database.ProofV2ShadowRepository
 	logf func(string, ...any)
 
-	memberGate atomic.Pointer[func() (bool, error)] // installed on the shadow when it starts (SetInitiatorMemberGate)
+	// memberGate is installed on the shadow when it becomes ready, or at once when it already is. gateMu makes "keep the gate and install it on the shadow
+	// if there is one" and "publish the shadow after installing the kept gate on it" atomic against each other, so no order of the two can lose the gate.
+	gateMu     sync.Mutex
+	memberGate *func() (bool, error)
 }
 
 // SetInitiatorMemberGate installs the gate of the initiating-signature member on the shadow now, or when it becomes ready.
 func (l *Lazy) SetInitiatorMemberGate(g func() (bool, error)) {
-	l.memberGate.Store(&g)
+	l.gateMu.Lock()
+	defer l.gateMu.Unlock()
+	l.memberGate = &g
 	if s := l.p.Load(); s != nil {
 		s.SetInitiatorMemberGate(g)
 	}
@@ -483,16 +488,14 @@ func NewLazy(repo *database.ProofV2ShadowRepository, logf func(string, ...any)) 
 	return &Lazy{repo: repo, logf: logf}
 }
 
-// ready publishes the shadow once it is built, with the member gate installed on it first (a gate installed meanwhile is installed again after, so no
-// order of SetInitiatorMemberGate and the shadow becoming ready can lose it).
+// ready publishes the shadow once it is built, with the member gate kept so far installed on it first.
 func (l *Lazy) ready(s *Shadow) {
-	if g := l.memberGate.Load(); g != nil {
-		s.SetInitiatorMemberGate(*g)
+	l.gateMu.Lock()
+	defer l.gateMu.Unlock()
+	if l.memberGate != nil {
+		s.SetInitiatorMemberGate(*l.memberGate)
 	}
 	l.p.Store(s)
-	if g := l.memberGate.Load(); g != nil {
-		s.SetInitiatorMemberGate(*g)
-	}
 }
 
 // Start derives the configured incarnation's evidence and walks the spine, retrying every minute until both succeed.

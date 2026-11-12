@@ -61,7 +61,7 @@ func TestLazyInstallsTheMemberGateOnTheShadow(t *testing.T) {
 	yes := func() (bool, error) { return true, nil }
 	l := NewLazy(nil, func(string, ...any) {})
 	l.SetInitiatorMemberGate(yes)
-	if l.memberGate.Load() == nil {
+	if l.memberGate == nil {
 		t.Fatal("the gate was not kept for the shadow that is not ready yet")
 	}
 	s := &Shadow{}
