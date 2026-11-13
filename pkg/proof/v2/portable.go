@@ -103,6 +103,10 @@ type PortableEvidence struct {
 	// GenesisLink (evidence 2.1 only): the merkle.Receipt from the pinned genesis root chain anchor to the certified root, as Accumulate's JSON; held
 	// undecoded for the same reason as Links.
 	GenesisLink json.RawMessage `json:"genesisLink,omitempty"`
+	// InitiatingSignature (evidence 2.1 only; DAX-1G): Evidence.InitiatingSignature as a PortableHop (its receipt as Accumulate's JSON). Held undecoded
+	// for the same reason as Links: a document that claims 2.0 never reads the member, whatever its JSON type, and only a document that claims 2.1
+	// decodes it (Import). Absent from every document made before it, which therefore re-encodes byte for byte.
+	InitiatingSignature json.RawMessage `json:"initiatingSignature,omitempty"`
 
 	Check PortableCheck `json:"check"`
 }
@@ -279,6 +283,15 @@ func ExportDocument(ev *Evidence, in proof.IncarnationInputs, pin [32]byte) (*Po
 	if ev.GenesisLink != "" {
 		if e.GenesisLink, err = receiptJSON(ev.GenesisLink); err != nil {
 			return nil, fmt.Errorf("genesis link: %w", err)
+		}
+	}
+	if ev.InitiatingSignature != nil {
+		ph, err := exportHop(*ev.InitiatingSignature)
+		if err != nil {
+			return nil, fmt.Errorf("initiating signature: %w", err)
+		}
+		if e.InitiatingSignature, err = json.Marshal(ph); err != nil {
+			return nil, err
 		}
 	}
 	raw, err := hex.DecodeString(ev.Anchor.Message)
@@ -619,6 +632,18 @@ func importPortable(p *Portable, section *string) (*Evidence, *Archive, proof.In
 			return fail(err)
 		}
 		ev.GenesisLink = h
+	}
+	if e.Version == Version21 && len(e.InitiatingSignature) > 0 && string(bytes.TrimSpace(e.InitiatingSignature)) != "null" {
+		*section = "initiating signature"
+		var ph PortableHop
+		if err := json.Unmarshal(e.InitiatingSignature, &ph); err != nil {
+			return fail(fmt.Errorf("initiating signature: %w", err))
+		}
+		hop, err := importHop(ph)
+		if err != nil {
+			return fail(fmt.Errorf("initiating signature on %s: %w", ph.Page, err))
+		}
+		ev.InitiatingSignature = &hop
 	}
 	*section = "anchor message"
 	seq := new(messaging.SequencedMessage)

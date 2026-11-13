@@ -73,7 +73,16 @@ func main() {
 	rb1 := flag.String("robust1", "", "write only the robustness suite (crafted documents refused by name, never a panic; RB9-L) into this directory")
 	c1 := flag.String("certify1", "", "write only the anchored-certify suite (evidence 2.1 links; RB9-F5) into this directory; names.json must exist there")
 	x6 := flag.String("xpartition6", "", "write only the two-voter UpdateAccountAuth suite (an Add operation whose added authority votes, and the verdicts beside it; RB9-K-F1) into this directory")
+	x7 := flag.String("xpartition7", "", "write only the non-voting initiator suite (a separate initiator identity whose signature the document carries and the verifier proves; DAX-1G, G-83) into this directory")
 	flag.Parse()
+	if *x7 != "" {
+		if err := writeXPartition7(*x7); err != nil {
+			fmt.Println("FAIL:", err)
+			os.Exit(1)
+		}
+		fmt.Println("wrote the non-voting initiator suite to", *x7)
+		return
+	}
 	if *c1 != "" {
 		if err := writeCertify1(*c1); err != nil {
 			fmt.Println("FAIL:", err)

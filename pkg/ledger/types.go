@@ -391,7 +391,11 @@ type G1ActivationLog struct {
 // G1ActivationRecord is one accepted activation: the block that accepted it (H) and the id folded into that block's app
 // hash. Blocks at heights above Height must carry 2.1; blocks at or below it are decided exactly as rules v14 decided them.
 type G1ActivationRecord struct {
-	Version uint64 `json:"version"` // always 1: a second activation is refused
+	Version uint64 `json:"version"` // 1: evidence 2.1 required (rules v15); 2: the initiating-signature member of evidence 2.1 read (rules v16). Each is accepted once
 	Height  int64  `json:"height"`  // H, the block that accepted it
 	ID      string `json:"id"`      // folded into the app hash of Height
+
+	// MemberInForce is NOT stored: G1ActivationAt sets it on the record it returns, from the whole log, to say that a version-2 activation was accepted below
+	// the height the record is read for (the initiating-signature member is read from that height on; before it the v16 binary decides as v15 did).
+	MemberInForce bool `json:"-"`
 }

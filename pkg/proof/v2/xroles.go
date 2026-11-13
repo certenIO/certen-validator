@@ -27,6 +27,7 @@ import (
 	"strings"
 
 	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/govsig"
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/govvote"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/types/messaging"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/url"
 	"gitlab.com/accumulatenetwork/accumulate/protocol"
@@ -82,11 +83,15 @@ func initiatorPayerURL(signer *url.URL) *url.URL {
 	return signer
 }
 
-// initiatorPages finds, among the cause-chain signatures the evidence carries, the signature that initiated the transaction and
-// returns the pages it makes initiator-signers: its payer and every delegator in its path. found is false when no carried signature
-// initiated the transaction. A signature used here is bound first, exactly as the vote re-evaluation binds it: it is the message its
-// chain entry holds, and a key signature must sign the transaction (g1_signature_invalid).
-func initiatorPages(ev *Evidence, txn *protocol.Transaction, byURL map[string]*provenAcct, network string) (pages []*url.URL, found bool, err error) {
+// initiatorPages finds the signature that initiated the transaction and returns the pages it makes initiator-signers: its payer and every
+// delegator in its path. found is false when no carried signature initiated the transaction. The signature is the document's member
+// InitiatingSignature when it carries one (a separate, non-voting initiator: carriedInitiatorPages proves it completely or refuses the
+// document), else it is searched among the cause-chain signatures of the votes. A signature used here is bound first, exactly as the vote
+// re-evaluation binds it: it is the message its chain entry holds, and a key signature must sign the transaction (g1_signature_invalid).
+func initiatorPages(ev *Evidence, txn *protocol.Transaction, byURL map[string]*provenAcct, tl states, x xAnchor, network string) (pages []*url.URL, found bool, err error) {
+	if ev.InitiatingSignature != nil {
+		return carriedInitiatorPages(ev, txn, byURL, tl, x, network)
+	}
 	var none [32]byte
 	if txn.Header.Initiator == none {
 		return nil, false, nil
@@ -147,4 +152,86 @@ func initiatorPages(ev *Evidence, txn *protocol.Transaction, byURL map[string]*p
 		}
 	}
 	return nil, false, nil
+}
+
+// carriedInitiatorPages proves the initiating signature the document carries (Evidence.InitiatingSignature, DAX-1G) and returns the pages it makes
+// initiator-signers: the payer and every delegator of its path. It proves the member COMPLETELY or refuses the document by name; there is no state
+// in which a carried signature is only partly proven. Each refusal names the signer page's partition and block (the transaction's when the page is
+// not proven at all). In order:
+//
+//  1. the page the signature is recorded on is a proven page                                   g1_initiator_page_unproven
+//  2. the transaction names an initiator                                                        g1_role_mismatch
+//  3. the signature decodes and is not an authority signature                                  g1_signature_invalid
+//  4. the signature's message hash (messaging.SignatureMessage.Hash(), the signature's own hash) is the member's message  g1_signature_invalid
+//  5. the signature is the one the header names as the initiator (SignatureDidInitiate)         g1_role_mismatch
+//  6. the message is a member of the page's signature chain as bound at the page's block, and
+//     the claimed block is the one its signature-index chain gives (deriveArrival)              g1_block_before_signature, g1_arrival_unproven
+//  7. the signature signs this transaction, is of a type the executor version in force there
+//     admits, and its delegation is within the depth limit (govsig.Verify)                      g1_signature_invalid, g1_executor_version_unproven, g1_delegation_depth_exceeded
+//  8. the key signature's payer is the page it is recorded on                                   g1_signature_invalid
+//  9. the page's certified history is carried (folded and replayed by foldTimelines), and a
+//     state of the page at the signature's signer version during the arrival block held the key g1_history_unavailable, g1_initiator_key_not_held
+//
+// Every delegator of the signature is then required to be a proven page by deriveRoles (g1_initiator_page_unproven). What this does NOT prove: that each
+// delegation of a delegated initiating signature was admitted by the executor at arrival (the delegator pages' entries naming the delegate book); the
+// initiator authorizes nothing, the executor's acceptance of the message is evidenced by its membership in the key page's signature chain (step 6), and
+// the vote model re-evaluates delegation for votes only (docs/proof/G1_CROSS_PARTITION.md, initiator-signer).
+func carriedInitiatorPages(ev *Evidence, txn *protocol.Transaction, byURL map[string]*provenAcct, tl states, x xAnchor, network string) ([]*url.URL, bool, error) {
+	h := ev.InitiatingSignature
+	page, perr := url.Parse(h.Page)
+	var pa *provenAcct
+	if perr == nil {
+		pa = byURL[lk(page)]
+	}
+	if pa == nil {
+		return nil, false, refusal21(StateInitiatorPageUnproven, x.id, x.block, "the initiating signature is carried for %s, which is not among the proven pages", h.Page)
+	}
+	id, blk := pa.anchor.id, pa.anchor.block
+	var none [32]byte
+	if txn.Header.Initiator == none {
+		return nil, false, refusal21(StateRoleMismatch, id, blk, "the transaction names no initiator, so the initiating signature carried for %s claims a role the transaction does not justify", h.Page)
+	}
+	sig, derr := decodeSig(h.Signature)
+	if derr != nil {
+		return nil, false, refusal21(StateSignatureInvalid, id, blk, "the initiating signature on %s: %v", h.Page, derr)
+	}
+	if _, isAuth := sig.(*protocol.AuthoritySignature); isAuth {
+		return nil, false, refusal21(StateSignatureInvalid, id, blk, "the initiating signature on %s is an authority signature, which cannot initiate a transaction", h.Page)
+	}
+	msgHash := (&messaging.SignatureMessage{Signature: sig, TxID: txn.ID()}).Hash()
+	if hex.EncodeToString(msgHash[:]) != strings.ToLower(h.Message) {
+		return nil, false, refusal21(StateSignatureInvalid, id, blk, "the initiating signature on %s is not the message its chain entry holds", h.Page)
+	}
+	if ok, _ := protocol.SignatureDidInitiate(sig, txn.Header.Initiator[:], nil); !ok {
+		return nil, false, refusal21(StateRoleMismatch, id, blk, "the signature carried for %s is not the one the transaction header names as its initiator: initiator-signer is claimed for it and the transaction does not justify it", h.Page)
+	}
+	if h.Arrival == nil {
+		return nil, false, refusal21(StateArrivalUnproven, id, blk, "the initiating signature on %s carries no arrival proof", h.Page)
+	}
+	block, aerr := deriveArrival(pa, &ev.Pages[pa.i], "signature", h.Message, h.Receipt, h.Arrival)
+	if aerr != nil {
+		return nil, false, aerr
+	}
+	if block != h.Block {
+		return nil, false, refusal21(StateArrivalUnproven, id, blk, "the initiating signature on %s was claimed to arrive in block %d, its signature-index chain says %d", h.Page, h.Block, block)
+	}
+	vs, verr := verifyKeySignature(sig, txn, network, pa, h.Page, block)
+	if verr != nil {
+		return nil, false, verr
+	}
+	ks := vs.Inner
+	signer := ks.GetSigner()
+	if signer == nil || normURL(initiatorPayerURL(signer)) != normURL(page) {
+		return nil, false, refusal21(StateSignatureInvalid, id, blk, "the initiating signature recorded on %s is by %v", h.Page, signer)
+	}
+	st, ok := tl[govvote.CanonicalAccSpelling(h.Page)]
+	if !ok {
+		return nil, false, refusal21(StateHistoryUnavailable, id, blk, "the initiating signature on %s is carried without the page's certified history, so the key it was made with cannot be judged against the page as it stood when the signature arrived", h.Page)
+	}
+	if held, _ := govvote.KeyHeldDuring(st, txn.Body.Type(), ks.GetSignerVersion(), int64(block), vs.KeyHash); held == 0 {
+		return nil, false, refusal21(StateInitiatorKeyNotHeld, id, blk, "no state of %s at version %d during block %d both held the key of the initiating signature and allowed a %v", h.Page, ks.GetSignerVersion(), block, txn.Body.Type())
+	}
+	pages := []*url.URL{initiatorPayerURL(signer)}
+	pages = append(pages, delegatorPages(sig)...)
+	return pages, true, nil
 }

@@ -99,6 +99,10 @@ type TxFacts struct {
 	// Delegator path of the initiating signature.
 	Initiators    []*url.URL
 	InitiatorPath []*url.URL
+	// Initiating is the signature message that initiated the transaction (SignatureDidInitiate against Header.Initiator), with the signature it
+	// carries, as the transaction record's signature sets hold it: the first such message in the record's order. Nil when none of the record's
+	// messages initiated it. When no vote's cause chain holds it (a separate, non-voting initiator) the capture carries it (Capture.Initiating).
+	Initiating *SigRecord
 	// Certified is the key page the intent certificate names (ResolveSigningKeyPage), when it could be resolved.
 	Certified *url.URL
 	// KeySigs are the signature messages (ids at their signer page) recorded for the transaction that are not authority

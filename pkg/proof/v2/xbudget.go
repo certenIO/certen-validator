@@ -178,6 +178,18 @@ func CheckEvidenceBudget(ev *Evidence, x xAnchor) error {
 // certificate they imply - the evidence plus R scaled by the closure's pages - must fit ConsensusTxLimit (else certificate_budget{size,limit}).
 // partition and block are where the capture judged it.
 func CheckClosureBudget(version string, pages []PageState, votes []Vote, partition string, block uint64) error {
+	return CheckClosureBudgetInitiating(version, pages, votes, nil, partition, block)
+}
+
+// InitiatingSignatureProofBytes is what the capture adds to the budget for the receipt and the arrival proof (three receipts of a chain of up to 2^24
+// entries, two index entries) the assembler builds for a captured initiating signature (Capture.Initiating carries neither): 3 x 25 steps x 66 hex
+// characters, 2 index entries of 64 characters, with the JSON around them, rounded up. The assembled document is measured exactly
+// (CheckEvidenceBudget, checkAssembledBudget); this keeps a closure that fits only without the member from being captured.
+const InitiatingSignatureProofBytes = 6_000
+
+// CheckClosureBudgetInitiating is CheckClosureBudget for a capture that carries an initiating signature (DAX-1G): the captured hop and the
+// proof the assembler adds to it count with the votes. A nil initiating is CheckClosureBudget exactly.
+func CheckClosureBudgetInitiating(version string, pages []PageState, votes []Vote, initiating *VoteHop, partition string, block uint64) error {
 	var fixed, limit int
 	switch version {
 	case Version:
@@ -200,6 +212,13 @@ func CheckClosureBudget(version string, pages []PageState, votes []Vote, partiti
 		return err
 	}
 	size += len(raw)
+	if initiating != nil {
+		hop, err := json.Marshal(initiating)
+		if err != nil {
+			return err
+		}
+		size += len(hop) + InitiatingSignatureProofBytes
+	}
 	if size > limit {
 		return &NamedState{Code: StateClosureExceedsBudget, Partition: partition, Block: block,
 			Detail: fmt.Sprintf("pages=%d limit=%d: the pages and votes encode to %d bytes with the %d-byte fixed part, over the %d bytes the consensus transaction limit (%d) leaves the evidence",

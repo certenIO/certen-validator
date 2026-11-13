@@ -255,6 +255,10 @@ const (
 	StateDelegateEntryAbsent = "g1_delegate_entry_absent"
 	// StateInitiatorPageUnproven: the initiator's (or payer's) page is not among the proven pages.
 	StateInitiatorPageUnproven = "g1_initiator_page_unproven"
+	// StateInitiatorKeyNotHeld: the carried initiating signature (Evidence.InitiatingSignature) was made with a key that no state of its page - the page's
+	// certified history, at the signature's signer version, during the block the signature arrived in - held, or that the page's blacklist refused for the
+	// transaction's type (DAX-1G). The signature is recorded in the page's chain; the verifier will not call it proven when the page could not have taken it.
+	StateInitiatorKeyNotHeld = "g1_initiator_key_not_held"
 	// StateCertifiedPageUnproven: the certified key page cannot be resolved, or is not among the proven pages (D1(f)).
 	StateCertifiedPageUnproven = "g1_certified_page_unproven"
 	// StateExecutorOverrideUnsupported: the body type has an executor override the default authority rules do not describe (D6).

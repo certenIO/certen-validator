@@ -220,8 +220,8 @@ func TestRulesV15UpgradeAndG1ActivationRehearsalOnALiveNetwork(t *testing.T) {
 	everyNode("the upgraded fleet to commit", restartedAt+2)
 	for _, n := range nodes {
 		info, err := n.client.ABCIInfo(context.Background())
-		if err != nil || info.Response.AppVersion != executionRulesV15 {
-			t.Fatalf("%s: app version (%+v, %v), want 15", n.name, info, err)
+		if err != nil || info.Response.AppVersion != CurrentExecutionRulesVersion {
+			t.Fatalf("%s: app version (%+v, %v), want %d", n.name, info, err, CurrentExecutionRulesVersion)
 		}
 		if st, _ := ledger.NewLedgerStore(n.kv).LoadABCIState(); st.ExecutionRulesVersion != executionRulesV14 {
 			t.Fatalf("%s: with no activation the state is stamped v%d, want v14 (a rollback stays open)", n.name, st.ExecutionRulesVersion)
@@ -333,6 +333,69 @@ func TestRulesV15UpgradeAndG1ActivationRehearsalOnALiveNetwork(t *testing.T) {
 		t.Fatalf("status: %s", out)
 	}
 
+	// 4b. The initiating-signature member (rules v16, DAX-1G): the second version of the activation, through the same tool. One approval is a NO-GO;
+	// two are accepted; every node records it at one height, stamps the state v16 and reads the member from the next height, not in its own block;
+	// a second one is refused by name; the history check passes with the record found.
+	member := filepath.Join(dir, "g1-member.json")
+	mustRun("g1-activate", "propose", "--rpc", rpcs[0], "--version", "2", "--admin-key-id", "ops-1", "--admin-secret", secret["ops-1"], "--out", member)
+	if out, err := run("g1-activate", "preflight", "--tx", member, "--rpc", all); err == nil || !strings.Contains(out, "NO-GO") {
+		t.Fatalf("preflight of the member activation with one approval: %v\n%s", err, out)
+	}
+	mustRun("g1-activate", "sign", "--tx", member, "--admin-key-id", "ops-2", "--admin-secret", secret["ops-2"])
+	for _, n := range nodes {
+		if in, err := n.app.G1InitiatorMemberInForce(); err != nil || in {
+			t.Fatalf("%s: the member is in force before its activation (%v, %v)", n.name, in, err)
+		}
+	}
+	mustRun("g1-activate", "preflight", "--tx", member, "--rpc", all)
+	out = mustRun("g1-activate", "submit", "--tx", member, "--rpc", all)
+	mm := regexp.MustCompile("ACCEPTED at height (\\d+)").FindStringSubmatch(out)
+	if mm == nil || !strings.Contains(out, "initiating-signature member is read from height") {
+		t.Fatalf("submit of the member activation: %s", out)
+	}
+	hm, _ := strconv.ParseInt(mm[1], 10, 64)
+	tick(nodes[0], 2)
+	everyNode("every node to commit past the member activation", hm+2)
+	var memberID string
+	for _, n := range nodes {
+		l, err := ledger.NewLedgerStore(n.kv).LoadG1Activation()
+		if err != nil || len(l.Activations) != 2 || l.Activations[0].Version != 1 || l.Activations[0].Height != hs ||
+			l.Activations[1].Version != 2 || l.Activations[1].Height != hm {
+			t.Fatalf("%s activation log after the member activation: (%+v, %v)", n.name, l, err)
+		}
+		if memberID == "" {
+			memberID = l.Activations[1].ID
+		} else if l.Activations[1].ID != memberID {
+			t.Fatalf("%s records %s, another node %s", n.name, l.Activations[1].ID, memberID)
+		}
+		if st, _ := ledger.NewLedgerStore(n.kv).LoadABCIState(); st.ExecutionRulesVersion != executionRulesV16 {
+			t.Fatalf("%s: after the member activation the state is stamped v%d", n.name, st.ExecutionRulesVersion)
+		}
+		if got := n.app.g1ActivationInForce(hm); got == nil || got.MemberInForce {
+			t.Fatalf("%s: the member is in force in its own block (%d): %+v", n.name, hm, got)
+		}
+		if got := n.app.g1ActivationInForce(hm + 1); got == nil || !got.MemberInForce || got.Height != hs {
+			t.Fatalf("%s: the member is not in force at %d: %+v", n.name, hm+1, got)
+		}
+		if in, err := n.app.G1InitiatorMemberInForce(); err != nil || !in {
+			t.Fatalf("%s: the proposer gate after the member activation (%v, %v)", n.name, in, err)
+		}
+	}
+	if out, err := run("g1-activate", "submit", "--tx", member, "--rpc", all); err == nil || !strings.Contains(out, "NO-GO") || !strings.Contains(out, "activates it once") {
+		t.Fatalf("a second member activation: %v\n%s", err, out)
+	}
+	if code, log, _ := submit(nodes[2], rotJSON(t, memberActivation(f, "ops-1", "ops-3"))); code != codeG1MemberActivationRefused {
+		t.Fatalf("the member activation again, by other admins, in a later block: %d %s", code, log)
+	}
+	out = mustRun("history-check", "--rules", "16", "--rpc", rpcs[1])
+	if !strings.Contains(out, "v16 continues this chain's history exactly") || !strings.Contains(out, G1ActivationKind) {
+		t.Fatalf("history-check --rules 16 after the member activation: %s", out)
+	}
+	if out := mustRun("g1-activate", "status", "--rpc", all); !strings.Contains(out, fmt.Sprintf("initiating-signature member accepted at height %d", hm)) ||
+		strings.Contains(out, "DISAGREE") {
+		t.Fatalf("status after the member activation: %s", out)
+	}
+
 	// 5. A whole-fleet restart.
 	for _, n := range nodes {
 		n.stop(t)
@@ -356,10 +419,10 @@ func TestRulesV15UpgradeAndG1ActivationRehearsalOnALiveNetwork(t *testing.T) {
 	var first string
 	for i, n := range nodes {
 		info, err := n.client.ABCIInfo(context.Background())
-		if err != nil || info.Response.AppVersion != executionRulesV15 {
+		if err != nil || info.Response.AppVersion != CurrentExecutionRulesVersion {
 			t.Fatalf("%s: app version (%+v, %v)", n.name, info, err)
 		}
-		if st, _ := ledger.NewLedgerStore(n.kv).LoadABCIState(); st.ExecutionRulesVersion != executionRulesV15 {
+		if st, _ := ledger.NewLedgerStore(n.kv).LoadABCIState(); st.ExecutionRulesVersion != executionRulesV16 {
 			t.Fatalf("%s: stamped v%d after the restart", n.name, st.ExecutionRulesVersion)
 		}
 		got := hex.EncodeToString(info.Response.LastBlockAppHash)
@@ -373,7 +436,8 @@ func TestRulesV15UpgradeAndG1ActivationRehearsalOnALiveNetwork(t *testing.T) {
 			t.Fatalf("%s: activation query (%+v, %v)", n.name, q, err)
 		}
 		var l ledger.G1ActivationLog
-		if err := json.Unmarshal(q.Value, &l); err != nil || len(l.Activations) != 1 || l.Activations[0].ID != activationID || l.Activations[0].Height != hs {
+		if err := json.Unmarshal(q.Value, &l); err != nil || len(l.Activations) != 2 || l.Activations[0].ID != activationID || l.Activations[0].Height != hs ||
+			l.Activations[1].ID != memberID || l.Activations[1].Height != hm {
 			t.Fatalf("%s answers %s", n.name, q.Value)
 		}
 	}

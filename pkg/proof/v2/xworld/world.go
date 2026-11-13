@@ -47,6 +47,14 @@ const (
 	dnBlockCert = 300
 )
 
+// ErpBook and ErpPage1 are the separate, non-voting initiator identity of Timeline.ExternalInitiator (the tcl `*-erp` pattern): an identity that
+// is no authority of the principal, whose page signs first and pays. pv2-erp-5 routes to BVN3 by the Kermit table (proof.RoutePartition over
+// RoutingTable()), so the table needs no override.
+const (
+	ErpBook  = "acc://pv2-erp-5.acme/book"
+	ErpPage1 = "acc://pv2-erp-5.acme/book/1"
+)
+
 // Options changes the world before it is proven. The zero value is the valid world.
 type Options struct {
 	// Routing edits the routing table before it is proven (nil: the Kermit table).
@@ -62,7 +70,8 @@ type Options struct {
 	// scripted history and signature chain, and the evidence members of RB9 Phase C1b-1. The plain world is unchanged by it.
 	Timeline *Timeline
 	// Layout puts the principal or the authority book on the Directory (RB9 Phase C1b-2, D2b and D2c); the default is three block
-	// validator partitions (D2a). It does not combine with Timeline.
+	// validator partitions (D2a). A Directory layout does not combine with Timeline; LayoutBVNProven (D2a at blocks the executor-activation
+	// table proves) does.
 	Layout Layout
 	// SwapAnchorKind, when 1, 2 or 3, builds the anchor of slot 0, 1 or 2 in the other kind (a DirectoryAnchor for a block validator
 	// partition, a BlockValidatorAnchor for the Directory): proven into the certified root like any other, refused only by the
@@ -88,6 +97,15 @@ type Built struct {
 	Archive  *proofv2.Archive
 	Inputs   proof.IncarnationInputs
 	Pin      [32]byte
+	// Initiating, for a Timeline.ExternalInitiator world, is the signature that initiated the transaction as the transaction's signature set holds
+	// it - on the page that is not a voting authority - with the receipt and arrival proof that place it in that page's signature chain (the
+	// hop Assembly.ProveInitiating builds). It is what a collector reads (TxFacts) and what the intent's own vote evidence carries; the document the
+	// world builds carries it as Evidence.InitiatingSignature unless the world omits it (Timeline.OmitInitiatingSignature).
+	Initiating *proofv2.VoteHop
+	// InitiatorCosign, with Timeline.InitiatorCosign, is a valid signature of the initiator's page that did NOT initiate the transaction.
+	InitiatorCosign *proofv2.VoteHop
+	// HiddenOnBank is the hop of the first SigEvent.Hidden entry of BankPage1's signature chain: a message the chain holds that no vote names.
+	HiddenOnBank *proofv2.VoteHop
 }
 
 // Portable is the world as a portable document.
@@ -309,7 +327,7 @@ func build(o Options) *Built {
 	}
 	pin := must(proof.ComputeIncarnation(in))
 	lay := layoutOf(o.Layout)
-	if o.Layout != LayoutBVN && o.Timeline != nil {
+	if o.Layout != LayoutBVN && o.Layout != LayoutBVNProven && o.Timeline != nil {
 		panic("a Directory layout does not combine with the timeline world")
 	}
 
@@ -421,6 +439,16 @@ func build(o Options) *Built {
 			bvn3 = append(bvn3, acct{a: &protocol.KeyBook{Url: mustURL(mp.book), BookType: protocol.BookTypeNormal, PageCount: 1}}, mp.page.acct)
 			bvn3Roles[mp.book] = []proofv2.PageRole{proofv2.RoleDelegateBook}
 			bvn3Roles[mp.pageURL] = []proofv2.PageRole{proofv2.RoleDelegatePage, proofv2.RoleVoter}
+		}
+	}
+	if tw != nil && tw.erp != nil {
+		// The external initiator's page: proven at BVN3's block with its chains; it records why it is among the proven pages (initiator-signer, and
+		// certified-key-page: it is the intent's declared signer) and is no authority of the principal.
+		bvn3 = append(bvn3, tw.erp.pageAcct)
+		bvn3Roles[ErpPage1] = []proofv2.PageRole{proofv2.RoleInitiatorSigner, proofv2.RoleCertifiedKeyPage}
+		if d := tw.t.InitiatorDelegator; d != "" {
+			// the delegator of the initiating signature is in its path: a proven page with the role beside its own
+			bvn3Roles[d] = append(append([]proofv2.PageRole(nil), bvn3Roles[d]...), proofv2.RoleInitiatorSigner)
 		}
 	}
 	if tw != nil && !tw.t.NoFirstVote {
@@ -729,5 +757,33 @@ func build(o Options) *Built {
 			}
 		}
 	}
-	return &Built{Evidence: ev, Archive: &proofv2.Archive{Majors: []*api.MajorHeaderRecord{m1}}, Inputs: in, Pin: pin}
+	built := &Built{Evidence: ev, Archive: &proofv2.Archive{Majors: []*api.MajorHeaderRecord{m1}}, Inputs: in, Pin: pin}
+	if tw != nil && tw.dw == nil && !tw.t.NoFirstVote {
+		for i, sg := range tw.t.Sigs {
+			if sg.Hidden {
+				h := tw.hopOf(i)
+				built.HiddenOnBank = &h
+				break
+			}
+		}
+	}
+	if tw != nil && tw.erp != nil {
+		hop := tw.erp.hopOf(0)
+		built.Initiating = &hop
+		if tw.t.InitiatorCosign != "" {
+			cos := tw.erp.hopOf(1)
+			built.InitiatorCosign = &cos
+		}
+		if !tw.t.OmitInitiatingSignature {
+			ev.InitiatingSignature = &hop
+			if !tw.t.OmitInitiatorHistory {
+				for i := range ev.Pages {
+					if ev.Pages[i].URL == ErpPage1 {
+						ev.Pages[i].History = tw.erp.history
+					}
+				}
+			}
+		}
+	}
+	return built
 }

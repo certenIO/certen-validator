@@ -99,7 +99,7 @@ func TestANewHistoryCheckRunsOverHistoryAnOlderBinaryMarkedChecked(t *testing.T)
 	if err := recorded.IndexCommittedHistory(hist); err != nil {
 		t.Fatalf("the same history with the registry's record: %v", err)
 	}
-	// The watermark of this binary's rules and checks (v15 and history-check v5 since rules v15; v14:checks4 before).
+	// The watermark of this binary's rules and checks (v16 and history-check v6 since rules v16; v15:checks5 before).
 	current := fmt.Sprintf("abci:kinds_checked_through:v%d:checks%d", CurrentExecutionRulesVersion, CommittedHistoryCheckVersion)
 	if got := rawHeight(t, kv, current); got != top {
 		t.Fatalf("the %s watermark is %d after a full check, want %d", current, got, top)
@@ -125,6 +125,7 @@ var historyCheckFingerprints = map[uint64]string{
 	3: "5cb03fe7b01d38fd1185a8fa3e15490b7218f6978227061b6f27adaa8d95a0a2",
 	4: "e046ddd43626ef6f956f67426235fb4ca572ae84f839ac7626b746a5bc2e3360",
 	5: "269f97f7ea09c95c0859c2c3eb1ee522f77b32df9e48a979d24a4bc7838a0d9a",
+	6: "88d250d7dbb41b3cfd985426e29d08dae4590927e80edaae634efc3c90eacf5b",
 }
 
 // historyCheckFingerprint hashes historyChecks as code: comments and layout are dropped, so only a change to what the

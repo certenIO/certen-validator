@@ -379,12 +379,43 @@ func TestVotes_SignerPageOnAnotherPartitionUsesItsOwnBlocks(t *testing.T) {
 func TestVotes_BlacklistedTypeCannotBeSigned(t *testing.T) {
 	tls := memTimelines{normalizeAccURL(pPage): timeline(t, pPage, []int64{1},
 		vPage{version: 1, accept: 1, keys: []string{"a"}, deny: []protocol.TransactionType{protocol.TransactionTypeUpdateKeyPage}})}
+	// Both calls record the vote, so the only difference between them is the page's blacklist.
 	_, err := account(t, tls, Facts{TxType: protocol.TransactionTypeUpdateKeyPage,
-		Sigs: []SigFact{sig(pPage, "a", 1, 10)}}, pBook)
+		Sigs: []SigFact{sig(pPage, "a", 1, 10)}, Votes: []RecordedVote{recorded(pBook, pPage, 10)}}, pBook)
 	requireUnevaluable(t, err)
 	av, err := account(t, tls, Facts{TxType: protocol.TransactionTypeWriteData,
 		Sigs: []SigFact{sig(pPage, "a", 1, 10)}, Votes: []RecordedVote{recorded(pBook, pPage, 10)}}, pBook)
 	requireSatisfied(t, av, err, true)
+}
+
+// KeyHeldDuring is the one rule of "the page could have accepted this key's signature" the vote model and the initiating-signature check of evidence
+// 2.1 share (DAX-1G): the states of the page at the signer version during the block that hold the key and do not blacklist the transaction type.
+func TestKeyHeldDuring(t *testing.T) {
+	tl := timeline(t, pPage, []int64{1, 50},
+		vPage{version: 1, accept: 1, keys: []string{"a"}},
+		vPage{version: 2, accept: 1, keys: []string{"a", "b"}, deny: []protocol.TransactionType{protocol.TransactionTypeUpdateKeyPage}})
+	for name, c := range map[string]struct {
+		typ           protocol.TransactionType
+		version       uint64
+		block         int64
+		key           string
+		holding, cand int
+	}{
+		"held at version 1":                   {protocol.TransactionTypeWriteData, 1, 10, "a", 1, 1},
+		"not held (a key never on the page)":  {protocol.TransactionTypeWriteData, 1, 10, "z", 0, 1},
+		"b is added at version 2, not before": {protocol.TransactionTypeWriteData, 1, 10, "b", 0, 1},
+		"held at version 2":                   {protocol.TransactionTypeWriteData, 2, 60, "b", 1, 1},
+		"a type the page blacklists":          {protocol.TransactionTypeUpdateKeyPage, 2, 60, "a", 0, 1},
+		"a type the page allows":              {protocol.TransactionTypeWriteData, 2, 60, "a", 1, 1},
+		"the version the page did not hold":   {protocol.TransactionTypeWriteData, 2, 10, "a", 0, 0},
+	} {
+		t.Run(name, func(t *testing.T) {
+			holding, cands := KeyHeldDuring(tl, c.typ, c.version, c.block, keyHash(c.key))
+			if holding != c.holding || cands != c.cand {
+				t.Fatalf("KeyHeldDuring = (%d, %d), want (%d, %d)", holding, cands, c.holding, c.cand)
+			}
+		})
+	}
 }
 
 // ---- books and accounts ---------------------------------------------------

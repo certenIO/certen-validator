@@ -45,6 +45,18 @@ import (
 // g1ActivateRulesVersion is the execution-rules version that recognises a cross-partition activation.
 const g1ActivateRulesVersion = 15
 
+// g1ActivateMemberRulesVersion is the execution-rules version that recognises the version-2 activation: the initiating-signature member of evidence 2.1
+// (rules v16, DAX-1G).
+const g1ActivateMemberRulesVersion = 16
+
+// g1ActivateRulesFor is the rules version the fleet must run for an activation of this version.
+func g1ActivateRulesFor(version uint64) uint64 {
+	if version == 2 {
+		return g1ActivateMemberRulesVersion
+	}
+	return g1ActivateRulesVersion
+}
+
 func g1Activate(args []string, c rpcDoer) error {
 	if len(args) == 0 {
 		return errors.New("g1-activate needs a subcommand: status, propose, sign, preflight, submit")
@@ -94,13 +106,29 @@ func readG1ActivationLog(c rpcDoer, base string) (*ledger.G1ActivationLog, error
 	return &l, nil
 }
 
-// g1ActivationLine is how a log reads in one line: none, or the height and id of the activation.
+// g1ActivationLine is how a log reads in one line: none, or the version, height and id of each activation.
 func g1ActivationLine(l *ledger.G1ActivationLog) string {
 	if l == nil || len(l.Activations) == 0 {
 		return "none"
 	}
-	a := l.Activations[0]
-	return fmt.Sprintf("activated at height %d (%s)", a.Height, a.ID)
+	var parts []string
+	for _, a := range l.Activations {
+		parts = append(parts, fmt.Sprintf("version %d activated at height %d (%s)", a.Version, a.Height, a.ID))
+	}
+	return strings.Join(parts, "; ")
+}
+
+// g1ActivationOfVersion is the record of the given version in the log, or nil.
+func g1ActivationOfVersion(l *ledger.G1ActivationLog, version uint64) *ledger.G1ActivationRecord {
+	if l == nil {
+		return nil
+	}
+	for i := range l.Activations {
+		if l.Activations[i].Version == version {
+			return &l.Activations[i]
+		}
+	}
+	return nil
 }
 
 func g1ActivateStatus(w io.Writer, args []string, c rpcDoer) error {
@@ -156,6 +184,12 @@ func g1ActivateStatus(w io.Writer, args []string, c rpcDoer) error {
 	a := first.Activations[0]
 	fmt.Fprintf(w, "cross-partition activation accepted at height %d (%s): evidence 2.1 is required from height %d; a certificate "+
 		"carrying evidence 2.0 is refused there (ErrIntentProofV21Missing)\n", a.Height, a.ID, a.Height+1)
+	if m := g1ActivationOfVersion(first, 2); m != nil {
+		fmt.Fprintf(w, "initiating-signature member accepted at height %d (%s): read from height %d (rules v%d)\n", m.Height, m.ID, m.Height+1, g1ActivateMemberRulesVersion)
+	} else {
+		fmt.Fprintf(w, "initiating-signature member NOT yet activated (rules v%d, version 2): a certificate whose evidence carries it is judged with the member "+
+			"cleared, as rules v15 judge it, and refused when its initiator is a page no vote's cause chain holds\n", g1ActivateMemberRulesVersion)
+	}
 	return nil
 }
 
@@ -172,6 +206,13 @@ func signG1Activation(tx *consensus.G1ActivationTx, keyID string, admin ed25519.
 
 func describeG1Activation(tx *consensus.G1ActivationTx) {
 	fmt.Fprintf(os.Stderr, "cross-partition activation (version %d) on chain %s:\n", tx.Version, tx.ChainID)
+	if tx.Version == 2 {
+		fmt.Fprintf(os.Stderr, "    from the block AFTER the one that accepts this, the initiating signature a certificate's evidence 2.1 carries for a separate, "+
+			"non-voting initiator is read and proven (rules v16); a certificate that carries one is accepted when it binds.\n")
+		fmt.Fprintf(os.Stderr, "    blocks up to and including the accepting block are decided as rules v15 decide them: the member is cleared and ignored.\n")
+		fmt.Fprintf(os.Stderr, "    ONE-WAY: needs version 1 accepted first, the chain accepts this once, there is no rollback to rules v15 after it.\n")
+		return
+	}
 	fmt.Fprintf(os.Stderr, "    from the block AFTER the one that accepts this, every ValidatorBlock must carry proof v2 evidence 2.1 "+
 		"(govRoot v4); a 2.0 certificate is refused there.\n")
 	fmt.Fprintf(os.Stderr, "    blocks up to and including the accepting block are decided as rules v14 decide them.\n")
@@ -185,8 +226,12 @@ func g1ActivatePropose(args []string, c rpcDoer) error {
 	keyID := fs.String("admin-key-id", "", "your admin key id (with --admin-secret; both omitted writes the unsigned payload)")
 	secret := fs.String("admin-secret", "", "@<file> holding your admin secret")
 	out := fs.String("out", "", "activation transaction to write (a new file)")
+	version := fs.Uint64("version", 1, "1: evidence 2.1 (rules v15); 2: the initiating-signature member of evidence 2.1 (rules v16; needs version 1 accepted first)")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	if *version != 1 && *version != 2 {
+		return fmt.Errorf("--version is 1 or 2, not %d", *version)
 	}
 	if *out == "" {
 		return errors.New("--out is required")
@@ -206,12 +251,19 @@ func g1ActivatePropose(args []string, c rpcDoer) error {
 		if err != nil {
 			return err
 		}
-		if len(l.Activations) > 0 {
+		switch {
+		case *version == 1 && len(l.Activations) > 0:
 			return fmt.Errorf("%s already records the cross-partition activation (%s): the chain activates once", *rpc, g1ActivationLine(l))
+		case *version == 2 && g1ActivationOfVersion(l, 1) == nil:
+			return fmt.Errorf("%s records no cross-partition activation (version 1): the initiating-signature member rides evidence 2.1 and is activated after it", *rpc)
+		case *version == 2 && g1ActivationOfVersion(l, 2) != nil:
+			return fmt.Errorf("%s already records the activation of the initiating-signature member (%s): the chain activates it once", *rpc, g1ActivationLine(l))
+		case *version == 2 && v.appVersion < g1ActivateMemberRulesVersion:
+			return fmt.Errorf("%s runs execution rules v%d; the initiating-signature member needs v%d", *rpc, v.appVersion, g1ActivateMemberRulesVersion)
 		}
 		*chainID = v.chainID
 	}
-	tx := &consensus.G1ActivationTx{Kind: consensus.G1ActivationKind, ChainID: *chainID, Version: 1}
+	tx := &consensus.G1ActivationTx{Kind: consensus.G1ActivationKind, ChainID: *chainID, Version: *version}
 	if err := tx.CheckShape(); err != nil {
 		return fmt.Errorf("the activation would be refused: %w", err)
 	}
@@ -278,7 +330,7 @@ func g1ActivatePreflight(tx *consensus.G1ActivationTx, nodes []g1ActivateNode) [
 	for _, n := range nodes {
 		views = append(views, n.nodeView)
 	}
-	problems := fleetRulesProblems(views, g1ActivateRulesVersion, "cross-partition activation")
+	problems := fleetRulesProblems(views, g1ActivateRulesFor(tx.Version), "cross-partition activation")
 	var top int64
 	for _, n := range nodes {
 		if n.height > top {
@@ -305,9 +357,16 @@ func g1ActivatePreflight(tx *consensus.G1ActivationTx, nodes []g1ActivateNode) [
 				"for the next block): evidence 2.1 is judged only where the v3 intent certificate is required, so the activation would take effect "+
 				"at a time no one chose; activate after the spine exists", n.rpc))
 		}
-		if len(n.activations.Activations) > 0 {
+		if tx.Version == 1 && len(n.activations.Activations) > 0 {
 			problems = append(problems, fmt.Sprintf("%s already records the cross-partition activation (%s): the chain activates once",
 				n.rpc, g1ActivationLine(n.activations)))
+		}
+		if tx.Version == 2 && g1ActivationOfVersion(n.activations, 2) != nil {
+			problems = append(problems, fmt.Sprintf("%s already records the activation of the initiating-signature member (%s): the chain activates it once",
+				n.rpc, g1ActivationLine(n.activations)))
+		}
+		if tx.Version == 2 && g1ActivationOfVersion(n.activations, 1) == nil {
+			problems = append(problems, fmt.Sprintf("%s records no version-1 activation: the initiating-signature member is activated after evidence 2.1", n.rpc))
 		}
 		if g1ActivationLine(n.activations) != g1ActivationLine(first.activations) {
 			problems = append(problems, fmt.Sprintf("%s reports activation %s, %s reports %s: the fleet disagrees about the activation",
@@ -372,8 +431,8 @@ func g1ActivateSubmit(w io.Writer, args []string, c rpcDoer, name string) error 
 		}
 		return fmt.Errorf("NO-GO (%d problem(s))", len(problems))
 	}
-	fmt.Fprintf(w, "GO: every validator runs rules v%d on %s, requires proof v3 and reports the same admin set and no activation; signed by the "+
-		"threshold of distinct admins in force\n", nodes[0].appVersion, tx.ChainID)
+	fmt.Fprintf(w, "GO: every validator runs rules v%d on %s, requires proof v3 and reports the same admin set and no activation of version %d; signed by the "+
+		"threshold of distinct admins in force\n", nodes[0].appVersion, tx.ChainID, tx.Version)
 	if *dryRun {
 		fmt.Fprintf(w, "dry run: would commit the cross-partition activation %s…\n", tx.ActivationID()[:32])
 		return nil
@@ -394,6 +453,11 @@ func g1ActivateSubmit(w io.Writer, args []string, c rpcDoer, name string) error 
 	}
 	if rec == nil {
 		return fmt.Errorf("committed at height %d, but %s does not record the activation at that height", h, nodes[0].rpc)
+	}
+	if tx.Version == 2 {
+		fmt.Fprintf(w, "ACCEPTED at height %d (%s…). The initiating-signature member is read from height %d: a certificate whose evidence 2.1 carries it "+
+			"is judged with it above %d, and with it cleared (as rules v15 judge it) up to and including %d.\n", h, tx.ActivationID()[:32], h+1, h, h)
+		return nil
 	}
 	fmt.Fprintf(w, "ACCEPTED at height %d (%s…). Evidence 2.1 is required from height %d: every ValidatorBlock above %d must carry it, "+
 		"and a certificate carrying evidence 2.0 is refused there.\n", h, tx.ActivationID()[:32], h+1, h)

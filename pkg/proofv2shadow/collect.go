@@ -70,6 +70,12 @@ type Capture struct {
 	// (RB9 Phase C1b-2). A capture without a Transaction is a capture made before them; its votes cannot be re-evaluated.
 	Transaction string            `json:"transaction,omitempty"`
 	Sequenced   map[string]string `json:"sequenced,omitempty"`
+
+	// Initiating (DAX-1G, G-83) is the signature that initiated the transaction when no counted vote's cause chain holds it: a separate, non-voting initiator
+	// (the tcl erp pattern). Page, message, signature and arrival block, without receipts (added when the evidence is built, like a vote's hops); the page
+	// is captured with its certified history. Nil for a voting initiator and for every capture made before it: such a capture is never given one
+	// (RecordCapture does not replace a capture that holds pages), so its intent stays held with g1_initiator_signature_not_carried.
+	Initiating *proofv2.VoteHop `json:"initiating,omitempty"`
 	// SequencedMessages maps the same vote messages to the SequencedMessage itself (binary, hex), which the production of the vote carries
 	// (verifier round VA, DEF-4). A capture made before it has none: its sequenced votes are assembled with an unbound production, which the
 	// verifier discloses and the consensus binding refuses.
@@ -316,6 +322,34 @@ func (c *Collector) collect(ctx context.Context, st *runState, account, tx strin
 			}
 		}
 	}
+	// A separate, NON-VOTING initiator (DAX-1G): the signature that initiated the transaction, when no vote's cause chain or counted signature holds it,
+	// is carried as the evidence member InitiatingSignature, and the page it is recorded on is captured with its certified history, which the proof of
+	// its key is judged against. A voting initiator needs no member: its signature is in a vote's cause chain and proven there.
+	var initiating *proofv2.VoteHop
+	var initiatingPage *url.URL
+	if fi := facts.Initiating; fi != nil && fi.ID != nil && fi.Sig != nil {
+		hx, inVote := hashHex(fi.ID), false
+		for i := range facts.Votes {
+			for _, h := range append(append([]Hop(nil), facts.Votes[i].Hops...), facts.Votes[i].Counted...) {
+				if h.ID != nil && hashHex(h.ID) == hx {
+					inVote = true
+				}
+			}
+		}
+		if !inVote {
+			initiatingPage = fi.ID.Account()
+			if payer := initiatorPayer(fi.Sig); payer == nil || key(payer) != key(initiatingPage) {
+				return nil, &proofv2.NamedState{Code: proofv2.StateCompletenessUnproven,
+					Detail: fmt.Sprintf("the signature that initiated the transaction is recorded on %v but its payer is %v", initiatingPage, payer)}
+			}
+			sb, merr := fi.Sig.MarshalBinary()
+			if merr != nil {
+				return nil, fmt.Errorf("the initiating signature: %w", merr)
+			}
+			needHist[key(initiatingPage)] = true
+			initiating = &proofv2.VoteHop{Page: initiatingPage.String(), Message: hx, Signature: hex.EncodeToString(sb)}
+		}
+	}
 	var sigPages []*url.URL
 	if facts.Certified != nil {
 		sigPages = append(sigPages, facts.Certified)
@@ -333,9 +367,22 @@ func (c *Collector) collect(ctx context.Context, st *runState, account, tx strin
 			if err != nil {
 				return nil, fmt.Errorf("arrival of %v: %w", id, err)
 			}
+			if initiating != nil && hashHex(id) == initiating.Message {
+				initiating.Block = blk
+			}
 			if err := record(id.Account(), blk, "the signature "+id.String()); err != nil {
 				return nil, err
 			}
+		}
+	}
+	if initiating != nil && initiating.Block == 0 { // the page is not among the pages the loop walks: its arrival bounds the page's partition all the same
+		_, blk, err := c.Arrival(ctx, facts.Initiating.ID)
+		if err != nil {
+			return nil, fmt.Errorf("arrival of %v: %w", facts.Initiating.ID, err)
+		}
+		initiating.Block = blk
+		if err := record(initiatingPage, blk, "the signature "+facts.Initiating.ID.String()); err != nil {
+			return nil, err
 		}
 	}
 
@@ -539,6 +586,20 @@ func (c *Collector) collect(ctx context.Context, st *runState, account, tx strin
 		}
 	}
 
+	// The member is carried only with the proof its key needs: the signer page's certified history. A page that has none (its history could not be read,
+	// or it is a lite identity, which has no key page) ends the capture with the named state, after everything else is captured, and carries no member.
+	if initiating != nil {
+		cp, ok := cache[key(initiatingPage)]
+		switch {
+		case !ok:
+			return nil, &proofv2.NamedState{Code: proofv2.StateInitiatorPageUnproven, Detail: fmt.Sprintf("%v initiated the transaction but was not captured", initiatingPage)}
+		case cp.page.History == nil:
+			softErr = firstState(softErr, &proofv2.NamedState{Code: proofv2.StateHistoryUnavailable, Partition: cp.page.Partition, Block: cp.block,
+				Detail: fmt.Sprintf("the page %v that initiated the transaction carries no certified history, so its initiating signature cannot be carried with the proof of its key", initiatingPage)})
+			initiating = nil
+		}
+	}
+
 	// The block each partition's pages were read at must not precede the arrival of any signature that was counted on it.
 	for _, a := range arrivals {
 		p, err := routeOf(mustURL(a.page))
@@ -593,6 +654,7 @@ func (c *Collector) collect(ctx context.Context, st *runState, account, tx strin
 			}
 		}
 	}
+	out.Initiating = initiating
 	if facts.Txn != nil {
 		raw, err := facts.Txn.MarshalBinary()
 		if err != nil {
@@ -657,7 +719,7 @@ func (cp *Capture) checkClosureBudgetFor(g1InForce bool) error {
 	for i := range cp.Pages {
 		pages[i] = cp.Pages[i].PageState
 	}
-	return proofv2.CheckClosureBudget(cp.BudgetVersionFor(g1InForce), pages, cp.Votes, cp.Partition, cp.Block)
+	return proofv2.CheckClosureBudgetInitiating(cp.BudgetVersionFor(g1InForce), pages, cp.Votes, cp.Initiating, cp.Partition, cp.Block)
 }
 
 func isDirectory(partition string) bool { return strings.EqualFold(partition, protocol.Directory) }
@@ -813,6 +875,9 @@ func ReadTxFacts(ctx context.Context, net api.Querier, principal, txHash string)
 					f.KeySigs[key(rec.ID.Account())] = append(f.KeySigs[key(rec.ID.Account())], rec.ID)
 				}
 				if didInit, _ := protocol.SignatureDidInitiate(m.Signature, txn.Header.Initiator[:], nil); didInit {
+					if f.Initiating == nil && rec.ID != nil {
+						f.Initiating = &SigRecord{ID: rec.ID, Sig: m.Signature}
+					}
 					if p := initiatorPayer(m.Signature); p != nil && !initiators[key(p)] {
 						initiators[key(p)] = true
 						f.Initiators = append(f.Initiators, p)
@@ -970,7 +1035,8 @@ func (cp *Capture) Assembly(ctx context.Context, log proofv2.AnchorLog, src proo
 		n := cp.Absent[0]
 		return nil, &n
 	}
-	a := &proofv2.Assembly{Roots: map[string][32]byte{}, Votes: cp.Votes, Sequenced: cp.Sequenced, SequencedMessages: cp.SequencedMessages, Transaction: cp.Transaction, Source: src}
+	a := &proofv2.Assembly{Roots: map[string][32]byte{}, Votes: cp.Votes, Sequenced: cp.Sequenced, SequencedMessages: cp.SequencedMessages, Transaction: cp.Transaction, Source: src,
+		Initiating: cp.Initiating}
 	for i := range cp.Pages {
 		p := cp.Pages[i].PageState
 		a.Pages = append(a.Pages, &p)

@@ -20,6 +20,18 @@ const (
 	// LayoutDirectoryPrincipal is D2c: the principal on the Directory (acc://dn.acme/pv2-data), governed by a book on BVN2. The
 	// transaction's own partition anchor is a DirectoryAnchor; the vote is a BlockValidatorAnchor-backed sequenced message from BVN2.
 	LayoutDirectoryPrincipal Layout = "directory-principal"
+	// LayoutBVNProven is D2a (the same accounts, partitions and slots as LayoutBVN) with every partition's block above that partition's pinned
+	// executor-activation block (xexecutor_table.go: BVN1 12,491,272, BVN2 12,492,057, BVN3 12,491,127), so the executor version governing each
+	// block is PROVEN and intentcert.BindProofV21 - which refuses a (partition, block) the table does not cover - can judge the document the
+	// verifier reports on. The earlier worlds keep their low blocks (their documents are frozen vectors). It combines with Timeline.
+	LayoutBVNProven Layout = "bvn-proven"
+)
+
+// The blocks of LayoutBVNProven, each above its partition's pinned activation block.
+const (
+	ProvenBlockBVN1 = 12_600_050
+	ProvenBlockBVN2 = 12_600_070
+	ProvenBlockBVN3 = 12_600_090
 )
 
 // The Directory accounts and blocks of the D2b and D2c worlds.
@@ -51,6 +63,8 @@ func layoutOf(l Layout) layout {
 		x: slot{PartBVN1, "BVN1", BlockBVN1, false}, a: slot{PartBVN2, "BVN2", BlockBVN2, false}, d: slot{PartBVN3, "BVN3", BlockBVN3, false}}
 	switch l {
 	case LayoutBVN:
+	case LayoutBVNProven:
+		lay.x.block, lay.a.block, lay.d.block = ProvenBlockBVN1, ProvenBlockBVN2, ProvenBlockBVN3
 	case LayoutDirectoryAuthority:
 		lay.book, lay.page1, lay.page2 = DNBook, DNPage1, DNPage2
 		lay.a = slot{DirPartition, protocol.Directory, BlockDN, true}

@@ -99,15 +99,15 @@ func TestG1ActivateToolBuildsAnActivationTheChainAccepts(t *testing.T) {
 	if err := g1ActivatePropose([]string{"--out", filepath.Join(dir, "y.json")}, nil); err == nil {
 		t.Fatal("neither --rpc nor --chain-id was accepted")
 	}
-	// A version other than 1 is not an activation the chain would take, and sign refuses it before anyone signs.
-	bad := &consensus.G1ActivationTx{Kind: consensus.G1ActivationKind, ChainID: chain, Version: 2}
+	// A version other than 1 or 2 is not an activation the chain would take, and sign refuses it before anyone signs.
+	bad := &consensus.G1ActivationTx{Kind: consensus.G1ActivationKind, ChainID: chain, Version: 3}
 	badPath := filepath.Join(dir, "bad.json")
 	if err := writeG1Activation(bad, badPath, false); err != nil {
 		t.Fatal(err)
 	}
 	if err := g1ActivateSign([]string{"--tx", badPath, "--admin-key-id", "ops-1", "--admin-secret", admins["ops-1"]}); err == nil ||
 		!strings.Contains(err.Error(), "would be refused") {
-		t.Fatalf("signed a version-2 activation: %v", err)
+		t.Fatalf("signed a version-3 activation: %v", err)
 	}
 }
 
@@ -551,5 +551,174 @@ func TestG1ActivatePreflightRefusesWhenProofV3IsNotRequired(t *testing.T) {
 		if joined := strings.Join(nogo, "\n"); !strings.Contains(joined, nodes[3].rpc+" does not require proof v3") {
 			t.Errorf("%s: NO-GO did not name the node and proof v3: %v", name, nogo)
 		}
+	}
+}
+
+// DAX-1G: the version-2 activation (the initiating-signature member of evidence 2.1, rules v16) through the same tool. It is proposed and signed
+// offline as version 2, the chain's rule accepts it only after version 1 and once, and the preflight needs the whole fleet on rules v16.
+func TestG1ActivateVersionTwoIsBuiltAndGatedLikeTheChainGatesIt(t *testing.T) {
+	dir, admins, policy := g1Admins(t)
+	out := filepath.Join(dir, "member.json")
+	if err := g1ActivatePropose([]string{"--chain-id", chain, "--version", "2", "--admin-key-id", "ops-1", "--admin-secret", admins["ops-1"], "--out", out}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := g1ActivateSign([]string{"--tx", out, "--admin-key-id", "ops-3", "--admin-secret", admins["ops-3"]}); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := readG1Activation(out)
+	if err != nil || tx.Version != 2 || len(tx.Signatures) != 2 {
+		t.Fatalf("the proposed version-2 activation is %+v (%v)", tx, err)
+	}
+	if err := g1ActivatePropose([]string{"--chain-id", chain, "--version", "3", "--out", filepath.Join(dir, "v3.json")}, nil); err == nil {
+		t.Fatal("version 3 was proposed")
+	}
+	log1 := &ledger.G1ActivationLog{Activations: []ledger.G1ActivationRecord{rec0(5)}}
+	if rec, err := consensus.VerifyG1Activation(tx, chain, policy, log1, 10); err != nil || rec.Version != 2 || rec.ID != tx.ActivationID() {
+		t.Fatalf("the chain would refuse the version-2 activation the tool built: %v (%+v)", err, rec)
+	}
+	if _, err := consensus.VerifyG1Activation(tx, chain, policy, nil, 10); err == nil {
+		t.Fatal("a version-2 activation was accepted before version 1")
+	}
+
+	// Preflight: GO only on a fleet at rules v16 that records version 1 and no version 2.
+	fleet := func(version uint64, log *ledger.G1ActivationLog) []g1ActivateNode {
+		nodes := g1Fleet(t, policy, 7)
+		for i := range nodes {
+			nodes[i].appVersion, nodes[i].activations = version, log
+		}
+		return nodes
+	}
+	if nogo := g1ActivatePreflight(tx, fleet(16, log1)); len(nogo) != 0 {
+		t.Fatalf("a v16 fleet with version 1 recorded: %v", nogo)
+	}
+	for name, c := range map[string]struct {
+		nodes []g1ActivateNode
+		want  string
+	}{
+		"a fleet still on rules v15": {fleet(15, log1), "execution rules v15"},
+		"no version 1 recorded":      {fleet(16, &ledger.G1ActivationLog{}), "records no version-1 activation"},
+		"version 2 already recorded": {fleet(16, &ledger.G1ActivationLog{Activations: []ledger.G1ActivationRecord{rec0(5),
+			{Version: 2, Height: 9, ID: "g1-activation:" + strings.Repeat("cd", 32)}}}), "activates it once"},
+	} {
+		nogo := g1ActivatePreflight(tx, c.nodes)
+		if len(nogo) == 0 || !strings.Contains(strings.Join(nogo, "\n"), c.want) {
+			t.Errorf("%s: preflight %v, want a NO-GO naming %q", name, nogo, c.want)
+		}
+	}
+	// A version-1 activation is still judged against rules v15 and no record: a fleet on v16 that records version 1 refuses a second version 1.
+	v1 := signedG1Activation(t, admins, "ops-1", "ops-2")
+	if nogo := g1ActivatePreflight(v1, fleet(16, log1)); len(nogo) == 0 || !strings.Contains(strings.Join(nogo, "\n"), "activates once") {
+		t.Errorf("a second version 1: %v", nogo)
+	}
+}
+
+// Against nodes: propose --version 2 reads the chain (version 1 recorded, rules v16), refuses before version 1, on rules v15 and after version 2;
+// status prints the member line; submit commits and confirms the member's height.
+func TestG1ActivateVersionTwoAgainstNodes(t *testing.T) {
+	dir, admins, policy := g1Admins(t)
+	view := consensus.NewAdminSetView(policy, 60)
+	var nodes []*g1Node
+	var rpcs []string
+	for i := 0; i < 3; i++ {
+		n := newG1Node(t, view, "16")
+		n.log = ledger.G1ActivationLog{Activations: []ledger.G1ActivationRecord{rec0(20)}}
+		nodes = append(nodes, n)
+		rpcs = append(rpcs, n.srv.URL)
+	}
+	all := strings.Join(rpcs, ",")
+	c := http.DefaultClient
+
+	var status bytes.Buffer
+	if err := g1ActivateStatus(&status, []string{"--rpc", all}, c); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(status.String(), "initiating-signature member NOT yet activated") || strings.Contains(status.String(), "DISAGREE") {
+		t.Fatalf("status before the member activation:\n%s", status.String())
+	}
+
+	out := filepath.Join(dir, "member.json")
+	if err := g1ActivatePropose([]string{"--rpc", rpcs[0], "--version", "2", "--admin-key-id", "ops-1", "--admin-secret", admins["ops-1"], "--out", out}, c); err != nil {
+		t.Fatalf("propose --version 2 against a v16 chain that recorded version 1: %v", err)
+	}
+	if err := g1ActivateSign([]string{"--tx", out, "--admin-key-id", "ops-2", "--admin-secret", admins["ops-2"]}); err != nil {
+		t.Fatal(err)
+	}
+	old := newG1Node(t, view, "15")
+	old.log = ledger.G1ActivationLog{Activations: []ledger.G1ActivationRecord{rec0(20)}}
+	if err := g1ActivatePropose([]string{"--rpc", old.srv.URL, "--version", "2", "--out", filepath.Join(dir, "old.json")}, c); err == nil || !strings.Contains(err.Error(), "needs v16") {
+		t.Fatalf("propose --version 2 against rules v15: %v", err)
+	}
+	fresh := newG1Node(t, view, "16")
+	if err := g1ActivatePropose([]string{"--rpc", fresh.srv.URL, "--version", "2", "--out", filepath.Join(dir, "fresh.json")}, c); err == nil || !strings.Contains(err.Error(), "records no cross-partition activation") {
+		t.Fatalf("propose --version 2 before version 1: %v", err)
+	}
+
+	var sub bytes.Buffer
+	if err := g1ActivateSubmit(&sub, []string{"--tx", out, "--rpc", all}, c, "submit"); err != nil {
+		t.Fatalf("submit: %v\n%s", err, sub.String())
+	}
+	if !strings.Contains(sub.String(), "ACCEPTED at height 70") || !strings.Contains(sub.String(), "initiating-signature member is read from height 71") ||
+		!strings.Contains(sub.String(), "GO: every validator runs rules v16") || nodes[0].broadcasts != 1 {
+		t.Fatalf("submit output:\n%s", sub.String())
+	}
+	for _, n := range nodes[1:] {
+		n.log = nodes[0].log
+	}
+	status.Reset()
+	if err := g1ActivateStatus(&status, []string{"--rpc", all}, c); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(status.String(), "initiating-signature member accepted at height 70") || !strings.Contains(status.String(), "read from height 71") ||
+		strings.Contains(status.String(), "DISAGREE") {
+		t.Fatalf("status after the member activation:\n%s", status.String())
+	}
+	sub.Reset()
+	if err := g1ActivateSubmit(&sub, []string{"--tx", out, "--rpc", all}, c, "submit"); err == nil || !strings.Contains(sub.String(), "activates it once") || nodes[0].broadcasts != 1 {
+		t.Fatalf("a second version-2 submit: %v\n%s", err, sub.String())
+	}
+	if err := g1ActivatePropose([]string{"--rpc", rpcs[0], "--version", "2", "--out", filepath.Join(dir, "again.json")}, c); err == nil || !strings.Contains(err.Error(), "activates it once") {
+		t.Fatalf("propose --version 2 after the member activation: %v", err)
+	}
+}
+
+// history-check --rules 16: a version-2 activation that rules v15 refused (code 18) is FOUND (v16 might decide it the other way); one accepted with
+// its record is checked; one accepted without it is FOUND.
+func TestG1ActivateHistoryCheckRulesSixteenFindsAVersionTwoActivationV15Refused(t *testing.T) {
+	_, admins, policy := g1Admins(t)
+	view := consensus.NewAdminSetView(policy, 60)
+	tx := &consensus.G1ActivationTx{Kind: consensus.G1ActivationKind, ChainID: chain, Version: 2}
+	for _, id := range []string{"ops-1", "ops-2"} {
+		a, err := loadAdmin(admins[id])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := signG1Activation(tx, id, a); err != nil {
+			t.Fatal(err)
+		}
+	}
+	raw, err := json.Marshal(tx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := newG1Node(t, view, "16")
+	n.height = 3
+	n.historyTxs = map[int64]string{2: base64.StdEncoding.EncodeToString(raw)}
+	n.historyCode = map[int64]uint32{2: 18}
+	n.log = ledger.G1ActivationLog{Activations: []ledger.G1ActivationRecord{rec0(1)}}
+	if ce, ok := historyCheckRules(n.srv.URL, http.DefaultClient, 16).(*checkExit); !ok || ce.code != exitHistoryFound {
+		t.Fatal("a version-2 activation refused by v15 was not FOUND")
+	}
+	// v16's own refusal of a version-2 activation (code 19) is not a violation: it was decided by the rules this check judges by.
+	n.historyCode[2] = 19
+	if err := historyCheckRules(n.srv.URL, http.DefaultClient, 16); err != nil {
+		t.Fatalf("a version-2 activation refused by v16 (code 19): %v", err)
+	}
+	n.historyCode[2] = 0
+	if ce, ok := historyCheckRules(n.srv.URL, http.DefaultClient, 16).(*checkExit); !ok || ce.code != exitHistoryFound {
+		t.Fatal("an accepted version-2 activation without its record was not FOUND")
+	}
+	n.log = ledger.G1ActivationLog{Activations: []ledger.G1ActivationRecord{rec0(1), {Version: 2, Height: 2, ID: tx.ActivationID()}}}
+	if err := historyCheckRules(n.srv.URL, http.DefaultClient, 16); err != nil {
+		t.Fatalf("an accepted version-2 activation with its record: %v", err)
 	}
 }

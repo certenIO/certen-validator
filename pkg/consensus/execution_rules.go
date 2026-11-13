@@ -262,8 +262,27 @@ const (
 	// state stays stamped with the older version until a block accepts or refuses an activation (committedRulesVersion).
 	executionRulesV15 uint64 = 15
 
+	// v16 - the initiating signature of a non-voting initiator becomes a governed member of evidence 2.1 (DAX-1G, G-83; docs/proof/G1_CROSS_PARTITION.md D8).
+	// A certificate whose proof v2 carries Evidence.InitiatingSignature is judged WITH the member: the verifier proves the signature of a separate initiator
+	// that no vote's cause chain holds, and BindProofV21 then accepts the role proven. v15 decoded the member as an unknown JSON key and ignored it, left the
+	// role declared and refused the certificate: a change to accept/reject, so a rules version, and one that switches at a committed fact, never at a deploy:
+	//
+	//   - the cross-partition activation transaction (g1_activation.go) gains a second version. A version-2 activation, authorised by the admin quorum in
+	//     force over the chain id and the version, is accepted only after the version-1 activation and only once, recorded append-only at the block H that
+	//     accepted it and served at /certen/g1_activation. Accepted, it contributes its id to the app hash; refused, it returns code 19 (v15 returned code 18 for every
+	//     version but 1, so the two refusals are told apart by their code).
+	//   - From the height after H the member is read (G1ActivationAt: MemberInForce). Until then the v16 binary clears the member from every evidence 2.1
+	//     document before it judges it (judgeProofV2), so it decides every block exactly as v15 did: the member is ignored, the role stays declared, the
+	//     certificate is refused as v15 refused it. The proposer attaches the member only from the same height (Shadow.SetInitiatorMemberGate).
+	//
+	// v16 CONTINUES v7..v15 state without a reset: a version-2 activation is new, so no committed history holds one that any earlier rules accepted, and a
+	// committed one that v15 refused with code 18 is a verdict v16 might reverse; both are checked at every start (kindViolation). The state stays stamped with
+	// the older version until a block decides a version-2 activation, accepted or refused (committedRulesVersion). There is no rollback to v15 after a
+	// version-2 activation is accepted; before it, a v15 binary can replace v16 because it has never seen a member.
+	executionRulesV16 uint64 = 16
+
 	// CurrentExecutionRulesVersion is what THIS binary implements.
-	CurrentExecutionRulesVersion = executionRulesV15
+	CurrentExecutionRulesVersion = executionRulesV16
 )
 
 // compatibleContinuations names the older rules whose committed state this binary may continue, and why
@@ -283,14 +302,17 @@ var compatibleContinuations = map[uint64]uint64{
 	// ValidatorBlock rules apply only from the height after an accepted anchor set, which no committed history reaches.
 	// v15 adds only the cross-partition activation kind, which no committed history contains (checked at every start), and
 	// its certificate rule applies only from the height after an accepted activation, which no committed history reaches.
-	executionRulesV7:  executionRulesV15,
-	executionRulesV8:  executionRulesV15,
-	executionRulesV9:  executionRulesV15,
-	executionRulesV10: executionRulesV15,
-	executionRulesV11: executionRulesV15,
-	executionRulesV12: executionRulesV15,
-	executionRulesV13: executionRulesV15,
-	executionRulesV14: executionRulesV15,
+	// v16 adds only a second version of that activation, which no committed history contains accepted (checked at every start), and its member rule
+	// applies only from the height after an accepted version-2 activation, which no committed history reaches.
+	executionRulesV7:  executionRulesV16,
+	executionRulesV8:  executionRulesV16,
+	executionRulesV9:  executionRulesV16,
+	executionRulesV10: executionRulesV16,
+	executionRulesV11: executionRulesV16,
+	executionRulesV12: executionRulesV16,
+	executionRulesV13: executionRulesV16,
+	executionRulesV14: executionRulesV16,
+	executionRulesV15: executionRulesV16,
 }
 
 // ExecutionRulesMismatchError explains a refusal to start in terms an operator

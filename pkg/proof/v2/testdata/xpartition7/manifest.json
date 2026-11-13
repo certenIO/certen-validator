@@ -1,0 +1,594 @@
+{
+  "format": "certen-xpartition7-conformance/1",
+  "domain": "certen:g1:v4",
+  "portableFormat": "certen-proof-v2-accumulate-portable/1",
+  "cases": [
+    {
+      "name": "initiator-nonvoting-carried",
+      "description": "ErpPage1, a page of an identity that is no authority of the principal, signs first and pays (Header.Initiator is its signature's metadata hash) and BankBook votes afterwards: the document carries the initiating signature with its receipt in ErpPage1's signature chain, its arrival proof and the page's certified history; initiator-signer is a PROVEN role of ErpPage1 (nothing unproven, no declared initiator-signer)",
+      "file": "initiator-nonvoting-carried.json",
+      "sha256": "a603cacb9e1e084dcbafeb2817156ad6864f81b94971c2b0af858b4a9cb4d797",
+      "expect": "verified",
+      "report": {
+        "version": "2.1",
+        "tag": "certen:g1:v4",
+        "partition": "acc://bvn-BVN1.acme",
+        "anchorBlock": 12600050,
+        "certifiedRoot": "97693e300599eb83d03963f050253c452d6fcfb7d28184fce745f87ba04e369f",
+        "checkBlock": 300,
+        "setVerdict": "verified",
+        "routingHeight": 1,
+        "proven": [
+          {
+            "url": "acc://pv2-cust-5.acme/data",
+            "partition": "acc://bvn-BVN1.acme",
+            "block": 12600050,
+            "roles": [
+              "principal-chain"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 12600070,
+            "roles": [
+              "authority-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/1",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 12600070,
+            "roles": [
+              "authority-page",
+              "voter"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/2",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 12600070,
+            "roles": [
+              "authority-page"
+            ]
+          },
+          {
+            "url": "acc://bvn-BVN2.acme/synthetic",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 12600070,
+            "roles": [
+              "synthetic-chain"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 12600090,
+            "roles": [
+              "delegate-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book/1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 12600090,
+            "roles": [
+              "delegate-page"
+            ]
+          },
+          {
+            "url": "acc://pv2-erp-5.acme/book/1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 12600090,
+            "roles": [
+              "initiator-signer"
+            ],
+            "declared": [
+              "certified-key-page"
+            ]
+          }
+        ],
+        "pagesBound": 8,
+        "unproven": null,
+        "authorizationMode": "authorities_required",
+        "arrivals": [
+          {
+            "kind": "signature",
+            "account": "acc://pv2-bank-5.acme/book/1",
+            "block": 65
+          },
+          {
+            "kind": "produced",
+            "account": "acc://bvn-BVN2.acme/synthetic",
+            "block": 66
+          }
+        ]
+      }
+    },
+    {
+      "name": "initiator-nonvoting-key-removed-after-arrival",
+      "description": "the initiating key was removed from ErpPage1 (and another added) after the signature arrived: judged on the certified history at the arrival block the page held the key, so the role is proven",
+      "file": "initiator-nonvoting-key-removed-after-arrival.json",
+      "sha256": "4256db82111165ba7ae7b3c3ad8a095eca2fd800db20536596d7e1ae630045d1",
+      "expect": "verified",
+      "report": {
+        "version": "2.1",
+        "tag": "certen:g1:v4",
+        "partition": "acc://bvn-BVN1.acme",
+        "anchorBlock": 12600050,
+        "certifiedRoot": "0e3f3db4bd760f8756553cb194fb1e3259f1688c4ccb9bc59d4ee84745c9ea7d",
+        "checkBlock": 300,
+        "setVerdict": "verified",
+        "routingHeight": 1,
+        "proven": [
+          {
+            "url": "acc://pv2-cust-5.acme/data",
+            "partition": "acc://bvn-BVN1.acme",
+            "block": 12600050,
+            "roles": [
+              "principal-chain"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 12600070,
+            "roles": [
+              "authority-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/1",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 12600070,
+            "roles": [
+              "authority-page",
+              "voter"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/2",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 12600070,
+            "roles": [
+              "authority-page"
+            ]
+          },
+          {
+            "url": "acc://bvn-BVN2.acme/synthetic",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 12600070,
+            "roles": [
+              "synthetic-chain"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 12600090,
+            "roles": [
+              "delegate-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book/1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 12600090,
+            "roles": [
+              "delegate-page"
+            ]
+          },
+          {
+            "url": "acc://pv2-erp-5.acme/book/1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 12600090,
+            "roles": [
+              "initiator-signer"
+            ],
+            "declared": [
+              "certified-key-page"
+            ]
+          }
+        ],
+        "pagesBound": 8,
+        "unproven": null,
+        "authorizationMode": "authorities_required",
+        "arrivals": [
+          {
+            "kind": "signature",
+            "account": "acc://pv2-bank-5.acme/book/1",
+            "block": 65
+          },
+          {
+            "kind": "produced",
+            "account": "acc://bvn-BVN2.acme/synthetic",
+            "block": 66
+          }
+        ]
+      }
+    },
+    {
+      "name": "initiator-nonvoting-delegated-carried",
+      "description": "the initiating signature is a delegated signature: ErpPage1's key signed it on behalf of DelePage1 (its delegator, a proven page): the roles are proven for the payer (ErpPage1) and the delegator (DelePage1). The delegation entry itself is not re-evaluated by this member (it authorizes nothing; docs/proof/G1_CROSS_PARTITION.md, initiator-signer)",
+      "file": "initiator-nonvoting-delegated-carried.json",
+      "sha256": "3e4405f82c6be502b411ab84293d71c58654037bf5093700eaf0364328c957b8",
+      "expect": "verified",
+      "report": {
+        "version": "2.1",
+        "tag": "certen:g1:v4",
+        "partition": "acc://bvn-BVN1.acme",
+        "anchorBlock": 12600050,
+        "certifiedRoot": "70b6c18052ee2bc248a1868529da19c5a8fa381946093c611a36d0d18c2f5329",
+        "checkBlock": 300,
+        "setVerdict": "verified",
+        "routingHeight": 1,
+        "proven": [
+          {
+            "url": "acc://pv2-cust-5.acme/data",
+            "partition": "acc://bvn-BVN1.acme",
+            "block": 12600050,
+            "roles": [
+              "principal-chain"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 12600070,
+            "roles": [
+              "authority-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/1",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 12600070,
+            "roles": [
+              "authority-page",
+              "voter"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/2",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 12600070,
+            "roles": [
+              "authority-page"
+            ]
+          },
+          {
+            "url": "acc://bvn-BVN2.acme/synthetic",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 12600070,
+            "roles": [
+              "synthetic-chain"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 12600090,
+            "roles": [
+              "delegate-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book/1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 12600090,
+            "roles": [
+              "delegate-page",
+              "initiator-signer"
+            ]
+          },
+          {
+            "url": "acc://pv2-erp-5.acme/book/1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 12600090,
+            "roles": [
+              "initiator-signer"
+            ],
+            "declared": [
+              "certified-key-page"
+            ]
+          }
+        ],
+        "pagesBound": 8,
+        "unproven": null,
+        "authorizationMode": "authorities_required",
+        "arrivals": [
+          {
+            "kind": "signature",
+            "account": "acc://pv2-bank-5.acme/book/1",
+            "block": 65
+          },
+          {
+            "kind": "produced",
+            "account": "acc://bvn-BVN2.acme/synthetic",
+            "block": 66
+          }
+        ]
+      }
+    },
+    {
+      "name": "initiator-signature-tampered",
+      "description": "one nibble of the carried initiating signature changed: no longer the message its signature-chain entry holds",
+      "file": "initiator-signature-tampered.json",
+      "sha256": "ba733a5eaa1ae3f84201afe386ae5f901eef46460de10dac6f648d5fb0f90dec",
+      "expect": "refused",
+      "state": "g1_signature_invalid",
+      "partition": "BVN3",
+      "block": 12600090
+    },
+    {
+      "name": "initiator-signature-other-transaction",
+      "description": "the member is the initiating signature of ANOTHER transaction (another body): ErpPage1's chain does not hold its message for this transaction",
+      "file": "initiator-signature-other-transaction.json",
+      "sha256": "082ab566c173cc326faa66aa710943b0748558251051a0983590ad3f3c538b37",
+      "expect": "refused",
+      "state": "g1_block_before_signature",
+      "partition": "BVN3",
+      "block": 12600090
+    },
+    {
+      "name": "initiator-signature-signs-another-transaction",
+      "description": "ErpPage1's signature chain holds the message of a signature that has the initiating signature's metadata but signs ANOTHER transaction (a forgery no real chain holds): it is a member of the chain and it initiates by metadata, but it does not sign this transaction",
+      "file": "initiator-signature-signs-another-transaction.json",
+      "sha256": "3d0a690182a99883b526c769e328056354a25a3c72baacad756b1190067ec9c1",
+      "expect": "refused",
+      "state": "g1_signature_invalid",
+      "partition": "BVN3",
+      "block": 12600090
+    },
+    {
+      "name": "initiator-signature-other-page",
+      "description": "the member names BankPage1 as the page that records the signature, but the message is ErpPage1's: BankPage1's signature chain does not hold it",
+      "file": "initiator-signature-other-page.json",
+      "sha256": "80bd11d26ba70a461a14457fe92a79c1c44d6858aab11ad979fa7d2d7e13c61e",
+      "expect": "refused",
+      "state": "g1_block_before_signature",
+      "partition": "BVN2",
+      "block": 12600070
+    },
+    {
+      "name": "initiator-signature-recorded-on-another-page",
+      "description": "BankPage1's signature chain holds the message of a signature MADE as ErpPage1 (a forgery no real chain holds), and the member names BankPage1: the chain does hold the message, but the signer is not the page it is recorded on",
+      "file": "initiator-signature-recorded-on-another-page.json",
+      "sha256": "19ad681192d08dcf9c7b4d47c39318831399329bdbf27393981ee3ea00f68033",
+      "expect": "refused",
+      "state": "g1_signature_invalid",
+      "partition": "BVN2",
+      "block": 12600070
+    },
+    {
+      "name": "initiator-member-absent",
+      "description": "ErpPage1 records initiator-signer but the document carries no initiating signature (every document made before the member): the role is a declared fact, the report says g1_initiator_signature_not_carried, and the binding refuses it",
+      "file": "initiator-member-absent.json",
+      "sha256": "1e313e813dbc8fe73e58cbd09f158ba3c42db418b94fd0a8e2300ed35e2fb008",
+      "expect": "verified",
+      "report": {
+        "version": "2.1",
+        "tag": "certen:g1:v4",
+        "partition": "acc://bvn-BVN1.acme",
+        "anchorBlock": 12600050,
+        "certifiedRoot": "97693e300599eb83d03963f050253c452d6fcfb7d28184fce745f87ba04e369f",
+        "checkBlock": 300,
+        "setVerdict": "verified",
+        "routingHeight": 1,
+        "proven": [
+          {
+            "url": "acc://pv2-cust-5.acme/data",
+            "partition": "acc://bvn-BVN1.acme",
+            "block": 12600050,
+            "roles": [
+              "principal-chain"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 12600070,
+            "roles": [
+              "authority-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/1",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 12600070,
+            "roles": [
+              "authority-page",
+              "voter"
+            ]
+          },
+          {
+            "url": "acc://pv2-bank-5.acme/book/2",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 12600070,
+            "roles": [
+              "authority-page"
+            ]
+          },
+          {
+            "url": "acc://bvn-BVN2.acme/synthetic",
+            "partition": "acc://bvn-BVN2.acme",
+            "block": 12600070,
+            "roles": [
+              "synthetic-chain"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 12600090,
+            "roles": [
+              "delegate-book"
+            ]
+          },
+          {
+            "url": "acc://pv2-dele-5.acme/book/1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 12600090,
+            "roles": [
+              "delegate-page"
+            ]
+          },
+          {
+            "url": "acc://pv2-erp-5.acme/book/1",
+            "partition": "acc://bvn-BVN3.acme",
+            "block": 12600090,
+            "roles": null,
+            "declared": [
+              "initiator-signer",
+              "certified-key-page"
+            ]
+          }
+        ],
+        "pagesBound": 8,
+        "unproven": [
+          "g1_initiator_signature_not_carried"
+        ],
+        "authorizationMode": "authorities_required",
+        "arrivals": [
+          {
+            "kind": "signature",
+            "account": "acc://pv2-bank-5.acme/book/1",
+            "block": 65
+          },
+          {
+            "kind": "produced",
+            "account": "acc://bvn-BVN2.acme/synthetic",
+            "block": 66
+          }
+        ]
+      }
+    },
+    {
+      "name": "initiator-member-page-records-no-role",
+      "description": "the member is carried and proves ErpPage1 an initiator-signer, but the page does not record the role: justified by the proven states, not recorded",
+      "file": "initiator-member-page-records-no-role.json",
+      "sha256": "55bb1a76aaf69fc1cc281d649382f5195bc1a5131e19f5213bd901a63cb866df",
+      "expect": "refused",
+      "state": "g1_role_mismatch",
+      "partition": "BVN3",
+      "block": 12600090
+    },
+    {
+      "name": "initiator-member-not-the-initiator",
+      "description": "the member is a VALID signature of ErpPage1 (a second key signed after the initiating one) that did not initiate the transaction: its metadata hash is not Header.Initiator, so the role it would justify is not the transaction's",
+      "file": "initiator-member-not-the-initiator.json",
+      "sha256": "311dc6054464944370029e6089af99d621e0b8ddca1aaecb93412f5bf9961099",
+      "expect": "refused",
+      "state": "g1_role_mismatch",
+      "partition": "BVN3",
+      "block": 12600090
+    },
+    {
+      "name": "initiator-key-not-held",
+      "description": "ErpPage1's certified history never held the signing key (K4): the signature is recorded in its chain but no state of the page at the signature's version during its arrival block holds the key",
+      "file": "initiator-key-not-held.json",
+      "sha256": "c7517aefe0267e2119d7bfe57a33ace3e9049d2b5bc4e3b6d16c04b7d72fd59d",
+      "expect": "refused",
+      "state": "g1_initiator_key_not_held",
+      "partition": "BVN3",
+      "block": 12600090
+    },
+    {
+      "name": "initiator-member-no-history",
+      "description": "the member is carried without ErpPage1's certified history, which the proof of its key needs",
+      "file": "initiator-member-no-history.json",
+      "sha256": "4c189c349f821850b2a5f61b3f447c30b1f16d0a9bae02cfd27b3e5fc24988e7",
+      "expect": "refused",
+      "state": "g1_history_unavailable",
+      "partition": "BVN3",
+      "block": 12600090
+    },
+    {
+      "name": "initiator-member-arrival-altered",
+      "description": "the claimed arrival block differs from the block ErpPage1's signature-index chain gives",
+      "file": "initiator-member-arrival-altered.json",
+      "sha256": "16a29c4b48c6f82e2a771bcae8fb5d8a69f4ea0bbf9421b65bb1aff9e5c639dc",
+      "expect": "refused",
+      "state": "g1_arrival_unproven",
+      "partition": "BVN3",
+      "block": 12600090
+    },
+    {
+      "name": "initiator-member-receipt-altered",
+      "description": "a step of the member's receipt altered: it no longer ends at ErpPage1's signature chain root as bound at the page's block",
+      "file": "initiator-member-receipt-altered.json",
+      "sha256": "182bd207215180d4781f020d62ada40adc21ed97da248d0a795ca79e4ef9d6e3",
+      "expect": "refused",
+      "state": "g1_block_before_signature",
+      "partition": "BVN3",
+      "block": 12600090
+    },
+    {
+      "name": "initiator-member-header-names-no-initiator",
+      "description": "the member is carried but the transaction's header names no initiator: the role the member claims is not one the transaction justifies",
+      "file": "initiator-member-header-names-no-initiator.json",
+      "sha256": "543050f2dd1ebc068c4c96584b6a93ba1a2f3764f82f0e1b883fba9c1fdf60b4",
+      "expect": "refused",
+      "state": "g1_role_mismatch",
+      "partition": "BVN3",
+      "block": 12600090
+    },
+    {
+      "name": "initiator-member-without-transaction",
+      "description": "the member is carried but the document carries no transaction, so nothing says what initiated it",
+      "file": "initiator-member-without-transaction.json",
+      "sha256": "c1c5da8e64391c5fdd863ae3521954b788f5676f51947e3f687e7b38913ba98f",
+      "expect": "refused",
+      "state": "g1_transaction_mismatch",
+      "partition": "BVN1",
+      "block": 12600050
+    },
+    {
+      "name": "initiator-member-is-an-authority-signature",
+      "description": "the member's signature is an authority signature, which cannot initiate a transaction",
+      "file": "initiator-member-is-an-authority-signature.json",
+      "sha256": "cee0dbb1c2702d59098121cf5f89b7b3ba329002b3dd40d25e30cc4eadff16ee",
+      "expect": "refused",
+      "state": "g1_signature_invalid",
+      "partition": "BVN3",
+      "block": 12600090
+    },
+    {
+      "name": "initiator-member-no-arrival-proof",
+      "description": "the member is carried without its arrival proof: the block it arrived in, which the key is judged at, is not established",
+      "file": "initiator-member-no-arrival-proof.json",
+      "sha256": "4653cc15782e56a0b07905199b9e3b78ece62d9c867197ff8eda9dec330abbdb",
+      "expect": "refused",
+      "state": "g1_arrival_unproven",
+      "partition": "BVN3",
+      "block": 12600090
+    },
+    {
+      "name": "initiator-delegator-not-a-proven-page",
+      "description": "the initiating signature is delegated through a page that is not among the proven pages: it is in the signature's path and the document does not prove it",
+      "file": "initiator-delegator-not-a-proven-page.json",
+      "sha256": "a88b64dbdb8c8be64907510ba216acc6d6a9584fd049de327df5951f2c7203c6",
+      "expect": "refused",
+      "state": "g1_initiator_page_unproven",
+      "partition": "BVN1",
+      "block": 12600050
+    },
+    {
+      "name": "initiator-page-blacklists-the-transaction-type",
+      "description": "the transaction is an UpdateAccountAuth (one of the two types a page can blacklist) and ErpPage1 blacklisted it (UpdateAllowed) before the initiating signature arrived: its chain holds the signature, but no state of the page at the signature's version during the arrival block both held the key and allowed the type",
+      "file": "initiator-page-blacklists-the-transaction-type.json",
+      "sha256": "d998fbff85dceac3c7e69b43392d80254d39f68e93652f039a4ad571f3b3d333",
+      "expect": "refused",
+      "state": "g1_initiator_key_not_held",
+      "partition": "BVN3",
+      "block": 12600090
+    },
+    {
+      "name": "initiator-member-in-20-document",
+      "description": "a document that says 2.0 but carries the member (with the other 2.1 members): refused as every 2.0 document that carries 2.1 members is",
+      "file": "initiator-member-in-20-document.json",
+      "sha256": "f22a9b7f5ad427a26a2ced977909d6bf1648ca09add33e59ce554427d9068053",
+      "expect": "refused"
+    }
+  ]
+}

@@ -585,8 +585,11 @@ func deriveRoles(ev *Evidence, byURL map[string]*provenAcct, anchors map[string]
 	}
 
 	// (f) The initiator's pages, from the initiating signature when the evidence carries it (xroles.go).
+	if txn == nil && ev.InitiatingSignature != nil {
+		return nil, refusal21(StateTransactionMismatch, x.id, x.block, "the evidence carries an initiating signature but no transaction, so what initiated it is not judged")
+	}
 	if txn != nil {
-		pages, found, err := initiatorPages(ev, txn, byURL, network)
+		pages, found, err := initiatorPages(ev, txn, byURL, tl, x, network)
 		if err != nil {
 			return nil, err
 		}

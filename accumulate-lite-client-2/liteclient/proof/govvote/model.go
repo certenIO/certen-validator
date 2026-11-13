@@ -678,15 +678,7 @@ func (e *pageEvaluation) keyHolding(s SigFact, v uint64) (int, int, error) {
 	if err != nil {
 		return 0, 0, &VoteUnevaluable{Page: e.page, Reason: fmt.Sprintf("signature %s: %v", short(s.ID), err)}
 	}
-	holding := 0
-	for _, c := range cands {
-		if blacklisted(c, e.m.facts.TxType) {
-			continue
-		}
-		if _, _, ok := c.EntryByKeyHash(kh); ok {
-			holding++
-		}
-	}
+	holding, _ := KeyHeldDuring(e.tl, e.m.facts.TxType, v, s.Block, kh)
 	if holding == 0 {
 		return 0, 0, &VoteUnevaluable{Page: e.page, Reason: fmt.Sprintf(
 			"signature %s is recorded, but no state of the page at version %d during block %d both holds "+
@@ -695,6 +687,23 @@ func (e *pageEvaluation) keyHolding(s SigFact, v uint64) (int, int, error) {
 	}
 	e.holding[ck], e.cands[ck] = holding, len(cands)
 	return holding, len(cands), nil
+}
+
+// KeyHeldDuring is how many states of a page - from its certified timeline - at signer version v during block held keyHash (a key hash as the
+// page stores it) and did not blacklist a transaction of type typ, and how many states at v there were. It is the one rule of "the page could
+// have accepted this key's signature" that the vote model (keyHolding) and the initiating-signature check of evidence 2.1 (pkg/proof/v2
+// carriedInitiatorPages, DAX-1G) both apply, so the two cannot disagree on it. candidates is 0 when the page did not hold version v during the block.
+func KeyHeldDuring(tl Timeline, typ protocol.TransactionType, v uint64, block int64, keyHash []byte) (holding, candidates int) {
+	cands := ofVersion(tl.CandidatesDuring(block), v)
+	for _, c := range cands {
+		if blacklisted(c, typ) {
+			continue
+		}
+		if _, _, ok := c.EntryByKeyHash(keyHash); ok {
+			holding++
+		}
+	}
+	return holding, len(cands)
 }
 
 // delegateHolding is keyHolding for a delegated vote: the states that carried an entry delegating to its authority.
