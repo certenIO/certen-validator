@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/govsig"
 	"gitlab.com/accumulatenetwork/accumulate/protocol"
 )
 
@@ -35,6 +36,13 @@ type erpInitiatorFixture struct {
 	// initiatorPage is the page of the initiator identity (the declared signer); authorityPage the page of the principal's own book that voted.
 	initiatorPage string
 	authorityPage string
+	// The partitions the network's routing table sends the principal and the declared page to (as read on 2026-11-14).
+	principalPartition string
+	pagePartition      string
+	// How the ordering of each of the two signatures before execution was established (g1_timing_basis.go): the erp page signs first, the
+	// principal's authority page after.
+	erpBasis       string
+	authorityBasis string
 }
 
 var erpInitiatorFixtures = []erpInitiatorFixture{
@@ -48,10 +56,62 @@ var erpInitiatorFixtures = []erpInitiatorFixture{
 		keyPage:       "acc://dax1-probe-g7-erp.acme/book/1",
 		initiatorPage: "acc://dax1-probe-g7-erp.acme/book/1",
 		authorityPage: "acc://dax1-probe-g7.acme/book/1",
+		// The principal and the erp page both route to bvn1 (the routing table: g1_frame_report_test.go, evidence/frame-report-live.txt), so
+		// EXEC_MBI and the page's blocks count one chain: this proof never had a frame to get wrong.
+		principalPartition: "bvn1", pagePartition: "bvn1",
+		// One clock: the erp page stands for the principal (as in every proof before G-85), its own signature is compared with EXEC_MBI and the
+		// authority page, another identity, is conservatively declared cross-partition.
+		erpBasis: TimingBasisLocalOrdering, authorityBasis: TimingBasisExecutionInclusion,
+	},
+	{
+		name: "erp_initiator_r6a",
+		description: "Kermit dax1-r6a (DAX-1 round 6, 2026-11-13, G-83 live probe, refused by the validators with `did not exist at block 16972068: its genesis " +
+			"is at block 16981650`, G-85): a single-leg intent on acc://dax1-r6a.acme/data (bvn3) whose blob 0 declares required_key_book " +
+			"acc://dax1-r6a-erp.acme/book and required_key_page acc://dax1-r6a-erp.acme/book/1 (bvn2, another partition); the erp page signs first " +
+			"(ed25519) and pays, the identity's own page 1 (an authority of the principal) signs after",
+		account:       "acc://dax1-r6a.acme/data",
+		txHash:        "e965cf4ccb51a6f55eb5327ec9fb2c56a591de8c992778694cf6bb0cd9ca8ca3",
+		keyPage:       "acc://dax1-r6a-erp.acme/book/1",
+		initiatorPage: "acc://dax1-r6a-erp.acme/book/1",
+		authorityPage: "acc://dax1-r6a.acme/book/1",
+		// The erp page is on ANOTHER partition than the principal: its blocks (genesis 16981650) and the principal's EXEC_MBI (16972068) are
+		// counters of two different chains.
+		principalPartition: "bvn3", pagePartition: "bvn2",
+		// Two clocks: EXEC_MBI is the principal's, so the authority page (the principal's identity) is compared with it and the erp page is not.
+		erpBasis: TimingBasisExecutionInclusion, authorityBasis: TimingBasisLocalOrdering,
 	},
 }
 
-func proveErpReplayed(t *testing.T, fx erpInitiatorFixture) (*G1Result, *replayClient) {
+// erpNetwork is Kermit's network-status answer as recorded (testdata/g1_erp_initiator/network_status_kermit.json, the exact bytes): the routing
+// table the production proof reads from the live endpoint (G1Layer.networkInfo) to learn which partition an account is on.
+func erpNetwork(t *testing.T) *govsig.Network {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("testdata", "g1_erp_initiator", "network_status_kermit.json"))
+	if err != nil {
+		t.Fatalf("recorded network-status: %v", err)
+	}
+	n, err := govsig.ParseNetworkStatus(raw)
+	if err != nil {
+		t.Fatalf("recorded network-status: %v", err)
+	}
+	return n
+}
+
+// replayErpLayer is a G1 layer over the fixture's recorded exchanges, with the recorded routing table in place of the live read.
+func replayErpLayer(t *testing.T, fx erpInitiatorFixture) (*G1Layer, *replayClient) {
+	t.Helper()
+	capture := loadErpCapture(t, fx)
+	rc := newReplayClient(t, capture)
+	am, err := NewArtifactManager(t.TempDir())
+	if err != nil {
+		t.Fatalf("artifact manager: %v", err)
+	}
+	g1 := NewG1Layer(rc, am, "")
+	g1.network = erpNetwork(t)
+	return g1, rc
+}
+
+func loadErpCapture(t *testing.T, fx erpInitiatorFixture) *recordedCapture {
 	t.Helper()
 	f, err := os.Open(filepath.Join("testdata", "g1_erp_initiator", fx.name+".json.gz"))
 	if err != nil {
@@ -73,14 +133,15 @@ func proveErpReplayed(t *testing.T, fx erpInitiatorFixture) (*G1Result, *replayC
 	if len(capture.Exchanges) == 0 || capture.TxHash != fx.txHash || capture.Account != fx.account || capture.KeyPage != fx.keyPage {
 		t.Fatalf("capture %s is for %s %s %s, not the fixture's", fx.name, capture.Account, capture.TxHash, capture.KeyPage)
 	}
-	rc := newReplayClient(t, &capture)
-	am, err := NewArtifactManager(t.TempDir())
-	if err != nil {
-		t.Fatalf("artifact manager: %v", err)
-	}
+	return &capture
+}
+
+func proveErpReplayed(t *testing.T, fx erpInitiatorFixture) (*G1Result, *replayClient) {
+	t.Helper()
+	g1, rc := replayErpLayer(t, fx)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	res, err := NewG1Layer(rc, am, "").ProveG1(ctx, G1Request{
+	res, err := g1.ProveG1(ctx, G1Request{
 		G0Request: G0Request{Account: fx.account, TxHash: fx.txHash, Chain: "main"}, KeyPage: fx.keyPage})
 	if err != nil {
 		t.Fatalf("G1 over the live erp-initiated transaction must hold: %v", err)

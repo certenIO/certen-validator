@@ -18,8 +18,22 @@ import (
 // G-83 (the verifier half): GoverningFactsFromVoteEvidence refuses evidence that holds none with g1_initiator_page_unproven.
 const erpG7VoteEvidence = "../../accumulate-lite-client-2/liteclient/proof/consolidated_governance-proof/testdata/g1_erp_initiator/erp_initiator_g7.vote_evidence.json"
 
+// DAX-1G-R2 (G-85): the same for the live intent the validators refused on 2026-11-13, acc://e965cf4c...@dax1-r6a.acme/data (DAX-1 round 6): the erp
+// page acc://dax1-r6a-erp.acme/book/1 is on ANOTHER partition (bvn2) than the principal (bvn3), so the proof of it only exists since the key page is
+// judged in its own partition's block numbers (accumulate-lite-client-2 g1_frame.go).
+const erpR6aVoteEvidence = "../../accumulate-lite-client-2/liteclient/proof/consolidated_governance-proof/testdata/g1_erp_initiator/erp_initiator_r6a.vote_evidence.json"
+
 func TestGoverningFactsOfTheLiveErpInitiatedIntentNameTheInitiatingPage(t *testing.T) {
-	raw, err := os.ReadFile(erpG7VoteEvidence)
+	for _, c := range []struct{ name, file, erp, authority, principal string }{
+		{"g7 (the erp page and the principal share a partition)", erpG7VoteEvidence, "acc://dax1-probe-g7-erp.acme/book/1", "acc://dax1-probe-g7.acme/book/1", "acc://dax1-probe-g7.acme/data"},
+		{"r6a (the erp page is on another partition than the principal)", erpR6aVoteEvidence, "acc://dax1-r6a-erp.acme/book/1", "acc://dax1-r6a.acme/book/1", "acc://dax1-r6a.acme/data"},
+	} {
+		t.Run(c.name, func(t *testing.T) { governingFactsOfAnErpEvidence(t, c.file, c.erp, c.authority, c.principal) })
+	}
+}
+
+func governingFactsOfAnErpEvidence(t *testing.T, file, erp, authority, principal string) {
+	raw, err := os.ReadFile(file)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,7 +45,6 @@ func TestGoverningFactsOfTheLiveErpInitiatedIntentNameTheInitiatingPage(t *testi
 	if err != nil {
 		t.Fatalf("the vote evidence of a live erp-initiated intent does not name its initiator: %v", err)
 	}
-	const erp = "acc://dax1-probe-g7-erp.acme/book/1"
 	if len(facts.Initiators) != 1 || facts.Initiators[0] != govvote.CanonicalAccSpelling(erp) {
 		t.Fatalf("the binding reads the initiating pages %v, want [%s]", facts.Initiators, erp)
 	}
@@ -42,12 +55,12 @@ func TestGoverningFactsOfTheLiveErpInitiatedIntentNameTheInitiatingPage(t *testi
 	for _, s := range facts.Signatures {
 		signers[s.Signer] = true
 	}
-	for _, want := range []string{erp, "acc://dax1-probe-g7.acme/book/1"} {
+	for _, want := range []string{erp, authority} {
 		if !signers[govvote.CanonicalAccSpelling(want)] {
 			t.Fatalf("the facts hold no signature of %s: %v", want, signers)
 		}
 	}
-	if !strings.EqualFold(facts.Principal, govvote.CanonicalAccSpelling("acc://dax1-probe-g7.acme/data")) {
+	if !strings.EqualFold(facts.Principal, govvote.CanonicalAccSpelling(principal)) {
 		t.Fatalf("principal %s", facts.Principal)
 	}
 }
