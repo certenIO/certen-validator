@@ -71,12 +71,17 @@ const (
 	ModeAllAuthoritiesDisabled = "all_authorities_disabled"
 )
 
-func unboundRefusal(pa *provenAcct, p *PageState) error {
-	code := StateChainUnboundPending
-	if i := strings.Index(pa.chain.Note, ":"); i > 0 && strings.HasPrefix(pa.chain.Note, "g1_") {
-		code = pa.chain.Note[:i]
+// chainUnboundCode is the named state a capture's reason for not binding a page's chains carries: the code the reason starts with ("g1_chain_unbound_pending: 1
+// transactions pending on the account" is g1_chain_unbound_pending), g1_chain_unbound_pending when it names none. The verifier and the assembler name it the same way.
+func chainUnboundCode(note string) string {
+	if i := strings.Index(note, ":"); i > 0 && strings.HasPrefix(note, "g1_") {
+		return note[:i]
 	}
-	return refusal21(code, pa.anchor.id, pa.anchor.block, "%s: its chains are not bound at the block (%s)", p.URL, pa.chain.Note)
+	return StateChainUnboundPending
+}
+
+func unboundRefusal(pa *provenAcct, p *PageState) error {
+	return refusal21(chainUnboundCode(pa.chain.Note), pa.anchor.id, pa.anchor.block, "%s: its chains are not bound at the block (%s)", p.URL, pa.chain.Note)
 }
 
 // boundChain returns the named chain among a page's bound chains.

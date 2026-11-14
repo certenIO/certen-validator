@@ -643,11 +643,7 @@ func delegatorPages(sig protocol.Signature) []*url.URL {
 // chainAnchor is the bound root of the named chain of a page, when its chains are bound.
 func chainAnchor(pa *provenAcct, p *PageState, name string) ([]byte, error) {
 	if !pa.chain.Bound {
-		code := StateChainUnboundPending
-		if i := strings.Index(pa.chain.Note, ":"); i > 0 && strings.HasPrefix(pa.chain.Note, "g1_") {
-			code = pa.chain.Note[:i]
-		}
-		return nil, refusal21(code, pa.anchor.id, pa.anchor.block, "%s: its chains are not bound at the block (%s)", p.URL, pa.chain.Note)
+		return nil, refusal21(chainUnboundCode(pa.chain.Note), pa.anchor.id, pa.anchor.block, "%s: its chains are not bound at the block (%s)", p.URL, pa.chain.Note)
 	}
 	for _, c := range p.Chains {
 		if c.Name == name && c.Count > 0 {

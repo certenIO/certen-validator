@@ -101,7 +101,9 @@ non-conforming.
   saying page-level minimum thresholds do not yet exist. Verifying it would
   claim more than the protocol implements. Recorded as
   `block-threshold-not-enforced-by-protocol`.
-* **Ordering for a CROSS-PARTITION signer.** The `localBlock <= execMBI`
+* **Ordering for a CROSS-PARTITION signer.** (EXEC_MBI is a block of the PRINCIPAL's partition, so the signers compared with it are
+  those on the principal's own clock: the principal's identity, and the key page when it is on the principal's partition. A key page on
+  another partition is not on that clock; see 8.7.) The `localBlock <= execMBI`
   comparison is skipped, correctly — those indices count different chains, and
   comparing them is not a weak check but a meaningless one that returns a
   confident answer. Ordering rests instead on **execution inclusion**: Accumulate
@@ -432,6 +434,26 @@ Verifier MUST:
 1. Verify all eligible signatures cryptographically,
 2. Count **unique** valid member keys,
 3. Require `count >= Threshold`.
+
+### 8.7 A key page on another partition than the principal (DAX-1G-R2, G-85)
+
+`EXEC_MBI` is a block of the partition that holds the PRINCIPAL. A key page's history is a sequence of blocks of the partition that holds the PAGE. They are one
+counter only when the two accounts are on one partition (one ADI identity always is; two identities are when the network's routing table sends them to one partition).
+
+1. A key page on the principal's partition: `State_exec(P)` is as in 8.4, taken at `EXEC_MBI`.
+2. A key page on another partition: `EXEC_MBI` is NOT a block of the page's chain and MUST NOT be applied to it. `State_exec(P)` is the page after every governance event
+   with `localBlock <= F`, where `F` is the last block of the PAGE's partition in which a counted signature of this transaction was recorded on the page (a signature
+   whose signer is the page, or a delegated vote recorded on it), each such block being the `receipt.localBlock` of the message on the page's own signature chain,
+   bound to the message by its receipt. The partition that holds a signer's page judges its signature at that arrival block (`docs/proof/G1_CROSS_PARTITION.md` section 1,
+   fact 1). The genesis and mutations in the snapshot are blocks of the page's partition; `ExecTerms` stay the principal's.
+3. A key page on another partition with no counted signature of the transaction has no such block: the proof is REFUSED by name. It is never taken at `EXEC_MBI`, at the
+   page's head or at its genesis.
+4. If the routing table cannot be read, whether the page is on the principal's partition is not established: an outage (`SignatureEvidenceIncomplete`, route
+   `key-page-frame`), not a governance verdict.
+
+The `localBlock <= EXEC_MBI` ordering check (1.2.1) is applied only to signers on the principal's clock; the timing record's `principalPage` names that clock (the
+principal when the key page is on another partition, the key page otherwise). The shape of `G1Result` is unchanged: nothing in it says which of 2 or 1 was taken, so the
+frame is readable only from the blocks of the genesis and mutations against `EXEC_MBI`, and from the vote evidence (`docs/proof/G1_CROSS_PARTITION.md` D9).
 
 ---
 

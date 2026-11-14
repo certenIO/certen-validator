@@ -119,6 +119,21 @@ refused with code 19 **counts as a v16 verdict and stamps the state v16**, which
 - The first natural intent after H whose initiator is a separate non-voting identity settles: its stored proof is evidence 2.1 with an
   `initiatingSignature` member, lists the initiator page's `initiator-signer` role as proven, and verifies offline with `proofverify`.
   A `[INTENT-CERT] REJECTED` for a certificate whose proof carries the member at height <= H means a proposer built it early (an old build).
+  This holds only for an intent whose initiating page is on the SAME partition as its principal until the G-85 build below is running: before it, the validators
+  refused an intent whose initiator page routes to another partition (about 5 in 8 of the erp pairs on Kermit's routing table) at G1, before the member is reached.
+
+## Verify, after the G-85 build (the key page of G1 in its own partition's block numbers)
+
+`pl/dax-1-g83-frame` changes the validators' proof generation only (the lite client CLI): `docs/proof/G1_CROSS_PARTITION.md` D9. It is not a rules change, so there is no activation and no
+rollback step; every validator must run the same build before the check below (until then an intent whose key page is on another partition than its principal cannot reach
+matching attestations: it fails to reach threshold, it cannot commit a wrong certificate). Roll all seven to the one image, then:
+
+- The lead runs `state/dax/evidence/dax1/g83-live/g83-live-probe.mts` on a FRESH payer name whose ADI and `-erp` ADI route to DIFFERENT partitions (read each ADI's partition
+  from the routing table before submitting: `network-status`, or `TestReportG1FrameFacts` in the lite client with the build tag `g1record`).
+- Expected: the gateway reports `completed` (not `failed` / `validator_unprocessed`); the validators' log shows `[G1] [FRAME] key page ... EXEC_MBI N is a block of <principal partition>, so the page's state is taken at block M of <page partition>`;
+  the stored proof is evidence 2.1 with the `initiatingSignature` member; `chain-check proof verify` (proof-verify 0.3.1) reports G1 verified and the erp page's `initiator-signer` role proven.
+- A principal that has a standing pending transaction (the lab's shared payment accounts) is a separate limit, not fixed by this build: the refusal now names it
+  (`g1_chain_unbound_pending`, D9b) instead of `has no signature chain bound at the block`.
 - Restart the whole fleet: one chain, equal app hashes, every node answering `/certen/g1_activation` with the same two records.
 
 ## Rollback
@@ -130,6 +145,9 @@ refused with code 19 **counts as a v16 verdict and stamps the state v16**, which
   the intents it certified. Roll forward only.
 
 ## What is not proven by this change (carried to the pull request)
+
+- The proof v2 capture and the evidence 2.1 build for an erp page on a DIFFERENT partition than its principal, against live Kermit, are not reproducible offline (the partition's anchor has to be
+  inside the node's ~900-block retention): the world vectors cover the document (`xworld.LayoutBVNProven`) and the check above is the first live run (DAX-1G-R2).
 
 - `execution.CheckIntentCertificate` (the offline check) cannot know the height: it reads the member always. A certificate that carries a
   member and was accepted by consensus below H was judged with the member cleared; the collector never emits one before H, so this

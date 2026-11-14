@@ -688,8 +688,15 @@ func (g1 *G1Layer) evaluateCandidate(ctx context.Context, cand sigCandidate, key
 	// comparing indices. That is a weaker claim than the same-partition case and
 	// it is recorded as such on the evidence rather than being passed off as the
 	// same thing.
+	//
+	// WHICH account's clock execMBI is. It is the PRINCIPAL's. The key page shares it for every proof that was ever recorded, and then
+	// the key page stands for the principal here exactly as before. A key page on ANOTHER partition (the erp initiator whose identity
+	// routes elsewhere) does not: its own signature, which shares its identity, was subtracted from the principal's counter and
+	// refused as "signed after execution" while the principal's own authority page, which IS on the principal's clock, was declared
+	// cross-partition (g1_frame.go, DAX-1G-R2).
 	signerPage := cand.pageFor(keyPage)
-	sameClock := sameRoutingPartition(signerPage, snapshot.Page)
+	clock := g1.clockAccount(snapshot.Page)
+	sameClock := sameRoutingPartition(signerPage, clock)
 	timingVerified := true
 	if sameClock {
 		timingVerified = g1.signatureVerifier.ValidateSignatureTiming(receipt, snapshot.ExecTerms.MBI)
@@ -705,7 +712,7 @@ func (g1 *G1Layer) evaluateCandidate(ctx context.Context, cand sigCandidate, key
 	// g1_timing_basis.go: the marker travels beside the hashed shape, never
 	// inside it, so a reader can tell a re-derived ordering from an inherited
 	// one without the govRoot moving.
-	timingBasis := newTimingBasis(cand.MessageID, cand.MessageHash, signerPage, snapshot.Page,
+	timingBasis := newTimingBasis(cand.MessageID, cand.MessageHash, signerPage, clock,
 		sameClock, receipt.LocalBlock, snapshot.ExecTerms.MBI)
 
 	validated := ValidatedSignature{

@@ -104,6 +104,17 @@ func rcptHex(r *merkle.Receipt) (string, error) {
 func chainEntries(ctx context.Context, src ChainSource, u *url.URL, p *PageState, name string) ([][]byte, error) {
 	c := boundChain(p, name)
 	if c == nil || c.Count == 0 {
+		if p.ChainError != "" {
+			// The capture could not bind this page's chains and said why (capturePageWith: an account with a pending transaction has a pending
+			// component in its state hash that no API serves). That is the named state the verifier would refuse it with; the assembler gives it,
+			// not an unnamed "has no chain bound" that hides the cause (DAX-F79).
+			var id string
+			if pu, perr := url.Parse(p.Partition); perr == nil && p.Partition != "" {
+				id, _ = protocol.ParsePartitionUrl(pu)
+			}
+			return nil, &NamedState{Code: chainUnboundCode(p.ChainError), Partition: id,
+				Detail: fmt.Sprintf("%s: its chains are not bound at the block (%s)", p.URL, p.ChainError)}
+		}
 		return nil, fmt.Errorf("%s has no %s chain bound at the block", p.URL, name)
 	}
 	es, err := src.Entries(ctx, u, name, c.Count)
