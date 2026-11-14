@@ -135,13 +135,39 @@ func capturePageWith(ctx context.Context, c api.Querier, qr proof.AccumulateQuer
 			return p, nil
 		}
 		if berr := proof.VerifyChainBinding(receipt, at, zero); berr != nil {
-			p.ChainError = fmt.Sprintf("g1_chain_unbound: neither the current roots nor the roots at block %d bind: %v", block, berr)
+			p.ChainError = unboundReason(block, pendingNow(ctx, c, u), berr)
 			return p, nil
 		}
 		chains = at
 	}
 	p.Chains, p.PendingHash = chains, zero
 	return p, nil
+}
+
+// pendingNow is the number of transactions pending on the account as the node serves it now, 0 when it cannot be read. A query for a past block
+// (ForHeight) does not report the pending set, so the guard above (ar.Pending) can never fire for the block the capture reads; this is the only count the
+// node gives, and it is used to name the likely cause, never to decide anything (DAX-F79).
+func pendingNow(ctx context.Context, c api.Querier, u *url.URL) uint64 {
+	r, err := c.Query(ctx, u, &api.DefaultQuery{})
+	if err != nil {
+		return 0
+	}
+	if ar, ok := r.(*api.AccountRecord); ok && ar.Pending != nil {
+		return ar.Pending.Total
+	}
+	return 0
+}
+
+// unboundReason is why a page's chains could not be bound at a block when neither the current roots nor the roots at the block satisfy the check. An account
+// with a pending transaction has a pending component in its state hash that covers the transaction's internal state (its payments, authority votes
+// and signatures: internal/database/observer_prod.go hashPending), which no API serves, so H(chains || pending) cannot be recomputed and the roots can
+// never be bound while anything is pending: that is named g1_chain_unbound_pending when the account has pending transactions now. The count is read now,
+// not at the block, so the reason says so; without one the reason is the plain g1_chain_unbound.
+func unboundReason(block, pending uint64, berr error) string {
+	if pending > 0 {
+		return fmt.Sprintf("%s: %d transactions are pending on the account now, and an account's state hash covers its pending transactions' internal state, which no API serves, so its chain roots cannot be bound while any is pending; neither the current roots nor the roots at block %d bind: %v", StateChainUnboundPending, pending, block, berr)
+	}
+	return fmt.Sprintf("g1_chain_unbound: neither the current roots nor the roots at block %d bind: %v", block, berr)
 }
 
 func toChainedReceipt(r *merkle.Receipt) chained_proof.Receipt {

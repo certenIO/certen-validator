@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -221,4 +222,57 @@ func TestProveInitiatingIsAcceptedByTheArrivalDerivation(t *testing.T) {
 	bad(VoteHop{Page: "acc://other.acme/book/1", Message: hex.EncodeToString(seedN("signature", 1))}, []*PageState{p}, "not among the captured pages")
 	bad(VoteHop{Page: p.URL, Message: "zz"}, []*PageState{p}, "not 32 bytes of hex")
 	bad(VoteHop{Page: p.URL, Message: hex.EncodeToString(seedN("absent", 1))}, []*PageState{p}, "does not hold the entry")
+}
+
+// DAX-1G-R2 (DAX-F79): a page whose chains the capture could not bind says why in ChainError (capturePageWith: an account with a pending transaction
+// has a pending component in its state hash that no API serves, so the chain roots cannot be checked against it). The assembler hit that page
+// first and answered with an unnamed "<account> has no signature chain bound at the block", which is what the lab's four multi-authority
+// intents on acc://harbor-mfg-tcl97.acme/data ended with on 2026-11-13: the named state g1_chain_unbound_pending was lost between the capture and
+// the operator. The refusal must be the capture's own named state, with the account and the reason.
+func TestProveEntryNamesTheStateTheCaptureGaveForAnUnboundChain(t *testing.T) {
+	for _, c := range []struct{ note, code string }{
+		{"g1_chain_unbound_pending: 1 transactions pending on the account", StateChainUnboundPending},
+		{"g1_chain_unbound: neither the current roots nor the roots at block 400 bind: x", "g1_chain_unbound"},
+		{"g1_chain_unread: no chain", "g1_chain_unread"},
+		{"g1_chain_unread_at_block: x", "g1_chain_unread_at_block"},
+		{"unnamed reason with no code", StateChainUnboundPending},
+	} {
+		src, p, _ := signatureWorld(t)
+		p.Chains, p.PendingHash, p.ChainError = nil, "", c.note
+		_, err := ProveEntry(context.Background(), src, p, "signature", seedN("signature", 3))
+		var ns *NamedState
+		if !errors.As(err, &ns) {
+			t.Fatalf("%q: the refusal is not a named state: %v", c.note, err)
+		}
+		if ns.Code != c.code || !strings.Contains(ns.Detail, p.URL) || !strings.Contains(ns.Detail, c.note) {
+			t.Fatalf("%q: named %q with detail %q, want code %q naming the account %s and the capture's reason", c.note, ns.Code, ns.Detail, c.code, p.URL)
+		}
+	}
+
+	// A page whose chains ARE bound but which holds no signature chain keeps the plain refusal: there is nothing to name.
+	src, p, _ := signatureWorld(t)
+	p.Chains = nil
+	if _, err := ProveEntry(context.Background(), src, p, "signature", seedN("signature", 3)); err == nil ||
+		!strings.Contains(err.Error(), "has no signature chain bound at the block") {
+		t.Fatalf("a page with no chain and no capture reason: %v", err)
+	}
+}
+
+// DAX-1G-R2 (DAX-F79): the reason a capture gives for a page whose chains do not bind names a pending transaction when the account has one now, with
+// the code the verifier and the assembler name it by; without one it is the plain g1_chain_unbound.
+func TestUnboundReasonNamesAPendingTransaction(t *testing.T) {
+	berr := errors.New("H(chains||pending) is not the receipt's second sibling")
+	with := unboundReason(16988238, 1, berr)
+	if got := chainUnboundCode(with); got != StateChainUnboundPending {
+		t.Fatalf("with a pending transaction the code is %q: %s", got, with)
+	}
+	for _, want := range []string{"1 transactions are pending on the account now", "no API serves", "block 16988238", berr.Error()} {
+		if !strings.Contains(with, want) {
+			t.Fatalf("the reason %q does not say %q", with, want)
+		}
+	}
+	without := unboundReason(16988238, 0, berr)
+	if got := chainUnboundCode(without); got != "g1_chain_unbound" || strings.Contains(without, "pending on the account now") {
+		t.Fatalf("with nothing pending the reason is the plain g1_chain_unbound: %q (code %q)", without, got)
+	}
 }
