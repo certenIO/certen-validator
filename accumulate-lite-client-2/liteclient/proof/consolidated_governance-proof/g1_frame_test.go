@@ -99,6 +99,10 @@ func TestLastBlockOnPage(t *testing.T) {
 	if got, ok := lastBlockOnPage(ev, frameErpPage); !ok || got != 12 {
 		t.Fatalf("F = %d, %v; want 12 (the delegated vote recorded on the page is later than its signatures)", got, ok)
 	}
+	// Signatures alone, the later one first and the earlier one second: F is the later, whatever the order of the evidence.
+	if got, ok := lastBlockOnPage(frameEvidence(frameErpPage, 9, 5, 7), frameErpPage); !ok || got != 9 {
+		t.Fatalf("F of signatures at 9, 5 and 7 = %d, %v; want 9", got, ok)
+	}
 	if got, ok := lastBlockOnPage(ev, "acc://other.acme/book/1"); !ok || got != 200 {
 		t.Fatalf("F of the other page = %d, %v; want 200", got, ok)
 	}
