@@ -29,7 +29,7 @@ import (
 func TestRecordG1ErpInitiatorFixtures(t *testing.T) {
 	want := os.Getenv("G1_RECORD_FIXTURE")
 	if want == "" {
-		t.Skip("G1_RECORD_FIXTURE names the fixture to record; it is not set")
+		t.Fatal("G1_RECORD_FIXTURE names the fixture to record; it is not set")
 	}
 	ep := os.Getenv("ACC_V3_ENDPOINT")
 	if ep == "" {
@@ -79,7 +79,7 @@ func TestRecordG1ErpInitiatorFixtures(t *testing.T) {
 // declared page from it, as the production proof reads them from the live endpoint (G1Layer.networkInfo).
 func TestRecordKermitNetworkStatus(t *testing.T) {
 	if os.Getenv("G1_RECORD_NETWORK_STATUS") == "" {
-		t.Skip("G1_RECORD_NETWORK_STATUS is not set")
+		t.Fatal("G1_RECORD_NETWORK_STATUS is not set")
 	}
 	ep := os.Getenv("ACC_V3_ENDPOINT")
 	if ep == "" {
@@ -124,7 +124,7 @@ func TestRecordKermitNetworkStatus(t *testing.T) {
 func TestWriteG1ErpInitiatorVoteEvidenceGolden(t *testing.T) {
 	want := os.Getenv("G1_RECORD_FIXTURE")
 	if want == "" {
-		t.Skip("G1_RECORD_FIXTURE names the fixture whose golden is written; it is not set")
+		t.Fatal("G1_RECORD_FIXTURE names the fixture whose golden is written; it is not set")
 	}
 	found := false
 	for _, fx := range erpInitiatorFixtures {
