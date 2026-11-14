@@ -113,12 +113,26 @@ func (ab *AuthorityBuilder) BuildAuthoritySnapshotFor(ctx context.Context, keyPa
 	if err != nil {
 		return nil, err
 	}
+	return ab.snapshotAt(tl, keyPage, execMBI, ExecTerms{MBI: execMBI, Witness: execWitness}, governedTx)
+}
+
+// snapshotAt is the snapshot of an already replayed page as of one block.
+//
+// block is a block of the PAGE's OWN partition (the blocks its timeline's entries were recorded in); terms are the execution
+// terms of the governed transaction, which are the PRINCIPAL's and are carried unchanged. For a page on the principal's partition the
+// block is the execution block (terms.MBI), which is what BuildAuthoritySnapshotFor passes; for a page on another partition it is the
+// last block of that page's partition in which a counted signature of the transaction was recorded on it (g1_frame.go): a block
+// number of one partition applied to a page of another partition is a number of a different chain.
+func (ab *AuthorityBuilder) snapshotAt(tl *pageTimeline, keyPage string, block int64, terms ExecTerms,
+	governedTx string) (*AuthoritySnapshot, error) {
+
+	keyPageScope := normalizeAccURL(keyPage)
 	genesis := tl.Genesis
 
-	execPage := tl.At(execMBI)
+	execPage := tl.At(block)
 	if execPage == nil {
 		return nil, ValidationError{Msg: fmt.Sprintf("%s did not exist at block %d: its genesis is at block %d",
-			keyPageScope, execMBI, genesis.LocalBlock)}
+			keyPageScope, block, genesis.LocalBlock)}
 	}
 	cutAt := len(tl.States)
 	if governedTx != "" {
@@ -134,7 +148,7 @@ func (ab *AuthorityBuilder) BuildAuthoritySnapshotFor(ctx context.Context, keyPa
 
 	var mutations []MutationEvent
 	for i, s := range tl.States {
-		if s.Event == nil || s.Block > execMBI || i >= cutAt {
+		if s.Event == nil || s.Block > block || i >= cutAt {
 			continue
 		}
 		mutations = append(mutations, MutationEvent{
@@ -148,7 +162,7 @@ func (ab *AuthorityBuilder) BuildAuthoritySnapshotFor(ctx context.Context, keyPa
 	}
 
 	fmt.Printf("[AUTHORITY] Found genesis at block %d with %d mutations at or before block %d\n",
-		genesis.LocalBlock, len(mutations), execMBI)
+		genesis.LocalBlock, len(mutations), block)
 
 	ab.noteRulesOf(execPage)
 	finalState := stateFromPage(execPage)
@@ -165,11 +179,8 @@ func (ab *AuthorityBuilder) BuildAuthoritySnapshotFor(ctx context.Context, keyPa
 
 	// Build authority snapshot
 	snapshot := &AuthoritySnapshot{
-		Page: keyPage,
-		ExecTerms: ExecTerms{
-			MBI:     execMBI,
-			Witness: execWitness,
-		},
+		Page:       keyPage,
+		ExecTerms:  terms,
 		StateExec:  finalState,
 		Genesis:    *genesis,
 		Mutations:  mutations,

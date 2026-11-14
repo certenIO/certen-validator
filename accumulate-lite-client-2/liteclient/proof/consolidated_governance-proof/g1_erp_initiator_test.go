@@ -230,3 +230,109 @@ func TestG1ErpInitiator_VoteEvidenceHoldsTheInitiatingSignature(t *testing.T) {
 		})
 	}
 }
+
+// DAX-1G-R2 (G-85): the key page is judged in the block numbers of ITS OWN partition. For every fixture, through the production ProveG1:
+//   - the snapshot names the declared page and carries the PRINCIPAL's execution terms;
+//   - a page on the principal's partition is the page after every change at or before EXEC_MBI (g7, as before);
+//   - a page on another partition (r6a) is the page after every change at or before F, the last block of ITS partition in which one of its
+//     counted signatures was recorded, F being re-derived here from the vote evidence alone; every number the snapshot carries is in the page's
+//     own frame (genesis, mutations), which for r6a are blocks ABOVE the principal's EXEC_MBI;
+//   - the timing record names the clock EXEC_MBI counts and compares only the signers on it.
+func TestG1ErpInitiator_SnapshotIsInThePagesOwnFrame(t *testing.T) {
+	for _, fx := range erpInitiatorFixtures {
+		t.Run(fx.name, func(t *testing.T) {
+			res, _ := proveErpReplayed(t, fx)
+			snap := res.AuthoritySnapshot
+			if normalizeAccURL(snap.Page) != normalizeAccURL(fx.keyPage) {
+				t.Fatalf("the snapshot names %s, the declared page is %s", snap.Page, fx.keyPage)
+			}
+			if snap.ExecTerms.MBI != res.ExecMBI || snap.ExecTerms.Witness != res.ExecWitness {
+				t.Fatalf("the execution terms are the principal's (%d, %s): %+v", res.ExecMBI, res.ExecWitness, snap.ExecTerms)
+			}
+			foreign := fx.principalPartition != fx.pagePartition
+
+			// The page's own history, replayed independently of the proof under test (a second layer over the same recording).
+			g1, _ := replayErpLayer(t, fx)
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+			defer cancel()
+			tl, err := g1.authorityBuilder.BuildPageTimeline(ctx, normalizeAccURL(fx.keyPage))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			block := res.ExecMBI
+			if foreign {
+				f, ok := lastBlockOnPage(res.VoteEvidence, fx.keyPage)
+				if !ok {
+					t.Fatalf("the vote evidence holds no counted message of the declared page %s", fx.keyPage)
+				}
+				block = f
+				if tl.Genesis.LocalBlock <= res.ExecMBI {
+					t.Fatalf("the fixture is meant to show a page created after the principal's EXEC_MBI in the principal's numbers: genesis %d, EXEC_MBI %d",
+						tl.Genesis.LocalBlock, res.ExecMBI)
+				}
+				if f == res.ExecMBI || f < tl.Genesis.LocalBlock {
+					t.Fatalf("F %d must be a block of the page's own chain (genesis %d), not EXEC_MBI %d", f, tl.Genesis.LocalBlock, res.ExecMBI)
+				}
+			}
+			want := stateFromPage(tl.At(block))
+			if got := snap.StateExec; got.Version != want.Version || got.Threshold != want.Threshold || len(got.Keys) != len(want.Keys) {
+				t.Fatalf("the snapshot's state %+v is not the page's state at block %d: %+v", got, block, want)
+			}
+			for i, k := range want.Keys {
+				if snap.StateExec.Keys[i] != k {
+					t.Fatalf("key %d: %s, want %s", i, snap.StateExec.Keys[i], k)
+				}
+			}
+			if snap.Genesis.LocalBlock != tl.Genesis.LocalBlock {
+				t.Fatalf("genesis block %d, the page's chain says %d", snap.Genesis.LocalBlock, tl.Genesis.LocalBlock)
+			}
+			for _, m := range snap.Mutations {
+				if m.LocalBlock > block {
+					t.Fatalf("a mutation at block %d is after the block %d the page is judged at", m.LocalBlock, block)
+				}
+			}
+			// ... and every change of the page at or before that block is there, in chain order (a snapshot that took the preliminary
+			// state, or filtered the changes by the principal's counter, lists fewer).
+			var wantMutations []string
+			for _, s := range tl.States {
+				if s.Event != nil && s.Block <= block {
+					wantMutations = append(wantMutations, s.Event.EntryHash)
+				}
+			}
+			if len(wantMutations) == 0 {
+				t.Fatalf("the fixture page has no change at or before block %d: the check below would prove nothing", block)
+			}
+			if len(snap.Mutations) != len(wantMutations) {
+				t.Fatalf("the snapshot lists %d mutations, the page's chain has %d at or before block %d", len(snap.Mutations), len(wantMutations), block)
+			}
+			for i, m := range snap.Mutations {
+				if m.EntryHash != wantMutations[i] {
+					t.Fatalf("mutation %d is %s, the page's chain has %s", i, m.EntryHash, wantMutations[i])
+				}
+			}
+			if snap.Validation.MutationsApplied != len(wantMutations) || snap.Validation.FinalVersion != want.Version {
+				t.Fatalf("the validation summary %+v does not describe the snapshot", snap.Validation)
+			}
+			if res.RequiredThreshold != want.Threshold {
+				t.Fatalf("the reported threshold %d is not the state's %d", res.RequiredThreshold, want.Threshold)
+			}
+
+			// The timing record: the clock named, and which signature rests on which basis.
+			wantClock := fx.keyPage
+			if foreign {
+				wantClock = fx.account
+			}
+			byBasis := map[string]string{}
+			for _, tb := range res.TimingBasis {
+				if normalizeAccURL(tb.PrincipalPage) != normalizeAccURL(wantClock) {
+					t.Fatalf("the timing record of %s names %s as the clock, want %s", tb.SignerPage, tb.PrincipalPage, wantClock)
+				}
+				byBasis[normalizeAccURL(tb.SignerPage)] = tb.Basis
+			}
+			if byBasis[normalizeAccURL(fx.initiatorPage)] != fx.erpBasis || byBasis[normalizeAccURL(fx.authorityPage)] != fx.authorityBasis {
+				t.Fatalf("timing bases %v, want the erp page on %s and the authority page on %s", byBasis, fx.erpBasis, fx.authorityBasis)
+			}
+		})
+	}
+}

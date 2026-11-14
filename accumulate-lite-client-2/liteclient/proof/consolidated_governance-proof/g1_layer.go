@@ -41,6 +41,10 @@ type G1Layer struct {
 	// network is the network's name and routing table (networkInfo), read at most once successfully per proof.
 	networkMu sync.Mutex
 	network   *govsig.Network
+
+	// keyFrame is whether the key page counts blocks on the principal's partition (g1_frame.go). ProveG1 sets it once, before any
+	// goroutine starts; nil for a layer that has not run ProveG1, which then behaves as every proof did before it existed.
+	keyFrame *keyPageFrame
 }
 
 // NewG1Layer creates a new G1 proof layer with enhanced cryptographic capabilities
@@ -134,12 +138,22 @@ func (g1 *G1Layer) ProveG1(ctx context.Context, request G1Request) (*G1Result, e
 
 	fmt.Printf("[G1] G0 foundation established\n")
 
+	// WHICH PARTITION'S BLOCKS THE KEY PAGE IS JUDGED IN (g1_frame.go). EXEC_MBI is a block of the PRINCIPAL's partition; the key page's
+	// history is in blocks of the PAGE's partition. They are one counter only when the page is on the principal's partition.
+	frame, err := g1.frameOfKeyPage(request.G0Request.Account, request.KeyPage)
+	if err != nil {
+		return nil, err
+	}
+	g1.keyFrame = &frame
+	fmt.Printf("[G1] [FRAME] key page %s: %s\n", request.KeyPage, frame)
+
 	// SUPERIOR CONCURRENCY: Run Steps 2 & 3 in parallel (true concurrency advantage over Python)
 	startTime := time.Now()
 	fmt.Printf("[G1] [CONCURRENT] Running authority snapshot and signature enumeration in parallel...\n")
 
 	type authorityResult struct {
 		snapshot *AuthoritySnapshot
+		timeline *pageTimeline // kept for a key page on another partition, whose snapshot is taken after its signatures are counted
 		err      error
 	}
 
@@ -156,6 +170,22 @@ func (g1 *G1Layer) ProveG1(ctx context.Context, request G1Request) (*G1Result, e
 	// Goroutine 1: Build authority snapshot (KPSW-EXEC)
 	go func() {
 		fmt.Printf("[G1] [GOROUTINE-1] Starting authority snapshot building...\n")
+		if frame.foreign {
+			// A key page on another partition: EXEC_MBI is not one of its blocks. Its history is replayed here; the state G1 reports
+			// is taken at the block of ITS partition in which its own signature was recorded, which is known once the signatures
+			// are counted (foreignPageSnapshot). The signature routes need only the page's identity and delegate entries before then.
+			tl, err := g1.authorityBuilder.BuildPageTimeline(ctx, normalizeAccURL(request.KeyPage))
+			if err != nil {
+				authChan <- authorityResult{err: err}
+				return
+			}
+			authChan <- authorityResult{
+				snapshot: g1.authorityBuilder.preliminarySnapshot(tl, request.KeyPage, ExecTerms{MBI: g0Result.ExecMBI, Witness: g0Result.ExecWitness}),
+				timeline: tl,
+			}
+			fmt.Printf("[G1] [GOROUTINE-1] Key page history replayed (%d states); its state is taken once its signatures are counted\n", len(tl.States))
+			return
+		}
 		// The page as the governed transaction executed against it: before
 		// its own update, when it updates the page that signed it.
 		snapshot, err := g1.authorityBuilder.BuildAuthoritySnapshotFor(
@@ -198,6 +228,7 @@ func (g1 *G1Layer) ProveG1(ctx context.Context, request G1Request) (*G1Result, e
 		return nil, fmt.Errorf("concurrent authority snapshot failed: %v", authResult.err)
 	}
 	authoritySnapshot := authResult.snapshot
+	pageTimeline := authResult.timeline
 
 	// Check signature enumeration result
 	if sigResult.err != nil {
@@ -296,6 +327,20 @@ func (g1 *G1Layer) ProveG1(ctx context.Context, request G1Request) (*G1Result, e
 	authorizationResult, err := g1.signatureVerifier.ValidateSignatureSet(ctx, validatedSignatures, *authoritySnapshot, g0Result.TxHash, g0Result.G0ProofComplete, request.G0Request.Account, authz, extraAuthorities)
 	if err != nil {
 		return nil, authorizationEvaluationFailed(err)
+	}
+
+	// A key page on another partition: its state is taken now, at the block of ITS partition in which its own signature was recorded,
+	// from the counted signatures the vote evidence holds (g1_frame.go). It replaces the preliminary snapshot the signature routes
+	// used; no other field of the result depends on it.
+	if frame.foreign {
+		if pageTimeline == nil {
+			return nil, fmt.Errorf("internal: the key page %s is on another partition than the principal but its history was not kept", request.KeyPage)
+		}
+		final, ferr := g1.foreignPageSnapshot(pageTimeline, frame, g0Result, authz.evidence)
+		if ferr != nil {
+			return nil, ferr
+		}
+		authoritySnapshot = final
 	}
 
 	// Step 5: Build G1 result
