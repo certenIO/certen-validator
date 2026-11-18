@@ -339,14 +339,23 @@ func (o *UnifiedOrchestrator) resolveAnchorBinding(
 
 	// The anchor, when it is not the observed transaction, is read back first: the layer needs its block
 	// before it can verify, and the chain's block is the one to state.
+	// The anchor block (AGT-F11) is read from the anchor transaction's own receipt; when the anchor IS the observed
+	// transaction its observation is that receipt. A receipt in another block than the recorded one is refused by name.
 	var anchorObs *chain.ObservationResult
-	if binding != nil && binding.AnchorTxHash != "" && !strings.EqualFold(binding.AnchorTxHash, obs.TxHash) {
-		anchorObs = o.observeAnchor(ctx, proofID, binding.AnchorTxHash, binding, obs, result)
-		if anchorObs != nil {
-			if binding.AnchorBlockNum > 0 && uint64(binding.AnchorBlockNum) != anchorObs.BlockNumber {
-				logfPrintf("🚨 [L5-PERSIST] proof %s: anchor %s is in block %d on chain, not block %d as recorded; "+
-					"the chain's block is used", proofID, binding.AnchorTxHash, anchorObs.BlockNumber, binding.AnchorBlockNum)
-			}
+	recordedBlock := int64(0)
+	if binding != nil && binding.AnchorTxHash != "" {
+		recordedBlock = binding.AnchorBlockNum
+		if strings.EqualFold(binding.AnchorTxHash, obs.TxHash) {
+			anchorObs = obs
+		} else {
+			anchorObs = o.observeAnchor(ctx, proofID, binding.AnchorTxHash, binding, obs, result)
+		}
+		if anchorObs != nil && recordedBlock > 0 && uint64(recordedBlock) != anchorObs.BlockNumber {
+			logfPrintf("🚨 [L5-PERSIST] proof %s: %s{anchor=%s,recorded=%d,receipt=%d}: no layer 5 - neither block is picked",
+				proofID, ErrAnchorBlockMismatch, binding.AnchorTxHash, recordedBlock, anchorObs.BlockNumber)
+			return nil, binding
+		}
+		if anchorObs != nil && recordedBlock == 0 {
 			binding.AnchorBlockNum = int64(anchorObs.BlockNumber)
 		}
 	}
@@ -361,8 +370,13 @@ func (o *UnifiedOrchestrator) resolveAnchorBinding(
 			"(tx=%q, block=%d); no L5 row rather than a half one", proofID, obs.TxHash, obs.BlockNumber)
 		return nil, binding
 	}
-	if anchorObs != nil && l5.BlockNumber == anchorObs.BlockNumber {
-		l5.BlockHash, l5.Confirmations, l5.BlockTime = anchorObs.BlockHash, anchorObs.Confirmations, anchorObs.BlockTimestamp
+	switch err := completeAnchorBlock(l5, recordedBlock, anchorObs); {
+	case errors.Is(err, ErrAnchorBlockMismatch):
+		logfPrintf("🚨 [L5-PERSIST] proof %s: %v: no layer 5", proofID, err)
+		return nil, binding
+	case err != nil:
+		logfPrintf("⚠️ [L5-PERSIST] proof %s: %v - layer 5 is written in state %s; no anchor reference is stated from it",
+			proofID, err, AnchorBlockUnread)
 	}
 	// The Accumulate validator-set evidence of the set this anchor committed (RB5-F4). Anything but "attached" is
 	// named: the layer then states that it carries none (ExternalClaim), and proofverify reports the set as asserted.
@@ -409,8 +423,14 @@ func (o *UnifiedOrchestrator) observeAnchor(ctx context.Context, proofID uuid.UU
 			timeout = o.config.ObservationTimeout
 		}
 		observeCtx, cancel := context.WithTimeout(ctx, timeout)
-		anchorObs, err = strategy.ObserveTransaction(observeCtx, anchorTx)
+		// The anchor transaction's receipt and its block header (by hash), not the settlement observer: that one proves
+		// a settlement in its block and did not answer for anchor-create transactions, which left every anchor since
+		// 2026-09-27 without its block hash or time (AGT-F11).
+		anchorObs, err = strategy.GetTransactionReceipt(observeCtx, anchorTx)
 		cancel()
+		if err == nil && anchorObs != nil && anchorObs.Status != 1 {
+			err = fmt.Errorf("anchor transaction %s did not succeed (status %d)", anchorTx, anchorObs.Status)
+		}
 		if err != nil || anchorObs == nil || anchorObs.BlockNumber == 0 {
 			logfPrintf("⚠️ [L5-PERSIST] proof %s: anchor %s could not be read back (%v); recorded without its "+
 				"block hash or depth", proofID, anchorTx, err)

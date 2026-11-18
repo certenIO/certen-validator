@@ -20,7 +20,7 @@ import (
 	"github.com/certen/independant-validator/pkg/execution"
 )
 
-const repairUsage = "usage: certen-validator repair anchor-blocks [--apply] [--min-depth N] | repair projections [--apply] | repair consensus-records --rpc ADDR [--apply] | repair member-proof-cycle --intent ID --chain CHAIN_ID --tx SETTLEMENT_TX [--apply] [--wait DURATION] | repair outcome-trees [--apply] [--recorded] | repair member-proof-unavailable --intent ID --chain CHAIN_ID --tx SETTLEMENT_TX --operator NAME --evidence TEXT [--apply] | repair stale-lifecycle [--apply] [--older-than DURATION] [--by NAME] | repair lifecycle-rows --block N --intent ID [--intent ID ...] [--apply]"
+const repairUsage = "usage: certen-validator repair anchor-blocks [--apply] [--min-depth N] | repair projections [--apply] | repair consensus-records --rpc ADDR [--apply] | repair anchor-block-fields [--apply] | repair member-proof-cycle --intent ID --chain CHAIN_ID --tx SETTLEMENT_TX [--apply] [--wait DURATION] | repair outcome-trees [--apply] [--recorded] | repair member-proof-unavailable --intent ID --chain CHAIN_ID --tx SETTLEMENT_TX --operator NAME --evidence TEXT [--apply] | repair stale-lifecycle [--apply] [--older-than DURATION] [--by NAME] | repair lifecycle-rows --block N --intent ID [--intent ID ...] [--apply]"
 
 // runRepairCommand runs `validator repair anchor-blocks`: it reads every canonical anchor's verify and
 // create transactions back from their chain - locating the create transaction where the row does not name
@@ -71,7 +71,7 @@ func runRepairCommand(args []string) int {
 		}
 		return runOutcomeTreeRepair(apply, recorded)
 	}
-	if len(args) == 0 || (args[0] != "anchor-blocks" && args[0] != "projections" && args[0] != "consensus-records") {
+	if len(args) == 0 || (args[0] != "anchor-blocks" && args[0] != "projections" && args[0] != "consensus-records" && args[0] != "anchor-block-fields") {
 		log.Print(repairUsage)
 		return 1
 	}
@@ -144,6 +144,9 @@ func runRepairCommand(args []string) int {
 	}
 	if what == "consensus-records" {
 		return runConsensusRecordsRepair(client, rpcAddr, cfg.ValidatorID, apply)
+	}
+	if what == "anchor-block-fields" {
+		return runAnchorBlockFieldsRepair(client, apply)
 	}
 
 	signers, err := repairSigners(cfg)
@@ -275,6 +278,30 @@ func runConsensusRecordsRepair(client *database.Client, rpcAddr, validatorID str
 		"%d heights not in the block store, %d refused, %d changed underneath",
 		mode, validatorID, report.Entries, report.Corrected, report.AttestationsWithdrawn, len(report.Unavailable), len(report.Refused), len(report.Changed))
 	if len(report.Refused) > 0 || len(report.Changed) > 0 || len(report.Unavailable) > 0 {
+		return 2
+	}
+	return 0
+}
+
+// runAnchorBlockFieldsRepair runs `validator repair anchor-block-fields` (AGT-F11): it fills anchor_block_hash and
+// anchor_timestamp on anchor references since 2026-09-27 from chain reads of their anchor transactions, refusing by name
+// any row whose receipt block disagrees with the stored block. Without --apply it reports counts only.
+func runAnchorBlockFieldsRepair(client *database.Client, apply bool) int {
+	reader := execution.NewEthAnchorTxReader()
+	defer reader.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+	report, err := execution.RepairAnchorBlockFields(ctx, database.NewProofArtifactRepository(client.DB()), reader,
+		execution.AnchorBlockFieldsSince, apply, log.Printf)
+	if report != nil {
+		out, _ := json.MarshalIndent(report, "", "  ")
+		fmt.Println(string(out))
+	}
+	if err != nil {
+		log.Printf("anchor-block-fields repair stopped: %v", err)
+		return 1
+	}
+	if report.Refused > 0 {
 		return 2
 	}
 	return 0

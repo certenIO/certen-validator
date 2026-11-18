@@ -123,6 +123,9 @@ type Layer5 struct {
 	// BlockTime is the anchor block's timestamp when the anchor transaction was read back; zero when it was not. Not
 	// part of the layer either: the proof bundle states it as its anchor reference's anchored_at.
 	BlockTime time.Time `json:"-"`
+	// AnchorBlock is empty when the anchor block (number, hash, time) was read off the anchor transaction's own
+	// receipt, and AnchorBlockUnread when it was not (AGT-F11): such a layer is not a finished anchor reference.
+	AnchorBlock string `json:"anchorBlock,omitempty"`
 
 	// The offline half.
 	BatchRoot string       `json:"batchRoot"` // hex32 — what was anchored
