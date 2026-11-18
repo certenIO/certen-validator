@@ -85,3 +85,92 @@ func RepairAnchorBlockFields(ctx context.Context, store AnchorBlockFieldsStore, 
 	}
 	return rep, nil
 }
+
+// UnreadAnchorStore is what the completer needs: layer-5 rows left in state anchor_block_unread, and the write of
+// their anchor reference once the block is read.
+type UnreadAnchorStore interface {
+	ListUnreadAnchorLayers(ctx context.Context, layerName, state string, since time.Time, limit int) ([]database.UnreadAnchorLayer, error)
+	CompleteAnchorReference(ctx context.Context, u database.UnreadAnchorLayer, targetChain string, blockNumber int64, blockHash string, blockTime time.Time) (bool, error)
+}
+
+// UnreadAnchorReport counts one completion pass.
+type UnreadAnchorReport struct {
+	Rows          int      `json:"rows"`
+	Completed     int      `json:"completed"`
+	WouldComplete int      `json:"would_complete"`
+	StillUnread   int      `json:"still_unread"`
+	Refused       int      `json:"refused"`
+	RefusedIDs    []string `json:"refused_proof_ids,omitempty"`
+}
+
+// CompleteUnreadAnchors reads the anchor block of each layer 5 left in state anchor_block_unread and, when its receipt
+// is readable, writes the proof's anchor reference with the block hash and time. A receipt in another block than the
+// layer states is refused by name (anchor_block_mismatch) and nothing is written. The layer row (evidence) is never
+// rewritten. Idempotent: a proof with a reference is not listed again.
+func CompleteUnreadAnchors(ctx context.Context, store UnreadAnchorStore, reader AnchorTxReader, since time.Time, limit int,
+	apply bool, logf func(string, ...interface{})) (*UnreadAnchorReport, error) {
+	if logf == nil {
+		logf = func(string, ...interface{}) {}
+	}
+	rows, err := store.ListUnreadAnchorLayers(ctx, Layer5RowName, AnchorBlockUnread, since, limit)
+	if err != nil {
+		return nil, err
+	}
+	rep := &UnreadAnchorReport{Rows: len(rows)}
+	for _, u := range rows {
+		if u.ChainID == 0 || !IsTransactionHash(u.AnchorTxHash) {
+			rep.StillUnread++
+			continue
+		}
+		reading, rerr := reader.ReadAnchorTx(ctx, u.ChainID, u.AnchorTxHash)
+		if rerr != nil || reading == nil || !reading.Found || !reading.Succeeded || reading.BlockNumber == 0 ||
+			!IsTransactionHash(reading.BlockHash) || reading.BlockTime == 0 {
+			rep.StillUnread++
+			logf("anchor-completer: proof %s: still %s (%v)", u.ProofID, AnchorBlockUnread, rerr)
+			continue
+		}
+		if u.AnchorBlockNumber > 0 && reading.BlockNumber != uint64(u.AnchorBlockNumber) {
+			rep.Refused++
+			rep.RefusedIDs = append(rep.RefusedIDs, u.ProofID.String())
+			logf("anchor-completer: proof %s: %s{layer=%d,receipt=%d}: no anchor reference", u.ProofID, ErrAnchorBlockMismatch,
+				u.AnchorBlockNumber, reading.BlockNumber)
+			continue
+		}
+		if !apply {
+			rep.WouldComplete++
+			continue
+		}
+		done, cerr := store.CompleteAnchorReference(ctx, u, "evm", int64(reading.BlockNumber), reading.BlockHash,
+			time.Unix(int64(reading.BlockTime), 0).UTC())
+		if cerr != nil {
+			return rep, fmt.Errorf("proof %s: %w", u.ProofID, cerr)
+		}
+		if done {
+			rep.Completed++
+		}
+	}
+	return rep, nil
+}
+
+// RunAnchorBlockCompleter completes unread anchors on a bounded schedule: every interval, at most limit rows created in
+// the last window. It returns when ctx ends.
+func RunAnchorBlockCompleter(ctx context.Context, store UnreadAnchorStore, reader AnchorTxReader, interval, window time.Duration,
+	limit int, logf func(string, ...interface{})) {
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			passCtx, cancel := context.WithTimeout(ctx, interval/2)
+			rep, err := CompleteUnreadAnchors(passCtx, store, reader, time.Now().Add(-window), limit, true, logf)
+			cancel()
+			if err != nil {
+				logf("anchor-completer: pass stopped: %v", err)
+			} else if rep.Rows > 0 {
+				logf("anchor-completer: %d unread, %d completed, %d still unread, %d refused", rep.Rows, rep.Completed, rep.StillUnread, rep.Refused)
+			}
+		}
+	}
+}

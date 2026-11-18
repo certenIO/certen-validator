@@ -3513,8 +3513,16 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 	// component 5. It used to be filled from the settlement observation, the very conflation RB3-F135 removed from
 	// those rows (RB5-F18). A proof without a layer 5 has no established anchor and states none.
 	if err := anchorBlockComplete(anchorL5); anchorL5 != nil && err != nil {
-		// Not a reference with its block hash and time missing (AGT-F11): none, said by name.
-		logfPrintf("⚠️ [BUNDLE] proof %s: %v - the bundle states no anchor reference", proofArtifact.ProofID, err)
+		// Not a reference with its block hash and time missing (AGT-F11): a reference that SAYS it is incomplete - the
+		// anchor transaction and the named state, no block fields - so a stranger sees why it cannot be checked.
+		_, required, _ := anchorDepth(anchorL5, settled)
+		bundle.ProofComponents.AnchorReference = &proof.AnchorReferenceProof{
+			TargetChain:   result.ChainID,
+			AnchorTxHash:  anchorL5.AnchorTx,
+			RequiredConfs: required,
+			State:         AnchorBlockUnread,
+		}
+		logfPrintf("⚠️ [BUNDLE] proof %s: %v - the bundle's anchor reference states %s", proofArtifact.ProofID, err, AnchorBlockUnread)
 	} else if anchorL5 != nil {
 		confirmations, required, _ := anchorDepth(anchorL5, settled)
 		bundle.ProofComponents.AnchorReference = &proof.AnchorReferenceProof{
@@ -3673,7 +3681,7 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 	includesChained := bundle.ProofComponents.ChainedProof != nil
 	includesGovernance := bundle.ProofComponents.GovernanceProof != nil
 	includesMerkle := bundle.ProofComponents.MerkleInclusion != nil
-	includesAnchor := bundle.ProofComponents.AnchorReference != nil
+	includesAnchor := bundle.ProofComponents.AnchorReference != nil && bundle.ProofComponents.AnchorReference.State == ""
 
 	newBundle := &database.NewProofBundle{
 		ProofID:            proofArtifact.ProofID,

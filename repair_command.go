@@ -301,7 +301,18 @@ func runAnchorBlockFieldsRepair(client *database.Client, apply bool) int {
 		log.Printf("anchor-block-fields repair stopped: %v", err)
 		return 1
 	}
-	if report.Refused > 0 {
+	// Layers left in state anchor_block_unread have no anchor reference at all: complete them too.
+	unread, err := execution.CompleteUnreadAnchors(ctx, database.NewProofArtifactRepository(client.DB()), reader,
+		execution.AnchorBlockFieldsSince, 100000, apply, log.Printf)
+	if unread != nil {
+		out, _ := json.MarshalIndent(unread, "", "  ")
+		fmt.Println(string(out))
+	}
+	if err != nil {
+		log.Printf("anchor-block-fields repair (unread layers) stopped: %v", err)
+		return 1
+	}
+	if report.Refused > 0 || unread.Refused > 0 {
 		return 2
 	}
 	return 0

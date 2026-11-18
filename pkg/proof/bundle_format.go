@@ -160,14 +160,17 @@ type MerklePathEntry struct {
 
 // AnchorReferenceProof references the external blockchain anchor
 type AnchorReferenceProof struct {
-	TargetChain       string    `json:"target_chain"`        // "ethereum", "bitcoin", etc.
-	AnchorTxHash      string    `json:"anchor_tx_hash"`      // External chain tx hash
-	AnchorBlockNumber uint64    `json:"anchor_block_number"` // Block containing anchor
+	TargetChain       string    `json:"target_chain"`                 // "ethereum", "bitcoin", etc.
+	AnchorTxHash      string    `json:"anchor_tx_hash"`               // External chain tx hash
+	AnchorBlockNumber uint64    `json:"anchor_block_number,omitzero"` // Block containing anchor; absent while State is set
 	AnchorBlockHash   string    `json:"anchor_block_hash,omitempty"`
 	Confirmations     int       `json:"confirmations"`          // Current confirmations
 	RequiredConfs     int       `json:"required_confirmations"` // Required for finality
-	AnchoredAt        time.Time `json:"anchored_at"`
-	ContractAddress   string    `json:"contract_address,omitempty"` // CertenAnchor contract
+	AnchoredAt        time.Time `json:"anchored_at,omitzero"`   // the anchor block's time; absent while State is set
+	// State is empty for a complete reference. "anchor_block_unread" (AGT-F11) says the anchor block (number, hash,
+	// time) has not been read off the chain: the reference names only the anchor transaction and is NOT complete.
+	State           string `json:"state,omitempty"`
+	ContractAddress string `json:"contract_address,omitempty"` // CertenAnchor contract
 }
 
 // =============================================================================
@@ -514,7 +517,7 @@ func (b *CertenProofBundle) Validate() []string {
 // IsComplete returns true if all four proof components are present
 func (b *CertenProofBundle) IsComplete() bool {
 	return b.ProofComponents.MerkleInclusion != nil &&
-		b.ProofComponents.AnchorReference != nil &&
+		b.ProofComponents.AnchorReference != nil && b.ProofComponents.AnchorReference.State == "" &&
 		b.ProofComponents.ChainedProof != nil &&
 		b.ProofComponents.GovernanceProof != nil
 }

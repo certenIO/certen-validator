@@ -16,8 +16,10 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/google/uuid"
 
+	chain "github.com/certen/independant-validator/pkg/chain/strategy"
 	"github.com/certen/independant-validator/pkg/database"
 	"github.com/certen/independant-validator/pkg/proof"
+	"github.com/certen/independant-validator/pkg/strategy"
 )
 
 // RB3-F85: a member's proof artifact states its own place in its anchored batch - its leaf, index,
@@ -60,6 +62,16 @@ func TestTheArtifactStatesTheMembersPlaceInItsBatch(t *testing.T) {
 	}
 
 	o := f73Orchestrator(db)
+	// The anchor-create transaction's receipt, as its chain reports it: the reference states its block hash and time
+	// only once that block is read (AGT-F11).
+	anchorHash := "0x" + strings.Repeat("9a", 32)
+	registry := strategy.NewRegistry()
+	if err := registry.RegisterChainStrategy("84532", &chain.ChainConfig{}, &anchorChain{obs: &chain.ObservationResult{
+		TxHash: "0x" + strings.Repeat("5a", 32), BlockNumber: 90, BlockHash: anchorHash, Status: 1,
+		BlockTimestamp: time.Unix(1_790_000_000, 0).UTC()}}); err != nil {
+		t.Fatal(err)
+	}
+	o.config.Registry = registry
 	if err := o.generateAndPersistBundle(ctx, c); err != nil {
 		t.Fatal(err)
 	}
@@ -86,11 +98,15 @@ func TestTheArtifactStatesTheMembersPlaceInItsBatch(t *testing.T) {
 	if paAnchor.String != createTx || paAnchorBlock.Int64 != 90 || paSettle.String != settleTx || paSettleBlock.Int64 != 100 {
 		t.Fatalf("proof_artifacts anchor %v @ %v, settlement %v @ %v", paAnchor, paAnchorBlock, paSettle, paSettleBlock)
 	}
-	var refAnchor, refSettle string
+	var refAnchor, refSettle, refBlockHash string
 	var refConfirmed bool
-	if err := db.QueryRow(`SELECT ar.anchor_tx_hash, ar.settlement_tx_hash, ar.is_confirmed FROM anchor_references ar JOIN proof_artifacts pa ON pa.proof_id = ar.proof_id WHERE pa.intent_id=$1`, intentID).
-		Scan(&refAnchor, &refSettle, &refConfirmed); err != nil {
+	var refTime time.Time
+	if err := db.QueryRow(`SELECT ar.anchor_tx_hash, ar.settlement_tx_hash, ar.is_confirmed, ar.anchor_block_hash, ar.anchor_timestamp FROM anchor_references ar JOIN proof_artifacts pa ON pa.proof_id = ar.proof_id WHERE pa.intent_id=$1`, intentID).
+		Scan(&refAnchor, &refSettle, &refConfirmed, &refBlockHash, &refTime); err != nil {
 		t.Fatal(err)
+	}
+	if refBlockHash != anchorHash || !refTime.Equal(time.Unix(1_790_000_000, 0)) {
+		t.Fatalf("anchor reference block hash %q at %s; want the anchor receipt's %s at 1790000000", refBlockHash, refTime, anchorHash)
 	}
 	if refAnchor != createTx || refSettle != settleTx || !refConfirmed {
 		t.Fatalf("anchor_references anchor %s settlement %s confirmed %v", refAnchor, refSettle, refConfirmed)
@@ -111,8 +127,9 @@ func TestTheArtifactStatesTheMembersPlaceInItsBatch(t *testing.T) {
 		t.Fatalf("the bundle's anchor reference is %+v; the anchor is %s @ 90 (the settlement %s @ 100 is component 5)", ref, createTx, settleTx)
 	}
 	// The settlement (block 100, 12 deep, final) needed the anchor's root: the anchor is at least 22 deep. Its block
-	// was not read back (no observer for its chain here), so its time is not known and none is stated.
-	if ref.Confirmations != 22 || ref.RequiredConfs != 12 || !ref.AnchoredAt.IsZero() {
+	// was read back from the anchor receipt (AGT-F11), so the reference states that block's hash and time.
+	if ref.Confirmations != 22 || ref.RequiredConfs != 12 || !ref.AnchoredAt.Equal(time.Unix(1_790_000_000, 0)) ||
+		ref.AnchorBlockHash != anchorHash || ref.State != "" {
 		t.Fatalf("anchor depth %d of %d, anchored at %v", ref.Confirmations, ref.RequiredConfs, ref.AnchoredAt)
 	}
 }

@@ -408,11 +408,33 @@ func (o *UnifiedOrchestrator) observeAnchor(ctx context.Context, proofID uuid.UU
 	key := strings.ToLower(anchorTx)
 	anchorObs, seen := result.anchorObservations[key]
 	if !seen {
-		chainName := obs.ChainName
-		if binding != nil && binding.TargetChain != "" {
-			chainName = binding.TargetChain
+		// The registry is keyed by chain id (strategy.ChainKey): a canonical row's name ("base-sepolia") does not
+		// resolve, and every anchor so named was left unread (AGT-F11). The chain id the cycle observed comes first.
+		var candidates []string
+		if obs.ChainIDNumeric > 0 {
+			candidates = append(candidates, strconv.FormatInt(obs.ChainIDNumeric, 10))
 		}
-		strategy, err := o.config.Registry.GetChainStrategy(chainName)
+		if result != nil && result.ChainID != "" {
+			candidates = append(candidates, result.ChainID)
+		}
+		if binding != nil && binding.TargetChain != "" {
+			candidates = append(candidates, binding.TargetChain)
+		}
+		candidates = append(candidates, obs.ChainName)
+		var strategy chain.ChainExecutionStrategy
+		var err error
+		chainName := ""
+		for _, c := range candidates {
+			if chainName = c; c == "" {
+				continue
+			}
+			if strategy, err = o.config.Registry.GetChainStrategy(c); err == nil {
+				break
+			}
+		}
+		if strategy == nil && err == nil {
+			err = fmt.Errorf("no chain named")
+		}
 		if err != nil {
 			logfPrintf("⚠️ [L5-PERSIST] proof %s: no observer for anchor chain %q, so anchor %s is recorded "+
 				"without its block hash or depth: %v", proofID, chainName, anchorTx, err)

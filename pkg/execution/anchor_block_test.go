@@ -125,3 +125,32 @@ func TestScene1AnchorReferenceCarriesBlockHashAndTime(t *testing.T) {
 		t.Fatalf("anchor reference %s", raw)
 	}
 }
+
+// D2: an unread anchor is stated in the bundle as a reference that SAYS it is incomplete: state, anchor tx and chain,
+// no block number, hash or time - and the bundle is not complete.
+func TestAnUnreadAnchorReferenceStatesItsStateAndIsNotComplete(t *testing.T) {
+	ref := &proof.AnchorReferenceProof{TargetChain: "84532", AnchorTxHash: scene1AnchorTx, RequiredConfs: 2, State: AnchorBlockUnread}
+	raw, _ := json.Marshal(ref)
+	var m map[string]any
+	_ = json.Unmarshal(raw, &m)
+	if m["state"] != AnchorBlockUnread {
+		t.Fatalf("no state: %s", raw)
+	}
+	for _, k := range []string{"anchor_block_number", "anchor_block_hash", "anchored_at"} {
+		if _, has := m[k]; has {
+			t.Fatalf("an unread reference states %s: %s", k, raw)
+		}
+	}
+	b := &proof.CertenProofBundle{}
+	b.ProofComponents.MerkleInclusion = &proof.MerkleInclusionProof{}
+	b.ProofComponents.ChainedProof = &proof.ChainedProofData{}
+	b.ProofComponents.GovernanceProof = &proof.GovernanceProof{}
+	b.ProofComponents.AnchorReference = ref
+	if b.IsComplete() {
+		t.Fatal("a bundle with an unread anchor reference is complete")
+	}
+	ref.State = ""
+	if !b.IsComplete() {
+		t.Fatal("control: the same bundle with a read anchor is not complete")
+	}
+}

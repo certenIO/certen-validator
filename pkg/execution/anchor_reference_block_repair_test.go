@@ -3,6 +3,7 @@ package execution
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -102,5 +103,67 @@ func TestRepairAnchorBlockFields(t *testing.T) {
 	}
 	if again.Filled != 0 || again.Rows != 1 || again.Refused != 1 {
 		t.Fatalf("second run is not idempotent: %+v", again)
+	}
+}
+
+type fakeUnreadStore struct {
+	layers    []database.UnreadAnchorLayer
+	completed map[uuid.UUID][3]string
+}
+
+func (s *fakeUnreadStore) ListUnreadAnchorLayers(_ context.Context, name, state string, since time.Time, limit int) ([]database.UnreadAnchorLayer, error) {
+	if name != Layer5RowName || state != AnchorBlockUnread {
+		return nil, errors.New("wrong layer or state asked for")
+	}
+	var out []database.UnreadAnchorLayer
+	for _, u := range s.layers {
+		if _, done := s.completed[u.ProofID]; !done && !u.CreatedAt.Before(since) && len(out) < limit {
+			out = append(out, u)
+		}
+	}
+	return out, nil
+}
+
+func (s *fakeUnreadStore) CompleteAnchorReference(_ context.Context, u database.UnreadAnchorLayer, _ string, block int64, hash string, ts time.Time) (bool, error) {
+	if _, done := s.completed[u.ProofID]; done {
+		return false, nil
+	}
+	s.completed[u.ProofID] = [3]string{fmt.Sprint(block), hash, ts.UTC().Format(time.RFC3339)}
+	return true, nil
+}
+
+// An anchor unread at proof time gets its reference once readable; a receipt in another block is refused by name; idempotent.
+func TestUnreadAnchorIsCompletedOnceReadable(t *testing.T) {
+	ok, mism := uuid.New(), uuid.New()
+	mismTx := "0x" + strings.Repeat("33", 32)
+	at := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
+	store := &fakeUnreadStore{completed: map[uuid.UUID][3]string{}, layers: []database.UnreadAnchorLayer{
+		{ProofID: ok, ChainID: 84532, AnchorTxHash: scene1AnchorTx, AnchorBlockNumber: 0, CreatedAt: at},
+		{ProofID: mism, ChainID: 84532, AnchorTxHash: mismTx, AnchorBlockNumber: 500, CreatedAt: at},
+	}}
+	reader := &fakeAnchorTxReader{byTx: map[string]*AnchorTxReading{}}
+	ctx := context.Background()
+
+	// Still unreadable: nothing written, the row stays listed.
+	rep, err := CompleteUnreadAnchors(ctx, store, reader, AnchorBlockFieldsSince, 50, true, t.Logf)
+	if err != nil || rep.StillUnread != 2 || len(store.completed) != 0 {
+		t.Fatalf("unreadable pass: %+v %v", rep, err)
+	}
+	// Readable now.
+	reader.byTx[scene1AnchorTx] = &AnchorTxReading{Found: true, Succeeded: true, BlockNumber: scene1AnchorBlock, BlockHash: scene1AnchorHash, BlockTime: uint64(scene1AnchorTime.Unix())}
+	reader.byTx[mismTx] = &AnchorTxReading{Found: true, Succeeded: true, BlockNumber: 501, BlockHash: "0x" + strings.Repeat("44", 32), BlockTime: 1_790_000_000}
+	rep, err = CompleteUnreadAnchors(ctx, store, reader, AnchorBlockFieldsSince, 50, true, t.Logf)
+	if err != nil || rep.Completed != 1 || rep.Refused != 1 || rep.RefusedIDs[0] != mism.String() {
+		t.Fatalf("readable pass: %+v %v", rep, err)
+	}
+	if got := store.completed[ok]; got[1] != scene1AnchorHash || got[2] != "2026-11-18T11:30:20Z" {
+		t.Fatalf("completed %v", got)
+	}
+	if _, wrote := store.completed[mism]; wrote {
+		t.Fatal("a mismatched anchor got a reference")
+	}
+	again, err := CompleteUnreadAnchors(ctx, store, reader, AnchorBlockFieldsSince, 50, true, t.Logf)
+	if err != nil || again.Completed != 0 || again.Rows != 1 || again.Refused != 1 {
+		t.Fatalf("not idempotent: %+v %v", again, err)
 	}
 }
