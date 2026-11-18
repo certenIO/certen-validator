@@ -160,17 +160,35 @@ type MerklePathEntry struct {
 
 // AnchorReferenceProof references the external blockchain anchor
 type AnchorReferenceProof struct {
-	TargetChain       string    `json:"target_chain"`                 // "ethereum", "bitcoin", etc.
-	AnchorTxHash      string    `json:"anchor_tx_hash"`               // External chain tx hash
-	AnchorBlockNumber uint64    `json:"anchor_block_number,omitzero"` // Block containing anchor; absent while State is set
+	TargetChain       string    `json:"target_chain"`        // "ethereum", "bitcoin", etc.
+	AnchorTxHash      string    `json:"anchor_tx_hash"`      // External chain tx hash
+	AnchorBlockNumber uint64    `json:"anchor_block_number"` // Block containing anchor
 	AnchorBlockHash   string    `json:"anchor_block_hash,omitempty"`
 	Confirmations     int       `json:"confirmations"`          // Current confirmations
 	RequiredConfs     int       `json:"required_confirmations"` // Required for finality
-	AnchoredAt        time.Time `json:"anchored_at,omitzero"`   // the anchor block's time; absent while State is set
+	AnchoredAt        time.Time `json:"anchored_at"`
+	ContractAddress   string    `json:"contract_address,omitempty"` // CertenAnchor contract
 	// State is empty for a complete reference. "anchor_block_unread" (AGT-F11) says the anchor block (number, hash,
 	// time) has not been read off the chain: the reference names only the anchor transaction and is NOT complete.
-	State           string `json:"state,omitempty"`
-	ContractAddress string `json:"contract_address,omitempty"` // CertenAnchor contract
+	State string `json:"state,omitempty"`
+}
+
+// MarshalJSON keeps every reference without a State byte-identical to the format before AGT-F11 (artifact_hash is
+// recomputed by re-marshalling, VerifyIntegrity): only a reference that carries a State omits the block number and
+// time it does not have.
+func (a AnchorReferenceProof) MarshalJSON() ([]byte, error) {
+	type plain AnchorReferenceProof
+	if a.State == "" {
+		return json.Marshal(plain(a))
+	}
+	return json.Marshal(struct {
+		TargetChain     string `json:"target_chain"`
+		AnchorTxHash    string `json:"anchor_tx_hash"`
+		Confirmations   int    `json:"confirmations"`
+		RequiredConfs   int    `json:"required_confirmations"`
+		ContractAddress string `json:"contract_address,omitempty"`
+		State           string `json:"state"`
+	}{a.TargetChain, a.AnchorTxHash, a.Confirmations, a.RequiredConfs, a.ContractAddress, a.State})
 }
 
 // =============================================================================
