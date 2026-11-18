@@ -168,6 +168,27 @@ type AnchorReferenceProof struct {
 	RequiredConfs     int       `json:"required_confirmations"` // Required for finality
 	AnchoredAt        time.Time `json:"anchored_at"`
 	ContractAddress   string    `json:"contract_address,omitempty"` // CertenAnchor contract
+	// State is empty for a complete reference. "anchor_block_unread" (AGT-F11) says the anchor block (number, hash,
+	// time) has not been read off the chain: the reference names only the anchor transaction and is NOT complete.
+	State string `json:"state,omitempty"`
+}
+
+// MarshalJSON keeps every reference without a State byte-identical to the format before AGT-F11 (artifact_hash is
+// recomputed by re-marshalling, VerifyIntegrity): only a reference that carries a State omits the block number and
+// time it does not have.
+func (a AnchorReferenceProof) MarshalJSON() ([]byte, error) {
+	type plain AnchorReferenceProof
+	if a.State == "" {
+		return json.Marshal(plain(a))
+	}
+	return json.Marshal(struct {
+		TargetChain     string `json:"target_chain"`
+		AnchorTxHash    string `json:"anchor_tx_hash"`
+		Confirmations   int    `json:"confirmations"`
+		RequiredConfs   int    `json:"required_confirmations"`
+		ContractAddress string `json:"contract_address,omitempty"`
+		State           string `json:"state"`
+	}{a.TargetChain, a.AnchorTxHash, a.Confirmations, a.RequiredConfs, a.ContractAddress, a.State})
 }
 
 // =============================================================================
@@ -514,7 +535,7 @@ func (b *CertenProofBundle) Validate() []string {
 // IsComplete returns true if all four proof components are present
 func (b *CertenProofBundle) IsComplete() bool {
 	return b.ProofComponents.MerkleInclusion != nil &&
-		b.ProofComponents.AnchorReference != nil &&
+		b.ProofComponents.AnchorReference != nil && b.ProofComponents.AnchorReference.State == "" &&
 		b.ProofComponents.ChainedProof != nil &&
 		b.ProofComponents.GovernanceProof != nil
 }

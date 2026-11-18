@@ -154,6 +154,8 @@ var wallClockReads = map[string]struct {
 	n       int
 	verdict string
 }{
+	"anchor_reference_block_repair.go": {1, "trigger only: RunAnchorBlockCompleter's look-back window (which unread layers " +
+		"to re-read); the anchor block's time comes from the chain's header, never this clock"},
 	"batch_orchestrator.go": {2, "trigger only: pastOnChain reads the chain only once the wall clock is past the bound; " +
 		"memberPastDeadline releases another validator's member locally (MemberReleased: nothing recorded)"},
 	"non_settlement_cycle.go": {3, "trigger only: nonSettlementWindowClosed reads the chain once the wall clock is past the " +

@@ -2054,6 +2054,12 @@ func startValidator(
 	// requests to it (UnifiedOrchestrator.HandlePeerAttestationRequest).
 	unifiedOrchestratorForAttestation.Store(unifiedOrchestrator)
 	go unifiedOrchestrator.RunNonSettlements(context.Background(), time.Minute)
+	// AGT-F11: a layer 5 whose anchor block could not be read at proof time gets its anchor reference once the anchor
+	// receipt is readable (same mismatch refusal), every 10 minutes, at most 50 rows from the last 7 days per pass.
+	if batchComponents != nil && batchComponents.Repos != nil && batchComponents.Repos.ProofArtifacts != nil {
+		go execution.RunAnchorBlockCompleter(context.Background(), batchComponents.Repos.ProofArtifacts, execution.NewEthAnchorTxReader(),
+			10*time.Minute, 7*24*time.Hour, 50, log.Printf)
+	}
 	log.Printf("✅ [Unified] Non-settlement attestation running (%d queued)", len(nonSettlements.All()))
 	log.Printf("✅ [Unified] Phase 8 peer attestation handler published for HTTP routing")
 	log.Printf("   - Strategy Registry: %d attestation schemes, %d chains",

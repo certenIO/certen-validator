@@ -3512,7 +3512,18 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 	// transaction and block, as anchor_references and proof_artifacts state it - never the settlement, which is
 	// component 5. It used to be filled from the settlement observation, the very conflation RB3-F135 removed from
 	// those rows (RB5-F18). A proof without a layer 5 has no established anchor and states none.
-	if anchorL5 != nil {
+	if err := anchorBlockComplete(anchorL5); anchorL5 != nil && err != nil {
+		// Not a reference with its block hash and time missing (AGT-F11): a reference that SAYS it is incomplete - the
+		// anchor transaction and the named state, no block fields - so a stranger sees why it cannot be checked.
+		_, required, _ := anchorDepth(anchorL5, settled)
+		bundle.ProofComponents.AnchorReference = &proof.AnchorReferenceProof{
+			TargetChain:   result.ChainID,
+			AnchorTxHash:  anchorL5.AnchorTx,
+			RequiredConfs: required,
+			State:         AnchorBlockUnread,
+		}
+		logfPrintf("⚠️ [BUNDLE] proof %s: %v - the bundle's anchor reference states %s", proofArtifact.ProofID, err, AnchorBlockUnread)
+	} else if anchorL5 != nil {
 		confirmations, required, _ := anchorDepth(anchorL5, settled)
 		bundle.ProofComponents.AnchorReference = &proof.AnchorReferenceProof{
 			TargetChain:       result.ChainID,
@@ -3670,7 +3681,7 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 	includesChained := bundle.ProofComponents.ChainedProof != nil
 	includesGovernance := bundle.ProofComponents.GovernanceProof != nil
 	includesMerkle := bundle.ProofComponents.MerkleInclusion != nil
-	includesAnchor := bundle.ProofComponents.AnchorReference != nil
+	includesAnchor := bundle.ProofComponents.AnchorReference != nil && bundle.ProofComponents.AnchorReference.State == ""
 
 	newBundle := &database.NewProofBundle{
 		ProofID:            proofArtifact.ProofID,
@@ -3814,17 +3825,19 @@ func (o *UnifiedOrchestrator) writeAnchorReference(ctx context.Context, proofID 
 	if !IsTransactionHash(l5.AnchorTx) || l5.BlockNumber == 0 {
 		return fmt.Errorf("proof %s: layer 5 states anchor %q at block %d; not recorded as its anchor", proofID, l5.AnchorTx, l5.BlockNumber)
 	}
+	// Never a reference that looks finished without the anchor block's hash and time (AGT-F11): the proof keeps its
+	// layer 5 in state anchor_block_unread and gets no anchor reference until the block is read (repair: anchor-block-fields).
+	if err := anchorBlockComplete(l5); err != nil {
+		logfPrintf("⚠️ [ANCHOR-REF] proof %s: %v - no anchor_reference written", proofID, err)
+		return nil
+	}
 	confirmations, reqConfirmations, final := anchorDepth(l5, settled)
 	var confirmedAt *time.Time
 	if final {
 		now := time.Now().UTC()
 		confirmedAt = &now
 	}
-	var anchorHash *string
-	if l5.BlockHash != "" {
-		h := l5.BlockHash
-		anchorHash = &h
-	}
+	anchorHash, anchorTime := l5.BlockHash, l5.BlockTime.UTC()
 	settlementHash, settlementTime := settled.BlockHash, settled.BlockTimestamp
 	ref := &database.NewAnchorReference{
 		ProofID:               proofID,
@@ -3833,7 +3846,8 @@ func (o *UnifiedOrchestrator) writeAnchorReference(ctx context.Context, proofID 
 		NetworkName:           getNetworkName(result.ChainID),
 		AnchorTxHash:          l5.AnchorTx,
 		AnchorBlockNumber:     int64(l5.BlockNumber),
-		AnchorBlockHash:       anchorHash,
+		AnchorBlockHash:       &anchorHash,
+		AnchorTimestamp:       &anchorTime,
 		Confirmations:         confirmations,
 		RequiredConfirmations: ptrInt(reqConfirmations),
 		IsConfirmed:           final,

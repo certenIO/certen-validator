@@ -232,6 +232,11 @@ type anchorChain struct {
 	calls int
 }
 
+// GetTransactionReceipt is how the anchor is read back since AGT-F11 (receipt + header by hash), not the settlement observer.
+func (c *anchorChain) GetTransactionReceipt(ctx context.Context, txHash string) (*chain.ObservationResult, error) {
+	return c.ObserveTransaction(ctx, txHash)
+}
+
 func (c *anchorChain) ObserveTransaction(_ context.Context, txHash string) (*chain.ObservationResult, error) {
 	c.calls++
 	if !strings.EqualFold(txHash, c.obs.TxHash) {
@@ -282,20 +287,20 @@ func TestTheCertenProofStatesTheAnchorsOwnBlockAndChain(t *testing.T) {
 	if certen.AnchorConfirms != 0 || certen.AnchorBlockHash.Valid {
 		t.Fatalf("the settlement's depth or block hash was stated for the anchor: %d %v", certen.AnchorConfirms, certen.AnchorBlockHash)
 	}
-	if l5 := layer5Of(t, f); l5.AnchorTx != f.anchorTx || l5.BlockNumber != 4231 || l5.BlockHash != "" {
-		t.Fatalf("layer 5 states %s @ %d (%s)", l5.AnchorTx, l5.BlockNumber, l5.BlockHash)
+	if l5 := layer5Of(t, f); l5.AnchorTx != f.anchorTx || l5.BlockNumber != 4231 || l5.BlockHash != "" || l5.AnchorBlock != AnchorBlockUnread {
+		t.Fatalf("layer 5 states %s @ %d (%s), state %q; want no hash and state %s (AGT-F11)", l5.AnchorTx, l5.BlockNumber, l5.BlockHash, l5.AnchorBlock, AnchorBlockUnread)
 	}
 }
 
-// With an observer for the anchor's chain, the anchor transaction is read back: the chain's block wins over
-// a recorded one that disagrees, and its block hash and depth are recorded. One read per anchor per cycle.
+// With an observer for the anchor's chain, the anchor transaction's receipt is read back and its block hash, time and
+// depth are recorded (a receipt in another block than the recorded one is refused: AGT-F11). One read per anchor per cycle.
 // The canonical row names its chain as the batch path writes it ("evm-84532") and the registry keys the
 // observer by chain id, as InitializeRegistry does; the lookup used to miss, and every proof was recorded
 // without its anchor's block hash or depth (RB3-F44).
 func TestTheAnchorIsReadBackForItsBlockHashAndDepth(t *testing.T) {
 	f := newLevelFixture(t)
 	observer := &anchorChain{obs: &chain.ObservationResult{
-		TxHash: f.anchorTx, BlockNumber: 4230, BlockHash: "0xanchorblock", Confirmations: 812, IsFinalized: true,
+		TxHash: f.anchorTx, BlockNumber: 4231, BlockHash: "0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1", Confirmations: 812, IsFinalized: true, Status: 1,
 		BlockTimestamp: time.Unix(1_790_000_000, 0).UTC(),
 	}}
 	registry := strategy.NewRegistry()
@@ -309,11 +314,11 @@ func TestTheAnchorIsReadBackForItsBlockHashAndDepth(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if certen.AnchorBlockNumber != 4230 || certen.AnchorBlockHash.String != "0xanchorblock" || certen.AnchorConfirms != 812 {
-		t.Fatalf("anchor recorded @ %d (%v), depth %d; want the chain's 4230, its hash and 812",
+	if certen.AnchorBlockNumber != 4231 || certen.AnchorBlockHash.String != "0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1" || certen.AnchorConfirms != 812 {
+		t.Fatalf("anchor recorded @ %d (%v), depth %d; want the receipt's 4231, its hash and 812",
 			certen.AnchorBlockNumber, certen.AnchorBlockHash, certen.AnchorConfirms)
 	}
-	if l5 := layer5Of(t, f); l5.BlockNumber != 4230 || l5.BlockHash != "0xanchorblock" {
+	if l5 := layer5Of(t, f); l5.BlockNumber != 4231 || l5.BlockHash != "0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1" || l5.AnchorBlock != "" {
 		t.Fatalf("layer 5 states block %d (%s)", l5.BlockNumber, l5.BlockHash)
 	}
 	again, _ := f.orch.resolveAnchorBinding(context.Background(), f.artifact.ProofID, f.placement(t), f.cycle.Result)
@@ -592,4 +597,19 @@ func (f *levelFixture) placement(t *testing.T) *database.Layer5Binding {
 		t.Fatalf("placement: %v", err)
 	}
 	return p
+}
+
+// A receipt in another block than the canonical row recorded is refused by name: no layer 5 (AGT-F11).
+func TestTheAnchorReceiptInAnotherBlockIsRefused(t *testing.T) {
+	f := newLevelFixture(t)
+	observer := &anchorChain{obs: &chain.ObservationResult{TxHash: f.anchorTx, BlockNumber: 4230, BlockHash: "0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+		BlockTimestamp: time.Unix(1_790_000_000, 0).UTC(), Status: 1}}
+	registry := strategy.NewRegistry()
+	if err := registry.RegisterChainStrategy("84532", &chain.ChainConfig{}, observer); err != nil {
+		t.Fatal(err)
+	}
+	f.orch.config.Registry = registry
+	if l5, _ := f.orch.resolveAnchorBinding(context.Background(), f.artifact.ProofID, f.placement(t), f.cycle.Result); l5 != nil {
+		t.Fatalf("a layer 5 was built from a mismatched anchor block: %+v", l5)
+	}
 }
