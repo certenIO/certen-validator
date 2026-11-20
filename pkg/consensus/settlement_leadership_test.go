@@ -40,7 +40,7 @@ func TestAQueuedOnDemandMemberNamesItsOnDemandLeader(t *testing.T) {
 	m := plan.members[0]
 	roster := batchLeaderRoster()
 	want := roster[OnDemandLeaderIndex(m.chainID, m.opID, len(roster))]
-	if !strings.Contains(out, "[SETTLEMENT-LEAD]") || !strings.Contains(out, "chain 84532: on-demand leader "+want+",") {
+	if !strings.Contains(out, "[SETTLEMENT-LEAD]") || !strings.Contains(out, "chain 84532: hash leader "+want+";") {
 		t.Fatalf("the round does not name the on-demand leader %s:\n%s", want, out)
 	}
 	if strings.Contains(out, "ELECTED EXECUTOR") {
@@ -62,7 +62,7 @@ func TestEveryMemberOfAMultiChainIntentIsNamed(t *testing.T) {
 	out, plan := leadershipLog(t, "on_demand", 84532, 11155111)
 	roster := batchLeaderRoster()
 	for _, m := range plan.members {
-		want := fmt.Sprintf("chain %d: on-demand leader %s", m.chainID, roster[OnDemandLeaderIndex(m.chainID, m.opID, len(roster))])
+		want := fmt.Sprintf("chain %d: hash leader %s", m.chainID, roster[OnDemandLeaderIndex(m.chainID, m.opID, len(roster))])
 		if !strings.Contains(out, want) {
 			t.Fatalf("member on chain %d is not named (%q):\n%s", m.chainID, want, out)
 		}

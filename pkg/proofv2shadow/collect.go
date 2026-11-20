@@ -58,6 +58,9 @@ type Capture struct {
 	Pages      []CapturedPage              `json:"pages"`
 	Votes      []proofv2.Vote              `json:"votes,omitempty"` // the counted votes, without their receipts (added when the evidence is built)
 	Notes      []string                    `json:"notes,omitempty"` // named states that did not stop the capture
+	// Partial marks the pages kept from a capture that stopped (runState.partial): no partition's anchor binding was recorded, so no
+	// evidence is built from it - the named state the capture stopped at is the intent's answer.
+	Partial bool `json:"partial,omitempty"`
 
 	// Absent are the authorities the principal lists (or a vote names) that do not exist at the block they were read at, each with the
 	// partition and block the absence was judged at (g1_authority_missing). The executor allows a disabled one, so a 2.0 document is
@@ -177,7 +180,7 @@ func (s *runState) partial() *Capture {
 	if len(s.cache) == 0 {
 		return nil
 	}
-	out := &Capture{Version: CaptureVersion, Principal: s.principal, Partition: s.x, Block: s.b, Partitions: map[string]PartitionCapture{}}
+	out := &Capture{Version: CaptureVersion, Principal: s.principal, Partition: s.x, Block: s.b, Partitions: map[string]PartitionCapture{}, Partial: true}
 	for p, bd := range s.bindings {
 		out.Partitions[p] = PartitionCapture{Partition: p, Block: bd.block, StateRoot: hex.EncodeToString(bd.stateRoot[:])}
 	}
@@ -258,6 +261,7 @@ func (c *Collector) collect(ctx context.Context, st *runState, account, tx strin
 		what  string
 	}
 	var arrivals []arrival
+	var lateNotes []*proofv2.NamedState // signatures recorded after the transaction executed: disclosed, not counted
 	bounds := map[string]uint64{}
 	needHist := map[string]bool{} // key pages a counted signature was recorded on: their history is captured
 	routeOf := func(u *url.URL) (string, error) {
@@ -300,24 +304,66 @@ func (c *Collector) collect(ctx context.Context, st *runState, account, tx strin
 		}
 		// The other signatures the pages on the cause chain recorded for the transaction: a threshold above 1 counts them too, and each
 		// bounds from below the block its page's partition is read at.
+		// A counted signature that is itself a delegate's vote (an authority signature arriving on the page) is judged by the verifier
+		// from that delegate's own signatures (govvote recomputes every delegated vote), so its cause chain is captured too, and the
+		// pages that chain reaches count their other signatures in turn: a worklist over every page reached, ended by the message set.
 		inHops := map[string]bool{}
 		for _, h := range hops {
 			inHops[hashHex(h.ID)] = true
 		}
-		for _, h := range hops {
+		work := append([]Hop(nil), hops...)
+		for wi := 0; wi < len(work); wi++ {
+			h := work[wi]
 			for _, sr := range facts.PageSigs[key(h.Page)] {
 				hx := hashHex(sr.ID)
 				if inHops[hx] {
 					continue
 				}
 				inHops[hx] = true
-				_, blk, err := c.Arrival(ctx, sr.ID)
+				part, blk, err := c.Arrival(ctx, sr.ID)
 				if err != nil {
 					return nil, fmt.Errorf("arrival of %v: %w", sr.ID, err)
+				}
+				// Accumulate records signatures on a transaction that has already executed. One recorded on the transaction's own
+				// partition after the transaction's block counted for nothing (the page is read at that block and the vote model
+				// excludes it, RB4-F67): it is disclosed, not made a bound the capture cannot meet.
+				if strings.EqualFold(part, x) && blk > b {
+					lateNotes = append(lateNotes, &proofv2.NamedState{Code: proofv2.StateSignatureAfterExecution, Partition: x, Block: b,
+						Detail: fmt.Sprintf("%v on %v arrived at block %d, after the transaction executed; it is not counted", sr.ID, h.Page, blk)})
+					continue
 				}
 				v.Counted = append(v.Counted, Hop{Page: h.Page, ID: sr.ID, Block: blk, Sig: sr.Sig})
 				if err := record(h.Page, blk, "a counted signature of the vote of "+v.Authority.String()); err != nil {
 					return nil, err
+				}
+				as, ok := sr.Sig.(*protocol.AuthoritySignature)
+				if !ok {
+					continue
+				}
+				if as.Cause == nil {
+					return nil, &proofv2.NamedState{Code: proofv2.StateCompletenessUnproven,
+						Detail: fmt.Sprintf("the delegated vote %v counted on %v records no cause", sr.ID, h.Page)}
+				}
+				inner, innerDels, err := c.Trace(ctx, as.Cause)
+				if err != nil {
+					return nil, fmt.Errorf("the cause chain of the delegated vote %v: %w", sr.ID, err)
+				}
+				if len(innerDels) > DelegationDepthLimit {
+					return nil, &proofv2.NamedState{Code: proofv2.StateDelegationDepthExceeded,
+						Detail: fmt.Sprintf("the delegated vote %v was signed through %d delegators, the limit is %d", sr.ID, len(innerDels), DelegationDepthLimit)}
+				}
+				for _, ih := range inner {
+					ihx := hashHex(ih.ID)
+					if inHops[ihx] {
+						continue
+					}
+					inHops[ihx] = true
+					needHist[key(ih.Page)] = true
+					v.Counted = append(v.Counted, ih)
+					if err := record(ih.Page, ih.Block, "the delegated vote counted for "+v.Authority.String()); err != nil {
+						return nil, err
+					}
+					work = append(work, ih)
 				}
 			}
 		}
@@ -663,6 +709,9 @@ func (c *Collector) collect(ctx context.Context, st *runState, account, tx strin
 		out.Transaction = hex.EncodeToString(raw)
 	}
 	for _, n := range cl.Notes {
+		out.Notes = append(out.Notes, n.Error())
+	}
+	for _, n := range lateNotes {
 		out.Notes = append(out.Notes, n.Error())
 	}
 	for _, n := range cl.Absent {
@@ -1014,6 +1063,27 @@ func firstState(prior error, s *proofv2.NamedState) error {
 	return s
 }
 
+// ErrPartialCapture: the stored capture is the pages kept from a capture that stopped; it holds no anchor binding for its partitions.
+var ErrPartialCapture = errors.New("the capture stopped before it was complete and holds no anchor binding for its partitions; no evidence is built from it")
+
+// IsPartial says the capture is the pages kept from a capture that stopped: marked so (Partial), or - a row stored before the mark - a
+// partition other than the transaction's recorded with no anchor binding (no anchor transaction and no Directory block), which a complete
+// capture always records. Building from it would read the partition's anchor at index 0 (block 1), not the block its pages were read at.
+func (cp *Capture) IsPartial() bool {
+	if cp.Partial {
+		return true
+	}
+	for n, pc := range cp.Partitions {
+		if strings.EqualFold(n, cp.Partition) {
+			continue
+		}
+		if pc.AnchorTx == "" && pc.DNBlock == 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // HasForeignPages says the capture holds pages on partitions other than the transaction's own: a 2.0 document cannot carry them.
 func (cp *Capture) HasForeignPages() bool {
 	own := ""
@@ -1031,6 +1101,9 @@ func (cp *Capture) HasForeignPages() bool {
 // Assembly converts a capture into the input of proofv2.Builder.Build21: every page with its partition, roles and history, the state
 // root of each partition, the anchors of the partitions other than the transaction's, and the votes and transaction the timeline needs.
 func (cp *Capture) Assembly(ctx context.Context, log proofv2.AnchorLog, src proofv2.ChainSource) (*proofv2.Assembly, error) {
+	if cp.IsPartial() {
+		return nil, ErrPartialCapture
+	}
 	if len(cp.Absent) > 0 {
 		n := cp.Absent[0]
 		return nil, &n
