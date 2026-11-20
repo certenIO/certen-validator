@@ -284,6 +284,9 @@ const (
 	StateCompletenessUnproven = "g1_completeness_unproven"
 	// StateBlockBeforeArrival: B_Y precedes the arrival block of a counted signature on the partition.
 	StateBlockBeforeArrival = "g1_block_before_signature"
+	// StateSignatureAfterExecution: a signature a page recorded on the transaction's own partition after the transaction's block. Accumulate
+	// records signatures on an executed transaction; this one counted for nothing, so the capture discloses it and does not count it.
+	StateSignatureAfterExecution = "g1_signature_after_execution"
 	// StatePageBlockMismatch: a page was served for a block other than the partition's B_Y.
 	StatePageBlockMismatch = "g1_page_block_mismatch"
 	// StateBookPageCountUnproven: a book's pages beyond what was captured, or fewer than its proven PageCount.

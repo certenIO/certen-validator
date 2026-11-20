@@ -268,7 +268,9 @@ func governingWith(ctx context.Context, f *TxFacts, get AccountReader, hist Dele
 			b.notes = append(b.notes, &proofv2.NamedState{Code: proofv2.StateAuthorityMissing,
 				Detail: fmt.Sprintf("the vote of %v was decided by no page", v.Authority)})
 		}
-		for _, h := range v.Hops {
+		// Every page a counted signature is recorded on, the cause chains of counted delegated votes included: the verifier names
+		// each page of Vote.allHops() a voter (xverify.go), so the capture claims the same roles.
+		for _, h := range append(append([]Hop(nil), v.Hops...), v.Counted...) {
 			b.add(h.Page, proofv2.RoleVoter)
 		}
 		for _, d := range v.Delegators {

@@ -401,6 +401,18 @@ func (s *Shadow) buildOne(ctx context.Context, j job, maxMajors uint64, prove, a
 			return nil, nil, fmt.Errorf("decode captured pages: %w", err)
 		}
 	}
+	// The pages kept from a capture that stopped are not a capture: its answer is the named state it stopped at (stored as its capture
+	// error), never a document built from bindings it did not record (AGT-0 4b, intent 84216735: anchor 0 of BVN3 -> g1_chain_moved).
+	if cp != nil && cp.IsPartial() {
+		_, captureErr, _, rerr := s.repo.CaptureResult(ctx, j.intentID)
+		if rerr != nil {
+			return nil, nil, fmt.Errorf("read the capture error: %w", rerr)
+		}
+		if captureErr == "" {
+			return nil, nil, ErrPartialCapture
+		}
+		return nil, nil, fmt.Errorf("%s: %w", captureErr, ErrPartialCapture)
+	}
 	if plan, err = planBuild(cp, prove, allow21); err != nil {
 		return nil, nil, err
 	}
