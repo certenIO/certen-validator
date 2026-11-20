@@ -5,6 +5,7 @@ package proof
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"gitlab.com/accumulatenetwork/accumulate/pkg/url"
@@ -43,6 +44,27 @@ func LoadNetworkRouter(ctx context.Context, endpoint string) (*NetworkRouter, er
 		return nil, fmt.Errorf("read the network's routing table: %w", err)
 	}
 	return NewNetworkRouter(resp.Result.Routing)
+}
+
+// Partitions are the partition IDs the routing table names, spelled as it spells them ("BVN1", "Directory"), sorted and
+// each once: every partition an account can route to, the Directory through the table's overrides.
+func (r *NetworkRouter) Partitions() []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(p string) {
+		if p != "" && !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	for _, rt := range r.table.Routes {
+		add(rt.Partition)
+	}
+	for _, o := range r.table.Overrides {
+		add(o.Partition)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // Partition is the lower-case partition name ("bvn1", "directory") the network routes account to.

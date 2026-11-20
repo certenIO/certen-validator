@@ -39,6 +39,7 @@ import (
 	"github.com/certen/independant-validator/pkg/ledger"
 	"github.com/certen/independant-validator/pkg/metrics"
 	"github.com/certen/independant-validator/pkg/proof"
+	proofv2 "github.com/certen/independant-validator/pkg/proof/v2"
 	"github.com/certen/independant-validator/pkg/proofrequests"
 	"github.com/certen/independant-validator/pkg/proofv2shadow"
 	"github.com/certen/independant-validator/pkg/server"
@@ -511,6 +512,10 @@ func main() {
 	// given on stdin and prints only positions and classes, so it runs before anything else prints or starts.
 	if len(os.Args) > 1 && os.Args[1] == "finality-config-check" {
 		os.Exit(runFinalityConfigCheck(os.Stdin, os.Stdout, os.Stderr))
+	}
+	// The read-only deploy check of the proof v2 history floor (AGT-F104): does a node keep every block from the floor on?
+	if len(os.Args) > 1 && os.Args[1] == "proofv2-history-check" {
+		os.Exit(runProofV2HistoryCheck(os.Args[2:], os.Stdout, os.Stderr))
 	}
 	// Configure logging
 	log.SetOutput(os.Stdout)
@@ -2262,6 +2267,16 @@ func startValidator(
 			if pin, perr := consensus.AccumulateIncarnation(); perr != nil {
 				log.Printf("⚠️ [PROOF-V2-SHADOW] not started: %v", perr)
 			} else {
+				// AGT-F104: proof v2 runs only against a node that keeps every block from the history floor on; a pruning node
+				// makes every intent with a governing page on a quiet partition unprovable. Refused here, never worked around.
+				v3 := strings.TrimSuffix(cfg.AccumulateURL, "/") + "/v3"
+				floorRaw := os.Getenv(proofv2.HistoryFloorEnv)
+				floor, floorErr := startupHistoryFloor(floorRaw, liveHistoryFloorDeps(v3))
+				if floorErr != nil {
+					return nil, nil, fmt.Errorf("proof v2: %w", floorErr)
+				}
+				log.Printf("📚 [PROOF-V2-HISTORY] %s keeps every block from the floor %s", cfg.AccumulateURL, floor)
+				go watchHistoryFloor(context.Background(), floorRaw, liveHistoryFloorDeps(v3))
 				shadow := proofv2shadow.NewLazy(database.NewProofV2ShadowRepository(dbClient), log.Printf)
 				intentDiscovery.SetProofV2Shadow(shadow)
 				// The initiating-signature member of evidence 2.1 is attached only from the height after the rules v16 activation (DAX-1G).
