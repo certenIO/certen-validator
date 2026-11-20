@@ -208,3 +208,25 @@ func TestWakeIsNonBlocking(t *testing.T) {
 		t.Fatal("Wake blocked; an enqueue would stall the consensus round")
 	}
 }
+
+// leaderAt names the node that leads after the failover handoffs counted from the commit block, beside the hash leader the round
+// names: intent 534ebb16 (2026-11-19) was queued ~10 minutes after its commit block, so it was led by the hash leader plus two
+// handoffs while the round's line named only the hash leader.
+func TestLeaderAtNamesTheNodeThatLeadsAfterHandoffs(t *testing.T) {
+	member := odMember(1, odChain, 105)
+	roster := odRoster()
+	base := onDemandLeaderIndex(member.ChainID, member.OperationID, len(roster))
+	s := odSubmitter(t, roster[0])
+	now, hash, handoffs, ok := s.leaderAt(member, 2*OnDemandFailoverAfter+time.Second)
+	if !ok || hash != roster[base] || handoffs != 2 || now != roster[(base+2)%len(roster)] {
+		t.Fatalf("leaderAt = %s, %s, %d, %v; want %s, %s, 2", now, hash, handoffs, ok, roster[(base+2)%len(roster)], roster[base])
+	}
+	if now, hash, handoffs, _ := s.leaderAt(member, 0); now != hash || handoffs != 0 {
+		t.Fatalf("before any failover the leader is the hash leader: %s vs %s (%d)", now, hash, handoffs)
+	}
+	for _, id := range roster {
+		if odSubmitter(t, id).isLeaderFor(member, 2*OnDemandFailoverAfter+time.Second) != (id == now) {
+			t.Fatalf("isLeaderFor and leaderAt disagree for %s", id)
+		}
+	}
+}

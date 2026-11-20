@@ -613,8 +613,10 @@ func settlementLeadership(members []batchMember, roster []string) string {
 			if m.after != nil {
 				wait = " once the member before it has settled"
 			}
-			parts = append(parts, fmt.Sprintf("chain %d: on-demand leader %s%s, the next roster validator "+
-				"taking over each failover interval it stays unsettled", m.chainID,
+			// The failover clock runs from the member's commit block, not from this queueing: a member whose proof took longer
+			// than the failover interval is first led by a later roster validator, which the submitter names when it leads.
+			parts = append(parts, fmt.Sprintf("chain %d: hash leader %s%s; the next roster validator takes over each failover "+
+				"interval counted from the commit block, so a slow proof is led by a later validator ([SETTLEMENT-LEAD] from the submitter names it)", m.chainID,
 				roster[OnDemandLeaderIndex(m.chainID, m.opID, len(roster))], wait))
 		}
 	}

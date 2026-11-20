@@ -131,6 +131,8 @@ type OnDemandSubmitter struct {
 	inWork map[string]bool // chainID|opID currently being worked, so a signal cannot double-start
 	// commitTimeTried is when a member's block time was last asked for and could not be read.
 	commitTimeTried map[string]time.Time
+	// leadNamed is when this validator logged that it leads a member after failover handoffs: once per member, pruned past the TTL.
+	leadNamed map[string]time.Time
 	// proveRoot replaces cfg.Prover.ProveBatchRootOnDemand in tests that have no peers. Nil in production.
 	proveRoot func(ctx context.Context, tree *BatchTree, member *PendingBatchIntent) error
 }
@@ -154,6 +156,7 @@ func NewOnDemandSubmitter(cfg OnDemandSubmitterConfig) (*OnDemandSubmitter, erro
 		inWork: make(map[string]bool),
 
 		commitTimeTried: make(map[string]time.Time),
+		leadNamed:       make(map[string]time.Time),
 	}, nil
 }
 
@@ -192,6 +195,11 @@ func (s *OnDemandSubmitter) Run(ctx context.Context) {
 			for key, at := range s.commitTimeTried {
 				if time.Since(at) > s.cfg.TTL {
 					delete(s.commitTimeTried, key)
+				}
+			}
+			for key, at := range s.leadNamed {
+				if time.Since(at) > s.cfg.TTL {
+					delete(s.leadNamed, key)
 				}
 			}
 			if held := s.cfg.Stack.Mempool.HeldPastTTL(); held > 0 {
@@ -242,7 +250,20 @@ func (s *OnDemandSubmitter) consider(ctx context.Context, member *PendingBatchIn
 	// Once the anchor is attested the leader rotation no longer decides: the member's settlement
 	// windows do, and one of them may be this validator's - which is how a dead attester's member is
 	// taken over. The check also pre-scans ahead of this validator's window, leader or not.
-	leader := s.isLeaderFor(member, s.failoverElapsed(ctx, member))
+	elapsed := s.failoverElapsed(ctx, member)
+	leader := s.isLeaderFor(member, elapsed)
+	if leader {
+		// Name the node that actually leads now: the round's [SETTLEMENT-LEAD] line names the hash leader, which a member whose
+		// proof outlasted FailoverAfter has already passed (intent 534ebb16: hash leader validator-3, settled by validator-5 two
+		// handoffs on, measured 2026-11-19).
+		if now, hash, handoffs, ok := s.leaderAt(member, elapsed); ok && handoffs > 0 {
+			if _, done := s.leadNamed[key]; !done {
+				s.leadNamed[key] = time.Now()
+				logf("📦 [SETTLEMENT-LEAD] intent=%s chain=%d: %s leads now - hash leader %s plus %d failover handoff(s), %s since its commit block",
+					member.IntentID, member.ChainID, now, hash, handoffs, elapsed.Round(time.Second))
+			}
+		}
+	}
 	if orch, err := s.cfg.Stack.OrchestratorFor(member.ChainID); err == nil {
 		needed, nerr := orch.OnDemandMemberNeedsThisValidator(ctx, member)
 		if !leader && (nerr != nil || !needed) {
@@ -460,20 +481,28 @@ func (s *OnDemandSubmitter) dispose(
 // quorum-plus-anchor cycle. After FailoverAfter the next node in the roster takes over, and
 // again each interval after that, so a dead leader cannot strand an urgent intent.
 func (s *OnDemandSubmitter) isLeaderFor(member *PendingBatchIntent, elapsed time.Duration) bool {
-	roster := s.cfg.Roster()
-	if len(roster) == 0 {
+	leader, _, _, ok := s.leaderAt(member, elapsed)
+	if !ok {
 		// No roster configured: single-node devnet. Always lead, matching the period path's
 		// nil-IsLeaderFn behaviour.
 		return true
 	}
-	idx := onDemandLeaderIndex(member.ChainID, member.OperationID, len(roster))
+	return leader == s.cfg.ValidatorID
+}
 
-	handoffs := 0
+// leaderAt is the validator that leads the member after elapsed, the hash leader before any failover and the number of
+// handoffs between them. The failover clock starts at the member's commit block (failoverElapsed), so a member whose proof
+// took longer than FailoverAfter is first led by a later roster validator than the hash leader the round names.
+func (s *OnDemandSubmitter) leaderAt(member *PendingBatchIntent, elapsed time.Duration) (leader, hashLeader string, handoffs int, ok bool) {
+	roster := s.cfg.Roster()
+	if len(roster) == 0 {
+		return "", "", 0, false
+	}
+	idx := onDemandLeaderIndex(member.ChainID, member.OperationID, len(roster))
 	if s.cfg.FailoverAfter > 0 && elapsed > 0 {
 		handoffs = int(elapsed / s.cfg.FailoverAfter)
 	}
-	idx = (idx + handoffs) % len(roster)
-	return roster[idx] == s.cfg.ValidatorID
+	return roster[(idx+handoffs)%len(roster)], roster[idx], handoffs, true
 }
 
 // failoverElapsed is how far the member is into the failover rotation: the time since its

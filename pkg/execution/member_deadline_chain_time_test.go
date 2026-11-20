@@ -160,9 +160,9 @@ var wallClockReads = map[string]struct {
 		"memberPastDeadline releases another validator's member locally (MemberReleased: nothing recorded)"},
 	"non_settlement_cycle.go": {3, "trigger only: nonSettlementWindowClosed reads the chain once the wall clock is past the " +
 		"window; QueuedAt and StartedAt are timestamps"},
-	"batch_ondemand_submitter.go": {9, "TTL is a trigger (settleOnDemandAtTTL decides on chain time); the quorum wait " +
+	"batch_ondemand_submitter.go": {11, "TTL is a trigger (settleOnDemandAtTTL decides on chain time); the quorum wait " +
 		"bounds one pass and defers; RefuseOnDemand's time starts RefusedKeep (a trigger); failoverElapsed rotates who acts; " +
-		"the commit-time retry is a local backoff"},
+		"the commit-time retry is a local backoff; leadNamed stamps and prunes a log-once marker (no outcome)"},
 	"batch_assembly.go":  {1, "the flush loop's first pass time: the settle grace (when a leader forms its batch)"},
 	"batch_mempool.go":   {1, "EnqueuedAt: a timestamp; the TTL it starts is a trigger"},
 	"batch_execution.go": {3, "the cadence accumulator's flush timing: when legs are grouped, no outcome"},
