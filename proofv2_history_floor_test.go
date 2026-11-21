@@ -6,10 +6,13 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/certen/independant-validator/pkg/metrics"
 	proofv2 "github.com/certen/independant-validator/pkg/proof/v2"
 )
 
@@ -23,7 +26,9 @@ func (f floorRet) Retained(_ context.Context, p string) (uint64, uint64, error) 
 	return r[0], r[1], nil
 }
 
-func floorDeps(ret floorRet, partsErr error, sleeps *int) historyFloorDeps {
+var floorClock = time.Date(2026, 11, 21, 12, 0, 0, 0, time.UTC)
+
+func floorDeps(ret floorRet, partsErr error) historyFloorDeps {
 	return historyFloorDeps{
 		partitions: func(context.Context) ([]string, error) {
 			if partsErr != nil {
@@ -32,48 +37,121 @@ func floorDeps(ret floorRet, partsErr error, sleeps *int) historyFloorDeps {
 			return []string{"BVN1", "BVN2", "BVN3", "Directory"}, nil
 		},
 		retention: ret,
-		sleep:     func(time.Duration) { *sleeps++ },
+		now:       func() time.Time { return floorClock },
 	}
 }
 
 const agtFloor = "Directory=13440000,BVN1=17570000,BVN2=17565000,BVN3=17540539"
 
-// AGT-F104: the validator does not start proof v2 against the public Kermit node as measured 2026-11-20 (about 700 retained
-// blocks per partition), nor with no floor configured; it starts against a node that keeps the floor.
-func TestProofV2StartRefusesANodeThatPrunes(t *testing.T) {
-	n := 0
-	public := floorRet{"Directory": {13445201, 13445749}, "BVN1": {17574589, 17575293}, "BVN2": {17570888, 17571592}, "BVN3": {17561366, 17562071}}
-	_, err := startupHistoryFloor(agtFloor, floorDeps(public, nil, &n))
-	var fe *proofv2.FloorError
-	if !errors.As(err, &fe) || fe.Code != proofv2.FloorUnmet {
-		t.Fatalf("pruning node: %v", err)
+var (
+	// the public Kermit node as measured 2026-11-20: about 700 retained blocks per partition
+	publicNode = floorRet{"Directory": {13445201, 13445749}, "BVN1": {17574589, 17575293}, "BVN2": {17570888, 17571592}, "BVN3": {17561366, 17562071}}
+	fullNode   = floorRet{"Directory": {13440000, 13445749}, "BVN1": {17569000, 17575293}, "BVN2": {17565000, 17571592}, "BVN3": {17540000, 17562071}}
+)
+
+type logLines []string
+
+func (l *logLines) logf(format string, args ...any) { *l = append(*l, fmt.Sprintf(format, args...)) }
+
+// AGT-F104: a node that prunes below the floor is REPORTED - the ❌ log naming the partition, the gauge at 0 and the health
+// block - and the validator is not stopped (reportHistoryFloor returns a verdict, never an error to abort on).
+func TestAPruningNodeIsReportedAndDoesNotStopTheValidator(t *testing.T) {
+	var l logLines
+	v := reportHistoryFloor(context.Background(), agtFloor, "https://kermit.example", floorDeps(publicNode, nil), "", l.logf)
+	if v != "unmet" {
+		t.Fatalf("verdict %q", v)
 	}
-	if n != 0 {
-		t.Fatalf("a definitive refusal was retried %d times", n)
+	if len(l) != 1 || !strings.Contains(l[0], "❌ [PROOF-V2-HISTORY]") || !strings.Contains(l[0], "proof_v2_history_floor_unmet{") || !strings.Contains(l[0], "the validator runs on") {
+		t.Fatalf("log %q", l)
 	}
-	if _, err := startupHistoryFloor("", floorDeps(public, nil, &n)); !errors.As(err, &fe) || fe.Code != proofv2.FloorUnset {
-		t.Fatalf("unset floor: %v", err)
-	}
-	full := floorRet{"Directory": {13440000, 13445749}, "BVN1": {17569000, 17575293}, "BVN2": {17565000, 17571592}, "BVN3": {17540000, 17562071}}
-	if _, err := startupHistoryFloor(agtFloor, floorDeps(full, nil, &n)); err != nil {
-		t.Fatalf("full-history node: %v", err)
+	h := metrics.ProofV2HistoryHealth()
+	if h["verdict"] != "unmet" || h["met"] != false || h["partition"] == nil || h["floor"] != mustFloor(t).String() || h["checked_at"] != "2026-11-21T12:00:00Z" {
+		t.Fatalf("health %v", h)
 	}
 }
 
-// A node that cannot be read is retried within the budget and then refused: never a pass.
-func TestProofV2StartRefusesAnUnreadableNodeAfterItsBudget(t *testing.T) {
-	old := historyFloorReadBudget
-	historyFloorReadBudget = 0
-	defer func() { historyFloorReadBudget = old }()
-	n := 0
-	_, err := startupHistoryFloor(agtFloor, floorDeps(floorRet{}, errors.New("network-status: connection refused"), &n))
-	if err == nil || !strings.Contains(err.Error(), "could not be read") {
-		t.Fatalf("unreadable node: %v", err)
+// Every failure is named, never collapsed into "met": no floor configured, a malformed floor, and a node that cannot be read.
+func TestEveryFailedJudgementIsNamed(t *testing.T) {
+	cases := []struct {
+		raw     string
+		deps    historyFloorDeps
+		verdict string
+	}{
+		{"", floorDeps(publicNode, nil), "unset"},
+		{"BVN1=abc", floorDeps(publicNode, nil), "malformed"},
+		{agtFloor, floorDeps(floorRet{}, errors.New("network-status: connection refused")), "unreadable"},
+		{agtFloor, floorDeps(floorRet{}, nil), "unreadable"},
 	}
-	var fe *proofv2.FloorError
-	if errors.As(err, &fe) {
-		t.Fatalf("a read failure was made definitive: %v", err)
+	for _, c := range cases {
+		var l logLines
+		if v := reportHistoryFloor(context.Background(), c.raw, "u", c.deps, "met", l.logf); v != c.verdict {
+			t.Errorf("%q: verdict %q, want %q", c.raw, v, c.verdict)
+		}
+		if len(l) != 1 || !strings.Contains(l[0], "❌") {
+			t.Errorf("%q: log %q", c.raw, l)
+		}
+		if metrics.ProofV2HistoryHealth()["met"] != false {
+			t.Errorf("%q: reported as met", c.raw)
+		}
 	}
+}
+
+// A node that keeps the floor is met: logged once on the change to met, then quiet while it stays met; a later failure is
+// logged again.
+func TestAFullHistoryNodeIsMetAndLoggedOnChange(t *testing.T) {
+	var l logLines
+	d := floorDeps(fullNode, nil)
+	if v := reportHistoryFloor(context.Background(), agtFloor, "u", d, "unmet", l.logf); v != "met" {
+		t.Fatalf("verdict %q", v)
+	}
+	if metrics.ProofV2HistoryHealth()["met"] != true {
+		t.Fatal("met not reported")
+	}
+	reportHistoryFloor(context.Background(), agtFloor, "u", d, "met", l.logf)
+	if len(l) != 1 || !strings.Contains(l[0], "📚") {
+		t.Fatalf("log %q", l)
+	}
+	reportHistoryFloor(context.Background(), agtFloor, "u", floorDeps(publicNode, nil), "met", l.logf)
+	if len(l) != 2 || !strings.Contains(l[1], "❌") {
+		t.Fatalf("log %q", l)
+	}
+}
+
+// The watcher judges at once (startup is never blocked on the node) and stops with its context.
+func TestTheWatcherJudgesAtOnceAndStops(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	var l logLines
+	done := make(chan struct{})
+	go func() { watchHistoryFloor(ctx, agtFloor, "u", floorDeps(publicNode, nil), l.logf); close(done) }()
+	deadline := time.Now().Add(5 * time.Second)
+	for metrics.ProofV2HistoryHealth()["checked_at"] == nil && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	<-done
+	if len(l) == 0 || !strings.Contains(l[0], "❌") {
+		t.Fatalf("log %q", l)
+	}
+}
+
+// main.go never aborts start on the floor: the old start gate is gone and the watcher is what runs.
+func TestMainDoesNotGateStartOnTheFloor(t *testing.T) {
+	src, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := string(src)
+	if strings.Contains(m, "startupHistoryFloor") || !strings.Contains(m, "go watchHistoryFloor(") || !strings.Contains(m, "metrics.ProofV2HistoryHealth()") {
+		t.Fatal("main.go must run the floor watcher and serve its verdict, and must not gate start on it")
+	}
+}
+
+func mustFloor(t *testing.T) proofv2.HistoryFloor {
+	f, err := proofv2.ParseHistoryFloor(agtFloor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return f
 }
 
 func TestProofV2HistoryCheckUsage(t *testing.T) {
