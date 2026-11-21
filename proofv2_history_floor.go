@@ -7,10 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"strings"
 	"time"
 
+	"github.com/certen/independant-validator/pkg/metrics"
 	"github.com/certen/independant-validator/pkg/proof"
 	proofv2 "github.com/certen/independant-validator/pkg/proof/v2"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/api/v3/jsonrpc"
@@ -18,12 +18,11 @@ import (
 
 // The history floor of the node proof v2 reads (AGT-F104, OQ12; pkg/proof/v2/historyfloor.go). Proof v2 reads a governing page
 // as of its partition's latest block anchored at or before the transaction's own anchor; on a quiet partition that block is
-// old, and a node that prunes its history refuses it, so the intent can never be proven. The validator therefore refuses to
-// start proof v2 against a node that does not keep every block from PROOF_V2_HISTORY_FLOOR on, and keeps judging the node
-// while it runs.
-
-// historyFloorReadBudget bounds how long startup retries a node that cannot be read (a definitive refusal is never retried).
-var historyFloorReadBudget = 2 * time.Minute
+// old, and a node that prunes its history refuses it, so the intent cannot be proven. The validator judges the node against
+// PROOF_V2_HISTORY_FLOOR at start and every historyFloorRecheck while it runs and REPORTS the verdict (log, the
+// certen_proof_v2_history_floor_met gauge, /health/detailed). It does not stop the validator: consensus, intent processing and
+// every provable intent carry on, and each intent that cannot be proven is refused by name (g1_historical_unavailable).
+// Stopping every validator for a node limit that already refuses its own victims by name would only remove capability.
 
 // historyFloorRecheck is how often the running validator judges the node again.
 var historyFloorRecheck = 10 * time.Minute
@@ -32,7 +31,7 @@ var historyFloorRecheck = 10 * time.Minute
 type historyFloorDeps struct {
 	partitions func(ctx context.Context) ([]string, error)
 	retention  proofv2.Retention
-	sleep      func(time.Duration)
+	now        func() time.Time
 }
 
 func liveHistoryFloorDeps(v3 string) historyFloorDeps {
@@ -45,7 +44,7 @@ func liveHistoryFloorDeps(v3 string) historyFloorDeps {
 			return r.Partitions(), nil
 		},
 		retention: &proofv2.ClientRetention{C: jsonrpc.NewClient(v3)},
-		sleep:     time.Sleep,
+		now:       time.Now,
 	}
 }
 
@@ -62,28 +61,47 @@ func judgeHistoryFloor(ctx context.Context, raw string, d historyFloorDeps) (pro
 	return floor, floor.Check(ctx, d.retention, parts)
 }
 
-// startupHistoryFloor is the start gate: nil only when the node keeps the floor. A definitive refusal (*FloorError) returns at
-// once; a node that cannot be read is retried within historyFloorReadBudget and then refused as well.
-func startupHistoryFloor(raw string, d historyFloorDeps) (proofv2.HistoryFloor, error) {
-	deadline := time.Now().Add(historyFloorReadBudget)
-	for {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		floor, err := judgeHistoryFloor(ctx, raw, d)
-		cancel()
-		var fe *proofv2.FloorError
-		if err == nil || errors.As(err, &fe) {
-			return floor, err
-		}
-		if !time.Now().Before(deadline) {
-			return floor, fmt.Errorf("proof v2 history floor: the node could not be read within %s: %w", historyFloorReadBudget, err)
-		}
-		d.sleep(10 * time.Second)
+// historyVerdict names a judgement: "met", the FloorError code without its prefix, or "unreadable" for a read failure (which is
+// never counted as met).
+func historyVerdict(err error) (verdict, partition string) {
+	if err == nil {
+		return "met", ""
 	}
+	var fe *proofv2.FloorError
+	if errors.As(err, &fe) {
+		return strings.TrimPrefix(fe.Code, "proof_v2_history_floor_"), fe.Partition
+	}
+	return "unreadable", ""
 }
 
-// watchHistoryFloor judges the node every historyFloorRecheck while the validator runs and logs each failure by name, so a
-// node that starts pruning (or a node swapped behind the URL) is reported, not discovered as unprovable intents.
-func watchHistoryFloor(ctx context.Context, raw string, d historyFloorDeps) {
+// reportHistoryFloor judges the node once and reports the verdict: the metrics and health block always, the log on every
+// failure and on the first judgement and each change of verdict. It returns the verdict.
+func reportHistoryFloor(ctx context.Context, raw, url string, d historyFloorDeps, prev string, logf func(string, ...any)) string {
+	rctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	floor, err := judgeHistoryFloor(rctx, raw, d)
+	cancel()
+	verdict, partition := historyVerdict(err)
+	detail, shown := "", ""
+	if err != nil {
+		detail = err.Error()
+	}
+	if floor != nil {
+		shown = floor.String()
+	}
+	metrics.ReportProofV2HistoryFloor(verdict, partition, detail, shown, d.now())
+	switch {
+	case verdict == "met" && prev != "met":
+		logf("📚 [PROOF-V2-HISTORY] %s keeps every block from the floor %s", url, shown)
+	case verdict != "met":
+		logf("❌ [PROOF-V2-HISTORY] the Accumulate node %s fails the history floor: %v - the validator runs on; intents whose governing pages sit on a partition quiet for longer than the node's retention are refused by name (g1_historical_unavailable) until it keeps the floor (AGT-F104, OQ12)", url, err)
+	}
+	return verdict
+}
+
+// watchHistoryFloor judges the node at once and then every historyFloorRecheck while the validator runs, so a node that does
+// not keep the floor, starts pruning, or is swapped behind the URL is reported, not discovered as unprovable intents.
+func watchHistoryFloor(ctx context.Context, raw, url string, d historyFloorDeps, logf func(string, ...any)) {
+	prev := reportHistoryFloor(ctx, raw, url, d, "", logf)
 	t := time.NewTicker(historyFloorRecheck)
 	defer t.Stop()
 	for {
@@ -92,12 +110,7 @@ func watchHistoryFloor(ctx context.Context, raw string, d historyFloorDeps) {
 			return
 		case <-t.C:
 		}
-		rctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		_, err := judgeHistoryFloor(rctx, raw, d)
-		cancel()
-		if err != nil {
-			log.Printf("❌ [PROOF-V2-HISTORY] the Accumulate node fails the history floor: %v - intents whose governing pages sit on a quiet partition cannot be proven until it keeps the floor (AGT-F104)", err)
-		}
+		prev = reportHistoryFloor(ctx, raw, url, d, prev, logf)
 	}
 }
 

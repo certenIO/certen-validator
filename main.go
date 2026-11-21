@@ -892,6 +892,8 @@ func main() {
 			// and last append. Informational: it never changes Status.
 			Finality         map[string]any `json:"finality"`
 			ContractIdentity map[string]any `json:"contract_identity"`
+			// Proof v2 history floor (AGT-F104): the latest verdict on the Accumulate node. Informational: it never changes Status.
+			ProofV2History map[string]any `json:"proof_v2_history"`
 		}{
 			Status:           healthStatus.Status,
 			Phase:            healthStatus.Phase,
@@ -905,6 +907,7 @@ func main() {
 			BatchDetails:     make(map[string]interface{}),
 			Finality:         metrics.FinalityHealth(),
 			ContractIdentity: metrics.ContractIdentityHealth(),
+			ProofV2History:   metrics.ProofV2HistoryHealth(),
 		}
 
 		// Build status explanation
@@ -2267,16 +2270,10 @@ func startValidator(
 			if pin, perr := consensus.AccumulateIncarnation(); perr != nil {
 				log.Printf("⚠️ [PROOF-V2-SHADOW] not started: %v", perr)
 			} else {
-				// AGT-F104: proof v2 runs only against a node that keeps every block from the history floor on; a pruning node
-				// makes every intent with a governing page on a quiet partition unprovable. Refused here, never worked around.
+				// AGT-F104: the node's history floor is judged at once and every 10 minutes and reported (log, gauge, /health/detailed);
+				// it never stops the validator - an intent the node cannot serve is refused by name (proofv2_history_floor.go).
 				v3 := strings.TrimSuffix(cfg.AccumulateURL, "/") + "/v3"
-				floorRaw := os.Getenv(proofv2.HistoryFloorEnv)
-				floor, floorErr := startupHistoryFloor(floorRaw, liveHistoryFloorDeps(v3))
-				if floorErr != nil {
-					return nil, nil, fmt.Errorf("proof v2: %w", floorErr)
-				}
-				log.Printf("📚 [PROOF-V2-HISTORY] %s keeps every block from the floor %s", cfg.AccumulateURL, floor)
-				go watchHistoryFloor(context.Background(), floorRaw, liveHistoryFloorDeps(v3))
+				go watchHistoryFloor(context.Background(), os.Getenv(proofv2.HistoryFloorEnv), cfg.AccumulateURL, liveHistoryFloorDeps(v3), log.Printf)
 				shadow := proofv2shadow.NewLazy(database.NewProofV2ShadowRepository(dbClient), log.Printf)
 				intentDiscovery.SetProofV2Shadow(shadow)
 				// The initiating-signature member of evidence 2.1 is attached only from the height after the rules v16 activation (DAX-1G).

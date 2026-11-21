@@ -7,8 +7,9 @@
 // that block can be far older than the transaction. A node that prunes its BPT history (the public Kermit node keeps about 800
 // blocks, some 13 minutes) refuses it as g1_historical_unavailable before the transaction is even executed, so whether an
 // intent can be proven would depend on other parties' traffic. The rule is not relaxed (no later block is admitted, nothing
-// falls back to another node): the node must keep every block from a floor on, and the validator refuses to run proof v2
-// against a node that does not.
+// falls back to another node): the node must keep every block from a floor on. The validator judges its node against the
+// floor at start and every 10 minutes and reports the verdict (log, certen_proof_v2_history_floor_met, /health/detailed);
+// it does not stop the validator, since each intent the node cannot serve is already refused by name.
 //
 // PROOF_V2_HISTORY_FLOOR names, for every partition of the network, the lowest block the node must keep serving, for example
 // "Directory=13445000,BVN1=17574000,BVN2=17570000,BVN3=17561000" (the heights the full-history node started from). The check
