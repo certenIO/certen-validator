@@ -411,13 +411,25 @@ func (s *Shadow) buildOne(ctx context.Context, j job, maxMajors uint64, prove, a
 		if captureErr == "" {
 			return nil, nil, ErrPartialCapture
 		}
-		return nil, nil, fmt.Errorf("%s: %w", captureErr, ErrPartialCapture)
+		// The stored text is kept as it was; a history refusal it renders is also returned as its named state (AGT-F104).
+		return nil, nil, newStoredCaptureError(captureErr, true)
 	}
 	if plan, err = planBuild(cp, prove, allow21); err != nil {
 		return nil, nil, err
 	}
 	pages := plan.pages
 	if len(pages) == 0 && !plan.is21 {
+		// A capture that stored no pages answers with the reason it stored, which names what stopped it and where (AGT-F104). Only
+		// a capture that stored no reason either is answered by the bare state, which names no place.
+		if cp == nil {
+			_, captureErr, _, rerr := s.repo.CaptureResult(ctx, j.intentID)
+			if rerr != nil {
+				return nil, nil, fmt.Errorf("read the capture error: %w", rerr)
+			}
+			if captureErr != "" {
+				return nil, nil, newStoredCaptureError(captureErr, false)
+			}
+		}
 		return nil, nil, fmt.Errorf("g1_historical_unavailable: no pages were captured at discovery")
 	}
 	if err := s.b.Refresh(ctx); err != nil {

@@ -88,7 +88,9 @@ const (
 	FailureGovernanceUnavailable IntentFailureClass = "governance_unavailable"
 	// FailureSettlementFailed: a chain member did not settle, or was not proven or written back.
 	FailureSettlementFailed IntentFailureClass = "settlement_failed"
-	// FailureProcessingFailed: CERTEN could not complete processing it.
+	// FailureProcessingFailed: CERTEN could not complete processing it. One cause of it is named in error_message by a leading token:
+	// proof_v2_history_unavailable{partition=<P>,height=<H>}: the Accumulate node no longer serves a governing page's admissible block,
+	// so the intent's required proof v2 could not be captured (AGT-F104; intent.ProofV2HistoryUnavailable documents the form).
 	FailureProcessingFailed IntentFailureClass = "processing_failed"
 )
 
