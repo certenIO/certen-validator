@@ -225,7 +225,8 @@ type IntentDiscovery struct {
 	proofGenerator *proof.LiteClientProofGenerator
 	validatorID    string
 
-	// v2Shadow builds proof v2 beside v1 (RB6 Phase A); nil when not configured. It can never fail or delay an intent.
+	// v2Shadow builds proof v2 beside v1 (RB6 Phase A); nil when not configured. Until the chain requires the v3 intent certificate it
+	// can never fail or delay an intent; from then on it builds the certificate's proof v2, and an intent fails closed without it (proveV2).
 	v2Shadow ProofV2Shadow
 	// v2Gate decides when proof v2 stops being a shadow and is built for the intent certificate (v3).
 	v2Gate ProofV2Gate
@@ -1682,6 +1683,14 @@ func (id *IntentDiscovery) proveV2(ctx context.Context, intentID, accountURL, tx
 			ev, err = id.v2Shadow.Prove(ctx, intentID, accountURL, txHash, partition, maxMajors)
 		}
 		if err != nil {
+			// The node no longer serves a governing page's admissible block (AGT-F104): failed at once, typed and with the cause kept
+			// (%w). D2 fixes the admissible blocks by the transaction's own Directory anchor, so no retry can find a later one, and a
+			// capture that kept pages is never replaced - retrying only repeats the refusal (proof_v2_history_test.go). Never executed
+			// without its proof: the intent fails closed here, before any execution or anchor side effect.
+			if ns := proofV2HistoryRefusal(err); ns != nil {
+				return &ProofV2HistoryUnavailableError{Partition: ns.Partition, Height: ns.Block,
+					Cause: fmt.Errorf("intent %s: %w: %w", intentID, errChainedProofTerminal, err)}
+			}
 			return fmt.Errorf("intent %s: %w: %v", intentID, errChainedProofUnavailable, err)
 		}
 		raw, err := json.Marshal(ev)
@@ -2715,7 +2724,7 @@ func recordLifecycleFailed(w lifecycleStatusWriter, intentID string, cause error
 	ctx, cancel := context.WithTimeout(context.Background(), lifecycleWriteTimeout)
 	defer cancel()
 	return w.UpdateStatus(ctx, intentID, database.IntentLifecycleFailed,
-		database.WithErrorMessage(cause.Error()), database.WithFailureClass(failureClassOf(cause)))
+		database.WithErrorMessage(lifecycleErrorMessage(cause)), database.WithFailureClass(failureClassOf(cause)))
 }
 
 // failureClassOf is why processing an intent failed, read from the typed error the failure carries - never

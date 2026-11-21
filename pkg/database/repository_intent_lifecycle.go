@@ -47,6 +47,22 @@ func WithFailureClass(class IntentFailureClass) UpdateOption {
 	}
 }
 
+// UpdateOptionValues is what a set of options records: the error message and the failure class ("" for one not set). It is for a
+// lifecycle writer other than this repository (a test double, a log) that must state what a status update carries.
+func UpdateOptionValues(opts ...UpdateOption) (errorMessage, failureClass string) {
+	var o updateOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
+	if o.errorMessage != nil {
+		errorMessage = *o.errorMessage
+	}
+	if o.failureClass != nil {
+		failureClass = *o.failureClass
+	}
+	return errorMessage, failureClass
+}
+
 // WithErrorMessage sets the error message on status update
 func WithErrorMessage(msg string) UpdateOption {
 	return func(o *updateOptions) {
