@@ -114,8 +114,9 @@ func capturePageWith(ctx context.Context, c api.Querier, qr proof.AccumulateQuer
 
 	// The chain roots. They are read as they are now; the binding check proves they are the roots at the block (the
 	// receipt's second sibling is H(chains || pending) at the block), so roots that moved since fail it and are
-	// named, never assumed. The pending component is 32 zero bytes when nothing is pending; when something is, its
-	// hash covers the network's internal transaction state, which no API serves, so the page is named unbound.
+	// named, never assumed. The pending component is 32 zero bytes when nothing is pending. When something is (a key
+	// page's own pending transactions, or its KEY BOOK's: accumulate-core observer_prod.go hashPending), it is rebuilt
+	// from what the network serves (pending.go, AGT-F81) - a candidate the receipt accepts or refuses, never assumed.
 	chains, err := proof.FetchChainRoots(ctx, qr, account)
 	if err != nil {
 		p.ChainError = fmt.Sprintf("g1_chain_unread: %v", err)
@@ -124,8 +125,11 @@ func capturePageWith(ctx context.Context, c api.Querier, qr proof.AccumulateQuer
 	zero := hex.EncodeToString(make([]byte, 32))
 	receipt := toChainedReceipt(&ar.Receipt.Receipt)
 	if err := proof.VerifyChainBinding(receipt, chains, zero); err != nil {
-		if ar.Pending != nil && ar.Pending.Total > 0 {
-			p.ChainError = fmt.Sprintf("g1_chain_unbound_pending: %d transactions pending on the account", ar.Pending.Total)
+		// The pending component as it is now: it binds when the pending state has not changed since the block (a stale pending entry on a page's
+		// book, AGT-0 scene 4b; a page whose signers are still collecting).
+		cand, cerr := pendingComponent(ctx, apiPending{c}, ar.Account)
+		if cerr == nil && cand != zero && proof.VerifyChainBinding(receipt, chains, cand) == nil {
+			p.Chains, p.PendingHash = chains, cand
 			return p, nil
 		}
 		// The chains moved since the block (a busy page): read their roots as of the block instead.
@@ -134,11 +138,28 @@ func capturePageWith(ctx context.Context, c api.Querier, qr proof.AccumulateQuer
 			p.ChainError = fmt.Sprintf("g1_chain_unread_at_block: %v", aerr)
 			return p, nil
 		}
-		if berr := proof.VerifyChainBinding(receipt, at, zero); berr != nil {
-			p.ChainError = unboundReason(block, pendingNow(ctx, c, u), berr)
+		berr := proof.VerifyChainBinding(receipt, at, zero)
+		if berr == nil {
+			p.Chains, p.PendingHash = at, zero
 			return p, nil
 		}
-		chains = at
+		if cerr == nil && cand != zero && proof.VerifyChainBinding(receipt, at, cand) == nil {
+			p.Chains, p.PendingHash = at, cand
+			return p, nil
+		}
+		// Nothing binds: named, with what the pending component could not establish.
+		note := ""
+		if cerr != nil {
+			note = fmt.Sprintf(" (pending component not rebuilt: %v)", cerr)
+		} else if cand != zero {
+			note = " (the pending component rebuilt now does not bind either: the pending state changed since the block)"
+		}
+		if ar.Pending != nil && ar.Pending.Total > 0 {
+			p.ChainError = fmt.Sprintf("g1_chain_unbound_pending: %d transactions pending on the account%s", ar.Pending.Total, note)
+			return p, nil
+		}
+		p.ChainError = unboundReason(block, pendingNow(ctx, c, u), berr) + note
+		return p, nil
 	}
 	p.Chains, p.PendingHash = chains, zero
 	return p, nil
