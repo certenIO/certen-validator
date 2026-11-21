@@ -100,3 +100,11 @@ func TestNothingRoutesWithTheModulesOwnTable(t *testing.T) {
 		t.Fatalf("still routing with the module's own table: %v", offenders)
 	}
 }
+
+// AGT-F104: the history floor is judged for every partition an account can route to, the Directory included, each once.
+func TestTheRouterNamesEveryPartitionOnce(t *testing.T) {
+	got := strings.Join(kermitRouter(t).Partitions(), ",")
+	if got != "BVN1,BVN2,BVN3,Directory" {
+		t.Fatalf("Partitions() = %s", got)
+	}
+}
